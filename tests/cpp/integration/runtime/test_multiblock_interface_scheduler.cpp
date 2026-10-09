@@ -704,3 +704,154 @@ TEST(test_multiblock_interface_scheduler, RetainedSampleSurvivesRepartitionAndFr
   EXPECT_TRUE(samples.empty());
   EXPECT_EQ(unauthenticated.evaluation_count(route.identity, 0), 0);
 }
+
+TEST(test_multiblock_interface_scheduler,
+     ProjectedHistoryPreservesEachParentFaceAndPhysicalSource) {
+  ensure_runtime();
+  const Box<2> domain(Index<2>(-2, 3), Index<2>(-1, 4));
+  const auto coarse_geometry = geometry<2>(domain, {Real(0), Real(0)}, {Real(1), Real(1)});
+  const auto fine_geometry = coarse_geometry.refine(Extent<2>(3, 2));
+  auto left = make_field<2>(domain, 2), right = make_field<2>(domain, 2);
+  auto left_rhs = make_field<2>(domain, 2), right_rhs = make_field<2>(domain, 2);
+  auto fine_left = make_field<2>(fine_geometry.domain(), 2);
+  auto fine_right = make_field<2>(fine_geometry.domain(), 2);
+  left.set_val(1);
+  right.set_val(2);
+  left_rhs.set_val(0);
+  right_rhs.set_val(0);
+  AxisAlignedInterface<2> route;
+  route.identity = "history-projection";
+  route.sampling_provider_identity = "test.nonconstant-shared-density";
+  route.left_block = 0;
+  route.right_block = 1;
+  route.left_axis = route.right_axis = 0;
+  route.left_side = InterfaceSide::High;
+  route.right_side = InterfaceSide::Low;
+  route.right_component_for_left = {1, 0};
+  route.affine_mapping_identity = "test.translated-reflected-interface";
+  route.right_normal_translation = Real(1);
+  route.tangential_transform.sign = {-1};
+  route.tangential_transform.offset = {Real(1)};
+  authenticate(route);
+  const auto evaluator = [](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+    for (int face = 0; face < batch.face_count; ++face) {
+      batch.shared_flux[2 * face] = Real(1 + 2 * face);
+      batch.shared_flux[2 * face + 1] = Real(10 + face);
+    }
+  };
+  InterfaceFluxScheduler<2> scheduler;
+  scheduler.install(route, left, coarse_geometry, right, coarse_geometry, serial_execution(),
+                    evaluator);
+  auto fine_route = route;
+  fine_route.level = 1;
+  scheduler.install(fine_route, fine_left, fine_geometry, fine_right, fine_geometry,
+                    serial_execution(), evaluator);
+  auto stage = point();
+  stage.graph_identity = "history-program";
+  stage.rate_identity = "shared-rhs/1";
+  stage.application_identity = "program-rhs-group";
+  std::vector<InterfaceFluxSample> samples;
+  scheduler.apply(stage, std::vector<MultiFab<2>*>{&left, &right},
+                  std::vector<MultiFab<2>*>{&left_rhs, &right_rhs}, nullptr, &samples);
+  ASSERT_EQ(samples.size(), 1u);
+  const auto source = samples.front();
+  const auto projection = scheduler.prepare_sample_projection(source, 1);
+  const auto density = projection.apply(source);
+  EXPECT_EQ(density, (std::vector<Real>{1, 10, 1, 10, 3, 11, 3, 11}));
+  EXPECT_EQ(projection.face_measure, 0.25);
+  EXPECT_EQ(scheduler.prepare_sample_projection(source, 0).apply(source), source.flux_density);
+  for (std::size_t parent = 0; parent < source.face_count; ++parent)
+    for (int component = 0; component < 2; ++component) {
+      const auto coarse = source.flux_density[2 * parent + component] * source.face_measure;
+      const auto fine = (density[4 * parent + component] + density[4 * parent + 2 + component]) *
+                        projection.face_measure;
+      EXPECT_EQ(fine, coarse);
+      EXPECT_EQ(-Real(0.5) * fine, -Real(0.5) * coarse);
+    }
+  // Repeating the entire array would conserve the total but mix the two parent-face integrals.
+  const std::vector<Real> interlaced{1, 10, 3, 11, 1, 10, 3, 11};
+  EXPECT_NE((interlaced[0] + interlaced[2]) * projection.face_measure,
+            source.flux_density[0] * source.face_measure);
+  EXPECT_EQ(samples.front().source_point, source.source_point);
+  EXPECT_EQ(samples.front().route_contract, source.route_contract);
+  EXPECT_EQ(samples.front().flux_density, source.flux_density);
+  EXPECT_EQ(scheduler.evaluation_count(route.identity, 0), 1u);
+  EXPECT_EQ(scheduler.evaluation_count(route.identity, 1), 0u);
+  auto fine_left_rhs = make_field<2>(fine_geometry.domain(), 2);
+  auto fine_right_rhs = make_field<2>(fine_geometry.domain(), 2);
+  fine_left.set_val(1);
+  fine_right.set_val(2);
+  fine_left_rhs.set_val(0);
+  fine_right_rhs.set_val(0);
+  auto fine_stage = stage;
+  fine_stage.level = 1;
+  std::vector<InterfaceFluxSample> fine_samples;
+  scheduler.apply(fine_stage, std::vector<MultiFab<2>*>{&fine_left, &fine_right},
+                  std::vector<MultiFab<2>*>{&fine_left_rhs, &fine_right_rhs}, nullptr,
+                  &fine_samples);
+  ASSERT_EQ(fine_samples.size(), 1u);
+  EXPECT_THROW(scheduler.prepare_sample_projection(fine_samples.front(), 0), std::invalid_argument);
+  EXPECT_THROW(scheduler.prepare_sample_projection(source, -1), std::invalid_argument);
+  EXPECT_THROW(scheduler.prepare_sample_projection(source, 2), std::invalid_argument);
+  auto foreign = source;
+  foreign.route_contract[0] ^= 1;
+  EXPECT_THROW(scheduler.prepare_sample_projection(foreign, 1), std::invalid_argument);
+  auto oversized = projection;
+  oversized.face_count = std::numeric_limits<std::size_t>::max();
+  EXPECT_THROW(oversized.apply(source), std::invalid_argument);
+  auto incompatible = projection;
+  incompatible.target_extents[0] = 3;
+  EXPECT_THROW(incompatible.apply(source), std::invalid_argument);
+
+  const auto rejects_route = [&](AxisAlignedInterface<2> target_route,
+                                 const Geometry<2>& target_geometry) {
+    auto target_left = make_field<2>(target_geometry.domain(), 2);
+    auto target_right = make_field<2>(target_geometry.domain(), 2);
+    InterfaceFluxScheduler<2> other;
+    other.install(route, left, coarse_geometry, right, coarse_geometry, serial_execution(),
+                  evaluator);
+    other.install(target_route, target_left, target_geometry, target_right, target_geometry,
+                  serial_execution(), evaluator);
+    EXPECT_THROW(other.prepare_sample_projection(source, 1), std::invalid_argument);
+  };
+  auto foreign_provider = fine_route;
+  foreign_provider.sampling_provider_identity += "/other";
+  rejects_route(foreign_provider, fine_geometry);
+  auto foreign_mapping = fine_route;
+  foreign_mapping.right_component_for_left = {0, 1};
+  rejects_route(foreign_mapping, fine_geometry);
+  const auto shifted_metric =
+      geometry<2>(fine_geometry.domain(), {Real(0), Real(-1)}, {Real(1), Real(2)});
+  rejects_route(fine_route, shifted_metric);
+  const auto nonintegral =
+      geometry<2>(Box<2>(Index<2>(0, 0), Index<2>(3, 2)), {Real(0), Real(0)}, {Real(1), Real(1)});
+  rejects_route(fine_route, nonintegral);
+}
+
+TEST(test_multiblock_interface_scheduler, ProjectedHistoryUsesRankedTangentialEnumeration) {
+  // Empty tangent space in 1-D and anisotropic tangent extents in 3-D. No synthetic axis.
+  InterfaceFluxSample source;
+  source.route_contract = "earned";
+  source.face_count = 1;
+  source.component_count = 1;
+  source.flux_density = {Real(7)};
+  InterfaceFluxSampleProjection<1> line;
+  line.source_route_contract = "earned";
+  line.source_faces = line.face_count = 1;
+  line.component_count = 1;
+  EXPECT_EQ(line.apply(source), source.flux_density);
+  source.face_count = 6;
+  source.flux_density = {1, 3, 5, 7, 9, 11};
+  InterfaceFluxSampleProjection<3> face;
+  face.source_route_contract = "earned";
+  face.source_extents = {2, 3};
+  face.target_extents = {6, 6};
+  face.source_faces = 6;
+  face.face_count = 36;
+  face.component_count = 1;
+  const auto values = face.apply(source);
+  ASSERT_EQ(values.size(), 36u);
+  for (std::size_t y = 0; y < 6; ++y)
+    for (std::size_t x = 0; x < 6; ++x)
+      EXPECT_EQ(values[x + 6 * y], source.flux_density[x / 3 + 2 * (y / 2)]);
+}

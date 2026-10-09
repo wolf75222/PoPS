@@ -1,0 +1,12 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 2 items
+
+tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py::test_mixed_linear_three_grids_and_permutation_from_saved_c_and_mu PASSED [ 50%]
+tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py::test_one_iteration_gmres_collectively_refuses_without_accepted_publication PASSED [100%]
+
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/pytest.xml -
+========================= 2 passed in 60.34s (0:01:00) =========================

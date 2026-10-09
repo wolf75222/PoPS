@@ -1,0 +1,26 @@
+{
+  "schema": "pops.root.privateCPP.Native.admission@1",
+  "date_utc": "2026-10-08T16:55:36.429251+00:00",
+  "Source": "db206100d81de834482c8a3b093ce30065aa1b43",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "peer_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-independent-privateCPP-af8-retry2-lineage-db206100-20261008/reception.json",
+  "peer_sha256": "b325344a1c888b3c2c3edb269478b919815949c91de6c967028cea71c18fba7b",
+  "producer_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/build-receipt-retry2.json",
+  "producer_sha256": "0eb895e4599bc004ac2b7cce4eba45179f37aa6031f8acf4816ac0eb811bf6a9",
+  "exit_label_correction": "/Users/romaindespoulain/dev/tmp/PoPS-root-private-CPP-af8-build-dispatch-db206100-20261008/producer-exit-label-correction.json",
+  "exit_label_correction_sha256": "baa7d212e15a08d97ecbd93f741e4d733f923504406e6f7f562fbd9f2b44e8e1",
+  "physical_peer_pins_rehashed": 37,
+  "raw_fullmanifest_source_wheel_installed": "3abe493f65ea3c9025e95fe22f1afac91df8dacccf1b891d454f5c66aa420406",
+  "bindings_authenticated_reused": 7,
+  "two_CPP_actions_from_preserved_first_negative_attempt": 2,
+  "new_link_and_manifest_retry2": 1,
+  "runtime_environment": {
+    "FI_PROVIDER": "tcp"
+  },
+  "RootGO_first_original_science": true,
+  "qualification_limits": [
+    "File/artifact and recorded doctor admission; no new science run yet",
+    "No scientific MPI2/GPU/3D/convergence/full94 or finalCI inheritance"
+  ]
+}

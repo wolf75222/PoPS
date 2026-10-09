@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import pytest
 from pathlib import Path
 
 
@@ -37,6 +38,35 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _driver_body(source: str, signature: str) -> str:
+    """Locate the one actual facade driver definition, including nested bodies."""
+    pattern = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', re.DOTALL)
+    code = pattern.sub(lambda match: " " * len(match.group()), source)
+    starts = [match.start() for match in re.finditer(re.escape(signature), code)]
+    assert len(starts) == 1, "facade driver definition must be unique: " + signature
+    start = code.index("{", starts[0])
+    depth = 1
+    end = start + 1
+    while end < len(code) and depth:
+        depth += (code[end] == "{") - (code[end] == "}")
+        end += 1
+    assert depth == 0, "facade driver body is incomplete"
+    return code[start+1:end-1]
+
+
+def _assert_ranked_step_drivers(source: str) -> None:
+    step = _driver_body(source, "System<Dim>::step(double dt)")
+    cfl = _driver_body(source, "System<Dim>::step_cfl(")
+    for body in (step, cfl):
+        assert "dispatch_cadence_step(" in body
+        assert not re.search(r"\bif\s+constexpr\b", body)
+        assert not re.search(r"\b(?:if|switch)\s*\([^)]*\bDim\b", body)
+        for legacy in ("SystemProgramDriver", "Box2D", "Array4"):
+            assert legacy not in body
+    for authority in ("p_->geom.spacing(axis)", "p_->coupling_.coupled_frequencies", "p_->coupling_.dt_bounds"):
+        assert authority in cfl
+
+
 def test_uniform_and_amr_facades_have_one_visible_ranked_template() -> None:
     system = _read(SYSTEM_HEADER)
     amr = _read(AMR_HEADER)
@@ -61,16 +91,7 @@ def test_system_step_driver_is_the_exact_ranked_facade_not_a_parallel_authority(
 
     assert not RETIRED_PROGRAM_DRIVER.exists()
     assert "system_program_driver.hpp" not in manifest
-    assert "System<Dim>::step(double dt)" in runtime
-    assert "System<Dim>::step_cfl(" in runtime
-    assert "p_->geom.spacing(axis)" in runtime
-    assert "p_->coupling_.coupled_frequencies" in runtime
-    assert "p_->coupling_.dt_bounds" in runtime
-    assert "dispatch_cadence_step(" in runtime
-    assert "if constexpr" not in runtime
-    assert not re.search(r"\bif\s*\(\s*Dim\s*(?:==|!=|<=|>=|<|>)", runtime)
-    for legacy in ("SystemProgramDriver", "Box2D", "Array4"):
-        assert legacy not in runtime
+    _assert_ranked_step_drivers(runtime)
 
 
 def test_legacy_polar_system_engine_is_absent_from_the_exact_ranked_runtime() -> None:
@@ -240,7 +261,10 @@ def test_layout_transfer_is_generic_with_exact_physical_support_contracts() -> N
     assert "if constexpr" not in source
     for required in (
         "validate_physical_contract(moment)",
-        "physical maps require host memory",
+        "physical maps execution memory differs from native field storage",
+        "physical maps require a supported authenticated backend memory lane",
+        "typename field_type::memory_space",
+        "supports_device_context(",
         "physical maps require the authenticated field rank space",
         "distributed physical maps require uniquely owned patches",
         "hidden storage axes must be periodic unit-measure singletons",
@@ -256,3 +280,20 @@ def test_layout_transfer_is_generic_with_exact_physical_support_contracts() -> N
     ) in source
     assert "for (int axis = 0; axis < Dim; ++axis)" in source
     assert not re.search(r"\bif\s*\(\s*Dim\s*(?:==|!=|<=|>=|<|>)", source)
+
+
+@pytest.mark.parametrize("injection", [
+    "if constexpr (Dim == 2) {}", "if (Dim == 2) {}", "switch (Dim) {}",
+    "if constexpr (sizeof(int) > 0) {}", "SystemProgramDriver alternate;",
+])
+def test_ranked_driver_fence_still_refuses_specialized_or_parallel_step_authority(injection):
+    source = _read(SYSTEM_RUNTIME)
+    source = source.replace("System<Dim>::step(double dt) {", "System<Dim>::step(double dt) { " + injection, 1)
+    with pytest.raises(AssertionError):
+        _assert_ranked_step_drivers(source)
+
+
+def test_non_driver_wire_width_guard_does_not_select_a_step_authority():
+    source = _read(SYSTEM_RUNTIME)
+    assert "if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t))" in source
+    _assert_ranked_step_drivers(source)

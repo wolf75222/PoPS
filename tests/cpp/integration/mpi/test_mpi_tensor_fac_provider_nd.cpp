@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include "tensor_periodic_seam_witness.hpp"
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/amr/amr_tensor_elliptic.hpp>
@@ -161,6 +162,21 @@ int run_partitioned_tensor_fac(int argc, char** argv) {
     EXPECT_EQ(pops::n_ranks(), 2);
     if (pops::n_ranks() == 2)
       expect_partitioned_tensor_fac<pops::kNativeDimension>();
+    if constexpr (pops::kNativeDimension == 2) {
+      if (pops::n_ranks() == 2) {
+        const auto lane = pops::ExecutionLane::duplicate_world_collectively(
+            "pops.test.tensor-periodic-coarse-fine-seam-mpi");
+        for (bool replicated : {true, false}) {
+          const auto interior = pops::test::tensor_periodic_seam_witness(16, 8, replicated, lane);
+          const auto one_sided = pops::test::tensor_periodic_seam_witness(16, 0, replicated, lane);
+          const auto paired = pops::test::tensor_periodic_seam_witness(16, 24, replicated, lane);
+          EXPECT_LT(pops::test::tensor_seam_difference(interior, one_sided), 2e-8);
+          EXPECT_LT(pops::test::tensor_seam_difference(interior, paired), 2e-8);
+          if (!replicated)
+            EXPECT_EQ(pops::all_reduce_min(one_sided.remote_parent_gather ? 1L : 0L, lane), 1L);
+        }
+      }
+    }
     result = ::testing::Test::HasFailure() ? 1 : 0;
   }
   pops::comm_finalize();

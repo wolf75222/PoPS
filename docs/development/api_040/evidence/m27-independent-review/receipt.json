@@ -1,0 +1,48 @@
+{
+  "reviewed_commit": "d86a0d854ab5f478789a9ffce5ff796ad2a59c61",
+  "scope": "source, mathematical oracles and full-Program syntax; no native execution",
+  "production_diff_empty": true,
+  "production_sha256": {
+    "include/pops/numerics/elliptic/nd/general_field_operator.hpp": "dd0d33ff8cf1edd5ef54fdfe89afa9d91ca1723a69bfc8e2431bbffeeb2e714d",
+    "python/pops/fields/_observation_contract.py": "9d5c5579609757d90d8899250231bba5284c8f933b7b3e68e39c44a1344a181e",
+    "python/pops/fields/_program_problem.py": "ac3118e2ebfdace059305c5c6791880e2fd74dd3d9c558c1df62bb7e2ba5ed05",
+    "python/pops/fields/methods.py": "76ffd89ea49e7a132ec5c9971d7be6b9e7a42c0a02fac252a2ea1a59161f1c0c",
+    "python/pops/codegen/program_emit_solve.py": "3f174a5a3acf7f430279e64f3591a24030a8262cf0ffd20c09cbc1da16e87d33",
+    "python/pops/codegen/program_emit_ops.py": "1ccf260e434467a1a33b01309c9bc46ae7495635ed1b5292efda9ca13f3ba689"
+  },
+  "translation_units": [
+    {
+      "name": "test_m27_full_program_syntax_F0",
+      "cpp_sha256": "761f357c91e0c8ae8f7ec37062e72578cdd0716c54c8ae6da07a5effb3b42f72"
+    },
+    {
+      "name": "test_m27_full_program_syntax_Fcurrent",
+      "cpp_sha256": "761f357c91e0c8ae8f7ec37062e72578cdd0716c54c8ae6da07a5effb3b42f72"
+    },
+    {
+      "name": "test_m27_full_program_syntax_T0",
+      "cpp_sha256": "6eee3b8c0b3d3f681448b6c80072f7431e0186b9683a3a2da96a55dd7a3f1f69"
+    },
+    {
+      "name": "test_m27_full_program_syntax_Tcurrent",
+      "cpp_sha256": "6eee3b8c0b3d3f681448b6c80072f7431e0186b9683a3a2da96a55dd7a3f1f69"
+    }
+  ],
+  "files": {
+    "source-and-math.xml": "5ef434747253898670ce3e16766f4e22c5d3304cb9bf1e157b5feffd24bbc1c1",
+    "syntax-and-initial-math.xml": "739f42001ac66a5e5058ee03f8e7bbc4c3ee7a32bffa3cf393d2776f6a0b7f7a",
+    "test_m27_full_program_syntax_F0-compiler-command.txt": "4ded5bb55f0bb9887be02e640ccbdcc694c2c61365f9f02bca833b2f53ed4204",
+    "test_m27_full_program_syntax_F0-compiler.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "test_m27_full_program_syntax_Fcurrent-compiler-command.txt": "4ded5bb55f0bb9887be02e640ccbdcc694c2c61365f9f02bca833b2f53ed4204",
+    "test_m27_full_program_syntax_Fcurrent-compiler.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "test_m27_full_program_syntax_T0-compiler-command.txt": "4b366afdd52c50a0661d6cd3d666613d346ffc0a7e85ad379508b3b3b1c74691",
+    "test_m27_full_program_syntax_T0-compiler.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "test_m27_full_program_syntax_Tcurrent-compiler-command.txt": "4b366afdd52c50a0661d6cd3d666613d346ffc0a7e85ad379508b3b3b1c74691",
+    "test_m27_full_program_syntax_Tcurrent-compiler.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "independent_checks": {
+    "public_projection_ir_and_grammar": 11,
+    "dense_math": 6,
+    "complete_program_syntax": 2
+  }
+}

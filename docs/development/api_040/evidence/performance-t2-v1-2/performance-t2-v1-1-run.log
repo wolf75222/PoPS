@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/joint_reconstruction_benchmark_v1_1.py", line 522, in <module>
+    main()
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/joint_reconstruction_benchmark_v1_1.py", line 518, in main
+    _driver(args)
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/joint_reconstruction_benchmark_v1_1.py", line 444, in _driver
+    cold = {lane: _invoke(args, lane, "compile", index, identities[lane], roots[lane],
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/joint_reconstruction_benchmark_v1_1.py", line 396, in _invoke
+    raise RuntimeError(f"{lane} {phase} failed ({exit_code}); see {stderr_path}")
+RuntimeError: baseline compile failed (1); see /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/performance-t2-v1-1-run/00-baseline-compile.stderr.log

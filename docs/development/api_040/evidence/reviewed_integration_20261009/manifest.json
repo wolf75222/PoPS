@@ -1,0 +1,375 @@
+{
+  "schema": 1,
+  "parent_source_commit": "98804c6849c9966e05b5397126bab983a5fa0227",
+  "reviewed_patch_sha256": "9c685bcefa658a2b66ea1fb1c48ff7e0efe1f35190f63847f5eaf6cf972adb4c",
+  "reviewed_source_paths": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "exists_after_apply": true,
+      "sha256": "824973ccf565eb541e848fb351cd96f934577767346e6046bcf1c8697d569680"
+    },
+    {
+      "path": "docs/development/api_040/accepted_static_provider_read_v1.md",
+      "exists_after_apply": true,
+      "sha256": "6ecac09253121fb443a4d7ae41b9f928ea7ae2a7f11dfa12027f377f88d9d0be"
+    },
+    {
+      "path": "docs/development/api_040/program_norm2_ownership_v1.md",
+      "exists_after_apply": true,
+      "sha256": "2c74589929e2d23d344c5b94a93a2e3ae4023a597eb4afab404a99f973240fd4"
+    },
+    {
+      "path": "docs/development/api_040/public_library_alias_v1.md",
+      "exists_after_apply": true,
+      "sha256": "f681d5917836b179c9f47fe578e8a53bbcc3426622918331ccd5f6564f7f5987"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_spatial_operations.inc",
+      "exists_after_apply": true,
+      "sha256": "b2b0c5ab0102d1a274f9fd8e606ed8d25dcb1ec5dca8244268696c1866e2cb71"
+    },
+    {
+      "path": "python/pops/_ir/path_arithmetic.py",
+      "exists_after_apply": true,
+      "sha256": "999f8010e50eb2151984d8c030e5658485caf2c0f55389f9745910ea04b43b0d"
+    },
+    {
+      "path": "python/pops/boundary/interior_trace.py",
+      "exists_after_apply": true,
+      "sha256": "daded5abc39637a6e946d1df636e7c611b2aac5c0e457f01ce602de168be0993"
+    },
+    {
+      "path": "python/pops/codegen/_phases.py",
+      "exists_after_apply": true,
+      "sha256": "874d4bd9e011e3964a5758da455b3e71c221b1d0e4a139f75e3355f8b48ddeff"
+    },
+    {
+      "path": "python/pops/codegen/program_accepted_ssp.py",
+      "exists_after_apply": true,
+      "sha256": "b264d64a072318848fd211cf81453a29a9783142c85916ea879a655a53331567"
+    },
+    {
+      "path": "python/pops/codegen/program_emit_field_routes.py",
+      "exists_after_apply": true,
+      "sha256": "3dd00d18572c3fd4e5879bddfb4ea4d741f02500aedc3b7013b75742d5c36cad"
+    },
+    {
+      "path": "python/pops/codegen/program_field_plan.py",
+      "exists_after_apply": true,
+      "sha256": "cfcd0c6bb0b3b5b9575d862f1af85c965ea9629086a2e20d8d9620b9d96491b9"
+    },
+    {
+      "path": "python/pops/codegen/program_models.py",
+      "exists_after_apply": true,
+      "sha256": "8e3a8704a9ad9d8765dbddf6e19a8fdf1bf09d7927d86bd929faedcb90290d89"
+    },
+    {
+      "path": "python/pops/codegen/program_static_provider_proof.py",
+      "exists_after_apply": true,
+      "sha256": "38a7463c0e9c4eba3f5c63b5bd3418f138a19f371e478e79e91c397a4b4ce1d3"
+    },
+    {
+      "path": "python/pops/fields/_references.py",
+      "exists_after_apply": true,
+      "sha256": "e9e5ad3d56218f0663df1f109982d9b1a20c272d3438eca9954dc0c2803834dd"
+    },
+    {
+      "path": "python/pops/fields/boundary_values.py",
+      "exists_after_apply": true,
+      "sha256": "953a4978ed1b7e5438c118167cc0ee12b2cfcdfda09969b8dc4caa51da8a8272"
+    },
+    {
+      "path": "python/pops/identity/checkpoint_origin.py",
+      "exists_after_apply": true,
+      "sha256": "9c78ed22f930e3737fc81ae203b305df0dfc6a2ae94a22135a6767b6126ca3c6"
+    },
+    {
+      "path": "python/pops/model/expression_language.py",
+      "exists_after_apply": true,
+      "sha256": "ef14759357fe9da4dc30438e8f49ec75627af4ce6f3221452452f6e840dcebb6"
+    },
+    {
+      "path": "python/pops/model/pointwise_boundary.py",
+      "exists_after_apply": true,
+      "sha256": "dcc22bac4db6fb5237a8b008de36f3809b8f9e6ef29b60dd76d4e97fd01ac15b"
+    },
+    {
+      "path": "python/pops/moments/fan_li_path.py",
+      "exists_after_apply": true,
+      "sha256": "1e62af90f5d9f23df7a1da77ca0c355a51bb646e05fe309034a763cad42e9dc8"
+    },
+    {
+      "path": "python/pops/numerics/__init__.py",
+      "exists_after_apply": true,
+      "sha256": "dd07bfaed80afb8e55df0057cb0bec173f1bc0d17d1c0d39ca32d51b0970edd1"
+    },
+    {
+      "path": "python/pops/numerics/coordinated_face.py",
+      "exists_after_apply": true,
+      "sha256": "5262d9a82267fff069bc98cf7d7250236397b225cfd3cf932c57d9dc6c9ee0e4"
+    },
+    {
+      "path": "python/pops/numerics/diffusion.py",
+      "exists_after_apply": true,
+      "sha256": "b71b3cb13cc47e3076b13fd71b9a2bf6628c1ebd6ede37df2f9b97620b8390c1"
+    },
+    {
+      "path": "python/pops/numerics/nonconservative.py",
+      "exists_after_apply": true,
+      "sha256": "b3ed771bb497ed9b6a33d8a5c11d903329e5ad3e6b473e7093e8ed19a75278e7"
+    },
+    {
+      "path": "python/pops/numerics/normalized_polynomial_path.py",
+      "exists_after_apply": true,
+      "sha256": "b2a58a7794c10ca23de2bf37b72adcac0ffaddfc61d551cb6e7a883af87f890b"
+    },
+    {
+      "path": "python/pops/numerics/scharfetter_gummel.py",
+      "exists_after_apply": true,
+      "sha256": "562c1d87493092d21db0666e302a3e7691fad04f25e5146d5b18422bed2b5938"
+    },
+    {
+      "path": "python/pops/numerics/state_storage.py",
+      "exists_after_apply": true,
+      "sha256": "6bb4c7c922f25ef449c56ec37090b843f5c7024819f58208061d012d39ea81d8"
+    },
+    {
+      "path": "python/pops/numerics/symbolic_path.py",
+      "exists_after_apply": true,
+      "sha256": "3f63584114e24c3631f0b599220bbbc2b002a7a25b299806d765086dccecc1c3"
+    },
+    {
+      "path": "python/pops/output/_checkpoint_collective.py",
+      "exists_after_apply": true,
+      "sha256": "759749f3883270adf2a47511674874ec658353f2838bacccc97d08472985cb69"
+    },
+    {
+      "path": "python/pops/public_api_exports.py",
+      "exists_after_apply": true,
+      "sha256": "f82f64330f8f66bb17745056cc954fc7f22aceb7865616f9eb7b8d613954a237"
+    },
+    {
+      "path": "python/pops/runtime/_checkpoint_manifest.py",
+      "exists_after_apply": true,
+      "sha256": "cd18d55830800d1659f83e15fad31d0be7bc1939fa464464a815c3d56f7ba57d"
+    },
+    {
+      "path": "python/pops/time/_authoring.py",
+      "exists_after_apply": true,
+      "sha256": "ee01fa20e1551edf9186317b316742120eb107dbb1549b201b006355f2439009"
+    },
+    {
+      "path": "python/pops/time/_graph/value_traversal.py",
+      "exists_after_apply": true,
+      "sha256": "dd054a5ae627ac296c08712fa35da934d62681954a71681be4ef60c4d83ee77b"
+    },
+    {
+      "path": "python/pops/time/_program/contract.py",
+      "exists_after_apply": true,
+      "sha256": "ad91f5b9e3de1a7ba3344280b16ed7272bb8de0cd247eee47e3a84719eaeef61"
+    },
+    {
+      "path": "python/pops/time/_program/global_history_storage.py",
+      "exists_after_apply": true,
+      "sha256": "7a6f868eb0968e8a2ab0aa588e9b8d54530d0d3c166fb66d86012640aa8ad121"
+    },
+    {
+      "path": "python/pops/time/evolved_field_stage.py",
+      "exists_after_apply": true,
+      "sha256": "28199192a84119b4532be420c5f1340826084ec0791f461024fc87b7f8a70764"
+    },
+    {
+      "path": "scripts/ci_assemble_installed_wheel.py",
+      "exists_after_apply": true,
+      "sha256": "d662826c103ed802e18fa2359dc24be391370fbb7812daba3ccd36665f5c35f2"
+    },
+    {
+      "path": "scripts/ci_python_dimensions.py",
+      "exists_after_apply": true,
+      "sha256": "efb685c7bb25be2e3c0d28a7c57542c67d8c9f290466982c1276b7b1dd36aaac"
+    },
+    {
+      "path": "scripts/run_m2_gate.py",
+      "exists_after_apply": true,
+      "sha256": "4b97b0dbcfb5b89eebc3cf508326ee387044a3747d67f9529e44bf6e81b089a6"
+    },
+    {
+      "path": "tests/cpp/integration/amr/test_amr_history_ring.cpp",
+      "exists_after_apply": true,
+      "sha256": "4d2d8798e9f8b5727fab6df0ac014675af1b8c4d6d6eb787284f0fa27a914a7f"
+    },
+    {
+      "path": "tests/cpp/integration/amr/test_amr_program_positivity_floor.cpp",
+      "exists_after_apply": true,
+      "sha256": "87ded0864cd2b910fa1e3c52fd90cdb6de7bf3eefdb5834ddbf46f4a67c3f973"
+    },
+    {
+      "path": "tests/cpp/integration/amr/test_amr_system_contract.cpp",
+      "exists_after_apply": true,
+      "sha256": "a084c1c0b83875724e752456ad98897da767354c4d33b0a3e52e30ad4e09b52a"
+    },
+    {
+      "path": "tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp",
+      "exists_after_apply": true,
+      "sha256": "fd74f1f6efe77ab630125a83feab1fddf5b0edd6c984df8ae7453e8eb15837fa"
+    },
+    {
+      "path": "tests/cpp/unit/elliptic/test_coupled_fieldsolve.cpp",
+      "exists_after_apply": true,
+      "sha256": "0cca78a20c731679c88aba0476b8192e6b20e9015a759e62ca98c0d2c8a8b0ed"
+    },
+    {
+      "path": "tests/python/architecture/test_ci_python_dimensions.py",
+      "exists_after_apply": true,
+      "sha256": "057ba7e788aa10154a5e87a54621d5d737d7796ced11987d32784b83e919a482"
+    },
+    {
+      "path": "tests/python/architecture/test_final_nd_system_runtime.py",
+      "exists_after_apply": true,
+      "sha256": "ed092d3304347724c889ca27deef2de6ccd694e2cac3a26240fb3f431fb9628c"
+    },
+    {
+      "path": "tests/python/architecture/test_final_public_api.py",
+      "exists_after_apply": true,
+      "sha256": "5a423d9c473d4f997281df29e5f96ce24e40ddf53e4387a5496fde8cdbd1a659"
+    },
+    {
+      "path": "tests/python/architecture/test_import_graph.py",
+      "exists_after_apply": true,
+      "sha256": "ac0dd51177b8a27bedff0ae3f0221a92c05d0a3abd09d859e24db4c04d87d90b"
+    },
+    {
+      "path": "tests/python/architecture/test_m2_temporal_execution_gate.py",
+      "exists_after_apply": true,
+      "sha256": "788992163af8594e684a6a54a30bd409f62d492e6df1d3d953af242bd8cab6ba"
+    },
+    {
+      "path": "tests/python/architecture/test_sol61_amr_witness_release_guard.py",
+      "exists_after_apply": true,
+      "sha256": "783e4b40cd9b587b5dd61877a22c43ebbbcd1d91b9f9d414ed9ff6d2c554391b"
+    },
+    {
+      "path": "tests/python/architecture/test_time_graph_package.py",
+      "exists_after_apply": true,
+      "sha256": "ea55fc5e1d6623d1beeb6ae4a51406f60a134794c436d42ce0952540e1e07c2b"
+    },
+    {
+      "path": "tests/python/architecture/test_time_package_layout.py",
+      "exists_after_apply": true,
+      "sha256": "ef402f82f8eb8a8dd6b9d5c7ba62bb76c25d851706805df13047adb674760bbe"
+    },
+    {
+      "path": "tests/python/conftest.py",
+      "exists_after_apply": true,
+      "sha256": "7f073fed282bce0da226b47dd79e7523d66b1d70d100fa72a04b235e72ec60d4"
+    },
+    {
+      "path": "tests/python/test_durations.json",
+      "exists_after_apply": true,
+      "sha256": "8fd09c46b883aa55d6ee84ccf50f6aaf930fef77ad106eaf7354386d1004ffda"
+    },
+    {
+      "path": "tests/python/unit/codegen/test_program_input_fields.py",
+      "exists_after_apply": true,
+      "sha256": "e127fc5efbbfd42a3bed36576dbe306833fe3e35a63dd9b212aba5e3e9b3288e"
+    },
+    {
+      "path": "tests/python/unit/codegen/test_static_provider_ssp_proof.py",
+      "exists_after_apply": true,
+      "sha256": "deddf7465ec87992a0ce897f25bd88925600e4edda4bf92e032002b7f6a45dd6"
+    },
+    {
+      "path": "tests/python/unit/numerics/test_fan_li15_path_contract.py",
+      "exists_after_apply": true,
+      "sha256": "6aaad0b7a993b5cd45c12469342f1d3e40e4d27931519f20e6f31d1f9948fe2f"
+    },
+    {
+      "path": "tests/python/unit/time/test_temporal_tau_program_authority.py",
+      "exists_after_apply": true,
+      "sha256": "7ccecdabbb7fec49d9f94928462d063be6e4db4d9f12c56e4730bca97ab713d3"
+    }
+  ],
+  "receipt_files": [
+    {
+      "file": "architecture-non-author.json",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-merged-architecture-independent-20261009/non-author-architecture-counterreview.json",
+      "sha256": "3543aa8eb7fdabdb23c5a0ee526340aea3a898ef7c6b7691844f2a0686da7ee8",
+      "bytes": 7564
+    },
+    {
+      "file": "ssp-v2-non-author.json",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-provider-ssp-independent-review-20261009/ssp-v2-counter-review-accepted.json",
+      "sha256": "03aa235d1e8286edaa07a88258c231e0219125fcf6d03dea0723763279643dd6",
+      "bytes": 3899
+    },
+    {
+      "file": "m2-v2-non-author.json",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m2-independent-source-review-20261009/independent-review-v2.json",
+      "sha256": "17d516698dbf63c7c75bd12f76c37db7b4d0b6400e6faee107c20934c0a07632",
+      "bytes": 6569
+    },
+    {
+      "file": "composed-source-author-result.json",
+      "source": "/Users/romaindespoulain/dev/tmp/sol61-composed-source-inventory-validation-20261009/final-architecture-result.json",
+      "sha256": "8f2cdcc5ac13eca10c6a9a3fc341146d71bb7c8af81ef72406298a10837b7be9",
+      "bytes": 1335
+    },
+    {
+      "file": "composed-source-author-reception.json",
+      "source": "/Users/romaindespoulain/dev/tmp/sol61-composed-source-inventory-validation-20261009/final-reception.json",
+      "sha256": "ae9d37b5f0c104948d13d58eaa0eb9a8afdf741cfd4f8e63bce770ebe8c8b0d1",
+      "bytes": 619
+    },
+    {
+      "file": "ci-installed-root-non-author.json",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-ci-installed-routing-review-20261009/root-review-v2.json",
+      "sha256": "4fe4d66f3a6fe800df7c54315a354ec66ffca841be64fd0115bacf035a109fb1",
+      "bytes": 3311
+    },
+    {
+      "file": "ci-source-native-audit.json",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-ci-installed-routing-review-20261009/v2-source-native-audit.json",
+      "sha256": "d0d00a1d3c68b74e45a3db120c1da9c29e52351330323bdeaa1bf2eb67df6203",
+      "bytes": 72
+    },
+    {
+      "file": "cpp-fixtures-non-author.json",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-cpp-fixture-independent-20261009/cpp-fixture-counterreview.json",
+      "sha256": "fa2c20bc18fcd4575f22aedaf859d0ddfb9dfb3504289dd491c91a4f8e351521",
+      "bytes": 3466
+    },
+    {
+      "file": "norm2-v2-non-author.json",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-independent-review-20261009/independent-norm2-v2-review.json",
+      "sha256": "22094acf289a56a9341249f3dbbd7b663b9ab037ab564b9a9410d2800b492959",
+      "bytes": 31897
+    },
+    {
+      "file": "norm2-v2-author.json",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-norm2-ownership-98804c68-20261009/norm2-review-ready-v2.json",
+      "sha256": "6017c7c34103291064913efe0f1e3b85d451ffb2a2377c42ffd613ce6ccc8d9a",
+      "bytes": 23969
+    },
+    {
+      "file": "inventory-order-reception.json",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/inventory-source-final-order-reception.json",
+      "sha256": "12e707c17e5dd596459cc37b7e552e113650b14790a354ca3b96c823f0c7ac1d",
+      "bytes": 480
+    },
+    {
+      "file": "gpu-r2-actual-linkage-failure.json",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-resume-r2-linkage-failure.json",
+      "sha256": "39a20c8b8adac5f69d22f1d26c01c177581c2bb9a6ed7f68d8063d4ecbe0c5c2",
+      "bytes": 13394
+    },
+    {
+      "file": "gpu-r3-source-non-author.json",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-gpu-r3-independent-review-20261009/independent-r3-review.json",
+      "sha256": "92dddc50ba838f6fab4289ee2bb9f512d6e667d147de4d5025a786ff2a2d19a1",
+      "bytes": 12131
+    }
+  ],
+  "integration": "Applied to real Main; final committed Source validation and rebuilt Native are pending.",
+  "scientific_reception": "Source988/f8d/de2 only; no inheritance to changed Python/core/SDK.",
+  "full_94_obligations_closed": false
+}

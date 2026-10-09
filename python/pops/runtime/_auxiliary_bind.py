@@ -25,8 +25,11 @@ def validate_auxiliary_bind_inputs(artifact: Any, values: Any) -> None:
             continue
         data = operations.to_data()["provider_evidence"]["auxiliary"]
         pack = ProviderPack.from_data(data)
+        from pops.codegen.provider_instances import require_instance_contract, runtime_key
+        instance = require_instance_contract(operations, owner_qid=block.instance_owner_qid)
         for key in pack:
             entry = pack.declared_entry(key)
+            key = runtime_key(key, instance)
             previous = declared.get(key)
             if previous is not None and previous != entry:
                 raise ValueError("pops.bind auxiliary providers conflict for %r" % (key,))

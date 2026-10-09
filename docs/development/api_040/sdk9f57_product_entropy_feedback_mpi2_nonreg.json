@@ -1,0 +1,229 @@
+{
+  "schema": "root.api040.sdk9f57-product-entropy-feedback-mpi2-nonreg@1",
+  "status": "passed",
+  "counts_per_rank": {
+    "tests": 13,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "dimension": 2,
+  "ranks": 2,
+  "threads": 1,
+  "duration_seconds": 1229.5776774170808,
+  "test_source_commit": "cfd5b01ed6c409879a823e9f93a9f93b5f5198cb",
+  "installed_python_source_commit": "378f29084c915ae316308481949ea174858197b2",
+  "actual_native_compilation_source_commit": "0abbe25395a44e570d8d5525693b8e2dcbf4d387",
+  "sdk_signature": "9f57def42c90cfc0e7ee127afa5050d95f27ecbc65b4ed198f788a097e4b4bad",
+  "native_sha256": "c8a45b013042f53a76ca6754a0285203aa5a9fda6a18f1d580e181dec99642fe",
+  "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=9f57def42c90cfc0e7ee127afa5050d95f27ecbc65b4ed198f788a097e4b4bad;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=4f0ddfff213bbc8f41ec9b7c80af3672d966f0527a55a041ed2b7e91e90198ab;dim=2",
+  "same_installation": true,
+  "test_sources_unchanged": true,
+  "rank_test_parity": true,
+  "verified_installed_source_files": 1128,
+  "before_identity": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-product-entropy-feedback-nonreg-mpi2-dim2/before/identity.json",
+    "bytes": 2917,
+    "sha256": "d63fbf10262299f855b51b41f16a28a7828b6d4788bf7da901e206090cbd22b5"
+  },
+  "after_identity": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-product-entropy-feedback-nonreg-mpi2-dim2/after/identity.json",
+    "bytes": 2917,
+    "sha256": "d63fbf10262299f855b51b41f16a28a7828b6d4788bf7da901e206090cbd22b5"
+  },
+  "before_source_files": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-product-entropy-feedback-nonreg-mpi2-dim2/before/source-files.json",
+    "bytes": 131919,
+    "sha256": "e588ff4deeb92b3fa5143811f4f1066984482bc07af50294e40c6d01510cb44e"
+  },
+  "after_source_files": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-product-entropy-feedback-nonreg-mpi2-dim2/after/source-files.json",
+    "bytes": 131919,
+    "sha256": "e588ff4deeb92b3fa5143811f4f1066984482bc07af50294e40c6d01510cb44e"
+  },
+  "raw_result": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-product-entropy-feedback-nonreg-mpi2-dim2/result.json",
+    "bytes": 7103,
+    "sha256": "41ab069b95bab011d8fdd971801b853ba9623f7582fd15532d5b644cbd5ee4a9"
+  },
+  "raw_test_sources": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-product-entropy-feedback-nonreg-mpi2-dim2/test-sources.json",
+    "bytes": 675,
+    "sha256": "41bdefa80083d8f8f374a2d3df4b817c6159d8ed80b340fbf1e2e5facdd6662c"
+  },
+  "launcher_log": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-product-entropy-feedback-nonreg-mpi2-dim2/launcher.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "rank_results": [
+    {
+      "rank": 0,
+      "counts": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_m19_product_support_runtime",
+          "test_native_product_reduce_lift_restart[False-4-3-3]"
+        ],
+        [
+          "tests.python.integration.runtime.test_m19_product_support_runtime",
+          "test_native_product_reduce_lift_restart[False-2-5-1]"
+        ],
+        [
+          "tests.python.integration.runtime.test_m19_product_support_runtime",
+          "test_native_product_reduce_lift_restart[False-7-3-5]"
+        ],
+        [
+          "tests.python.integration.runtime.test_m19_product_support_runtime",
+          "test_native_product_reduce_lift_restart[True-4-3-3]"
+        ],
+        [
+          "tests.python.integration.runtime.test_m19_product_support_runtime",
+          "test_native_product_reduce_lift_restart[True-2-5-1]"
+        ],
+        [
+          "tests.python.integration.runtime.test_m19_product_support_runtime",
+          "test_native_product_reduce_lift_restart[True-7-3-5]"
+        ],
+        [
+          "tests.python.integration.runtime.test_m18_discrete_entropy_runtime",
+          "test_twenty_interior_targets_and_outside_cone_refusal"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_integral_feedback",
+          "test_public_feedback_original_source_real_exterior_and_byte_exact_restart[False-8]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_integral_feedback",
+          "test_public_feedback_original_source_real_exterior_and_byte_exact_restart[False-16]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_integral_feedback",
+          "test_public_feedback_original_source_real_exterior_and_byte_exact_restart[True-8]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_integral_feedback",
+          "test_public_feedback_original_source_real_exterior_and_byte_exact_restart[True-16]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_integral_feedback",
+          "test_feedback_rejected_transport_preserves_capture_integral_and_safe_retry[False]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_integral_feedback",
+          "test_feedback_rejected_transport_preserves_capture_integral_and_safe_retry[True]"
+        ]
+      ],
+      "xml": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-product-entropy-feedback-nonreg-mpi2-dim2/rank0.xml",
+        "bytes": 11014,
+        "sha256": "cb1a7b72b1674678f7d71222d72e00250bd3df1b837e10a1536ec655415c75f1"
+      },
+      "log": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-product-entropy-feedback-nonreg-mpi2-dim2/rank0.log",
+        "bytes": 4850,
+        "sha256": "2e3187ec7b396f6dda6d4635b3145a79247736769c284156117ef8f86b8a0a7e"
+      },
+      "identity": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-product-entropy-feedback-nonreg-mpi2-dim2/rank0.identity.json",
+        "bytes": 579,
+        "sha256": "4998d2ec9f2bcefade902931645de34dfad902812be80888f88ac0e6549e5d09"
+      }
+    },
+    {
+      "rank": 1,
+      "counts": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_m19_product_support_runtime",
+          "test_native_product_reduce_lift_restart[False-4-3-3]"
+        ],
+        [
+          "tests.python.integration.runtime.test_m19_product_support_runtime",
+          "test_native_product_reduce_lift_restart[False-2-5-1]"
+        ],
+        [
+          "tests.python.integration.runtime.test_m19_product_support_runtime",
+          "test_native_product_reduce_lift_restart[False-7-3-5]"
+        ],
+        [
+          "tests.python.integration.runtime.test_m19_product_support_runtime",
+          "test_native_product_reduce_lift_restart[True-4-3-3]"
+        ],
+        [
+          "tests.python.integration.runtime.test_m19_product_support_runtime",
+          "test_native_product_reduce_lift_restart[True-2-5-1]"
+        ],
+        [
+          "tests.python.integration.runtime.test_m19_product_support_runtime",
+          "test_native_product_reduce_lift_restart[True-7-3-5]"
+        ],
+        [
+          "tests.python.integration.runtime.test_m18_discrete_entropy_runtime",
+          "test_twenty_interior_targets_and_outside_cone_refusal"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_integral_feedback",
+          "test_public_feedback_original_source_real_exterior_and_byte_exact_restart[False-8]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_integral_feedback",
+          "test_public_feedback_original_source_real_exterior_and_byte_exact_restart[False-16]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_integral_feedback",
+          "test_public_feedback_original_source_real_exterior_and_byte_exact_restart[True-8]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_integral_feedback",
+          "test_public_feedback_original_source_real_exterior_and_byte_exact_restart[True-16]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_integral_feedback",
+          "test_feedback_rejected_transport_preserves_capture_integral_and_safe_retry[False]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_integral_feedback",
+          "test_feedback_rejected_transport_preserves_capture_integral_and_safe_retry[True]"
+        ]
+      ],
+      "xml": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-product-entropy-feedback-nonreg-mpi2-dim2/rank1.xml",
+        "bytes": 11014,
+        "sha256": "d82b63949a31f5d2a0fbd141a276ec4643aaa2111b2caee6aac60c16d2bc5928"
+      },
+      "log": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-product-entropy-feedback-nonreg-mpi2-dim2/rank1.log",
+        "bytes": 4850,
+        "sha256": "256e8965ae593f7cd0b3e2e88c5c3c8605c88fdc33ad25d90b9a74a28a26ee17"
+      },
+      "identity": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-product-entropy-feedback-nonreg-mpi2-dim2/rank1.identity.json",
+        "bytes": 579,
+        "sha256": "bbd0bb0f3e97d87b39960845864ed1e284b5fe2e2bcb36582fef1220d7b56df2"
+      }
+    }
+  ],
+  "selected_scope": [
+    "Six finite-product Reduce/Lift/initial checkpoint/restart variants",
+    "Twenty entropy interior targets and outside-cone refusal",
+    "Four integral-feedback original-source/exterior/restart cases",
+    "Two rejected-transport capture-preservation and safe-retry cases"
+  ],
+  "scientific_owner_seal": false,
+  "saved_state_independent_reception": "pending external ROOT seals on new SDK9f portable archive",
+  "full_m19_kinetics_qualification": false,
+  "new_source_headers_requalified": false,
+  "migration_complete": false,
+  "remote_github_ci_claim": false
+}

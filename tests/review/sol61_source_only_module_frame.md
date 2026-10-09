@@ -1,0 +1,11 @@
+# Source-only Module storage from declared frame
+
+SDK27 jobs 732758/732759 failed during real public compilation before bind or mapping/injection. The frozen thermal authoring had no physical flux and no explicit Module frame. Those failures remain negative; neither the mapper nor its backend was exercised.
+
+An operator-first source-only `Module(frame=...)` now admits its existing Program-owned storage carrier through `prepare_local_state_storage_carrier`. The selected registered StateSpace must have the identical frame identity and cell/multifab storage contract. The dimension follows the declared Cartesian frame axes. Unsupported grid/diffusion/nonlocal balances retain their existing native lowering, and an authored flux remains authoritative. No backend dimension, first State, first layout, zero flux, model name or component-name recipe is used.
+
+The production delta is the missing adapter call in `_module_to_model`; the brick emitter already has the `program_only_storage` branch and omits physical flux and wave-speed methods. Public Module frame declaration/identity/schema are a separate Kier change. No new wire, native ABI, physical equation or numerical tolerance is changed by this compiler admission itself. Generated actual source and the existing C25 compile-input authority distinguish the changed emitted carrier; old compiled artefacts are not qualified retroactively.
+
+Source tests exercise dimensions 1/2/3, changed component order, an exact selected State among independent declarations, immutable canonical Module hash, absent-frame refusal, and genuine emitted native-loader source. Initial test-authoring mistakes (multi-State default adapter route and a non-identifier operator name) are preserved as separate XMLs; the valid-before-fix reproduction is `sol61-source-only-module-frame-valid-red.xml` and really reaches `emit_cpp_brick`'s missing-flux refusal. Coherent after-fix storage tests: 32 PASS, 7.16 s. This is Source emission only, not Native JIT, MPI, AMR, GPU or temporal consumption qualification.
+
+The future thermal fixture must declare its physical frame on the source and both destination Modules explicitly. SDK27 archives stay immutable; ROOT owns a fresh coherent SDK build and genuine temporal Field→two-destination reception after independent review.

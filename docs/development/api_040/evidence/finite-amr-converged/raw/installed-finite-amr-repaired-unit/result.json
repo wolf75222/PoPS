@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='aed8c1582c3344bd5afb19ab784adec260bcdbd4bf944b26a29242b53889c862'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-repaired-unit/pytest.xml",
+    "--basetemp=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-repaired-unit/pytest-tmp",
+    "tests/python/unit/codegen/test_finite_m09_full_program.py",
+    "tests/python/unit/codegen/test_finite_m09_source.py",
+    "tests/python/unit/codegen/test_finite_m09_admission.py",
+    "tests/python/unit/numerics/test_finite_linear_native_shapes.py",
+    "tests/python/unit/amr/test_local_state_storage_amr.py"
+  ],
+  "returncode": 0,
+  "pytest_base_temp": "pytest-tmp",
+  "duration_seconds": 22.66548891691491,
+  "counts": {
+    "tests": 21,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "passed",
+  "identity_sha256": "a71dd1d12c123f14aee4e8c501e1e49de9f868fc914fc1eda5c51ad5038b3ec4",
+  "log_sha256": "56ec90d8ba22d3b65f2a01c31ba90b07c779d37605a6b71ef6bd0d7b7c4724c3"
+}

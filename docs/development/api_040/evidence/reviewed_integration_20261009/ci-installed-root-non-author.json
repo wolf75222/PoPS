@@ -1,0 +1,41 @@
+{
+  "delta_sha256": "220933d3fffe598dae7f387d6c7c45e97a105d200d9ebde58b4b3c5ae4a3ed08",
+  "assembler_whole_AST_equal": true,
+  "argv": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "-c",
+    "import sys; sys.path[:0]=['/Users/romaindespoulain/dev/tmp/PoPS-root-ci-installed-routing-review-20261009/source/scripts', '/Users/romaindespoulain/dev/tmp/PoPS-root-ci-installed-routing-review-20261009/source/python', '/Users/romaindespoulain/dev/tmp/PoPS-root-ci-installed-routing-review-20261009/source']; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-q",
+    "--noconftest",
+    "-o",
+    "pythonpath=",
+    "-o",
+    "cache_dir=/Users/romaindespoulain/dev/tmp/PoPS-root-ci-installed-routing-review-20261009/v2-cache",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-root-ci-installed-routing-review-20261009/v2-tmp",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-root-ci-installed-routing-review-20261009/v2-source-routing.xml",
+    "tests/python/architecture/test_ci_python_dimensions.py"
+  ],
+  "exit": 0,
+  "stdout": "........                                                                 [100%]\n8 passed in 0.06s\n",
+  "scope": "Root independent CI delta Source unit validation; assembler AST identical to independently physically assembled wheel. No new Native/install/hardware claim.",
+  "Native_audit": {
+    "attempts_blocked": [],
+    "Native_loaded": {},
+    "pytest_exit": 0
+  },
+  "measured_audit_argv": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "-c",
+    "import sys,json,importlib.abc\nfrom pathlib import Path\nsys.path[:0]=['/Users/romaindespoulain/dev/tmp/PoPS-root-ci-installed-routing-review-20261009/source/scripts', '/Users/romaindespoulain/dev/tmp/PoPS-root-ci-installed-routing-review-20261009/source/python', '/Users/romaindespoulain/dev/tmp/PoPS-root-ci-installed-routing-review-20261009/source']\nattempts=[]\nclass DenyNative(importlib.abc.MetaPathFinder):\n def find_spec(self,name,path=None,target=None):\n  if name in ('_pops','pops._pops') or name.endswith('._pops'):\n   attempts.append(name)\n   raise ModuleNotFoundError('Native denied during Source CI routing review')\nsys.meta_path.insert(0,DenyNative())\nimport pytest\nstatus=pytest.main(sys.argv[1:])\nloaded={name:str(getattr(module,'__file__','')) for name,module in sys.modules.items() if name in ('_pops','pops._pops') or name.endswith('._pops')}\nPath('/Users/romaindespoulain/dev/tmp/PoPS-root-ci-installed-routing-review-20261009/v2-source-native-audit.json').write_text(json.dumps({'attempts_blocked':attempts,'Native_loaded':loaded,'pytest_exit':int(status)},indent=2)+'\\n')\nassert not loaded\nraise SystemExit(status)\n",
+    "-q",
+    "--noconftest",
+    "-o",
+    "pythonpath=",
+    "-o",
+    "cache_dir=/Users/romaindespoulain/dev/tmp/PoPS-root-ci-installed-routing-review-20261009/v2-audit-cache",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-root-ci-installed-routing-review-20261009/v2-audit-tmp",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-root-ci-installed-routing-review-20261009/v2-source-audited.xml",
+    "tests/python/architecture/test_ci_python_dimensions.py"
+  ],
+  "measured_audit_XML": "/Users/romaindespoulain/dev/tmp/PoPS-root-ci-installed-routing-review-20261009/v2-source-audited.xml"
+}

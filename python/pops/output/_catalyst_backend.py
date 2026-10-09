@@ -168,6 +168,21 @@ def _add_blueprint_topology(
     topology_base = base + "/topologies/%s" % topology
     coordinate_lower = tuple(reversed(lower))
     coordinate_upper = tuple(reversed(upper))
+    if geometry.node_coordinates is not None:
+        root[coordset_base + "/type"] = "explicit"
+        spatial = tuple(slice(lo,hi+1) for lo,hi in zip(lower,upper,strict=True))
+        nodes = geometry.node_coordinates[spatial]
+        for axis in range(dimension):
+            values = (np.empty(0,dtype=np.float64) if empty else
+                      np.ascontiguousarray(nodes[...,axis]).reshape(-1))
+            root[coordset_base + "/values/" + _BLUEPRINT_COORDINATE_AXES[axis]] = values
+        root[topology_base + "/type"] = "unstructured"
+        root[topology_base + "/coordset"] = coordset
+        root[topology_base + "/elements/shape"] = _BLUEPRINT_CELL_SHAPES[dimension]
+        root[topology_base + "/elements/connectivity"] = (
+            np.empty(0,dtype=np.int64) if empty else _structured_connectivity(tuple(
+                hi-lo for lo,hi in zip(lower,upper,strict=True))))
+        return
     if geometry.coordinate_system == expected_cartesian:
         root[coordset_base + "/type"] = "uniform"
         for axis, (lo, hi, origin, spacing) in enumerate(zip(
@@ -295,7 +310,7 @@ def _add_blueprint_face_topology(
     if geometry.coordinate_system == POLAR_ANNULUS_2D_COORDINATES:
         if dimension != 2:
             raise ValueError("polar-annulus coordinates require spatial rank two")
-    elif geometry.coordinate_system != _CARTESIAN_COORDINATES[dimension]:
+    elif geometry.node_coordinates is None and geometry.coordinate_system != _CARTESIAN_COORDINATES[dimension]:
         raise NotImplementedError(
             "Catalyst face topologies prove Cartesian ranks 1/2/3 and 2D polar-annulus"
         )

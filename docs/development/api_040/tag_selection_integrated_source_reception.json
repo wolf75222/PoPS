@@ -1,0 +1,89 @@
+{
+  "main_production_fix": "76adc71c",
+  "native_build_completed": true,
+  "native_build_receipt": {
+    "bytes": 4154,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-amr-tag-selection-dim2-01c5b654/build-reception.json",
+    "sha256": "0f2fa092773eb004e8d2acba6f2be07a03a1a32c34ac01c52bf9f700c9b774c0"
+  },
+  "native_build_returncode": 0,
+  "native_build_source": "01c5b6545273dbb2f17b776ba2a23d31066a1c71",
+  "native_build_started": true,
+  "native_extension_loaded": false,
+  "rows": [
+    {
+      "counts": {
+        "errors": 0,
+        "failures": 1,
+        "skipped": 0,
+        "tests": 1
+      },
+      "stage": "baseline",
+      "xml": {
+        "bytes": 961,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/implicit-pair-source-baseline-84284034.xml",
+        "sha256": "7cc7585f8914f3af4f3beb0f8434d4026144b808a02cc68ee3d6b671208593ba"
+      }
+    },
+    {
+      "counts": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 24
+      },
+      "stage": "fixture-corrected",
+      "xml": {
+        "bytes": 4082,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/amr-bind-source-layout-fixture-9f169163.xml",
+        "sha256": "998d99e77a6441045e79228c868006bd7fbe4609dffaa4735d2f741f20467b22"
+      }
+    },
+    {
+      "counts": {
+        "errors": 0,
+        "failures": 2,
+        "skipped": 0,
+        "tests": 170
+      },
+      "stage": "release-consumer-drift",
+      "xml": {
+        "bytes": 29580,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/tag-selection-integrated-source-9b484f43.xml",
+        "sha256": "6105e5b245a3391240039bf661e3d48a916592ec7ace0f21fb08b8cf4f469562"
+      }
+    },
+    {
+      "counts": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 170
+      },
+      "stage": "integrated-corrected",
+      "xml": {
+        "bytes": 28312,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/tag-selection-integrated-source-01c5b654.xml",
+        "sha256": "54cafa74ae969da57cd188b62c3ca237884acd91b1e9a1999399de9bbab32a57"
+      }
+    },
+    {
+      "counts": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 29
+      },
+      "source_commit": "fc670393ce346557583a64dac82908541483fef8",
+      "stage": "exact-InstallPlan-relay-integrated",
+      "xml": {
+        "bytes": 4873,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/install-tagging-relay-integrated-fc670393.xml",
+        "sha256": "5fe8e590addc05e2774dbde0884b35dcb9c3ec52d5b5cff07fa54fea1ff9b722"
+      }
+    }
+  ],
+  "schema": "root.api040.tag-selection-source-integration@1",
+  "scope": "Explicit tag policy versus derived nesting; release/ABI6 static gates and normalized layout ordering fixture. No native science reception. Actual typed InstallPlan relay and registered projection: 29 Source passes. Native build is a separate pinned receipt; first bind failure retained.",
+  "source_only": true
+}

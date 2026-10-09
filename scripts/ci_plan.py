@@ -24,7 +24,7 @@ from ci_pytest_timings import SHARD_TOTAL as PYTHON_SHARDS
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = ROOT / "scripts/ci_components.toml"
-CPP_SHARDS = 11
+CPP_SHARDS = 13
 UNKNOWN_DIFF = "__unresolved_pr_change_scope__"
 
 
@@ -125,8 +125,8 @@ def make_plan(changed: list[str], *, event_name: str, output_dir: Path,
     compile_cache = sorted(set(python.selected_tests) & excluded)
     dimensions = ci_python_dimensions.partition(
         python.selected_tests, json.loads(ci_python_dimensions.CONTRACT.read_text()))
-    if set(dimensions) - {1, 2}:
-        raise ValueError("CI package downloads support only declared native Dim1/Dim2")
+    if set(dimensions) - {1, 2, 3}:
+        raise ValueError("CI package downloads support only declared native Dim1/Dim2/Dim3")
     # Installed serial shards and MPI entrypoints have separate manifest ownership.
     # Their import graph still exposes MPI consumers of a changed Python module.
     pops_changes = [path for path in source_inputs if path.startswith("python/pops/")]

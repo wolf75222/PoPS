@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='00b38fe09ba42678a5a2beda64a3767be9aa130455ecdfcf864a7182fc519cc9'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-affine-consumers-native/pytest.xml",
+    "tests/python/integration/runtime/test_affine_push_forward_runtime.py",
+    "tests/python/integration/runtime/test_conditional_consumers_runtime.py"
+  ],
+  "returncode": 1,
+  "duration_seconds": 180.83111570798792,
+  "counts": {
+    "tests": 8,
+    "failures": 2,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "failed",
+  "identity_sha256": "6a71b02f7bf8d4b45679e977ca688c802f4bdf5a8157f366d10c5816be228a18",
+  "log_sha256": "727340f8a32de2f5b542f81b6bb4793dd5e30e559cf260487167e58ce26ac6c1"
+}

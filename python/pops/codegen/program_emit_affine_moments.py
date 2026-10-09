@@ -1,0 +1,82 @@
+"""Fail-closed native kernel for a common affine velocity-moment push-forward."""
+from __future__ import annotations
+
+from typing import Any
+
+from pops.codegen.program_emit_kernels import (
+    _cell_locals, _coeff_cpp, _has_runtime_param, _kernel_close, _kernel_open, _model_impl,
+)
+from pops.codegen.program_emit_model_kernels import _linear_source_rows, _provider_binding
+from pops.codegen.module_emit_helpers import _checked_inline_expr
+
+
+def emit_affine_moment_kernel(
+    model: Any, attrs: Any, old: str, mean: str, output: str, status: str,
+    active: str, block: int, *, provider_plans: Any, consumer_qid: str,
+) -> list[str]:
+    impl = _model_impl(model)
+    order = attrs["order"]
+    if type(order) is not int or order < 1:
+        raise ValueError("affine_moment_update order must be an exact positive integer")
+    rotation = attrs.get("rotation", "cayley")
+    if not isinstance(rotation, str) or rotation not in ("cayley", "exponential"):
+        raise ValueError("affine_moment_update rotation must be 'cayley' or 'exponential'")
+    template = str(order)
+    if rotation == "exponential":
+        template += ", pops::moments::AffineVelocityRotation::exponential"
+    count = (order + 1) * (order + 2) // 2
+    if count > 2147483647:
+        raise ValueError("affine moment cardinality exceeds native component index representation")
+    if len(impl.cons_names) != count:
+        raise ValueError("affine_moment_update model does not own the declared complete moment basis")
+    from collections.abc import Mapping
+    from pops.moments.basis import CartesianMonomialBasis
+    descriptor = attrs.get('basis')
+    binding = attrs.get('component_binding')
+    if not isinstance(descriptor, Mapping) or set(descriptor) != {'schema', 'indices'} or descriptor['schema'] != 'pops.cartesian-monomial-basis@1':
+        raise ValueError("affine_moment_update basis descriptor differs")
+    basis = CartesianMonomialBasis(descriptor['indices'])
+    if basis.dimension != 2 or basis.order != order or type(binding) not in (list, tuple) or len(binding) != count or any(type(name) is not str for name in binding) or len(set(binding)) != count or set(binding) != set(impl.cons_names):
+        raise ValueError("affine_moment_update basis/State binding differs")
+    names = dict(zip(basis.indices, binding, strict=True))
+    slots = tuple(impl.cons_names.index(names[(p, q)]) for q in range(order + 1) for p in range(order + 1 - q))
+    rows = _linear_source_rows(impl, attrs["linear_operator"])
+    x, y = slots[1], slots[order + 1]
+    entries = (rows[x][x], rows[x][y], rows[y][x], rows[y][y])
+    provider = _provider_binding(impl, entries, provider_plans, consumer_qid)
+    impl.assign_runtime_indices()
+    params = block if _has_runtime_param(entries) else None
+    body = _kernel_open(output, old, params, provider_binding=provider, program_block=block)
+    position = next(i for i, line in enumerate(body) if "pops::for_each_cell" in line)
+    body[position:position] = [
+        "  const auto meanA = std::as_const(%s).fab(li).view();" % mean,
+        "  const auto statusA = %s.fab(li).view();" % status,
+        "  const bool has_active = %s != nullptr;" % active,
+        "  const pops::FieldView<const pops::Real, pops::kNativeDimension> activeA = has_active"
+        " ? std::as_const(*%s).fab(li).view()"
+        " : pops::FieldView<const pops::Real, pops::kNativeDimension>{};" % active,
+    ]
+    body.append("    if (has_active && !(activeA(index, 0) >= pops::Real(0.5))) {")
+    for component in range(count):
+        body.append("      outA(index, %d) = %sA(index, %d);" % (component, old, component))
+    body.extend(["      statusA(index, 0) = pops::Real(0);", "      return;", "    }"])
+    body.extend("    " + line for line in _cell_locals(
+        impl, entries, old, with_cons=True, with_prim=True, provider_binding=provider))
+    for label, expression in zip(("jxx", "jxy", "jyx", "jyy"), entries, strict=True):
+        body.append("    const pops::Real %s = %s;" % (label, _checked_inline_expr(expression)))
+    body.append("    pops::Real old_moments[%d], endpoint[%d], mapped[%d];" % (count, count, count))
+    for component in range(count):
+        body.append("    old_moments[%d] = %sA(index, %d);" % (component, old, slots[component]))
+        body.append("    endpoint[%d] = meanA(index, %d);" % (component, slots[component]))
+    body.extend([
+        "    const bool skew = std::isfinite(jxy) && jxx == pops::Real(0)"
+        " && jyy == pops::Real(0) && jyx == -jxy;",
+        "    const bool valid = skew && pops::moments::affine_velocity_push_forward<%s>("
+        "old_moments, endpoint, jxy, %s, mapped);" % (template, _coeff_cpp(attrs["theta_dt"])),
+        "    statusA(index, 0) = valid ? pops::Real(0) : pops::Real(1);",
+    ])
+    for component in range(count):
+        body.append("    outA(index, %d) = valid ? mapped[%d] : old_moments[%d];"
+                    % (slots[component], component, component))
+    body.extend(_kernel_close())
+    return body

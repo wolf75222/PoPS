@@ -1,0 +1,138 @@
+{
+  "artifact_metadata": {
+    "abi_environment": {
+      "compiler": "Apple LLVM 21.0.0 (clang-2100.1.1.101)",
+      "dim": "2",
+      "kokkos": "1",
+      "mpi": "1",
+      "mpi_abi": "f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5",
+      "std": "202002L",
+      "stdlib": "libc++_210106"
+    },
+    "abi_key": "188bd89463b43e0e8edfed6123df93d7eded84803eacdc6359f48d151089cc68|/usr/bin/clang++|c++20|dim=2",
+    "compiler": "/usr/bin/clang++",
+    "cxx_standard": "c++20",
+    "dso_bytes": {
+      "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-resource-lifetime/outputs/perf-v12-cache-diagnostic/cache/3af73f8e3a0626f7e8bff24b677b8c954a020bc48bef60d61d4c22c084d3c8d0.so": {
+        "bytes": 1909816,
+        "sha256": "e65cfc7dc48970006613b6a3b5c4ee1fcc4e8b3ae28e6aff63c026bf049c7bcd"
+      },
+      "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-resource-lifetime/outputs/perf-v12-cache-diagnostic/codegen/4a055ad62b4488bd41da4452935d9568b3aae3d2c83acd4659b751a98b274d38.so": {
+        "bytes": 339088,
+        "sha256": "5f86330ac2dc32ec0cdade31b405417874e8b740bb8c668161f88ef233c4e31d"
+      }
+    },
+    "native_abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=188bd89463b43e0e8edfed6123df93d7eded84803eacdc6359f48d151089cc68;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+    "sdk_version": {
+      "available": true,
+      "version": "26.5"
+    }
+  },
+  "compiler_probe": "clang++ -x c++ -std=c++20 -fsyntax-only -; all DSO compilation forbidden by audit hook",
+  "generated_compilation": false,
+  "metadata_cache_and_codegen_empty": true,
+  "metadata_workers": {
+    "baseline": {
+      "abi_environment": {
+        "compiler": "Apple LLVM 21.0.0 (clang-2100.1.1.101)",
+        "dim": "2",
+        "kokkos": "1",
+        "mpi": "1",
+        "mpi_abi": "f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5",
+        "std": "202002L",
+        "stdlib": "libc++_210106"
+      },
+      "artifact_properties": [
+        "abi_key",
+        "cxx",
+        "std",
+        "so_path",
+        "layout_program_paths"
+      ],
+      "doctor_checks": [
+        "compilateur",
+        "headers_sync",
+        "include",
+        "interpreteur",
+        "kokkos",
+        "kokkos_root",
+        "numpy",
+        "threads"
+      ],
+      "header_signature": "188bd89463b43e0e8edfed6123df93d7eded84803eacdc6359f48d151089cc68",
+      "include_root": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/artifacts/3d06cab/pops/include",
+      "native_abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=188bd89463b43e0e8edfed6123df93d7eded84803eacdc6359f48d151089cc68;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+      "native_sha256": "4574ed6096650aa708ad040fd6ee056414a3cfa1735a0440bd74220170265beb",
+      "package_file": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/artifacts/3d06cab/pops/__init__.py",
+      "phase": "metadata",
+      "schema": "pops.api040.joint-reconstruction-comparison.v1.2",
+      "sdk_version": {
+        "available": true,
+        "version": "26.5"
+      },
+      "source_commit": "3d06cabee9db4a31c4d07fa4e00dc5a40d164155"
+    },
+    "candidate": {
+      "abi_environment": {
+        "compiler": "Apple LLVM 21.0.0 (clang-2100.1.1.101)",
+        "dim": "2",
+        "kokkos": "1",
+        "mpi": "1",
+        "mpi_abi": "f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5",
+        "std": "202002L",
+        "stdlib": "libc++_210106"
+      },
+      "artifact_properties": [
+        "abi_key",
+        "cxx",
+        "std",
+        "so_path",
+        "layout_program_paths"
+      ],
+      "doctor_checks": [
+        "compilateur",
+        "headers_sync",
+        "include",
+        "interpreteur",
+        "kokkos",
+        "kokkos_root",
+        "numpy",
+        "threads"
+      ],
+      "header_signature": "7553c50eecb2bc352f276643fad748a168750d3c94badf1dcb3293ed933b343e",
+      "include_root": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/artifacts/cf6dace/pops/include",
+      "native_abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=7553c50eecb2bc352f276643fad748a168750d3c94badf1dcb3293ed933b343e;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+      "native_sha256": "4b458dabd54357b8aa3a4659cee8363a9a4510e55aaa81706bfe03a445d27037",
+      "package_file": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/artifacts/cf6dace/pops/__init__.py",
+      "phase": "metadata",
+      "schema": "pops.api040.joint-reconstruction-comparison.v1.2",
+      "sdk_version": {
+        "available": true,
+        "version": "26.5"
+      },
+      "source_commit": "cf6daceaa028df1343a303751ec9ae8f9f5ce6b3"
+    }
+  },
+  "profile": {
+    "accepted_steps": 2,
+    "counters": {
+      "kernels": 6,
+      "steps": 2
+    },
+    "enabled": true,
+    "scope_counts": {
+      "node:accepted": 2,
+      "node:rhs1": 2,
+      "step": 2
+    },
+    "scratch_allocs_available": false,
+    "scratch_peak_bytes_available": false,
+    "source": "snapshot"
+  },
+  "recognized_owned_copies": {
+    "/private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pops-native-XTMH3p/image-oPqSOq.dylib": "e65cfc7dc48970006613b6a3b5c4ee1fcc4e8b3ae28e6aff63c026bf049c7bcd"
+  },
+  "snapshot": "3d06cabee9db4a31c4d07fa4e00dc5a40d164155",
+  "status": "diagnostic_only_not_benchmark",
+  "timing_observations": false
+}

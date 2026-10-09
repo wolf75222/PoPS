@@ -8,9 +8,9 @@
 
 #pragma once
 
-#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/numerics/spatial/nd/conservation_law.hpp>
 #include <pops/numerics/spatial/nd/face_field.hpp>
 #include <pops/numerics/spatial/nd/finite_volume.hpp>
 #include <pops/numerics/spatial/nd/reconstruction.hpp>
-#include <pops/numerics/spatial/nd/state_schema.hpp>
+#include <pops/numerics/spatial/nd/state_conversion.hpp>
 #include <pops/numerics/spatial/operators/cartesian_operator.hpp>

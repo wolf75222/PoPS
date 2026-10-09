@@ -45,7 +45,7 @@ def lowering_provenance_data(program: Any) -> list[dict[str, Any]]:
 
 def artifact_sidecar_path(so_path: Any) -> Any:
     """Return the final artifact-identity sidecar path for ``so_path``."""
-    return so_path + ARTIFACT_SIDECAR_SUFFIX
+    return os.fspath(so_path) + ARTIFACT_SIDECAR_SUFFIX
 
 
 def _atomic_write(path: Any, text: Any) -> None:
@@ -76,6 +76,11 @@ def write_artifact_sidecar(
         "binary_identity": binary.token,
         "artifact_identity": artifact.token,
     }
+    from .model_compile_evidence import read
+    model_source = read(so_path)
+    if model_source['complete']:
+        payload['protocol'] = 'pops.artifact-sidecar.v2'
+        payload['model_compile_provenance_sha256'] = model_source['provenance_sha256']
     _atomic_write(
         artifact_sidecar_path(so_path),
         json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
@@ -106,6 +111,8 @@ def publish_staged_artifact(
         spec_identity=spec_identity,
     )
     os.replace(staging_path, destination_path)
+    from .model_compile_evidence import publish
+    publish(staging_path, destination_path)
     os.replace(
         artifact_sidecar_path(staging_path),
         artifact_sidecar_path(destination_path),
@@ -116,6 +123,8 @@ def publish_staged_artifact(
 def read_artifact_sidecar(so_path: Any) -> Any:
     """Read the exact current artifact sidecar schema, or ``None`` when absent."""
     path = artifact_sidecar_path(so_path)
+    if os.path.islink(path):
+        raise StaleArtifactError('compiled artifact identity sidecar must not be a symlink')
     if not os.path.isfile(path):
         return None
     with open(path, encoding="utf-8") as handle:
@@ -124,13 +133,23 @@ def read_artifact_sidecar(so_path: Any) -> Any:
         "protocol", "semantic_identity", "artifact_spec_identity", "binary_identity",
         "artifact_identity",
     }
+    if isinstance(payload, dict) and payload.get('protocol') == 'pops.artifact-sidecar.v2':
+        expected.add('model_compile_provenance_sha256')
     if not isinstance(payload, dict) or set(payload) != expected:
         raise StaleArtifactError(
             "compiled artifact sidecar must contain exactly %s" % sorted(expected))
-    if payload["protocol"] != _ARTIFACT_SIDECAR_PROTOCOL:
+    if payload["protocol"] not in (_ARTIFACT_SIDECAR_PROTOCOL, 'pops.artifact-sidecar.v2'):
         raise StaleArtifactError("compiled artifact sidecar protocol is unsupported")
     if any(not isinstance(payload[key], str) for key in expected - {"protocol"}):
         raise StaleArtifactError("compiled artifact sidecar identities must be strings")
+    if payload['protocol'] == 'pops.artifact-sidecar.v2':
+        from .model_compile_evidence import read
+        try:
+            evidence = read(so_path, require=True)
+            if evidence['provenance_sha256'] != payload['model_compile_provenance_sha256']:
+                raise ValueError('model compiler provenance digest differs')
+        except (ValueError, OSError) as error:
+            raise StaleArtifactError('model source evidence differs: '+str(error)) from error
     return payload
 
 

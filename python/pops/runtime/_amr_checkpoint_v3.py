@@ -38,9 +38,11 @@ class _PreparedAMRRestart:
     owner_ranks: tuple[int, ...]
     multi: bool
     state_payload: tuple[Any, ...]
+    state_carrier_checkpoint: bytes
     auxiliary_checkpoint_payload: tuple[bytes, ...]
     history_flux_snapshot_shards: tuple[bytes, ...] | None
     exchange_checkpoint: bytes
+    program_diagnostic_checkpoint: bytes
     potential_payload: tuple[Any, ...]
     field_payload: tuple[Any, ...]
     hierarchy_mode: str
@@ -373,6 +375,7 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     """Freeze the complete AMR gather plan without invoking a native collective."""
     import numpy as np
     from pops.identity import make_identity
+    from pops.runtime._checkpoint_manifest import checkpoint_lifecycle_evidence
     from pops.output._checkpoint_collective import canonical_checkpoint_path, checkpoint_topology
     from pops.runtime._amr_checkpoint_contract import encode_contract
     from pops.runtime._checkpoint_spatial import (
@@ -527,9 +530,11 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     for index, value in enumerate(field_levels):
         out["field_provider_levels_%d" % index] = value
     capture_identity = make_identity(
-        "checkpoint-capture-plan-v2",
+        "checkpoint-capture-plan-v3",
         {
             "runtime_kind": "amr",
+            "program_diagnostic_archive": "pops.program-diagnostics.archive@1",
+            "state_carriers_contract": "pops.amr.state-carriers-checkpoint@1",
             "target": str(target),
             "clock": {"time": time.hex(), "macro_step": macro_step},
             "spatial_contract": spatial.to_data(),
@@ -565,7 +570,7 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
             "accepted_contract": accepted_contract,
             "histories": history_plan.to_data(),
             "runtime_identities": [value.to_data() for value in owner._checkpoint_identities()],
-            "run_identity": owner.last_run_identity.to_data(),
+            **checkpoint_lifecycle_evidence(owner),
         },
     ).token
     return _PreparedAMRCapture(
@@ -590,7 +595,7 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     )
 
 
-def _capture_v3(owner, sim, prepared):
+def _capture_v3(owner, sim, prepared, *, prepared_capture=None):
     """Execute the agreed AMR gather order and seal the in-memory payload."""
     if not isinstance(prepared, _PreparedAMRCapture):
         raise TypeError("AMR checkpoint capture requires its exact prepared plan")
@@ -726,6 +731,9 @@ def _capture_v3(owner, sim, prepared):
 
     final_accepted_contract = encode_contract(sim)
     out["amr_accepted_contract"] = final_accepted_contract
+    from pops.runtime._checkpoint_state_carriers import capture_checkpoint_state_carriers
+
+    capture_checkpoint_state_carriers(owner, sim, out, prepared_capture=prepared_capture)
     auxiliary_checkpoint = sim.capture_auxiliary_checkpoint_accepted_state()
     if type(auxiliary_checkpoint) is not list or len(auxiliary_checkpoint) != prepared.levels:
         raise RuntimeError(
@@ -741,6 +749,8 @@ def _capture_v3(owner, sim, prepared):
     capture_histories(sim, prepared.history_plan, out)
     from pops.runtime._checkpoint_exchanges import capture_checkpoint_continuation
     capture_checkpoint_continuation(owner, out)
+    from pops.runtime._checkpoint_program_diagnostics import capture_checkpoint_program_diagnostics
+    capture_checkpoint_program_diagnostics(owner, out, prepared_capture=prepared_capture)
     identity = seal_checkpoint_payload(owner, out, runtime_kind="amr")
     return out, identity.token
 
@@ -754,6 +764,7 @@ def write_v3(
     *,
     precreated_inode=False,
     precreated_descriptor=None,
+    prepared_capture=None,
 ):
     """Capture exact AMR accepted state with preflight consensus before native gathers."""
     import os
@@ -771,7 +782,12 @@ def write_v3(
         return prepared, prepared.capture_identity
 
     def capture(prepared):
-        return _capture_v3(owner, sim, prepared)
+        if prepared_capture is not None:
+            sim._validate_prepared_checkpoint_capture(prepared_capture)
+        result = _capture_v3(owner, sim, prepared, prepared_capture=prepared_capture)
+        if prepared_capture is not None:
+            sim._validate_prepared_checkpoint_capture(prepared_capture)
+        return result
 
     def publish(payload):
         prepared = prepared_holder["plan"]
@@ -805,7 +821,7 @@ def prepare_v3(
     hierarchy_mode="restore_recorded_hierarchy",
     hierarchy_identity=None,
 ):
-    """Validate an accepted-state v11 AMR payload without mutating the native engine.
+    """Validate an accepted-state v12 AMR payload without mutating the native engine.
 
     This is the all-rank preflight boundary used before ``begin_restart_transaction``.
     """
@@ -916,7 +932,7 @@ def prepare_v3(
             "(replay the SAME composition before restart)" % (chk_blocks, cur_blocks)
         )
     nlev = checkpoint_levels
-    # Program-hash guard: an accepted-state v11 checkpoint refuses a different compiled Program.
+    # Program-hash guard: an accepted-state v12 checkpoint refuses a different compiled Program.
     chk_hash = str(d["program_hash"])
     cur_hash = sim.installed_program_hash() if hasattr(sim, "installed_program_hash") else ""
     if chk_hash != cur_hash:
@@ -1126,8 +1142,10 @@ def prepare_v3(
 
     _preflight_histories_v3(sim, d, current_ranks, spatial)
 
+    from pops.runtime._checkpoint_program_diagnostics import prepare_checkpoint_program_diagnostics
     from pops.runtime._checkpoint_exchanges import prepare_checkpoint_continuation
     from pops.runtime._checkpoint_history_flux_snapshots import prepare_history_flux_snapshots
+    from pops.runtime._checkpoint_state_carriers import prepare_checkpoint_state_carriers
     snapshot_capacity_provider = getattr(
         sim, "_checkpoint_program_history_flux_snapshot_capacity", None
     )
@@ -1154,9 +1172,11 @@ def prepare_v3(
         owner_ranks=tuple(int(rank) for rank in owner_ranks),
         multi=bool(multi),
         state_payload=tuple((block, tuple(levels)) for block, levels in state_payload),
+        state_carrier_checkpoint=prepare_checkpoint_state_carriers(owner, sim, d),
         auxiliary_checkpoint_payload=tuple(auxiliary_checkpoint_payload),
         history_flux_snapshot_shards=history_flux_snapshot_shards,
         exchange_checkpoint=prepare_checkpoint_continuation(owner, d),
+        program_diagnostic_checkpoint=prepare_checkpoint_program_diagnostics(owner, d),
         potential_payload=tuple(phi_payload),
         field_payload=tuple((slot, tuple(levels)) for slot, levels in field_payload),
         hierarchy_mode=hierarchy_mode,
@@ -1481,6 +1501,10 @@ def apply_v3(owner, sim, prepared):
             [slot for slot, _levels in prepared.field_payload],
             [[value.tolist() for value in levels] for _slot, levels in prepared.field_payload],
         )
+    # Global valid-cell arrays do not preserve patch-local ghosts. Restore the
+    # authenticated native storage after replay and the final topology mutation,
+    # before validating the exact recorded image or invoking RegridOnRestart.
+    sim.restore_checkpoint_state_carriers(prepared.state_carrier_checkpoint)
     if prepared.hierarchy_mode == "regrid_on_restart":
         _restart_collective_phase(
             owner,
@@ -1574,6 +1598,7 @@ def apply_v3(owner, sim, prepared):
             validate_transformed_state,
         )
         owner._last_restart_regrid_receipt = receipt
+    sim._restore_checkpoint_program_diagnostics(prepared.program_diagnostic_checkpoint)
     owner._temporal_restart_state = prepared.temporal_state
     owner._step_controller = None
     return report

@@ -1,0 +1,43 @@
+{
+  "changed_CXX_inputs": [],
+  "checks": {
+    "doctor_all_true": true,
+    "git_source_blobs_verified": 1191,
+    "installed_codegen_authority_matches_git": true,
+    "installed_files": 1156,
+    "observed_CXX_objects": 0,
+    "observed_snapshot_domain_count": 1191,
+    "old_environment_preserved": true,
+    "root_transfer_pins_rehashed": 21,
+    "sdk19_archive_verified_files": 1156,
+    "sdk19_matches_sdk19_prior_installation": true,
+    "shipped_source_verified_files": 1147,
+    "source_before_after_equal": true,
+    "wheel_nonRECORD_members_verified": 1152
+  },
+  "codegen_source_authority": {
+    "contract": "pops.codegen-source@1",
+    "sha256": "c90343018034d7259dacccfb6e37dc92f0e1c72735b8fa0f74c7a9ef31301d4b"
+  },
+  "compile_commands_available": false,
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk20-build-independent-732069/report.json",
+    "sha256": "68566f8bfd29b1949b39547f0791825a31d4890d9f9a2ef501f51721430b81ae"
+  },
+  "installed_header_signature": "2d3aa1140e6b24d30cdb501d70012b700b1ce70ce36871756f2e7cffda7d828d",
+  "job": "732069",
+  "native_extension_changed": false,
+  "native_scientific_acceptance": false,
+  "native_sha256": "4efc61b3a4a01ed82e41ef1eac4baaa450914afa516e806b88e282a0ac8fc0b7",
+  "reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk20-build-independent-732069/audit_build.py",
+    "sha256": "02d6d417ff32706e4fe0fa4035108e0013c355ed5391a2ffe2227a53f9b78d3e"
+  },
+  "root_recompute_exact_bytes": true,
+  "root_replay": "/Users/romaindespoulain/dev/tmp/sol61-sdk20-build-root-replay-732069",
+  "schema": "root.sdk20.build-install-reception@1",
+  "separate_supplement_pins_rehashed": 21,
+  "separate_supplement_pins_sha256": "5b4c3513cf8f90076db0df9065e6b59f0685ed99581ff13efcf23e572b85ae40",
+  "source_freeze": "bdfea618dd5479e30f451f16e0dea5b632b12ccf",
+  "whole_mission_complete": false
+}

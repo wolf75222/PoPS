@@ -77,6 +77,18 @@ class DiffusiveFluxHandle(Handle):
         object.__setattr__(self, "law", law)
 
 
+class CoupledGradientFluxHandle(DiffusiveFluxHandle):
+    """A signed rate flux retaining dissipative and reversible component parts."""
+
+    __slots__ = ()
+
+    def __init__(self, name: str, law: CoupledGradientLaw, *, owner: Any) -> None:
+        Handle.__init__(self, name, kind="coupled_gradient_flux", owner=owner)
+        object.__setattr__(self, "reg_name", name)
+        object.__setattr__(self, "state", law.state)
+        object.__setattr__(self, "law", law)
+
+
 @dataclass(frozen=True, slots=True, eq=False)
 class DiffusiveFluxLaw:
     """The physical law Fd=A grad(W), retaining every gradient/coefficient dependency."""
@@ -144,6 +156,111 @@ class DiffusiveFluxLaw:
                      for row in tensor)
 
 
+@dataclass(frozen=True, slots=True, eq=False)
+class CoupledGradientLaw(DiffusiveFluxLaw):
+    """Rate flux D grad(U) - F_rev, where F_rev = -R grad(U), R^T = -R."""
+
+    dissipative_components: tuple[tuple[float, ...], ...]
+    reversible_components: tuple[tuple[float, ...], ...]
+
+    def resolve_references(self, resolver: Any) -> CoupledGradientLaw:
+        base = DiffusiveFluxLaw.resolve_references(self, resolver)
+        return CoupledGradientLaw(
+            base.state, base.variable, base.coefficients, base.axes, base.inputs,
+            base.boundaries, self.dissipative_components, self.reversible_components)
+
+    def to_data(self) -> dict[str, Any]:
+        data = DiffusiveFluxLaw.to_data(self)
+        data.update(kind="constitutive_coupled_gradient_flux",
+                    dissipative_components=self.dissipative_components,
+                    reversible_components=self.reversible_components,
+                    signed_rate_flux="D_grad_U_minus_F_rev",
+                    reversible_physical_flux="-R_grad_U")
+        return data
+
+
+def declare_coupled_gradient_flux(model: Any, name: Any, *, state: Any,
+                                  dissipative: Any, reversible: Any,
+                                  boundaries: Any = None) -> CoupledGradientFluxHandle:
+    """Declare distinct component-space symmetric and skew gradient fluxes.
+
+    This is a physical declaration for any Cartesian dimension. A numerical
+    method separately chooses which frames, traces and stages it can realize.
+    """
+    import math
+    from ._board_contract import require_name
+    from .board_handles import StateHandle
+
+    model._guard_mutable("declare a coupled gradient flux")
+    name = require_name(name, "coupled gradient flux name")
+    if not isinstance(state, StateHandle) or model._states.get(state.name) != state:
+        raise ValueError("coupled gradient flux requires this Model's exact state")
+    if model.frame is None:
+        raise ValueError("coupled gradient flux requires an explicit Cartesian frame")
+    n = len(state.components)
+    def matrix(value, label):
+        if not isinstance(value, (tuple, list)) or len(value) != n:
+            raise ValueError(label + " must cover every exact state component")
+        rows = tuple(tuple(row) for row in value)
+        if any(len(row) != n for row in rows):
+            raise ValueError(label + " must be a complete square component matrix")
+        if any(isinstance(item, bool) or not isinstance(item, (int, float))
+               or not math.isfinite(item) for row in rows for item in row):
+            raise ValueError(label + " entries must be finite real constants")
+        return rows
+    d, r = matrix(dissipative, "dissipative matrix"), matrix(reversible, "reversible matrix")
+    if any(d[i][j] != d[j][i] or r[i][j] != -r[j][i]
+           for i in range(n) for j in range(n)):
+        raise ValueError("coupled gradient requires symmetric D and skew R")
+    # The authored finite constants are exact binary rationals. An eigensolver
+    # can report a negative rounded eigenvalue for an exactly semidefinite
+    # matrix (for example, the 3x3 all-ones rank-one matrix). Exact symmetric
+    # Schur complements decide this contract without changing any coefficient
+    # or admitting a genuinely negative mode through a numerical tolerance.
+    from fractions import Fraction
+    schur = [[Fraction(entry) for entry in row] for row in d]
+    for pivot_index in range(n):
+        pivot = schur[pivot_index][pivot_index]
+        if pivot < 0 or (pivot == 0 and any(
+                schur[pivot_index][column] != 0
+                for column in range(pivot_index + 1, n))):
+            raise ValueError("dissipative component matrix must be positive semidefinite")
+        if pivot == 0:
+            continue
+        for row in range(pivot_index + 1, n):
+            for column in range(row, n):
+                entry = (schur[row][column] -
+                         schur[row][pivot_index] * schur[pivot_index][column] / pivot)
+                schur[row][column] = schur[column][row] = entry
+    from pops._ir.expr import Const
+    components = tuple(state)
+    variables = tuple(cast(Expr, sum(
+        (Const(d[i][j] + r[i][j]) * components[j] for j in range(n)), Const(0)))
+        for i in range(n))
+    axes = tuple(axis.name for axis in model.frame.axes)
+    tensors = tuple(_coefficient_tensor(1, len(axes)) for _ in range(n))
+    if boundaries is None:
+        physical = _physical_boundaries(None, len(axes)) * n
+    else:
+        from collections.abc import Mapping
+        if not isinstance(boundaries, Mapping) or set(boundaries) != set(state.components):
+            raise ValueError("coupled gradient boundaries must cover exact components")
+        physical = tuple(row for component in state.components
+                         for row in _physical_boundaries(boundaries[component], len(axes)))
+    expressions = (*variables, *(entry for tensor in tensors for row in tensor for entry in row))
+    for expression in expressions:
+        _authenticate_expression(model, expression, state, label="coupled gradient law")
+    existing = getattr(model, "_diffusive_fluxes", {})
+    if name in existing or name in model._fluxes:
+        raise ValueError("physical flux %r is already declared" % name)
+    law = CoupledGradientLaw(state, variables, tensors, axes,
+                             _law_inputs(model, state, expressions), physical, d, r)
+    handle = CoupledGradientFluxHandle(name, law, owner=model.owner_path)
+    model._diffusive_fluxes = {**existing, name: handle}
+    model._invalidate_authoring_views()
+    return handle
+
+
 def _gradient_law(value: Any) -> tuple[Any, Any]:
     if isinstance(value, Gradient):
         return value.field, value.scale
@@ -181,25 +298,26 @@ def _coefficient_tensor(value: Any, dimension: int) -> tuple[tuple[Expr, ...], .
                        for j in range(dimension)) for i in range(dimension))
 
 
-def _authenticate_expression(model: Any, expression: Expr, state: Any) -> None:
+def _authenticate_expression(model: Any, expression: Expr, state: Any, *,
+                             label: str = "diffusive law") -> None:
     pending = [expression]
     primitives = set()
     while pending:
         node = pending.pop()
         if isinstance(node, QuantityRef):
             if node.handle.owner_path != model.owner_path:
-                raise ValueError("diffusive law reads a foreign quantity owner")
+                raise ValueError(label + " reads a foreign quantity owner")
         elif isinstance(node, Var):
             if node.kind == "prim" and node.name in model._dsl._m.prim_defs:
                 if node.name not in primitives:
                     primitives.add(node.name)
                     pending.append(model._dsl._m.prim_defs[node.name])
-            elif node.kind != "aux" or node.name not in model._dsl._m._provider_components:
-                raise ValueError("diffusive law requires qualified state or declared field quantities")
+            elif node.kind != "aux" or node.name not in model._dsl._m._aux_name_set():
+                raise ValueError(label + " requires qualified state or declared field quantities")
         pending.extend(_children(node))
     for reference in expression.declaration_references():
         if reference.owner_path != model.owner_path:
-            raise ValueError("diffusive law reads a foreign declaration")
+            raise ValueError(label + " reads a foreign declaration")
 
 
 def _law_inputs(model,state,expressions):
@@ -298,4 +416,5 @@ def install_diffusive_fluxes(model: Any, module: Any) -> None:
                               declarations=declarations)
 
 
-__all__ = ["DiffusiveFluxHandle", "DiffusiveFluxLaw", "DiffusiveBoundary"]
+__all__ = ["DiffusiveFluxHandle", "DiffusiveFluxLaw", "DiffusiveBoundary",
+           "CoupledGradientFluxHandle", "CoupledGradientLaw", "declare_coupled_gradient_flux"]

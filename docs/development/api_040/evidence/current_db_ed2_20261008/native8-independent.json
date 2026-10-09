@@ -1,0 +1,2130 @@
+{
+  "schema": "pops.independent-Native8-db-ed2@1",
+  "status": "PASS",
+  "Source": "db206100d81de834482c8a3b093ce30065aa1b43",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "actual_XML_counts": {
+    "tests": 8,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "actual_driver_wall_seconds": 487.6799499999979,
+  "actual_testcases": [
+    "test_original_manual_state_field_restart",
+    "test_original_preset_parity_and_rejected_rollback",
+    "test_original_imex_final_checkpoint_failure_restores_science_and_outputs",
+    "test_system_direct_step_requires_the_installed_python_program_strategy",
+    "test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible",
+    "test_uniform_native_linear_history_uses_bracketing_slots_and_restarts_exactly",
+    "test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart",
+    "test_uniform_restart_restores_default_field_onto_fresh_unmaterialized_target"
+  ],
+  "selectors": [
+    "tests/python/integration/runtime/test_final_imex_original_reception.py::test_original_manual_state_field_restart",
+    "tests/python/integration/runtime/test_final_imex_original_reception.py::test_original_preset_parity_and_rejected_rollback",
+    "tests/python/integration/runtime/test_imex_checkpoint_publication_rollback.py::test_original_imex_final_checkpoint_failure_restores_science_and_outputs",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_system_direct_step_requires_the_installed_python_program_strategy",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_native_linear_history_uses_bracketing_slots_and_restarts_exactly",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_restart_restores_default_field_onto_fresh_unmaterialized_target"
+  ],
+  "explicit_recorded_failfast_environment": "PYTEST_ADDOPTS=-x",
+  "Source_production_files_verified": 1165,
+  "live_installed_package_inventory_matches_build_after": true,
+  "package_inventory_entries": 2793,
+  "comparisons": {
+    "accepted__restored": {
+      "arrays": {
+        "states/tracer/0": {
+          "dtype": "<f8",
+          "shape": [
+            1024
+          ],
+          "rawbytes_sha256": "73b4a6b55954426e256f08bc7d7a60819569eba596cc798f692f461b2bd1e1e7",
+          "rawbytes_equal": true
+        },
+        "states/tracer/1": {
+          "dtype": "<f8",
+          "shape": [
+            4096
+          ],
+          "rawbytes_sha256": "509f4339bd97d7c98d8c6f3ae972bf984d082b79e651393b8f1435648b8f5fca",
+          "rawbytes_equal": true
+        },
+        "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/0": {
+          "dtype": "<f8",
+          "shape": [
+            1024
+          ],
+          "rawbytes_sha256": "d3f0b45e9ef6a2426f81cd6567451817e666e068d2a23fae92085f9a2362a25f",
+          "rawbytes_equal": true
+        },
+        "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/1": {
+          "dtype": "<f8",
+          "shape": [
+            4096
+          ],
+          "rawbytes_sha256": "b2b19ed8f4746ee080e69441070ddbf9dd271ba5dac8b415f819ba1cf4e1275c",
+          "rawbytes_equal": true
+        }
+      },
+      "full_JSON_equal": true,
+      "Program_rawbytes_equal": true,
+      "Program_bytes": 612399,
+      "Program_sha256": "414dcf5d5230a592c3c593a74538039e31bfcb3c144df68ba4909c2fd0277940"
+    },
+    "continuous__restarted": {
+      "arrays": {
+        "states/tracer/0": {
+          "dtype": "<f8",
+          "shape": [
+            1024
+          ],
+          "rawbytes_sha256": "921a311983df074b7e2cdef02ce3da72651ebddc21daf9b80703dfdcee2ac8f1",
+          "rawbytes_equal": true
+        },
+        "states/tracer/1": {
+          "dtype": "<f8",
+          "shape": [
+            4096
+          ],
+          "rawbytes_sha256": "e9d26387ea84142d43e6f79b0804e5d642bdc6f7dd61fe5ca08549c05a1bd345",
+          "rawbytes_equal": true
+        },
+        "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/0": {
+          "dtype": "<f8",
+          "shape": [
+            1024
+          ],
+          "rawbytes_sha256": "b9c24eb69be17e2983429ecaa78150de07dc81f7eec166a0669c15ff8624f592",
+          "rawbytes_equal": true
+        },
+        "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/1": {
+          "dtype": "<f8",
+          "shape": [
+            4096
+          ],
+          "rawbytes_sha256": "ddffd950fc0e7d2be283c232c75bc3222e96698b2bc725a3de91602df6eca9a2",
+          "rawbytes_equal": true
+        }
+      },
+      "full_JSON_equal": true,
+      "Program_rawbytes_equal": true,
+      "Program_bytes": 606663,
+      "Program_sha256": "177e02203cf2275365cee6ffe2bed58bf1e992fa6df84ade8cdbdbd9e95d1be0"
+    },
+    "accepted__preset": {
+      "arrays": {
+        "states/tracer/0": {
+          "dtype": "<f8",
+          "shape": [
+            1024
+          ],
+          "rawbytes_sha256": "73b4a6b55954426e256f08bc7d7a60819569eba596cc798f692f461b2bd1e1e7",
+          "rawbytes_equal": true
+        },
+        "states/tracer/1": {
+          "dtype": "<f8",
+          "shape": [
+            4096
+          ],
+          "rawbytes_sha256": "509f4339bd97d7c98d8c6f3ae972bf984d082b79e651393b8f1435648b8f5fca",
+          "rawbytes_equal": true
+        },
+        "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/0": {
+          "dtype": "<f8",
+          "shape": [
+            1024
+          ],
+          "rawbytes_sha256": "d3f0b45e9ef6a2426f81cd6567451817e666e068d2a23fae92085f9a2362a25f",
+          "rawbytes_equal": true
+        },
+        "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/1": {
+          "dtype": "<f8",
+          "shape": [
+            4096
+          ],
+          "rawbytes_sha256": "b2b19ed8f4746ee080e69441070ddbf9dd271ba5dac8b415f819ba1cf4e1275c",
+          "rawbytes_equal": true
+        }
+      },
+      "full_JSON_equal": true,
+      "Program_rawbytes_equal": true,
+      "Program_bytes": 612399,
+      "Program_sha256": "414dcf5d5230a592c3c593a74538039e31bfcb3c144df68ba4909c2fd0277940"
+    },
+    "rejected-before__rejected-after": {
+      "arrays": {
+        "states/tracer/0": {
+          "dtype": "<f8",
+          "shape": [
+            1024
+          ],
+          "rawbytes_sha256": "92d861339eb78fb3c9fc9c6e5f00fc85b6f0d27b8ec2f81a1d5c554dfc5ffa7d",
+          "rawbytes_equal": true
+        },
+        "states/tracer/1": {
+          "dtype": "<f8",
+          "shape": [
+            4096
+          ],
+          "rawbytes_sha256": "f7f7131922a4806fb38f395862177582c657e682b9816ae9058defeac1036888",
+          "rawbytes_equal": true
+        },
+        "fields/pops.qualified-field-provider.v1:sha256:54dc6f66da088f1d40d530d49e478157c636a43fbb9c5d48f0890bbccd413599/0": {
+          "dtype": "<f8",
+          "shape": [
+            1024
+          ],
+          "rawbytes_sha256": "3726feaaa0c21d6c4feb357b373c6a53367033a86fc500626a3c3cdba7c9199f",
+          "rawbytes_equal": true
+        },
+        "fields/pops.qualified-field-provider.v1:sha256:54dc6f66da088f1d40d530d49e478157c636a43fbb9c5d48f0890bbccd413599/1": {
+          "dtype": "<f8",
+          "shape": [
+            4096
+          ],
+          "rawbytes_sha256": "e621be1780fddcce4ad99dfafb55a6b11258dbc9a103ea3526d4ada54f098bd2",
+          "rawbytes_equal": true
+        }
+      },
+      "full_JSON_equal": true,
+      "Program_rawbytes_equal": true,
+      "Program_bytes": 7654,
+      "Program_sha256": "c552a985b477ba12a3ae67aeb7320a04a321a86dd6f3e69286091da757c8435c"
+    }
+  },
+  "positive_CP_count": 17,
+  "positive_CP_array_payloads": 809,
+  "positive_checkpoints": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/accepted/restart.npz": {
+      "file": {
+        "sha256": "69b5968a5e887cbc4c30b91ef270ea5997d53f14f849c8b0a6ce2bab2583b258",
+        "bytes": 178816,
+        "mode": 384
+      },
+      "arrays_checked": 52,
+      "restart_identity": "e8f3cab2890095d37d1c08a5cdea271b2028a0bb2f3e80d31a758a629bdbfaaa",
+      "runtime_kind": "amr",
+      "schema": 1,
+      "levels": 2,
+      "time": 0.0001,
+      "macro_step": 1,
+      "regrid_count": 2,
+      "topology_epoch": 2,
+      "history_names_count": 0,
+      "temporal_history_cursors_count": 0,
+      "temporal_cache_cursors_count": 0,
+      "cache_names_count": null,
+      "cache_nodes_count": null,
+      "history_storage": {},
+      "program_transaction_JSON_present": false,
+      "program_cache_count": null,
+      "program_history_count": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/continuous/restart.npz": {
+      "file": {
+        "sha256": "450e23fdbf06ead490e39ce7ef459da3a60710fbc4b4df91faf9baade3349607",
+        "bytes": 210193,
+        "mode": 384
+      },
+      "arrays_checked": 52,
+      "restart_identity": "73fe25ce26af0aab2ebc26217f22edfb1a4f9b205ecd884a60c80846bdcf9ef8",
+      "runtime_kind": "amr",
+      "schema": 1,
+      "levels": 2,
+      "time": 0.0002,
+      "macro_step": 2,
+      "regrid_count": 3,
+      "topology_epoch": 3,
+      "history_names_count": 0,
+      "temporal_history_cursors_count": 0,
+      "temporal_cache_cursors_count": 0,
+      "cache_names_count": null,
+      "cache_nodes_count": null,
+      "history_storage": {},
+      "program_transaction_JSON_present": false,
+      "program_cache_count": null,
+      "program_history_count": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/manual_restart.npz": {
+      "file": {
+        "sha256": "69b5968a5e887cbc4c30b91ef270ea5997d53f14f849c8b0a6ce2bab2583b258",
+        "bytes": 178816,
+        "mode": 384
+      },
+      "arrays_checked": 52,
+      "restart_identity": "e8f3cab2890095d37d1c08a5cdea271b2028a0bb2f3e80d31a758a629bdbfaaa",
+      "runtime_kind": "amr",
+      "schema": 1,
+      "levels": 2,
+      "time": 0.0001,
+      "macro_step": 1,
+      "regrid_count": 2,
+      "topology_epoch": 2,
+      "history_names_count": 0,
+      "temporal_history_cursors_count": 0,
+      "temporal_cache_cursors_count": 0,
+      "cache_names_count": null,
+      "cache_nodes_count": null,
+      "history_storage": {},
+      "program_transaction_JSON_present": false,
+      "program_cache_count": null,
+      "program_history_count": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/restarted/restart.npz": {
+      "file": {
+        "sha256": "1661a175c1e35369a77bc9b1cd6514b5068372892c83f408048152365c5fd065",
+        "bytes": 210190,
+        "mode": 384
+      },
+      "arrays_checked": 52,
+      "restart_identity": "6adfd2db987f0550fc1162624f9595e7b05e250e684b3723ff91f9c99f1df4f7",
+      "runtime_kind": "amr",
+      "schema": 1,
+      "levels": 2,
+      "time": 0.0002,
+      "macro_step": 2,
+      "regrid_count": 3,
+      "topology_epoch": 3,
+      "history_names_count": 0,
+      "temporal_history_cursors_count": 0,
+      "temporal_cache_cursors_count": 0,
+      "cache_names_count": null,
+      "cache_nodes_count": null,
+      "history_storage": {},
+      "program_transaction_JSON_present": false,
+      "program_cache_count": null,
+      "program_history_count": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset/restart.npz": {
+      "file": {
+        "sha256": "74ed8a0e4c47019ea9021146d090f44f59b2608cbf0c6acac44fd78011716391",
+        "bytes": 178809,
+        "mode": 384
+      },
+      "arrays_checked": 52,
+      "restart_identity": "a0170709b1350ec9bfe24389024dac7b8d5a111f93f49206d580347529bd47d8",
+      "runtime_kind": "amr",
+      "schema": 1,
+      "levels": 2,
+      "time": 0.0001,
+      "macro_step": 1,
+      "regrid_count": 2,
+      "topology_epoch": 2,
+      "history_names_count": 0,
+      "temporal_history_cursors_count": 0,
+      "temporal_cache_cursors_count": 0,
+      "cache_names_count": null,
+      "cache_nodes_count": null,
+      "history_storage": {},
+      "program_transaction_JSON_present": false,
+      "program_cache_count": null,
+      "program_history_count": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-public.npz": {
+      "file": {
+        "sha256": "73a92476b8ee4facb2e27b95e81a9dfe5d14fad84045cf265befb1683feef6e9",
+        "bytes": 119866,
+        "mode": 384
+      },
+      "arrays_checked": 52,
+      "restart_identity": "82126931911320a457ed40eee1384422a859a86c760ae949053c2e41ea5d968d",
+      "runtime_kind": "amr",
+      "schema": 1,
+      "levels": 2,
+      "time": 0.0,
+      "macro_step": 0,
+      "regrid_count": 1,
+      "topology_epoch": 1,
+      "history_names_count": 0,
+      "temporal_history_cursors_count": 0,
+      "temporal_cache_cursors_count": 0,
+      "cache_names_count": null,
+      "cache_nodes_count": null,
+      "history_storage": {},
+      "program_transaction_JSON_present": false,
+      "program_cache_count": null,
+      "program_history_count": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-public.npz": {
+      "file": {
+        "sha256": "62714720a011800814800ba82f142dc4d4184d87f626205dc9b47470a9f1eb38",
+        "bytes": 119852,
+        "mode": 384
+      },
+      "arrays_checked": 52,
+      "restart_identity": "03c773ee265677a15b66c8fcf66c52841633cb87afd3f0b99e499e7bb9987a7a",
+      "runtime_kind": "amr",
+      "schema": 1,
+      "levels": 2,
+      "time": 0.0,
+      "macro_step": 0,
+      "regrid_count": 1,
+      "topology_epoch": 1,
+      "history_names_count": 0,
+      "temporal_history_cursors_count": 0,
+      "temporal_cache_cursors_count": 0,
+      "cache_names_count": null,
+      "cache_nodes_count": null,
+      "history_storage": {},
+      "program_transaction_JSON_present": false,
+      "program_cache_count": null,
+      "program_history_count": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/real-committed-checkpoint-before-fault.npz": {
+      "file": {
+        "sha256": "cf3d45606ee5e77679ea342f595d98458b457372699ab6a813927f05e412f4b5",
+        "bytes": 178824,
+        "mode": 420
+      },
+      "arrays_checked": 52,
+      "restart_identity": "4e54cffba82f66329f5c60267304d8c328703850973929160045f3e82255845d",
+      "runtime_kind": "amr",
+      "schema": 1,
+      "levels": 2,
+      "time": 0.0001,
+      "macro_step": 1,
+      "regrid_count": 2,
+      "topology_epoch": 2,
+      "history_names_count": 0,
+      "temporal_history_cursors_count": 0,
+      "temporal_cache_cursors_count": 0,
+      "cache_names_count": null,
+      "cache_nodes_count": null,
+      "history_storage": {},
+      "program_transaction_JSON_present": false,
+      "program_cache_count": null,
+      "program_history_count": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-current.npz": {
+      "file": {
+        "sha256": "9a1834974e9fc70b609796caa66512fc258c20d7f0c120643f11e0a0e32d65a4",
+        "bytes": 20636,
+        "mode": 384
+      },
+      "arrays_checked": 50,
+      "restart_identity": "87fede2656770e7799b5926686ad9d405f1bc1c567df345e23242565f4ce4712",
+      "runtime_kind": "uniform",
+      "schema": 1,
+      "levels": null,
+      "time": 0.189453125,
+      "macro_step": 3,
+      "regrid_count": null,
+      "topology_epoch": null,
+      "history_names_count": 1,
+      "temporal_history_cursors_count": 1,
+      "temporal_cache_cursors_count": 1,
+      "cache_names_count": 1,
+      "cache_nodes_count": 1,
+      "history_storage": {
+        "blk.held_state": {
+          "stored_slots": [
+            0,
+            1
+          ],
+          "fill_count": 2,
+          "slot_dt": [
+            0.078125,
+            0.048828125
+          ]
+        }
+      },
+      "program_transaction_JSON_present": false,
+      "program_cache_count": null,
+      "program_history_count": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_child_clock_histo0/child-linear-final-reference.npz": {
+      "file": {
+        "sha256": "9f21a008e8e2cd257c1ab5db60d98e2fd960fd49609b992678b018ebd6c5a63e",
+        "bytes": 19962,
+        "mode": 384
+      },
+      "arrays_checked": 46,
+      "restart_identity": "9ba3ad99d2c1569692d1689109225276602c6d88efa3d14d759c770208a65d0f",
+      "runtime_kind": "uniform",
+      "schema": 1,
+      "levels": null,
+      "time": 0.3,
+      "macro_step": 3,
+      "regrid_count": null,
+      "topology_epoch": null,
+      "history_names_count": 1,
+      "temporal_history_cursors_count": 1,
+      "temporal_cache_cursors_count": 0,
+      "cache_names_count": 0,
+      "cache_nodes_count": 0,
+      "history_storage": {
+        "blk.U": {
+          "stored_slots": [
+            0,
+            1,
+            2
+          ],
+          "fill_count": 3,
+          "slot_dt": [
+            0.05,
+            0.04999999999999999,
+            0.04999999999999999
+          ]
+        }
+      },
+      "program_transaction_JSON_present": false,
+      "program_cache_count": null,
+      "program_history_count": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_child_clock_histo0/child-linear-final-resumed.npz": {
+      "file": {
+        "sha256": "1fde195762e1c74370ed333144c46d7f141f28b4408b4ce148e4ed33d16dd75c",
+        "bytes": 19958,
+        "mode": 384
+      },
+      "arrays_checked": 46,
+      "restart_identity": "89bddf079c8b140a03309f10beb78331faf232113ba0af1ade4c51e6528ff296",
+      "runtime_kind": "uniform",
+      "schema": 1,
+      "levels": null,
+      "time": 0.3,
+      "macro_step": 3,
+      "regrid_count": null,
+      "topology_epoch": null,
+      "history_names_count": 1,
+      "temporal_history_cursors_count": 1,
+      "temporal_cache_cursors_count": 0,
+      "cache_names_count": 0,
+      "cache_nodes_count": 0,
+      "history_storage": {
+        "blk.U": {
+          "stored_slots": [
+            0,
+            1,
+            2
+          ],
+          "fill_count": 3,
+          "slot_dt": [
+            0.05,
+            0.04999999999999999,
+            0.04999999999999999
+          ]
+        }
+      },
+      "program_transaction_JSON_present": false,
+      "program_cache_count": null,
+      "program_history_count": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_child_clock_histo0/child-linear-final-split.npz": {
+      "file": {
+        "sha256": "abb995fab97c19d5048e694ecbdece10356d13743d1fb0ccbac9c65da9026a1e",
+        "bytes": 19959,
+        "mode": 384
+      },
+      "arrays_checked": 46,
+      "restart_identity": "a292e36e3cb4e8c9d0f2aa6c7acccabd7c344765d4cefc0f825e7839f6a52e4e",
+      "runtime_kind": "uniform",
+      "schema": 1,
+      "levels": null,
+      "time": 0.3,
+      "macro_step": 3,
+      "regrid_count": null,
+      "topology_epoch": null,
+      "history_names_count": 1,
+      "temporal_history_cursors_count": 1,
+      "temporal_cache_cursors_count": 0,
+      "cache_names_count": 0,
+      "cache_nodes_count": 0,
+      "history_storage": {
+        "blk.U": {
+          "stored_slots": [
+            0,
+            1,
+            2
+          ],
+          "fill_count": 3,
+          "slot_dt": [
+            0.05,
+            0.04999999999999999,
+            0.04999999999999999
+          ]
+        }
+      },
+      "program_transaction_JSON_present": false,
+      "program_cache_count": null,
+      "program_history_count": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_child_clock_histo0/child-linear-history.npz": {
+      "file": {
+        "sha256": "652a9598d58b96571a2023c7bfe4062355d2f4fbe2f9768faeed35b5b0d2025e",
+        "bytes": 20021,
+        "mode": 384
+      },
+      "arrays_checked": 46,
+      "restart_identity": "ce0b29308ef9b3f422c35388f9ea1166ad7243251fc15aa49a612f66caa1cf91",
+      "runtime_kind": "uniform",
+      "schema": 1,
+      "levels": null,
+      "time": 0.2,
+      "macro_step": 2,
+      "regrid_count": null,
+      "topology_epoch": null,
+      "history_names_count": 1,
+      "temporal_history_cursors_count": 1,
+      "temporal_cache_cursors_count": 0,
+      "cache_names_count": 0,
+      "cache_nodes_count": 0,
+      "history_storage": {
+        "blk.U": {
+          "stored_slots": [
+            0,
+            1,
+            2
+          ],
+          "fill_count": 3,
+          "slot_dt": [
+            0.05,
+            0.05,
+            0.05
+          ]
+        }
+      },
+      "program_transaction_JSON_present": false,
+      "program_cache_count": null,
+      "program_history_count": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_child_clock_histo0/child-linear-restored.npz": {
+      "file": {
+        "sha256": "652a9598d58b96571a2023c7bfe4062355d2f4fbe2f9768faeed35b5b0d2025e",
+        "bytes": 20021,
+        "mode": 384
+      },
+      "arrays_checked": 46,
+      "restart_identity": "ce0b29308ef9b3f422c35388f9ea1166ad7243251fc15aa49a612f66caa1cf91",
+      "runtime_kind": "uniform",
+      "schema": 1,
+      "levels": null,
+      "time": 0.2,
+      "macro_step": 2,
+      "regrid_count": null,
+      "topology_epoch": null,
+      "history_names_count": 1,
+      "temporal_history_cursors_count": 1,
+      "temporal_cache_cursors_count": 0,
+      "cache_names_count": 0,
+      "cache_nodes_count": 0,
+      "history_storage": {
+        "blk.U": {
+          "stored_slots": [
+            0,
+            1,
+            2
+          ],
+          "fill_count": 3,
+          "slot_dt": [
+            0.05,
+            0.05,
+            0.05
+          ]
+        }
+      },
+      "program_transaction_JSON_present": false,
+      "program_cache_count": null,
+      "program_history_count": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_native_linear_his0/linear-history.npz": {
+      "file": {
+        "sha256": "b1e3f745c389614df9c008cf130d5e4131df77e805e552bff55fc6bc2ebf6f95",
+        "bytes": 19951,
+        "mode": 384
+      },
+      "arrays_checked": 46,
+      "restart_identity": "89a94ac7fe5fd17ba0ac8b5466fc56ce078a2a089fb006087a9210b36551740d",
+      "runtime_kind": "uniform",
+      "schema": 1,
+      "levels": null,
+      "time": 0.2,
+      "macro_step": 2,
+      "regrid_count": null,
+      "topology_epoch": null,
+      "history_names_count": 1,
+      "temporal_history_cursors_count": 1,
+      "temporal_cache_cursors_count": 0,
+      "cache_names_count": 0,
+      "cache_nodes_count": 0,
+      "history_storage": {
+        "blk.U": {
+          "stored_slots": [
+            0,
+            1,
+            2
+          ],
+          "fill_count": 2,
+          "slot_dt": [
+            0.1,
+            0.1,
+            0.1
+          ]
+        }
+      },
+      "program_transaction_JSON_present": false,
+      "program_cache_count": null,
+      "program_history_count": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_restart_restores_0/default-field-source.npz": {
+      "file": {
+        "sha256": "a33d5e4009966873807d4405901d19b58a5316ea8fc86965b898006cf8d94dce",
+        "bytes": 14208,
+        "mode": 384
+      },
+      "arrays_checked": 34,
+      "restart_identity": "78593786906dfa960cbef3a9d598462be32b468204aeaeeb8d64548534ae605f",
+      "runtime_kind": "uniform",
+      "schema": 1,
+      "levels": null,
+      "time": 0.0,
+      "macro_step": 0,
+      "regrid_count": null,
+      "topology_epoch": null,
+      "history_names_count": 0,
+      "temporal_history_cursors_count": 0,
+      "temporal_cache_cursors_count": 0,
+      "cache_names_count": 0,
+      "cache_nodes_count": 0,
+      "history_storage": {},
+      "program_transaction_JSON_present": false,
+      "program_cache_count": null,
+      "program_history_count": null
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_restart_restores_0/field-free-source.npz": {
+      "file": {
+        "sha256": "abe6c36f3e7314af9d6660edf24c6bff15874178938cdd7d48632a754a02b6d7",
+        "bytes": 13739,
+        "mode": 384
+      },
+      "arrays_checked": 33,
+      "restart_identity": "c58ab6d6b4e1386db6c0be73b696396b7460c54f43a6062b2d1181d06138a88f",
+      "runtime_kind": "uniform",
+      "schema": 1,
+      "levels": null,
+      "time": 0.0,
+      "macro_step": 0,
+      "regrid_count": null,
+      "topology_epoch": null,
+      "history_names_count": 0,
+      "temporal_history_cursors_count": 0,
+      "temporal_cache_cursors_count": 0,
+      "cache_names_count": 0,
+      "cache_nodes_count": 0,
+      "history_storage": {},
+      "program_transaction_JSON_present": false,
+      "program_cache_count": null,
+      "program_history_count": null
+    }
+  },
+  "deliberate_negative_archives_excluded": [
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-corrupt-cache.npz",
+      "sha256": "1419a43c73d082b371a9bdeca6c2cedccd507f64266b2ed18a45b7cf5bba5f37",
+      "reason": "Original deliberate corrupt/resealed-invalid semantic archive; excluded from positive admission"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-corrupt-history.npz",
+      "sha256": "44f326f3e1e4dc4a9f9bd3c971c9d2d2bb1efd88d6438de37a8b8fa5a8fdd214",
+      "reason": "Original deliberate corrupt/resealed-invalid semantic archive; excluded from positive admission"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-corrupt-queue.npz",
+      "sha256": "05e316a2b375b694f71e183955fe875737dd35031cb11bc84080b7b9a52f05b4",
+      "reason": "Original deliberate corrupt/resealed-invalid semantic archive; excluded from positive admission"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-resealed-invalid-cache-accumulated-dt-nan.npz",
+      "sha256": "2dd92a7a263c28fdcd42b85e25fdbf2ffef90b4b617d8e8901c04e2ddc5b7bf7",
+      "reason": "Original deliberate corrupt/resealed-invalid semantic archive; excluded from positive admission"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-resealed-invalid-cache-empty-name.npz",
+      "sha256": "b4528829e463a351ecd88bc2ccff1e2864cd6d33c4690da6ecb3f989f56adcff",
+      "reason": "Original deliberate corrupt/resealed-invalid semantic archive; excluded from positive admission"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-resealed-invalid-cache-future-update.npz",
+      "sha256": "afc9261829ae7d1f7a6aac2faeb086f1bf307085dff300e1e991073439563011",
+      "reason": "Original deliberate corrupt/resealed-invalid semantic archive; excluded from positive admission"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-resealed-invalid-cache-node.npz",
+      "sha256": "fcd182f753beb4a5dc163801916b097f81e0010b138392f4cd1f819e0d84ed93",
+      "reason": "Original deliberate corrupt/resealed-invalid semantic archive; excluded from positive admission"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-resealed-invalid-history-fill-count.npz",
+      "sha256": "233de94c5d1356b420944938f801eab32372f4c79393705fb97dd8a310285eeb",
+      "reason": "Original deliberate corrupt/resealed-invalid semantic archive; excluded from positive admission"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-resealed-invalid-history-slot-dt-nan.npz",
+      "sha256": "9d1620d0e390c58f5692b1e43bad90d8766d3d632c8a9006c159d0c5b6d12ca4",
+      "reason": "Original deliberate corrupt/resealed-invalid semantic archive; excluded from positive admission"
+    }
+  ],
+  "scientific_NPZ_not_CP": [
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/accepted.npz",
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/continuous.npz",
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/accepted/npz/state/scientific-output-npz-st__pops.handle.v1-case-scal__fb0229526fa1e570e7444c93724be33b01a15effbcf9e74effe0f67d36250712b__s000000001__ce20221c200c23d356bccc8cba4b9bbf6b3b623f6a2394aa2ed63dfcb462338f.npz",
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/continuous/npz/state/scientific-output-npz-st__pops.handle.v1-case-scal__faf8b2fc2633bd4def0c0fd53949fe2f502313ab01d817194b5800b02a900ef73__s000000002__0d803b70ef41116907d3d2995301f33dd039cc61d6b5817ff9855f5ae09d6d53.npz",
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/restarted/npz/state/scientific-output-npz-st__pops.handle.v1-case-scal__f18df66b2a3987e181c7865d53baf2fa6e12bfc8d2a6dac3cb073baea2445e664__s000000002__6c7f2f4b2aa75ed8b2f30b1fa2c71dc5f7ffac90ae5f63c19a958ad239ba71be.npz",
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset/npz/state/scientific-output-npz-st__pops.handle.v1-case-scal__f1251c075dcc5fa0d62ad73f6e54a91f09afde97b2d006a6db44fd5016b187b30__s000000001__cba2ecd51b10f1145783a72d9985c2e26075f4e0ec26cac163674b8500dd887b.npz",
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset.npz",
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/rejected-after.npz",
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/rejected-before.npz",
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/restarted.npz",
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/restored.npz",
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-rank0.npz",
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-rank0.npz"
+  ],
+  "whole_NPZ_count": 39,
+  "standalone_NPY_count": 8,
+  "standalone_NPY_matches": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-rank0-fields-23ce14acf846f650-level0.npy": {
+      "snapshot_key": "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/0",
+      "dtype": "<f8",
+      "shape": [
+        1024
+      ],
+      "rawbytes_equal": true,
+      "rawbytes_sha256": "3726feaaa0c21d6c4feb357b373c6a53367033a86fc500626a3c3cdba7c9199f"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-rank0-fields-23ce14acf846f650-level1.npy": {
+      "snapshot_key": "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/1",
+      "dtype": "<f8",
+      "shape": [
+        4096
+      ],
+      "rawbytes_equal": true,
+      "rawbytes_sha256": "e621be1780fddcce4ad99dfafb55a6b11258dbc9a103ea3526d4ada54f098bd2"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-rank0-fields-23ce14acf846f650-level0.npy": {
+      "snapshot_key": "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/0",
+      "dtype": "<f8",
+      "shape": [
+        1024
+      ],
+      "rawbytes_equal": true,
+      "rawbytes_sha256": "3726feaaa0c21d6c4feb357b373c6a53367033a86fc500626a3c3cdba7c9199f"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-rank0-fields-23ce14acf846f650-level1.npy": {
+      "snapshot_key": "fields/pops.qualified-field-provider.v1:sha256:1daca09833e07877f4fabff9d730f9140719ef8f1c857a1b0cd2babdb178399d/1",
+      "dtype": "<f8",
+      "shape": [
+        4096
+      ],
+      "rawbytes_equal": true,
+      "rawbytes_sha256": "e621be1780fddcce4ad99dfafb55a6b11258dbc9a103ea3526d4ada54f098bd2"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-rank0-states-1e6243a2b17026f8-level1.npy": {
+      "snapshot_key": "states/tracer/1",
+      "dtype": "<f8",
+      "shape": [
+        4096
+      ],
+      "rawbytes_equal": true,
+      "rawbytes_sha256": "f7f7131922a4806fb38f395862177582c657e682b9816ae9058defeac1036888"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-rank0-states-1e6243a2b17026f8-level0.npy": {
+      "snapshot_key": "states/tracer/0",
+      "dtype": "<f8",
+      "shape": [
+        1024
+      ],
+      "rawbytes_equal": true,
+      "rawbytes_sha256": "92d861339eb78fb3c9fc9c6e5f00fc85b6f0d27b8ec2f81a1d5c554dfc5ffa7d"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-rank0-states-1e6243a2b17026f8-level1.npy": {
+      "snapshot_key": "states/tracer/1",
+      "dtype": "<f8",
+      "shape": [
+        4096
+      ],
+      "rawbytes_equal": true,
+      "rawbytes_sha256": "f7f7131922a4806fb38f395862177582c657e682b9816ae9058defeac1036888"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-rank0-states-1e6243a2b17026f8-level0.npy": {
+      "snapshot_key": "states/tracer/0",
+      "dtype": "<f8",
+      "shape": [
+        1024
+      ],
+      "rawbytes_equal": true,
+      "rawbytes_sha256": "92d861339eb78fb3c9fc9c6e5f00fc85b6f0d27b8ec2f81a1d5c554dfc5ffa7d"
+    }
+  },
+  "DSO_count": 23,
+  "all_DSO_literal_SDK_verified": true,
+  "actual_manual_fixture_context": {
+    "after": {
+      "allocator_lifetime": "process-lifetime ManagedArena; blocks are released by a Kokkos finalize hook, the arena tables are intentionally never destroyed",
+      "allocator_mode": "kokkos_shared_space_managed_arena",
+      "amr_refinement_ratio": null,
+      "amr_refinement_ratio_rank": 2,
+      "amr_refinement_ratio_selection": "hierarchy_exact_rank",
+      "comm_allocator_mode": "kokkos_shared_host_pinned_space",
+      "communicator": "MPI_COMM_WORLD",
+      "dimension": 2,
+      "field_memory_space": "host",
+      "has_kokkos": true,
+      "kokkos_atexit_finalize_registered": true,
+      "kokkos_backend": "OpenMP",
+      "kokkos_concurrency": 2,
+      "kokkos_device": "cpu",
+      "kokkos_finalized": false,
+      "kokkos_initialized": true,
+      "kokkos_initialized_by_pops": true,
+      "kokkos_lifecycle": "PoPS lazily initialized Kokkos and registered an atexit finalize hook",
+      "kokkos_ownership": "pops-owned-lazy",
+      "kokkos_shared_space": "Host",
+      "kokkos_stream": "Kokkos::OpenMP::synchronous",
+      "kokkos_stream_synchronous": true,
+      "mpi_active": true,
+      "mpi_atexit_finalize_registered": true,
+      "mpi_compiled": true,
+      "mpi_initialized_by_pops": true,
+      "mpi_ownership": "pops-owned",
+      "mpi_rank": 0,
+      "mpi_ranks": 1,
+      "mpi_thread_level": 3,
+      "precision": "double",
+      "real_bytes": 8,
+      "supports_custom_communicator": false,
+      "supports_mixed_precision": false,
+      "supports_single_precision": false
+    },
+    "before": {
+      "allocator_lifetime": "process-lifetime ManagedArena; blocks are released by a Kokkos finalize hook, the arena tables are intentionally never destroyed",
+      "allocator_mode": "kokkos_shared_space_managed_arena",
+      "amr_refinement_ratio": null,
+      "amr_refinement_ratio_rank": 2,
+      "amr_refinement_ratio_selection": "hierarchy_exact_rank",
+      "comm_allocator_mode": "kokkos_shared_host_pinned_space",
+      "communicator": "MPI_COMM_WORLD",
+      "dimension": 2,
+      "field_memory_space": "host",
+      "has_kokkos": true,
+      "kokkos_atexit_finalize_registered": false,
+      "kokkos_backend": "OpenMP",
+      "kokkos_concurrency": 0,
+      "kokkos_device": "cpu",
+      "kokkos_finalized": false,
+      "kokkos_initialized": false,
+      "kokkos_initialized_by_pops": false,
+      "kokkos_lifecycle": "PoPS will lazily initialize Kokkos on first allocation or kernel launch",
+      "kokkos_ownership": "lazy",
+      "kokkos_shared_space": "Host",
+      "kokkos_stream": "Kokkos::OpenMP::synchronous",
+      "kokkos_stream_synchronous": true,
+      "mpi_active": true,
+      "mpi_atexit_finalize_registered": true,
+      "mpi_compiled": true,
+      "mpi_initialized_by_pops": true,
+      "mpi_ownership": "pops-owned",
+      "mpi_rank": 0,
+      "mpi_ranks": 1,
+      "mpi_thread_level": 3,
+      "precision": "double",
+      "real_bytes": 8,
+      "supports_custom_communicator": false,
+      "supports_mixed_precision": false,
+      "supports_single_precision": false
+    }
+  },
+  "OpenMP2_scope": "Only manual fixture after record, not assigned to every selector/process",
+  "publication_failure_actual_record": {
+    "depth_zero_passed": [
+      "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-public.npz",
+      "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-public.npz"
+    ],
+    "events": [
+      "committed-capture-real-publication-then-fault"
+    ],
+    "failures": [
+      [
+        "ConsumerPublicationError",
+        "consumer pops.handle.v1::case:scalar_advection_imex_amr/consumer:graph::consumer::checkpoint-checkpoints-restart-e0e0f1df05fb2b36 failed under FailRun: RuntimeError: IMEX deterministic publication failure after committed final checkpoint",
+        true
+      ]
+    ]
+  },
+  "reviewer_actions": {
+    "Native_import": false,
+    "run": false,
+    "build": false,
+    "install": false,
+    "Main_edit": false,
+    "remote": false
+  },
+  "limits": [
+    "Every rawarray/fullJSON/Program byte equal for four manual pairs; wholeNPZ equality not inferred.",
+    "17 CP positive authenticity rehashed;9 deliberate invalid archives excluded.",
+    "Adaptive-current has history/cache populated; child/linear history populated, caches empty; exact per-CP counts retained.",
+    "Original8 world1 scope only; no newdiffusive/GPU/MPI2science/3D/convergence/Full94/GNU13.3 inherited.",
+    "Independent file reception, no native semantic decoder rerun."
+  ],
+  "pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/accepted/restart.npz": {
+      "sha256": "69b5968a5e887cbc4c30b91ef270ea5997d53f14f849c8b0a6ce2bab2583b258",
+      "bytes": 178816,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/continuous/restart.npz": {
+      "sha256": "450e23fdbf06ead490e39ce7ef459da3a60710fbc4b4df91faf9baade3349607",
+      "bytes": 210193,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/manual_restart.npz": {
+      "sha256": "69b5968a5e887cbc4c30b91ef270ea5997d53f14f849c8b0a6ce2bab2583b258",
+      "bytes": 178816,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/restarted/restart.npz": {
+      "sha256": "1661a175c1e35369a77bc9b1cd6514b5068372892c83f408048152365c5fd065",
+      "bytes": 210190,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset/restart.npz": {
+      "sha256": "74ed8a0e4c47019ea9021146d090f44f59b2608cbf0c6acac44fd78011716391",
+      "bytes": 178809,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-public.npz": {
+      "sha256": "73a92476b8ee4facb2e27b95e81a9dfe5d14fad84045cf265befb1683feef6e9",
+      "bytes": 119866,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-public.npz": {
+      "sha256": "62714720a011800814800ba82f142dc4d4184d87f626205dc9b47470a9f1eb38",
+      "bytes": 119852,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/real-committed-checkpoint-before-fault.npz": {
+      "sha256": "cf3d45606ee5e77679ea342f595d98458b457372699ab6a813927f05e412f4b5",
+      "bytes": 178824,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-current.npz": {
+      "sha256": "9a1834974e9fc70b609796caa66512fc258c20d7f0c120643f11e0a0e32d65a4",
+      "bytes": 20636,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_child_clock_histo0/child-linear-final-reference.npz": {
+      "sha256": "9f21a008e8e2cd257c1ab5db60d98e2fd960fd49609b992678b018ebd6c5a63e",
+      "bytes": 19962,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_child_clock_histo0/child-linear-final-resumed.npz": {
+      "sha256": "1fde195762e1c74370ed333144c46d7f141f28b4408b4ce148e4ed33d16dd75c",
+      "bytes": 19958,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_child_clock_histo0/child-linear-final-split.npz": {
+      "sha256": "abb995fab97c19d5048e694ecbdece10356d13743d1fb0ccbac9c65da9026a1e",
+      "bytes": 19959,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_child_clock_histo0/child-linear-history.npz": {
+      "sha256": "652a9598d58b96571a2023c7bfe4062355d2f4fbe2f9768faeed35b5b0d2025e",
+      "bytes": 20021,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_child_clock_histo0/child-linear-restored.npz": {
+      "sha256": "652a9598d58b96571a2023c7bfe4062355d2f4fbe2f9768faeed35b5b0d2025e",
+      "bytes": 20021,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_native_linear_his0/linear-history.npz": {
+      "sha256": "b1e3f745c389614df9c008cf130d5e4131df77e805e552bff55fc6bc2ebf6f95",
+      "bytes": 19951,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_restart_restores_0/default-field-source.npz": {
+      "sha256": "a33d5e4009966873807d4405901d19b58a5316ea8fc86965b898006cf8d94dce",
+      "bytes": 14208,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_restart_restores_0/field-free-source.npz": {
+      "sha256": "abe6c36f3e7314af9d6660edf24c6bff15874178938cdd7d48632a754a02b6d7",
+      "bytes": 13739,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/identity-driver.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/planned-command.json": {
+      "sha256": "b1e77cdbc21f9e55320420669f23fa291869a81f72d29946debced9e5c1745c2",
+      "bytes": 3222,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/driver.log": {
+      "sha256": "7b8dd13a0549134ecc595de445842dac3668a7195ac63ba47cae4b5344bce12d",
+      "bytes": 2682,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/status.json": {
+      "sha256": "5b31ccf5102fbf87eccbd56ae6c6b8fc3e727257a5e94fcd21adae419fded5ef",
+      "bytes": 88,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/identity/identity.json": {
+      "sha256": "c4a1476eb55bc0e3f730e4cd864d1b76994be277019881c3e49780724c90c0cb",
+      "bytes": 2840,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/identity/source-files.json": {
+      "sha256": "c1f34376e3d2a4e29aadcf00153cd1e6c16bc6678869e53edbe3b3162fe6cbc6",
+      "bytes": 136438,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest.log": {
+      "sha256": "b90c4c6364229e02310a87b12d74a2f36465887ca3db2f47a44ef0301cf16251",
+      "bytes": 2364,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/result.json": {
+      "sha256": "7b8dd13a0549134ecc595de445842dac3668a7195ac63ba47cae4b5344bce12d",
+      "bytes": 2682,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/identity.json": {
+      "sha256": "c4a1476eb55bc0e3f730e4cd864d1b76994be277019881c3e49780724c90c0cb",
+      "bytes": 2840,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/source-files.json": {
+      "sha256": "c1f34376e3d2a4e29aadcf00153cd1e6c16bc6678869e53edbe3b3162fe6cbc6",
+      "bytes": 136438,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest.xml": {
+      "sha256": "bd824d78a73c4fae80577b990fbfcb44bf012bca9e0fbbe95ac4b195b1628f69",
+      "bytes": 1964,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/eafbf5972cb1e88c054211fc7520005354b012f8ec906b527e58e6ddb663216d.so": {
+      "sha256": "4d508f25b5978b12cc12b6f2f06ff1295af8ba54a4bc8a81c4beedd5163ed285",
+      "bytes": 1621616,
+      "mode": 493
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/95cd6bdc1fc307b4ca4f76b117829890040f13849c2f00dbcb00552b0e88c3e0.so": {
+      "sha256": "fa0ca305a80b3f1a2954780f4e1f5e48bd8529970af15a5b8378fc1effcad1a3",
+      "bytes": 7009576,
+      "mode": 493
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/508fb9371564e4eca78c21afb746fb06d13e031fd9a6769e34583c58ac15e815.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/17dcc08194c1bd2a23520f535b941ce65aa67c60f8e3932df48da7861a2ba60e.so.pops-artifact.json": {
+      "sha256": "d65ac469cf91a2640ca663ba71b5f019249926c74a403d598466ebfd238ba3e9",
+      "bytes": 490,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so.pops-artifact.json": {
+      "sha256": "40ae971366b339af0365afa2a472f77aef4bc0b25da3ef07de2028d15bb061e1",
+      "bytes": 591,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/c45414cd8804abfb8dccba208c421cba4c7855818b3e21daa6135de597357d6d.so.pops-artifact.json": {
+      "sha256": "300a27b67716e71d13011ec7a3ff6dc5f67597d70e2db835e8b3a058d974bb7a",
+      "bytes": 591,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/95cd6bdc1fc307b4ca4f76b117829890040f13849c2f00dbcb00552b0e88c3e0.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/c45414cd8804abfb8dccba208c421cba4c7855818b3e21daa6135de597357d6d.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/95cd6bdc1fc307b4ca4f76b117829890040f13849c2f00dbcb00552b0e88c3e0.so.pops-model-compile.json": {
+      "sha256": "c59b513fb64ca9899ccb25ebdfa6ad362e7f93e58b172dddc901c39a5f9295b5",
+      "bytes": 2280,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/c45414cd8804abfb8dccba208c421cba4c7855818b3e21daa6135de597357d6d.so.pops-model-compile.json": {
+      "sha256": "31c93813151084a367ab1f6c8cf6d2bf68350d2439002eb5a318e95d97863dd2",
+      "bytes": 2288,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so.pops-model-compile.json": {
+      "sha256": "6289c147965099b6673ff3d7d7875b6662614894900cf61625f68dd6b899fe3e",
+      "bytes": 2288,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/508fb9371564e4eca78c21afb746fb06d13e031fd9a6769e34583c58ac15e815.so.pops-artifact.json": {
+      "sha256": "2747a7a3c7aadce6ded12a3f00a8c79554a7489c979efc38d97ff4563f3a48fd",
+      "bytes": 490,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/9f1512232bc873bac53096a0e64cfb21abeda4769d673aa19748ca065c7b7401.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/.c45414cd8804abfb8dccba208c421cba4c7855818b3e21daa6135de597357d6d.pops-stage-pzgy4mt5.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/.290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.pops-stage-kd092_t5.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/17dcc08194c1bd2a23520f535b941ce65aa67c60f8e3932df48da7861a2ba60e.so": {
+      "sha256": "402d1882f2a5893a820cb8990fdba07e4e0f01761c11949c18bd35b78adcba5f",
+      "bytes": 1621616,
+      "mode": 493
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/c45414cd8804abfb8dccba208c421cba4c7855818b3e21daa6135de597357d6d.so": {
+      "sha256": "7199cf67d05d181d5e4975f97c3abbebc40edf561798f6f61abf8c8691f02289",
+      "bytes": 5164344,
+      "mode": 493
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/95cd6bdc1fc307b4ca4f76b117829890040f13849c2f00dbcb00552b0e88c3e0.so.pops-artifact.json": {
+      "sha256": "3aea6d47aa7bb146e7b6c204264d3d38f9c4b7bfa6f73c2bbaa7db8edb94eb4e",
+      "bytes": 591,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/eafbf5972cb1e88c054211fc7520005354b012f8ec906b527e58e6ddb663216d.so.pops-artifact.json": {
+      "sha256": "d60d7788e8eba9fe7a51bbefa5d837a76434354a413c9db7ec938327d8b804b0",
+      "bytes": 490,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/.95cd6bdc1fc307b4ca4f76b117829890040f13849c2f00dbcb00552b0e88c3e0.pops-stage-wdldghq6.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so": {
+      "sha256": "ed2f2504a03f8706585d94c0ee6585130fe2f51aa84a92ad88fc5ef3ad5e5f5a",
+      "bytes": 5164344,
+      "mode": 493
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/c45414cd8804abfb8dccba208c421cba4c7855818b3e21daa6135de597357d6d.so.pops-model.cpp": {
+      "sha256": "72cf8fa27803a173bfdc8353b381e2a81a141947834923d7dd4f41ed382c7023",
+      "bytes": 24337,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/95cd6bdc1fc307b4ca4f76b117829890040f13849c2f00dbcb00552b0e88c3e0.so.pops-model.cpp": {
+      "sha256": "302af048aef8ee975fc613900239b5faaba88c6c099031c4b4ead6ddcc36308f",
+      "bytes": 12400,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/508fb9371564e4eca78c21afb746fb06d13e031fd9a6769e34583c58ac15e815.so": {
+      "sha256": "b405275363ec261ca8a1389aa2602dc1851e86c251a81a05619c5e1cad8ade9d",
+      "bytes": 429792,
+      "mode": 493
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/eafbf5972cb1e88c054211fc7520005354b012f8ec906b527e58e6ddb663216d.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/9f1512232bc873bac53096a0e64cfb21abeda4769d673aa19748ca065c7b7401.so": {
+      "sha256": "f6df0ca71e028c07443e8cf9cd363593fb4dccc22090a5138fab59eff0c2c4e6",
+      "bytes": 286880,
+      "mode": 493
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so.pops-model.cpp": {
+      "sha256": "a3ef761854f9bb674241d199a1244c16de7b19a799acbd8e71cd77ea2dfb890a",
+      "bytes": 24337,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/17dcc08194c1bd2a23520f535b941ce65aa67c60f8e3932df48da7861a2ba60e.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/jit-af8/9f1512232bc873bac53096a0e64cfb21abeda4769d673aa19748ca065c7b7401.so.pops-artifact.json": {
+      "sha256": "5b5763f9631625c7536fecd3819ba335d416b015ee576b9de5b02b825fe4ad5f",
+      "bytes": 490,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-resealed-invalid-history-slot-dt-nan.npz": {
+      "sha256": "9d1620d0e390c58f5692b1e43bad90d8766d3d632c8a9006c159d0c5b6d12ca4",
+      "bytes": 20644,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-resealed-invalid-cache-node.npz": {
+      "sha256": "fcd182f753beb4a5dc163801916b097f81e0010b138392f4cd1f819e0d84ed93",
+      "bytes": 20635,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-resealed-invalid-history-fill-count.npz": {
+      "sha256": "233de94c5d1356b420944938f801eab32372f4c79393705fb97dd8a310285eeb",
+      "bytes": 20687,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-resealed-invalid-cache-future-update.npz": {
+      "sha256": "afc9261829ae7d1f7a6aac2faeb086f1bf307085dff300e1e991073439563011",
+      "bytes": 20646,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-corrupt-history.npz": {
+      "sha256": "44f326f3e1e4dc4a9f9bd3c971c9d2d2bb1efd88d6438de37a8b8fa5a8fdd214",
+      "bytes": 20634,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-resealed-invalid-cache-accumulated-dt-nan.npz": {
+      "sha256": "2dd92a7a263c28fdcd42b85e25fdbf2ffef90b4b617d8e8901c04e2ddc5b7bf7",
+      "bytes": 20655,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-corrupt-cache.npz": {
+      "sha256": "1419a43c73d082b371a9bdeca6c2cedccd507f64266b2ed18a45b7cf5bba5f37",
+      "bytes": 20636,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-corrupt-queue.npz": {
+      "sha256": "05e316a2b375b694f71e183955fe875737dd35031cb11bc84080b7b9a52f05b4",
+      "bytes": 20636,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/adaptive-resealed-invalid-cache-empty-name.npz": {
+      "sha256": "b4528829e463a351ecd88bc2ccff1e2864cd6d33c4690da6ecb3f989f56adcff",
+      "bytes": 20631,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/restored.npz": {
+      "sha256": "432f1142d589b8d89b4f001639b533d8279805eb3d49ef414240b795aa90193d",
+      "bytes": 83382,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/accepted.json": {
+      "sha256": "1d99b4b1123082b817697d5c478d4230a42ca6eff8f9a8e720faa2fb2295ede2",
+      "bytes": 755704,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset.npz": {
+      "sha256": "432f1142d589b8d89b4f001639b533d8279805eb3d49ef414240b795aa90193d",
+      "bytes": 83382,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/continuous-program.bin": {
+      "sha256": "177e02203cf2275365cee6ffe2bed58bf1e992fa6df84ade8cdbdbd9e95d1be0",
+      "bytes": 606663,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/restarted-program.bin": {
+      "sha256": "177e02203cf2275365cee6ffe2bed58bf1e992fa6df84ade8cdbdbd9e95d1be0",
+      "bytes": 606663,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/continuous.json": {
+      "sha256": "e47e0fe953916f274f9fab66fbadc369a75c9592d26eac2372340201a96400c1",
+      "bytes": 755606,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual-result.json": {
+      "sha256": "3b2fb1cff65ad34586a942f89d4fd7042977724706d5b19f5f13f17d98010251",
+      "bytes": 1575,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/restarted.npz": {
+      "sha256": "ce7a5de46c6a1813941a6e2cf7ea1797318e04214ba0cb2af8c13678138fe96d",
+      "bytes": 83382,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset.json": {
+      "sha256": "1d99b4b1123082b817697d5c478d4230a42ca6eff8f9a8e720faa2fb2295ede2",
+      "bytes": 755704,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/rejected-before.npz": {
+      "sha256": "003192c9df2ab2beaae886072f2b55252d59ce97029f675587f9ff8eee168ae6",
+      "bytes": 83382,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/rejected-after.npz": {
+      "sha256": "003192c9df2ab2beaae886072f2b55252d59ce97029f675587f9ff8eee168ae6",
+      "bytes": 83382,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/context.json": {
+      "sha256": "ae076d4b6775fb51a46cccb3eb464bf8f9927a255c06be0f6c6ca5fc9aa3774c",
+      "bytes": 2900,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset-program.bin": {
+      "sha256": "414dcf5d5230a592c3c593a74538039e31bfcb3c144df68ba4909c2fd0277940",
+      "bytes": 612399,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/rejected-before-program.bin": {
+      "sha256": "c552a985b477ba12a3ae67aeb7320a04a321a86dd6f3e69286091da757c8435c",
+      "bytes": 7654,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/continuous.npz": {
+      "sha256": "ce7a5de46c6a1813941a6e2cf7ea1797318e04214ba0cb2af8c13678138fe96d",
+      "bytes": 83382,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/rejected-before.json": {
+      "sha256": "2ea59558d0f823ce15a405d54fddb2f9d413420a20723d9d2f2d4633efd32351",
+      "bytes": 3136,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/rejected-after.json": {
+      "sha256": "2ea59558d0f823ce15a405d54fddb2f9d413420a20723d9d2f2d4633efd32351",
+      "bytes": 3136,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/rejected-result.json": {
+      "sha256": "a71a25514007716785b58f1af5768c7707f2def864bdc37dd0b9894a6e5f14d9",
+      "bytes": 152,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/restored-program.bin": {
+      "sha256": "414dcf5d5230a592c3c593a74538039e31bfcb3c144df68ba4909c2fd0277940",
+      "bytes": 612399,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/restarted.json": {
+      "sha256": "e47e0fe953916f274f9fab66fbadc369a75c9592d26eac2372340201a96400c1",
+      "bytes": 755606,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/accepted.npz": {
+      "sha256": "432f1142d589b8d89b4f001639b533d8279805eb3d49ef414240b795aa90193d",
+      "bytes": 83382,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/restored.json": {
+      "sha256": "1d99b4b1123082b817697d5c478d4230a42ca6eff8f9a8e720faa2fb2295ede2",
+      "bytes": 755704,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/accepted-program.bin": {
+      "sha256": "414dcf5d5230a592c3c593a74538039e31bfcb3c144df68ba4909c2fd0277940",
+      "bytes": 612399,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/rejected-after-program.bin": {
+      "sha256": "c552a985b477ba12a3ae67aeb7320a04a321a86dd6f3e69286091da757c8435c",
+      "bytes": 7654,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/pops-native-cache/fba45d5a090c36dcf0d8157c48016e1f1eba1824cf038baa2a72b5d62206737a.so.pops-model.cpp": {
+      "sha256": "7acb95048f18452f83ead6fbe7e4fbf1df42d323e07d1ebc89f8a4d8fa431ff5",
+      "bytes": 12775,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/pops-native-cache/62f953d4fa6649ab1279c5432669c8eeacc8ea629e48b0f42760503069d6f4b7.so.pops-model.cpp": {
+      "sha256": "5d506d9a6ae16e6dd09611e87cfb87d5ad33665a8a74a947d6bcd497992dca4d",
+      "bytes": 12775,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/pops-native-cache/8168a7a2a28c0a40962827597a3da57680d77ee393a28848ad68a64abcfc542e.so": {
+      "sha256": "104ec351e37a2b353d968b744f7b2c1b867d560d48cf4803944da219a649b226",
+      "bytes": 481552,
+      "mode": 493
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/pops-native-cache/62f953d4fa6649ab1279c5432669c8eeacc8ea629e48b0f42760503069d6f4b7.so": {
+      "sha256": "d9450b20f8c1453af1c3df2aa5b3ddcc10ad5521ea0421c8abf48a16e771d6a5",
+      "bytes": 7069272,
+      "mode": 493
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/pops-native-cache/62f953d4fa6649ab1279c5432669c8eeacc8ea629e48b0f42760503069d6f4b7.so.pops-artifact.json": {
+      "sha256": "cbcdcdf3815d3277953ccf91f704798ead9e8cbca4008c9ca8f98007fc0eb5d4",
+      "bytes": 591,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/pops-native-cache/fba45d5a090c36dcf0d8157c48016e1f1eba1824cf038baa2a72b5d62206737a.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/pops-native-cache/62f953d4fa6649ab1279c5432669c8eeacc8ea629e48b0f42760503069d6f4b7.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/pops-native-cache/fba45d5a090c36dcf0d8157c48016e1f1eba1824cf038baa2a72b5d62206737a.so": {
+      "sha256": "68f13492713096fcf625dd039421b6ebee65c0cc979c845e59e404f5c7ffc90b",
+      "bytes": 7069272,
+      "mode": 493
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/pops-native-cache/.62f953d4fa6649ab1279c5432669c8eeacc8ea629e48b0f42760503069d6f4b7.pops-stage-fp8os8s7.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/pops-native-cache/8168a7a2a28c0a40962827597a3da57680d77ee393a28848ad68a64abcfc542e.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/pops-native-cache/8168a7a2a28c0a40962827597a3da57680d77ee393a28848ad68a64abcfc542e.so.pops-artifact.json": {
+      "sha256": "21b021a30e0408697f485093e75516a718999e708062c1310f5d5a57f3545ada",
+      "bytes": 490,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/pops-native-cache/912c75907baa831906072ef02cf614aea7c647bb0c22ccf0590cec825f28536e.so": {
+      "sha256": "d49f2295e1b7db8593c47884ecf7cc6636c3bdf8a0714379beb919a2d3cdd4a3",
+      "bytes": 402448,
+      "mode": 493
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/pops-native-cache/912c75907baa831906072ef02cf614aea7c647bb0c22ccf0590cec825f28536e.so.pops-artifact.json": {
+      "sha256": "6a06f7b431a33a6ca6019a2b2ef58a993e574d7c29f6f7b0581680f35b5bed6d",
+      "bytes": 490,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/pops-native-cache/62f953d4fa6649ab1279c5432669c8eeacc8ea629e48b0f42760503069d6f4b7.so.pops-model-compile.json": {
+      "sha256": "bec21f40add15517b445fd067c366f11ebba32416233940ef74d66cc9180eb31",
+      "bytes": 2406,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/pops-native-cache/.fba45d5a090c36dcf0d8157c48016e1f1eba1824cf038baa2a72b5d62206737a.pops-stage-cowbdgx8.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/pops-native-cache/fba45d5a090c36dcf0d8157c48016e1f1eba1824cf038baa2a72b5d62206737a.so.pops-model-compile.json": {
+      "sha256": "156fd6602aa5b4519f1a05dcec13dd65c5d78ab8f7c6608dcd3eda7f4319112b",
+      "bytes": 2406,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/pops-native-cache/fba45d5a090c36dcf0d8157c48016e1f1eba1824cf038baa2a72b5d62206737a.so.pops-artifact.json": {
+      "sha256": "a8c248660cf5d422af2b984a46f0e97a2efff7551f9d492834041e2c8298724a",
+      "bytes": 591,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_rejection_preserves_nativ0/pops-native-cache/912c75907baa831906072ef02cf614aea7c647bb0c22ccf0590cec825f28536e.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_system_direct_step_requir0/pops-native-cache/fba45d5a090c36dcf0d8157c48016e1f1eba1824cf038baa2a72b5d62206737a.so.pops-model.cpp": {
+      "sha256": "7acb95048f18452f83ead6fbe7e4fbf1df42d323e07d1ebc89f8a4d8fa431ff5",
+      "bytes": 12775,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_system_direct_step_requir0/pops-native-cache/fba45d5a090c36dcf0d8157c48016e1f1eba1824cf038baa2a72b5d62206737a.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_system_direct_step_requir0/pops-native-cache/fba45d5a090c36dcf0d8157c48016e1f1eba1824cf038baa2a72b5d62206737a.so": {
+      "sha256": "68f13492713096fcf625dd039421b6ebee65c0cc979c845e59e404f5c7ffc90b",
+      "bytes": 7069272,
+      "mode": 493
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_system_direct_step_requir0/pops-native-cache/912c75907baa831906072ef02cf614aea7c647bb0c22ccf0590cec825f28536e.so": {
+      "sha256": "d49f2295e1b7db8593c47884ecf7cc6636c3bdf8a0714379beb919a2d3cdd4a3",
+      "bytes": 402448,
+      "mode": 493
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_system_direct_step_requir0/pops-native-cache/912c75907baa831906072ef02cf614aea7c647bb0c22ccf0590cec825f28536e.so.pops-artifact.json": {
+      "sha256": "6a06f7b431a33a6ca6019a2b2ef58a993e574d7c29f6f7b0581680f35b5bed6d",
+      "bytes": 490,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_system_direct_step_requir0/pops-native-cache/fba45d5a090c36dcf0d8157c48016e1f1eba1824cf038baa2a72b5d62206737a.so.pops-model-compile.json": {
+      "sha256": "c412285bea0a873a576a0f2876fa41735b288c202a917e4e19af6ebd0262eb51",
+      "bytes": 2406,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_system_direct_step_requir0/pops-native-cache/fba45d5a090c36dcf0d8157c48016e1f1eba1824cf038baa2a72b5d62206737a.so.pops-artifact.json": {
+      "sha256": "c96865dc54190e496fb430f2d836f64e2730904f57b9256baefb78e00cd3e81e",
+      "bytes": 591,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_system_direct_step_requir0/pops-native-cache/912c75907baa831906072ef02cf614aea7c647bb0c22ccf0590cec825f28536e.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_system_direct_step_requir0/pops-native-cache/.fba45d5a090c36dcf0d8157c48016e1f1eba1824cf038baa2a72b5d62206737a.pops-stage-2yiq6qdj.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-rank0-fields-23ce14acf846f650-level0.npy": {
+      "sha256": "55a8b47fb25cb3a1080875d57a3668f88a717a9033ad9dabe74370b6d57d99f5",
+      "bytes": 8320,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-rank0.npz": {
+      "sha256": "b420c07208d5b74d9093da7bc31bc4648cc98709f290538d5758832894259ab8",
+      "bytes": 83382,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-rank0-fields-23ce14acf846f650-level1.npy": {
+      "sha256": "434198a433a578de8826257ec121266853586759f32b41f19a9a6e59e384a144",
+      "bytes": 32896,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-rank0-fields-23ce14acf846f650-level0.npy": {
+      "sha256": "55a8b47fb25cb3a1080875d57a3668f88a717a9033ad9dabe74370b6d57d99f5",
+      "bytes": 8320,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-rank0-fields-23ce14acf846f650-level1.npy": {
+      "sha256": "434198a433a578de8826257ec121266853586759f32b41f19a9a6e59e384a144",
+      "bytes": 32896,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/failure-rank0.json": {
+      "sha256": "33fdf5f5e275f50bba68e5e9d1ea7818c11fb796ef840facb3c4cb0e1ee613b8",
+      "bytes": 923,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-rank0.json": {
+      "sha256": "8e9209d56f1e67b2c165df48c8b55e99403fc41c490b8642f08d8d338e9c087a",
+      "bytes": 3136,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-rank0.json": {
+      "sha256": "8e9209d56f1e67b2c165df48c8b55e99403fc41c490b8642f08d8d338e9c087a",
+      "bytes": 3136,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/fault-boundary.json": {
+      "sha256": "c682a5b148f1bf7bfc83ba9cd541295bb899c0636bdd3741c2c6251d461b4e25",
+      "bytes": 5224,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-rank0.npz": {
+      "sha256": "b420c07208d5b74d9093da7bc31bc4648cc98709f290538d5758832894259ab8",
+      "bytes": 83382,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-rank0-states-1e6243a2b17026f8-level1.npy": {
+      "sha256": "5be9ddf80d95e3f41770bdec4cc8b2bab256bbb2c85cc10d7aa7042974bde5f8",
+      "bytes": 32896,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-rank0-states-1e6243a2b17026f8-level0.npy": {
+      "sha256": "00f14432cf5523efc5f9c5da08b3dde1beab3a2ee522f3d82b4129b132163893",
+      "bytes": 8320,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-rank0-states-1e6243a2b17026f8-level1.npy": {
+      "sha256": "5be9ddf80d95e3f41770bdec4cc8b2bab256bbb2c85cc10d7aa7042974bde5f8",
+      "bytes": 32896,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-rank0-states-1e6243a2b17026f8-level0.npy": {
+      "sha256": "00f14432cf5523efc5f9c5da08b3dde1beab3a2ee522f3d82b4129b132163893",
+      "bytes": 8320,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-rank0-program.bin": {
+      "sha256": "cac1f59b34772507b111529526d4c359aa35d5a4f68960a038254097985e6a49",
+      "bytes": 7654,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-rank0-program.bin": {
+      "sha256": "cac1f59b34772507b111529526d4c359aa35d5a4f68960a038254097985e6a49",
+      "bytes": 7654,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/pops-native-cache/eafbf5972cb1e88c054211fc7520005354b012f8ec906b527e58e6ddb663216d.so": {
+      "sha256": "4d508f25b5978b12cc12b6f2f06ff1295af8ba54a4bc8a81c4beedd5163ed285",
+      "bytes": 1621616,
+      "mode": 493
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/pops-native-cache/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so.pops-artifact.json": {
+      "sha256": "87978b7d249aa17b8a6fef2627f91eda9b0089322ee31d080dab49ad3469a76f",
+      "bytes": 591,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/pops-native-cache/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/pops-native-cache/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so.pops-model-compile.json": {
+      "sha256": "98f6f6e14420542f0bb4a08b24121fe9ef9789ea4dcf5fc5c37b9932ec01d24c",
+      "bytes": 2414,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/pops-native-cache/.290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.pops-stage-316zlsou.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/pops-native-cache/eafbf5972cb1e88c054211fc7520005354b012f8ec906b527e58e6ddb663216d.so.pops-artifact.json": {
+      "sha256": "d60d7788e8eba9fe7a51bbefa5d837a76434354a413c9db7ec938327d8b804b0",
+      "bytes": 490,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/pops-native-cache/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so": {
+      "sha256": "ed2f2504a03f8706585d94c0ee6585130fe2f51aa84a92ad88fc5ef3ad5e5f5a",
+      "bytes": 5164344,
+      "mode": 493
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/pops-native-cache/eafbf5972cb1e88c054211fc7520005354b012f8ec906b527e58e6ddb663216d.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/pops-native-cache/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so.pops-model.cpp": {
+      "sha256": "a3ef761854f9bb674241d199a1244c16de7b19a799acbd8e71cd77ea2dfb890a",
+      "bytes": 24337,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/provenance-rank0/model-0.artifact.json": {
+      "sha256": "87978b7d249aa17b8a6fef2627f91eda9b0089322ee31d080dab49ad3469a76f",
+      "bytes": 591,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/provenance-rank0/compiled-manifest.json": {
+      "sha256": "ef770ba82b7371f18c33edba9967199bf86230d9d0091b610125415f68ce157f",
+      "bytes": 93734,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/provenance-rank0/model-0.cpp": {
+      "sha256": "a3ef761854f9bb674241d199a1244c16de7b19a799acbd8e71cd77ea2dfb890a",
+      "bytes": 24337,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/provenance-rank0/model-0.so": {
+      "sha256": "ed2f2504a03f8706585d94c0ee6585130fe2f51aa84a92ad88fc5ef3ad5e5f5a",
+      "bytes": 5164344,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/provenance-rank0/model-0.module-ir.json": {
+      "sha256": "e1095efc981b21058175988cf2f187cb5f00f3314f0cd60b27bede0a22639fd8",
+      "bytes": 55237,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/provenance-rank0/receipt.json": {
+      "sha256": "8b78b7e0f9622056aca8e56028f8e7e500c51578e80798559b624ad1633bd2a9",
+      "bytes": 10910,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/provenance-rank0/layout-0/program.cpp": {
+      "sha256": "8647fedc7e8942971fda17cd67ce65b9bca6d67fbb3c0e91f3516843e003f9ae",
+      "bytes": 39411,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/provenance-rank0/layout-0/program.so": {
+      "sha256": "4d508f25b5978b12cc12b6f2f06ff1295af8ba54a4bc8a81c4beedd5163ed285",
+      "bytes": 1621616,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/provenance-rank0/layout-0/program.ir.json": {
+      "sha256": "fc8dd062311e17711ea10a0844bd94ac2038d47bc9a567fb155fc6d2622be75f",
+      "bytes": 211392,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/provenance-rank0/layout-0/program.artifact.json": {
+      "sha256": "d60d7788e8eba9fe7a51bbefa5d837a76434354a413c9db7ec938327d8b804b0",
+      "bytes": 490,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/provenance-rank0/model-0-companions/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so.pops-artifact.json": {
+      "sha256": "87978b7d249aa17b8a6fef2627f91eda9b0089322ee31d080dab49ad3469a76f",
+      "bytes": 591,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/provenance-rank0/model-0-companions/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so.pops-model-compile.json": {
+      "sha256": "98f6f6e14420542f0bb4a08b24121fe9ef9789ea4dcf5fc5c37b9932ec01d24c",
+      "bytes": 2414,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/provenance-rank0/model-0-companions/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so.pops-model.cpp": {
+      "sha256": "a3ef761854f9bb674241d199a1244c16de7b19a799acbd8e71cd77ea2dfb890a",
+      "bytes": 24337,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_restart_restores_0/pops-native-cache/fba45d5a090c36dcf0d8157c48016e1f1eba1824cf038baa2a72b5d62206737a.so.pops-model.cpp": {
+      "sha256": "7acb95048f18452f83ead6fbe7e4fbf1df42d323e07d1ebc89f8a4d8fa431ff5",
+      "bytes": 12775,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_restart_restores_0/pops-native-cache/fba45d5a090c36dcf0d8157c48016e1f1eba1824cf038baa2a72b5d62206737a.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_restart_restores_0/pops-native-cache/fba45d5a090c36dcf0d8157c48016e1f1eba1824cf038baa2a72b5d62206737a.so": {
+      "sha256": "68f13492713096fcf625dd039421b6ebee65c0cc979c845e59e404f5c7ffc90b",
+      "bytes": 7069272,
+      "mode": 493
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_restart_restores_0/pops-native-cache/912c75907baa831906072ef02cf614aea7c647bb0c22ccf0590cec825f28536e.so": {
+      "sha256": "d49f2295e1b7db8593c47884ecf7cc6636c3bdf8a0714379beb919a2d3cdd4a3",
+      "bytes": 402448,
+      "mode": 493
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_restart_restores_0/pops-native-cache/.fba45d5a090c36dcf0d8157c48016e1f1eba1824cf038baa2a72b5d62206737a.pops-stage-73gnti7e.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_restart_restores_0/pops-native-cache/912c75907baa831906072ef02cf614aea7c647bb0c22ccf0590cec825f28536e.so.pops-artifact.json": {
+      "sha256": "6a06f7b431a33a6ca6019a2b2ef58a993e574d7c29f6f7b0581680f35b5bed6d",
+      "bytes": 490,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_restart_restores_0/pops-native-cache/fba45d5a090c36dcf0d8157c48016e1f1eba1824cf038baa2a72b5d62206737a.so.pops-model-compile.json": {
+      "sha256": "10fb6472596b0fecdde278fc9159b04de8435ae8c132bf2639640fe1c4e8c32e",
+      "bytes": 2406,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_restart_restores_0/pops-native-cache/fba45d5a090c36dcf0d8157c48016e1f1eba1824cf038baa2a72b5d62206737a.so.pops-artifact.json": {
+      "sha256": "11ee893dd67e24aa1b13e482413c30ef949a8c6cd2e2747b9f5d059f6b99c26f",
+      "bytes": 591,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/test_uniform_restart_restores_0/pops-native-cache/912c75907baa831906072ef02cf614aea7c647bb0c22ccf0590cec825f28536e.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/provenance-rank0/model-0.artifact.json": {
+      "sha256": "40ae971366b339af0365afa2a472f77aef4bc0b25da3ef07de2028d15bb061e1",
+      "bytes": 591,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/provenance-rank0/compiled-manifest.json": {
+      "sha256": "b739b08e8f921337b705bba4df820777b16f3e18acbabcf3fa75e44f8b5a8e2c",
+      "bytes": 93727,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/provenance-rank0/model-0.cpp": {
+      "sha256": "a3ef761854f9bb674241d199a1244c16de7b19a799acbd8e71cd77ea2dfb890a",
+      "bytes": 24337,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/provenance-rank0/model-0.so": {
+      "sha256": "ed2f2504a03f8706585d94c0ee6585130fe2f51aa84a92ad88fc5ef3ad5e5f5a",
+      "bytes": 5164344,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/provenance-rank0/model-0.module-ir.json": {
+      "sha256": "e1095efc981b21058175988cf2f187cb5f00f3314f0cd60b27bede0a22639fd8",
+      "bytes": 55237,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/provenance-rank0/receipt.json": {
+      "sha256": "16b3750fc9c97b5db77eaabb8a6334d46762fbc08468b7ad6cc246666caf10a8",
+      "bytes": 10118,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset-provenance/provenance-rank0/model-0.artifact.json": {
+      "sha256": "40ae971366b339af0365afa2a472f77aef4bc0b25da3ef07de2028d15bb061e1",
+      "bytes": 591,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset-provenance/provenance-rank0/compiled-manifest.json": {
+      "sha256": "f0f1b3d2d7060a8152e51634e32b514b7d4ce19b9480332f2587185a04c65847",
+      "bytes": 93734,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset-provenance/provenance-rank0/model-0.cpp": {
+      "sha256": "a3ef761854f9bb674241d199a1244c16de7b19a799acbd8e71cd77ea2dfb890a",
+      "bytes": 24337,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset-provenance/provenance-rank0/model-0.so": {
+      "sha256": "ed2f2504a03f8706585d94c0ee6585130fe2f51aa84a92ad88fc5ef3ad5e5f5a",
+      "bytes": 5164344,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset-provenance/provenance-rank0/model-0.module-ir.json": {
+      "sha256": "e1095efc981b21058175988cf2f187cb5f00f3314f0cd60b27bede0a22639fd8",
+      "bytes": 55237,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset-provenance/provenance-rank0/receipt.json": {
+      "sha256": "0a9a8aabe0d63bdad9f01906d0432d9fd392094307900044fd0eec94b078677f",
+      "bytes": 8874,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset-provenance/provenance-rank0/layout-0/program.cpp": {
+      "sha256": "8647fedc7e8942971fda17cd67ce65b9bca6d67fbb3c0e91f3516843e003f9ae",
+      "bytes": 39411,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset-provenance/provenance-rank0/layout-0/program.so": {
+      "sha256": "4d508f25b5978b12cc12b6f2f06ff1295af8ba54a4bc8a81c4beedd5163ed285",
+      "bytes": 1621616,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset-provenance/provenance-rank0/layout-0/program.ir.json": {
+      "sha256": "d763d0baaf07a2fe6274fd3c3c8517d9a8ffd8a1f9572611acc52468a746a88c",
+      "bytes": 218647,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset-provenance/provenance-rank0/layout-0/program.artifact.json": {
+      "sha256": "d60d7788e8eba9fe7a51bbefa5d837a76434354a413c9db7ec938327d8b804b0",
+      "bytes": 490,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset-provenance/provenance-rank0/model-0-companions/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so.pops-artifact.json": {
+      "sha256": "40ae971366b339af0365afa2a472f77aef4bc0b25da3ef07de2028d15bb061e1",
+      "bytes": 591,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset-provenance/provenance-rank0/model-0-companions/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so.pops-model-compile.json": {
+      "sha256": "6289c147965099b6673ff3d7d7875b6662614894900cf61625f68dd6b899fe3e",
+      "bytes": 2288,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset-provenance/provenance-rank0/model-0-companions/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so.pops-model.cpp": {
+      "sha256": "a3ef761854f9bb674241d199a1244c16de7b19a799acbd8e71cd77ea2dfb890a",
+      "bytes": 24337,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/provenance-rank0/layout-0/program.cpp": {
+      "sha256": "8647fedc7e8942971fda17cd67ce65b9bca6d67fbb3c0e91f3516843e003f9ae",
+      "bytes": 39411,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/provenance-rank0/layout-0/program.so": {
+      "sha256": "4d508f25b5978b12cc12b6f2f06ff1295af8ba54a4bc8a81c4beedd5163ed285",
+      "bytes": 1621616,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/provenance-rank0/layout-0/program.ir.json": {
+      "sha256": "fc8dd062311e17711ea10a0844bd94ac2038d47bc9a567fb155fc6d2622be75f",
+      "bytes": 211392,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/provenance-rank0/layout-0/program.artifact.json": {
+      "sha256": "d60d7788e8eba9fe7a51bbefa5d837a76434354a413c9db7ec938327d8b804b0",
+      "bytes": 490,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/provenance-rank0/model-0-companions/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so.pops-artifact.json": {
+      "sha256": "40ae971366b339af0365afa2a472f77aef4bc0b25da3ef07de2028d15bb061e1",
+      "bytes": 591,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/provenance-rank0/model-0-companions/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so.pops-model-compile.json": {
+      "sha256": "6289c147965099b6673ff3d7d7875b6662614894900cf61625f68dd6b899fe3e",
+      "bytes": 2288,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/provenance-rank0/model-0-companions/290885163906b1081834327a8758757bc96a2767f5894399de2ad492faa27f8a.so.pops-model.cpp": {
+      "sha256": "a3ef761854f9bb674241d199a1244c16de7b19a799acbd8e71cd77ea2dfb890a",
+      "bytes": 24337,
+      "mode": 420
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset/paraview/state/pops.handle.v1-case-scalar_advection_imex_amr-consumer-graph__series-8dc82405718c1b8c7d9d9481765530d00288320692a3c3cc2db0067bf32d66c4__s000000001.view.py": {
+      "sha256": "e36e861cc62ff7fd09fbe023d08cf0c23b74b941d4da1510d5fd700b484862bd",
+      "bytes": 4340,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset/paraview/state/pops.handle.v1-case-scalar_advection_imex_amr-consumer-graph__series-8dc82405718c1b8c7d9d9481765530d00288320692a3c3cc2db0067bf32d66c4__s000000001.view.json": {
+      "sha256": "9a67cdb1aca5fafd7df7e24cb0f6ba9fdd9f3a8128aab48109b997e35b3fe857",
+      "bytes": 1510,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset/paraview/state/scientific-output-paravi__pops.handle.v1-case-scal__ffb1dd0dc0c8620ab22e373974ff0cbcf88fc96a64f8487accec6c9797ba95db6__s000000001__a961264b898a5b33428f589dd0a787db9f660dcde62411842650030c4c8fd423.vtu": {
+      "sha256": "c3b3f959a0a90cfa2cbe5f71d57c140034bb568d26fd1921910ee111c214ffaf",
+      "bytes": 123294,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset/paraview/state/pops.handle.v1-case-scalar_advection_imex_amr-consumer-graph__series-8dc82405718c1b8c7d9d9481765530d00288320692a3c3cc2db0067bf32d66c4__s000000001.pvd": {
+      "sha256": "ef0956d35e28f42a2e1416083364078b183b14ff19657a4953b005f9b2401330",
+      "bytes": 1404,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset/hdf5/state/series__f9b3c139f22f837000601444994fa8374b43b161ef07ffa9d6068cd8e66683d76.h5.series": {
+      "sha256": "055852ee4d11dc3e059646ebbfaee16f794eb6a91b82a5af9edb9e81c9849b2f",
+      "bytes": 302,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset/hdf5/state/.series__f9b3c139f22f837000601444994fa8374b43b161ef07ffa9d6068cd8e66683d76.h5.series.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset/hdf5/state/scientific-output-hdf5-s__pops.handle.v1-case-scal__f9b3c139f22f837000601444994fa8374b43b161ef07ffa9d6068cd8e66683d76__s000000001__c6ee827f590ddec8823a7ae6e53e731f04d9b5548ad39b4185e216f9b647590b.h5": {
+      "sha256": "9e9b0fc47832453af152dbcff9b3280a818d6d74e7df1c76ca5c57a3a62fa257",
+      "bytes": 130989,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset/npz/state/scientific-output-npz-st__pops.handle.v1-case-scal__f1251c075dcc5fa0d62ad73f6e54a91f09afde97b2d006a6db44fd5016b187b30__s000000001__cba2ecd51b10f1145783a72d9985c2e26075f4e0ec26cac163674b8500dd887b.npz": {
+      "sha256": "6d022f93a58796bcd78f003f667fef3dd6a0ac248f58ac688d3f74e2a1138045",
+      "bytes": 53220,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset/npz/state/.series__f1251c075dcc5fa0d62ad73f6e54a91f09afde97b2d006a6db44fd5016b187b30.npz.series.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/preset/npz/state/series__f1251c075dcc5fa0d62ad73f6e54a91f09afde97b2d006a6db44fd5016b187b30.npz.series": {
+      "sha256": "457716296c38605edd106c78e68cdeca55752ab530174b56233781cb4b7418f1",
+      "bytes": 303,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/accepted/paraview/state/scientific-output-paravi__pops.handle.v1-case-scal__f8ed7b9ee8a461e669292dd268a24b88295f88192b41034283c04915643b0f762__s000000001__90c1621056265670b69982b21e2ac2eabf3ad8e4baa25993f3a99b48f5f58a00.vtu": {
+      "sha256": "388bb29a2aa701cdae4dde736bc585fea13b140d53e3faed12a0560e3247e4a7",
+      "bytes": 123289,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/accepted/paraview/state/pops.handle.v1-case-scalar_advection_imex_amr-consumer-graph__series-1489862946ca280b36181f79a973c79a1647f80d4140806f625a4b955d750f2a__s000000001.view.json": {
+      "sha256": "05e104b2319a0633ab1d4de61d6d752412c961fcea9d87756602e89463beebe7",
+      "bytes": 1505,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/accepted/paraview/state/pops.handle.v1-case-scalar_advection_imex_amr-consumer-graph__series-1489862946ca280b36181f79a973c79a1647f80d4140806f625a4b955d750f2a__s000000001.pvd": {
+      "sha256": "3464d2c2e3894b846db588d27a8997821fa98bccf1457194743f1c3da3510dfd",
+      "bytes": 1404,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/accepted/paraview/state/pops.handle.v1-case-scalar_advection_imex_amr-consumer-graph__series-1489862946ca280b36181f79a973c79a1647f80d4140806f625a4b955d750f2a__s000000001.view.py": {
+      "sha256": "e04538edcbb8ddaeac79402c26d401bf7c0c04d2c3bd8a068642f557d4ff399e",
+      "bytes": 4340,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/accepted/hdf5/state/scientific-output-hdf5-s__pops.handle.v1-case-scal__f7456d76766d332c7d11becba9653b514b2c9ec0678a30b0431d915dab2aa8c0c__s000000001__6668c98fc5601292c9fcc4e6271f3bd28232175f05813b85d546db3fecb51223.h5": {
+      "sha256": "ed482db7bc8d7218943ec207bd79a4a16095a19c4c535ae3dfb64fd4cd3a49f6",
+      "bytes": 130989,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/accepted/hdf5/state/.series__f7456d76766d332c7d11becba9653b514b2c9ec0678a30b0431d915dab2aa8c0c.h5.series.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/accepted/hdf5/state/series__f7456d76766d332c7d11becba9653b514b2c9ec0678a30b0431d915dab2aa8c0c.h5.series": {
+      "sha256": "8fb1b8567d7db35e6b2fafa3f987a54880d9115d113f62b3d5f66d2aeb3238b3",
+      "bytes": 302,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/accepted/npz/state/scientific-output-npz-st__pops.handle.v1-case-scal__fb0229526fa1e570e7444c93724be33b01a15effbcf9e74effe0f67d36250712b__s000000001__ce20221c200c23d356bccc8cba4b9bbf6b3b623f6a2394aa2ed63dfcb462338f.npz": {
+      "sha256": "97ba581b5b3361d76a84fd0e596173dfba81a5721af396e082aa3b93d23c0478",
+      "bytes": 53308,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/accepted/npz/state/series__fb0229526fa1e570e7444c93724be33b01a15effbcf9e74effe0f67d36250712b.npz.series": {
+      "sha256": "8a86dabdce12ff88d72e3a99dba73aca9db19c1db9a6eff4e2cceb27483144a1",
+      "bytes": 303,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/accepted/npz/state/.series__fb0229526fa1e570e7444c93724be33b01a15effbcf9e74effe0f67d36250712b.npz.series.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/continuous/paraview/state/pops.handle.v1-case-scalar_advection_imex_amr-consumer-graph__series-1489862946ca280b36181f79a973c79a1647f80d4140806f625a4b955d750f2a__s000000002.view.json": {
+      "sha256": "4883f868ad952ae13f7de88834ea5d69c48bdc4198f3b497b0f3afaf369dc19d",
+      "bytes": 1505,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/continuous/paraview/state/scientific-output-paravi__pops.handle.v1-case-scal__fe7e73513a80e11d8f97c463a8491f91a07efd1a8942077e16a213274e8a83e2d__s000000002__4e14c3da972b2634cd086e3945b5d78f01bda02497be9bd0cd5436a85c65b8ba.vtu": {
+      "sha256": "f51cf7287fd4ec897e8d31ac392f31507955e5ad9821451441d2a519265518b9",
+      "bytes": 149551,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/continuous/paraview/state/pops.handle.v1-case-scalar_advection_imex_amr-consumer-graph__series-1489862946ca280b36181f79a973c79a1647f80d4140806f625a4b955d750f2a__s000000002.view.py": {
+      "sha256": "bb5dffb16b209bb23988c26ef5a400eb8cee64526ccbd7e44928c55d4159b646",
+      "bytes": 4340,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/continuous/paraview/state/pops.handle.v1-case-scalar_advection_imex_amr-consumer-graph__series-1489862946ca280b36181f79a973c79a1647f80d4140806f625a4b955d750f2a__s000000002.pvd": {
+      "sha256": "e9ebc8eaf3ee40dcc6e1fd151eac29c333b40b5ced44902ff3fff009bdd370da",
+      "bytes": 1420,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/continuous/hdf5/state/series__f9629f5e2fdbf2fee8b709f41377a381bd7278e0fec373f54898f86843f5b6d35.h5.series": {
+      "sha256": "fe3ea1d72b013443a85a7f498297b1fa2a927b7d8a86e21c8afb4953cd7f63f8",
+      "bytes": 302,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/continuous/hdf5/state/.series__f9629f5e2fdbf2fee8b709f41377a381bd7278e0fec373f54898f86843f5b6d35.h5.series.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/continuous/hdf5/state/scientific-output-hdf5-s__pops.handle.v1-case-scal__f9629f5e2fdbf2fee8b709f41377a381bd7278e0fec373f54898f86843f5b6d35__s000000002__048ff7b40ee5a11133ba09b4acb97a522198cdb91b4c2eb5b14419529ad227b4.h5": {
+      "sha256": "e752ef664201148ffa4addae47d907eba9ba2a7822c5d1ed4a7e4fd528cdaaf0",
+      "bytes": 130158,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/continuous/npz/state/series__faf8b2fc2633bd4def0c0fd53949fe2f502313ab01d817194b5800b02a900ef73.npz.series": {
+      "sha256": "6108ae65817b5c53dbe6f393ce5c35ab62710cd1b8b978d6364c2160c6911142",
+      "bytes": 303,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/continuous/npz/state/scientific-output-npz-st__pops.handle.v1-case-scal__faf8b2fc2633bd4def0c0fd53949fe2f502313ab01d817194b5800b02a900ef73__s000000002__0d803b70ef41116907d3d2995301f33dd039cc61d6b5817ff9855f5ae09d6d53.npz": {
+      "sha256": "686fc561315333b56711d59a6b8beef83841340fef16e49ff5bfdd35600e3d7d",
+      "bytes": 65033,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/continuous/npz/state/.series__faf8b2fc2633bd4def0c0fd53949fe2f502313ab01d817194b5800b02a900ef73.npz.series.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/restarted/paraview/state/pops.handle.v1-case-scalar_advection_imex_amr-consumer-graph__series-1489862946ca280b36181f79a973c79a1647f80d4140806f625a4b955d750f2a__s000000002.view.json": {
+      "sha256": "0be486f026b42452ceafaf5d496827b1b53d935748baa72a592bd050dd542186",
+      "bytes": 1505,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/restarted/paraview/state/scientific-output-paravi__pops.handle.v1-case-scal__f5b0ac7d2d75fdc7e99bd862e80979a2984eda817fd0b21a6b0e18ff099528652__s000000002__b974d329cf631b88787a6615106a94ebab6e1921a8dd1246d819cff9e39c7b83.vtu": {
+      "sha256": "0195840c900dae39558191b9f994ab8d9dc70b17f2211de92f4ad33f8b688e58",
+      "bytes": 149551,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/restarted/paraview/state/pops.handle.v1-case-scalar_advection_imex_amr-consumer-graph__series-1489862946ca280b36181f79a973c79a1647f80d4140806f625a4b955d750f2a__s000000002.view.py": {
+      "sha256": "e4d33ef97ea981b23ea74c2ca2626cf9cbb19b34a99a7198d241fc8e8c1d8f86",
+      "bytes": 4340,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/restarted/paraview/state/pops.handle.v1-case-scalar_advection_imex_amr-consumer-graph__series-1489862946ca280b36181f79a973c79a1647f80d4140806f625a4b955d750f2a__s000000002.pvd": {
+      "sha256": "b53bb25e50433b3c9e88c7c4ab78ff713ef46e6d742400cb411fe8deadfca155",
+      "bytes": 1420,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/restarted/hdf5/state/.series__f9e68dcd3a550deae46e8b45704f1169dabd3ba0d3c1838276360ec1c8010cbb0.h5.series.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/restarted/hdf5/state/scientific-output-hdf5-s__pops.handle.v1-case-scal__f9e68dcd3a550deae46e8b45704f1169dabd3ba0d3c1838276360ec1c8010cbb0__s000000002__919f162892bfb62c735351f2529eba2b9e335db1e2b7c9eed3e8d75bf16c701b.h5": {
+      "sha256": "0ba68303736003c0deb210fe2bab81ccbfe81818c2c31d241c85e9b9d754dfbd",
+      "bytes": 130158,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/restarted/hdf5/state/series__f9e68dcd3a550deae46e8b45704f1169dabd3ba0d3c1838276360ec1c8010cbb0.h5.series": {
+      "sha256": "c8199024ed6a34a4399c4a9435367b7dcbb7845bbc4438fa4cb0938af2c8a7de",
+      "bytes": 302,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/restarted/npz/state/.series__f18df66b2a3987e181c7865d53baf2fa6e12bfc8d2a6dac3cb073baea2445e664.npz.series.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/restarted/npz/state/scientific-output-npz-st__pops.handle.v1-case-scal__f18df66b2a3987e181c7865d53baf2fa6e12bfc8d2a6dac3cb073baea2445e664__s000000002__6c7f2f4b2aa75ed8b2f30b1fa2c71dc5f7ffac90ae5f63c19a958ad239ba71be.npz": {
+      "sha256": "45c0cef9390304d07999c15ac50a6439452889ea4436134c082eb456075317ba",
+      "bytes": 65044,
+      "mode": 384
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/runs-af8-db206100-ed2f610f-reception1/native8/installed/pytest-tmp/imex-original0/manual/restarted/npz/state/series__f18df66b2a3987e181c7865d53baf2fa6e12bfc8d2a6dac3cb073baea2445e664.npz.series": {
+      "sha256": "44b2b3f1f0b8e2bb52d2bf0127b2eb8709e03ad18248689c8a4e8a53f2dcc750",
+      "bytes": 303,
+      "mode": 384
+    }
+  }
+}

@@ -43,6 +43,11 @@ def _resolved_brick(value: Any, resolver: Any) -> Any:
     if hasattr(result, "_frozen"):
         object.__setattr__(result, "_frozen", False)
     object.__setattr__(result, "options", _resolved_value(dict(options), resolver))
+    if getattr(value, "_joint_state_sources", None) is not None:
+        from pops.numerics.reconstruction.user import authenticated_user_reconstruction
+        authenticated_user_reconstruction(value)
+        object.__setattr__(result, "_joint_state_sources",
+                           _resolved_value(value._joint_state_sources, resolver))
     return result
 
 
@@ -101,6 +106,7 @@ class FiniteVolume(Descriptor):
         reconstruction: Any,
         riemann: Any,
         positivity_floor: Any = None,
+        sampling: Any = (),
     ) -> None:
         from pops.model import Handle
 
@@ -142,6 +148,21 @@ class FiniteVolume(Descriptor):
                 raise ValueError("FiniteVolume.positivity_floor must be >= 0")
         self.positivity_floor = positivity_floor
         state = self.variables.options.get("state")
+        if isinstance(sampling, (str, bytes, Handle)):
+            raise TypeError("FiniteVolume.sampling requires a tuple of typed state handles")
+        self.sampling = tuple(sampling)
+        if any(not isinstance(item, Handle) or item.kind != "state" for item in self.sampling):
+            raise TypeError("FiniteVolume.sampling requires typed state handles")
+        if len(set(self.sampling)) != len(self.sampling) or state in self.sampling:
+            raise ValueError("FiniteVolume.sampling must not duplicate the target or another state")
+        if any(item.owner_path != flux_owner for item in self.sampling):
+            # Resolved instances may occupy different blocks of the same Model.
+            def declaration_owner(item):
+                return (item.declaration_ref or item).owner_path
+            flux_item = flux[0] if isinstance(flux, tuple) else flux
+            if any(declaration_owner(item) != declaration_owner(flux_item)
+                   for item in self.sampling):
+                raise ValueError("FiniteVolume.sampling contains a foreign Model state")
         if state is not None and state.owner_path != flux_owner:
             raise ValueError("FiniteVolume variables and physical flux belong to different Models")
         velocity = self.riemann.options.get("velocity")
@@ -155,6 +176,7 @@ class FiniteVolume(Descriptor):
             "reconstruction": self.reconstruction,
             "riemann": self.riemann,
             "positivity_floor": self.positivity_floor,
+            "sampling": self.sampling,
         }
 
     @property
@@ -235,6 +257,9 @@ class FiniteVolume(Descriptor):
         if contract["flux"] != self.flux:
             raise ValueError(
                 "FiniteVolume flux does not match the physical flux referenced by the rate")
+        if contract.get("nonconservative_products"):
+            raise ValueError("FiniteVolume cannot omit a physical nonconservative product; "
+                             "select its explicit path-conservative realization")
         state = self.variables.options.get("state")
         if state is not None and state != contract["state"]:
             raise ValueError(
@@ -254,13 +279,14 @@ class FiniteVolume(Descriptor):
             reconstruction=_resolved_brick(self.reconstruction, resolver),
             riemann=_resolved_brick(self.riemann, resolver),
             positivity_floor=self.positivity_floor,
+            sampling=tuple(resolver(item) for item in self.sampling),
         )
 
     def to_data(self) -> dict[str, Any]:
         fluxes = self.flux if isinstance(self.flux, tuple) else (self.flux,)
         if any(not item.is_resolved for item in fluxes):
             raise ValueError("FiniteVolume.to_data requires resolved physical handles")
-        return {
+        result = {
             "schema_version": 1,
             "method": "finite_volume",
             "flux": (
@@ -275,6 +301,13 @@ class FiniteVolume(Descriptor):
             "ghost_depth": self.ghost_depth,
             "positivity_floor": self.positivity_floor,
         }
+        if self.sampling:
+            result["sampling"] = [item.canonical_identity() for item in self.sampling]
+        return result
+
+    def runtime_storage_requirements(self):
+        """Grouped transport owns its native face evaluation; installation supplies storage."""
+        return {"ghost_depth": self.ghost_depth} if self.sampling else None
 
     def runtime_configuration(self) -> dict[str, Any]:
         """Return the exact per-block native method identity, excluding physical ownership.
@@ -288,6 +321,12 @@ class FiniteVolume(Descriptor):
 
     def runtime_spatial(self) -> Any:
         """Lower at the native boundary to the existing optimized runtime value."""
+        if self.sampling:
+            from pops.runtime._state_storage import StateStorageSpatial
+
+            # The shared Program operator owns every group face. Installing a
+            # per-row flux would disagree with the generated storage-only model.
+            return StateStorageSpatial(ghost_depth=self.ghost_depth)
         from pops.runtime._bricks_scheme import Spatial
 
         return Spatial(

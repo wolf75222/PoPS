@@ -25,7 +25,7 @@ TEST(CapabilityReport, ReportsSchemaAbiAndRouteVocabulary) {
   bool saw_custom_comm = false;
   bool saw_kokkos_lifecycle = false;
   bool saw_uniform_checkpoint_v5 = false;
-  bool saw_amr_checkpoint_v7 = false;
+  bool saw_amr_checkpoint_v8 = false;
   bool saw_dynamic_regrid_checkpoint = false;
   bool saw_mpi_world = false;
   bool saw_weno5 = false;
@@ -33,6 +33,8 @@ TEST(CapabilityReport, ReportsSchemaAbiAndRouteVocabulary) {
     EXPECT_TRUE(!row.route_id.empty()) << "route_id_nonempty";
     EXPECT_TRUE(row.status == "available" || row.status == "partial" || row.status == "unavailable")
         << "route_status_vocab";
+    if (row.route_id.starts_with("checkpoint:amr_accepted_state_v"))
+      EXPECT_EQ(row.route_id, "checkpoint:amr_accepted_state_v8");
     if (row.route_id == "amr:refinement_ratio") {
       saw_amr_ratio = true;
       EXPECT_TRUE(row.status == "partial") << "amr_ratio_partial";
@@ -52,10 +54,12 @@ TEST(CapabilityReport, ReportsSchemaAbiAndRouteVocabulary) {
       saw_uniform_checkpoint_v5 = true;
       EXPECT_TRUE(row.status == "available") << "uniform_checkpoint_v5_available";
       EXPECT_TRUE(row.layout == "uniform") << "uniform_checkpoint_v5_layout";
-    } else if (row.route_id == "checkpoint:amr_accepted_state_v7") {
-      saw_amr_checkpoint_v7 = true;
-      EXPECT_TRUE(row.status == "available") << "amr_checkpoint_v7_available";
-      EXPECT_TRUE(row.layout == "amr") << "amr_checkpoint_v7_layout";
+    } else if (row.route_id == "checkpoint:amr_accepted_state_v8") {
+      saw_amr_checkpoint_v8 = true;
+      EXPECT_TRUE(row.status == "available") << "amr_checkpoint_v8_available";
+      EXPECT_TRUE(row.layout == "amr") << "amr_checkpoint_v8_layout";
+      EXPECT_NE(row.reason.find("committed attempt authority"), std::string::npos);
+      EXPECT_NE(row.reason.find("v4-v7 images are inspection-only"), std::string::npos);
     } else if (row.route_id == "checkpoint:amr_dynamic_regrid") {
       saw_dynamic_regrid_checkpoint = true;
       EXPECT_TRUE(row.status == "available") << "dynamic_regrid_checkpoint_available";
@@ -78,7 +82,7 @@ TEST(CapabilityReport, ReportsSchemaAbiAndRouteVocabulary) {
   EXPECT_TRUE(saw_custom_comm) << "saw_custom_comm";
   EXPECT_TRUE(saw_kokkos_lifecycle) << "saw_kokkos_lifecycle";
   EXPECT_TRUE(saw_uniform_checkpoint_v5) << "saw_uniform_checkpoint_v5";
-  EXPECT_TRUE(saw_amr_checkpoint_v7) << "saw_amr_checkpoint_v7";
+  EXPECT_TRUE(saw_amr_checkpoint_v8) << "saw_amr_checkpoint_v8";
   EXPECT_TRUE(saw_dynamic_regrid_checkpoint) << "saw_dynamic_regrid_checkpoint";
   EXPECT_TRUE(saw_mpi_world) << "saw_mpi_world";
   EXPECT_TRUE(saw_weno5) << "saw_weno5";

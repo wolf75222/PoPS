@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pops/parallel/collective_exception.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp>
@@ -15,6 +16,20 @@
 namespace pops::elliptic::nd {
 
 enum class PhysicalFieldBoundary : unsigned char { periodic, homogeneous_neumann };
+
+// Opt-in @3 guards: local launch/reduction errors are voted before the next MPI phase.
+template <bool Guarded, class Operation>
+inline void general_field_local_phase(const ExecutionLane& lane, Operation&& operation) {
+  if constexpr (!Guarded) {
+    operation();
+  } else {
+    std::exception_ptr error;
+    try { operation(); } catch (...) { error = std::current_exception(); }
+    try { Kokkos::fence(); } catch (...) { if (!error) error = std::current_exception(); }
+    collectively_rethrow_exception(error, lane, "general field candidate local phase");
+  }
+}
+
 
 /// The scalar Program closure is exactly the cell-centred zero conormal flux closure
 /// when the physical relation says homogeneous Neumann. This adapter authenticates
@@ -36,10 +51,13 @@ inline void require_field_boundary(
 
 /// Allocation-free conservative variable-coefficient apply over one physical tuple.
 /// The coefficient and boundary session are immutable, prepared solve inputs. Every
-/// diagonal-only coefficient uses harmonic face averaging. A complete component matrix
-/// uses arithmetic face averaging, preserving SPD even for signed cross terms.
+/// diagonal-only coefficient uses harmonic face averaging by default; a complete
+/// matrix defaults to arithmetic face averaging. ArithmeticFaces explicitly selects
+/// the discretization, including scalar arithmetic means. Signed finite matrices
+/// remain admissible; this general application makes no SPD certificate.
 /// Reaction is the complete component matrix supplied by the authored equation.
-template <int Dim, int Components, int CoefficientComponents = Components>
+template <int Dim, int Components, int CoefficientComponents = Components,
+          bool ArithmeticFaces = (CoefficientComponents != Components), bool GuardLocalPhases = false>
 inline void apply_general_field(
     MultiFab<Dim>& output, MultiFab<Dim>& input, const MultiFab<Dim>& coefficients,
     const runtime::program::PreparedScalarBoundarySession<Dim>& boundary,
@@ -73,6 +91,7 @@ inline void apply_general_field(
         "communicator rank");
   boundary.fill(input);
   const Geometry<Dim> geometry = boundary.geometry();
+  general_field_local_phase<GuardLocalPhases>(boundary.lane(), [&] {
   for (std::size_t local = 0; local < output.local_size(); ++local) {
     const auto result = output.fab(local).view();
     const auto value = std::as_const(input).fab(local).view();
@@ -93,12 +112,12 @@ inline void apply_general_field(
             ++upper[axis];
             const Real center = coefficient(cell, slot);
             Real low, high;
-            if constexpr (CoefficientComponents == Components) {
+            if constexpr (!ArithmeticFaces) {
               low = harmonic_tensor_face_average(coefficient(lower, slot), center);
               high = harmonic_tensor_face_average(center, coefficient(upper, slot));
             } else {
-              // Convex matrix averaging preserves symmetry and positive definiteness;
-              // entrywise harmonic averaging does not preserve either for cross terms.
+              // Arithmetic averaging preserves the complete matrix law;
+              // the strict SPD route also retains symmetry and positivity.
               low = Real(0.5) * coefficient(lower, slot) + Real(0.5) * center;
               high = Real(0.5) * center + Real(0.5) * coefficient(upper, slot);
             }
@@ -114,10 +133,12 @@ inline void apply_general_field(
       }
     });
   }
+  });
 }
 
 /// Validate and prepare coefficient halos once per frozen data version, outside CG.
-template <int Dim, int Components = 0, int CoefficientComponents = Components>
+template <int Dim, int Components = 0, int CoefficientComponents = Components,
+          bool RequireSPD = true, bool GuardLocalPhases = false>
 inline void prepare_general_field_coefficients(
     MultiFab<Dim>& coefficients,
     const runtime::program::PreparedScalarBoundarySession<Dim>& boundary) {
@@ -127,12 +148,17 @@ inline void prepare_general_field_coefficients(
     if (all_reduce_max(components != CoefficientComponents ? 1L : 0L, boundary.lane()) != 0)
       throw std::invalid_argument("field coefficient matrix has the wrong component count");
   }
+  general_field_local_phase<GuardLocalPhases>(boundary.lane(), [&] {
   for (std::size_t local = 0; local < coefficients.local_size(); ++local) {
     const auto values = std::as_const(coefficients).fab(local).view();
     invalid +=
         for_each_cell_reduce_sum(coefficients.box(local), [=] POPS_HD(const Index<Dim>& cell) {
           Real result = Real(0);
-          if constexpr (Components > 1 && CoefficientComponents == Components * Components) {
+          if constexpr (!RequireSPD) {
+            for (int component = 0; component < components; ++component)
+              if (!std::isfinite(values(cell, component)))
+                return Real(1);
+          } else if constexpr (Components > 1 && CoefficientComponents == Components * Components) {
             std::array<Real, Components * Components> matrix{};
             for (int i = 0; i < Components; ++i)
               for (int j = 0; j < Components; ++j) {
@@ -161,9 +187,11 @@ inline void prepare_general_field_coefficients(
           return result;
         });
   }
+  });
   if (all_reduce_max(invalid, boundary.lane()) != Real(0))
-    throw std::invalid_argument(
-        "field diffusion matrix must be finite, symmetric and strictly positive definite");
+    throw std::invalid_argument(RequireSPD
+        ? "field diffusion matrix must be finite, symmetric and strictly positive definite"
+        : "general coupled field coefficients must be finite");
   boundary.fill(coefficients);
 }
 

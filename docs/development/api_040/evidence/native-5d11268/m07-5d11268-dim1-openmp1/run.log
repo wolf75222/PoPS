@@ -1,0 +1,27 @@
+Traceback (most recent call last):
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/examples/migration/scientific/api040_m07_saint_venant.py", line 165, in <module>
+    simulation = pops.bind(artifact, initial_state={"lake": initial},
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py", line 91, in bind
+    return phase(artifact, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py", line 623, in bind
+    return install(install_plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py", line 638, in install
+    return runtime_install(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_adapters.py", line 32, in install_plan
+    return RuntimeInstance(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_runtime_instance.py", line 481, in __init__
+    native = install_runtime_executor(plan, runtime_plan) if executor is None else executor
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_runtime_executor.py", line 475, in install_runtime_executor
+    return matches[0].install(plan, runtime_plan)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_runtime_executor.py", line 345, in install
+    engine._install_compiled(
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_system_unified_install.py", line 390, in _install_compiled
+    self._s._finalize_native_packages()
+ValueError: prepared System boundary lacks its complete full/core/residual/JVP authority

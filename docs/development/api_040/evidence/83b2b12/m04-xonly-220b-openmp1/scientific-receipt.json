@@ -1,0 +1,637 @@
+{
+  "schema_version": 2,
+  "case": "M04/W02",
+  "status": "failed",
+  "scope": "Dim=2 authored diagonal tensor, y-invariant exact trajectory; not Dim=1",
+  "diffusion_variant": "x_only",
+  "diffusion_tensor": [
+    [
+      0.01,
+      0.0
+    ],
+    [
+      0.0,
+      0.0
+    ]
+  ],
+  "equation_2d": "u_t+a*u_x=Dx*u_xx+Dy*u_yy",
+  "reduced_equation": "u_t+a*u_x=D*u_xx for y-invariant state",
+  "method": "combined first-order Rusanov+two-point diffusion, ForwardEuler",
+  "criteria": {
+    "density_l1_max": {
+      "32": 0.009,
+      "64": 0.0048,
+      "128": 0.0024
+    },
+    "minimum_observed_order": 0.7,
+    "mass_defect_max": 2e-11,
+    "initial_max_error": 1e-12,
+    "time_error_max": 1e-12,
+    "y_invariance_max": 2e-11,
+    "minimum_state": 0.7999999999,
+    "maximum_state": 1.2000000001
+  },
+  "resolutions": [
+    32,
+    64,
+    128
+  ],
+  "observed_orders": [
+    0.6063534245372065,
+    0.701766241133962
+  ],
+  "records": [
+    {
+      "cells": [
+        32,
+        32
+      ],
+      "time": 0.1,
+      "fixed_dt": 0.017149390243902437,
+      "frequency_parts": {
+        "advection_x": 32.0,
+        "diffusion_x": 20.48,
+        "diffusion_y": 0.0,
+        "physical_1d": 52.480000000000004,
+        "installed_2d": 52.480000000000004
+      },
+      "density_l1": 0.0034835899637368876,
+      "mass_defect": 0.0,
+      "y_invariance_max": 0.0,
+      "minimum": 0.8137525126674533,
+      "maximum": 1.1862474873325466,
+      "initial_max_error": 0.0,
+      "center_average_gap": 0.00031957510559821323,
+      "accepted_steps": 6,
+      "compile_seconds": 29.854030709015206,
+      "run_seconds": 0.22695258306339383,
+      "run_report": {
+        "accepted_steps": 6,
+        "rejected_steps": 0,
+        "final_time": 0.1,
+        "final_macro_step": 6,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "3028ccd8fb989f9a2d2dd10f3d7daa27890d29afb4e7432275c7403bbcff98f2"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "1467eae8d8281771e20f2682cb4438f52bf81bfd4cb22b052151669136e6f39b"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "28584ae56c530313aa3e9cb7396b0628560c884e862d3aee7299587c2825f3bb"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "4f02a5573fd7b86644207cd425480a9c0db118496b3b0414888b2d2b417f5856"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "c464ce567340784499d75f8885252fa1e9ec89f8f9b2e206553131fee9cc3e2f"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      },
+      "runtime_backend": {
+        "schema_version": 1,
+        "backend": {
+          "value": "production",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "target": {
+          "value": "system",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "abi": {
+          "value": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=47299dd6ba34f1d97464e06e06fb2fe3c4aab75958eb516cc0e57732437c39f6;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "precision": {
+          "storage": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "compute": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "accumulation": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "reduction": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          }
+        },
+        "device": {
+          "value": "cpu",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "memory_spaces": {
+          "value": [
+            "host"
+          ],
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "communicator": {
+          "value": "MPI_COMM_WORLD",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "capabilities": {
+          "centerings": {
+            "value": [
+              "cell"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "execution_backend": {
+            "value": "OpenMP",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "generic_field_view": {
+            "value": true,
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "layouts": {
+            "value": [
+              "right",
+              "left",
+              "strided"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "ownership": {
+            "value": [
+              "borrowed",
+              "owned",
+              "shared"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "scalars": {
+            "value": [
+              "float64"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "shared_space": {
+            "value": "Host",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "stream_identity": {
+            "value": "Kokkos::OpenMP::synchronous",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "supported_dimensions": {
+            "value": [
+              2
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          }
+        }
+      },
+      "mpi_ranks": 1,
+      "saved_state": "state_32.npz",
+      "saved_state_sha256": "76e616b8c019b9942e8376fb0ac11f5a16d2e0718190b72742e55f61ce409151"
+    },
+    {
+      "cells": [
+        64,
+        64
+      ],
+      "time": 0.1,
+      "fixed_dt": 0.006167763157894736,
+      "frequency_parts": {
+        "advection_x": 64.0,
+        "diffusion_x": 81.92,
+        "diffusion_y": 0.0,
+        "physical_1d": 145.92000000000002,
+        "installed_2d": 145.92000000000002
+      },
+      "density_l1": 0.0022882130700148107,
+      "mass_defect": 0.0,
+      "y_invariance_max": 0.0,
+      "minimum": 0.8114110096698995,
+      "maximum": 1.1885889903301006,
+      "initial_max_error": 0.0,
+      "center_average_gap": 8.021263391078115e-05,
+      "accepted_steps": 17,
+      "compile_seconds": 12.678276082966477,
+      "run_seconds": 2.0679454999044538,
+      "run_report": {
+        "accepted_steps": 17,
+        "rejected_steps": 0,
+        "final_time": 0.1,
+        "final_macro_step": 17,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "128d7c7fcc8ae0e72f129b065ed529f109e1a7fa62002cc87a727df0d1a74826"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6b9ce39cfb053dc209eb4f05a87104b2c117e84b564f5f9a2067ccce1d6e86c2"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "28584ae56c530313aa3e9cb7396b0628560c884e862d3aee7299587c2825f3bb"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "3c44c54064e0cfdc61c85257b7057e7750be7be67fa9b531829097510b697a7b"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "c464ce567340784499d75f8885252fa1e9ec89f8f9b2e206553131fee9cc3e2f"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      },
+      "runtime_backend": {
+        "schema_version": 1,
+        "backend": {
+          "value": "production",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "target": {
+          "value": "system",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "abi": {
+          "value": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=47299dd6ba34f1d97464e06e06fb2fe3c4aab75958eb516cc0e57732437c39f6;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "precision": {
+          "storage": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "compute": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "accumulation": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "reduction": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          }
+        },
+        "device": {
+          "value": "cpu",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "memory_spaces": {
+          "value": [
+            "host"
+          ],
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "communicator": {
+          "value": "MPI_COMM_WORLD",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "capabilities": {
+          "centerings": {
+            "value": [
+              "cell"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "execution_backend": {
+            "value": "OpenMP",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "generic_field_view": {
+            "value": true,
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "layouts": {
+            "value": [
+              "right",
+              "left",
+              "strided"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "ownership": {
+            "value": [
+              "borrowed",
+              "owned",
+              "shared"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "scalars": {
+            "value": [
+              "float64"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "shared_space": {
+            "value": "Host",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "stream_identity": {
+            "value": "Kokkos::OpenMP::synchronous",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "supported_dimensions": {
+            "value": [
+              2
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          }
+        }
+      },
+      "mpi_ranks": 1,
+      "saved_state": "state_64.npz",
+      "saved_state_sha256": "91b4da3779628840f540508ab7d540927f0d224db18c52c828e65ee5ba5aa2f6"
+    },
+    {
+      "cells": [
+        128,
+        128
+      ],
+      "time": 0.1,
+      "fixed_dt": 0.001975070224719101,
+      "frequency_parts": {
+        "advection_x": 128.0,
+        "diffusion_x": 327.68,
+        "diffusion_y": 0.0,
+        "physical_1d": 455.68,
+        "installed_2d": 455.68
+      },
+      "density_l1": 0.0014068369727602706,
+      "mass_defect": 0.0,
+      "y_invariance_max": 0.0,
+      "minimum": 0.8099912641816106,
+      "maximum": 1.1900087358183893,
+      "initial_max_error": 0.0,
+      "center_average_gap": 2.007310930496331e-05,
+      "accepted_steps": 51,
+      "compile_seconds": 8.057929874863476,
+      "run_seconds": 26.440711959032342,
+      "run_report": {
+        "accepted_steps": 51,
+        "rejected_steps": 0,
+        "final_time": 0.1,
+        "final_macro_step": 51,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9d4deb0eda00cab39a3997dd3ecc49de5cb09fe2567aa84b0cbd1f8f8600e1fb"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "192a3ef4c4c3ee0f484895877f07b5885fd12f15d25dac36995d6bd088ba9d28"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "28584ae56c530313aa3e9cb7396b0628560c884e862d3aee7299587c2825f3bb"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "55cb2e6f497c345bfe88c444bf7b9c2439903d549a49585febd55a6cff35da95"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "c464ce567340784499d75f8885252fa1e9ec89f8f9b2e206553131fee9cc3e2f"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      },
+      "runtime_backend": {
+        "schema_version": 1,
+        "backend": {
+          "value": "production",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "target": {
+          "value": "system",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "abi": {
+          "value": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=47299dd6ba34f1d97464e06e06fb2fe3c4aab75958eb516cc0e57732437c39f6;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "precision": {
+          "storage": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "compute": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "accumulation": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "reduction": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          }
+        },
+        "device": {
+          "value": "cpu",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "memory_spaces": {
+          "value": [
+            "host"
+          ],
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "communicator": {
+          "value": "MPI_COMM_WORLD",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "capabilities": {
+          "centerings": {
+            "value": [
+              "cell"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "execution_backend": {
+            "value": "OpenMP",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "generic_field_view": {
+            "value": true,
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "layouts": {
+            "value": [
+              "right",
+              "left",
+              "strided"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "ownership": {
+            "value": [
+              "borrowed",
+              "owned",
+              "shared"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "scalars": {
+            "value": [
+              "float64"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "shared_space": {
+            "value": "Host",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "stream_identity": {
+            "value": "Kokkos::OpenMP::synchronous",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "supported_dimensions": {
+            "value": [
+              2
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          }
+        }
+      },
+      "mpi_ranks": 1,
+      "saved_state": "state_128.npz",
+      "saved_state_sha256": "e7845d68d0f8cb366b3a9b14c715ac6616a9ddf56946b1308c852dbd77cad649"
+    }
+  ],
+  "package_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py",
+  "package_version": "1.1.0",
+  "native_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+  "native_sha256": "220b48d3264f413aa5ccd8bba58a8b0d1a6b31bf5bade6faac904b1b7ef8cc87",
+  "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=47299dd6ba34f1d97464e06e06fb2fe3c4aab75958eb516cc0e57732437c39f6;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+  "prefix": "/Users/romaindespoulain/miniforge3/envs/pops-api040",
+  "threads_requested": "1"
+}

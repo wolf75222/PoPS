@@ -199,6 +199,11 @@ class OperatorManifestEntry:
             raise TypeError("operator manifest inputs must be a list of non-empty strings")
         if not isinstance(row["output"], str) or not row["output"]:
             raise TypeError("operator manifest output must be a non-empty string")
+        if "flux_wave_law" in row["lowering_route"]:
+            from .flux_waves import validate_flux_wave_data
+            if row["kind"] != "grid_operator":
+                raise ValueError("flux wave authority requires a grid operator")
+            validate_flux_wave_data(row["lowering_route"]["flux_wave_law"], row["signature"])
         result = object.__new__(cls)
         for name in ("id", "name", "kind", "qid", "output"):
             object.__setattr__(result, name, row[name])

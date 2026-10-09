@@ -1,0 +1,91 @@
+[0/2] Re-checking globbed directories...
+[1/2] Re-running CMake...
+-- PoPS native spatial specialization: Dim=2
+-- PoPS Real specialization: double
+-- ccache actif : /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/ccache (cache de compilation ; -DPOPS_USE_CCACHE=OFF pour desactiver)
+-- Kokkos trouve (install 5.2.0) : for_each_cell backend = Kokkos (OPENMP;SERIAL)
+-- Found MPI: TRUE (found version "4.0") found components: CXX
+-- MPI found (/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/mpiexec) : enabling distributed comm seam
+-- Found MPI: TRUE (found version "4.0") found components: C CXX
+-- HDF5 C compiler wrapper is unable to compile a minimal HDF5 program.
+CMake Warning at /Users/romaindespoulain/miniforge3/envs/pops-api040/share/cmake-4.4/Modules/FindHDF5.cmake:938 (message):
+  HDF5 found for language C is not parallel but previously found language is
+  parallel.
+Call Stack (most recent call first):
+  CMakeLists.txt:481 (find_package)
+
+
+-- Parallel HDF5 found (1.14.3) : enabling native collective DataWriter
+-- FFTW3 found (/Users/romaindespoulain/miniforge3/envs/pops-api040) : PoissonFFT local-axis production radix backend
+-- GoogleTest not found in the environment; fetching v1.17.0
+-- pops tests: 75 heavy runtime targets capped (-O0 + pops_heavy_test_tu pool)
+-- Configuring done (10.5s)
+-- Generating done (0.6s)
+-- Build files have been written to: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi
+[0/4] Re-checking globbed directories...
+[1/35] Building CXX object src/CMakeFiles/pops_runtime_core_objects.dir/runtime/program/step_transaction.cpp.o
+[2/35] Building CXX object src/CMakeFiles/pops_runtime_core_objects.dir/runtime/prepared_embedded_boundary.cpp.o
+[3/35] Linking CXX static library src/libpops_runtime_core.a
+[4/35] Building CXX object tests/CMakeFiles/pops_build_synthetic_loader_fixture.dir/cpp/support/build_synthetic_loader_fixture.cpp.o
+[5/35] Linking CXX executable bin/pops_build_synthetic_loader_fixture
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-api040/lib' ignored
+[6/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system.cpp.o
+[7/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_aux.cpp.o
+[8/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_install.cpp.o
+[9/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_fields.cpp.o
+[10/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_embedded_boundary.cpp.o
+[11/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_field_plans.cpp.o
+[12/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_layout_transfer.cpp.o
+[13/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_io.cpp.o
+[14/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_profiling.cpp.o
+[15/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_program.cpp.o
+[16/35] Linking CXX static library src/libpops_runtime_system_abi.a
+[17/35] Generating synthetic-loader-fixtures/10.so, synthetic-loader-fixtures/10.cpp
+[18/35] Generating synthetic-loader-fixtures/12.so, synthetic-loader-fixtures/12.cpp
+[19/35] Generating synthetic-loader-fixtures/28.so, synthetic-loader-fixtures/28.cpp
+[20/35] Generating synthetic-loader-fixtures/4.so, synthetic-loader-fixtures/4.cpp
+[21/35] Generating synthetic-loader-fixtures/8.so, synthetic-loader-fixtures/8.cpp
+[22/35] Generating synthetic-loader-fixtures/9.so, synthetic-loader-fixtures/9.cpp
+[23/35] Building CXX object src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_layout_transfer.cpp.o
+[24/35] Building CXX object src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o
+[25/35] Building CXX object src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_component.cpp.o
+[26/35] Building CXX object src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o
+[27/35] Building CXX object tests/CMakeFiles/test_generated_amr_system_block.dir/cpp/unit/runtime/test_generated_amr_system_block.cpp.o
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/unit/runtime/test_generated_amr_system_block.cpp:1:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+[28/35] Linking CXX executable bin/test_generated_amr_system_block
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-api040/lib' ignored
+[29/35] Building CXX object tests/CMakeFiles/test_amr_synthetic_program_loader_transaction.dir/cpp/integration/native_loader/test_amr_synthetic_program_loader_transaction.cpp.o
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/integration/native_loader/test_amr_synthetic_program_loader_transaction.cpp:8:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+[30/35] Linking CXX executable bin/test_amr_synthetic_program_loader_transaction
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-api040/lib' ignored
+[31/35] Building CXX object tests/CMakeFiles/test_amr_history_ring.dir/cpp/integration/amr/test_amr_history_ring.cpp.o
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/integration/amr/test_amr_history_ring.cpp:1:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+[32/35] Linking CXX executable bin/test_amr_history_ring
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops-api040/lib' ignored

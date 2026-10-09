@@ -1,0 +1,31 @@
+{
+  "returncode": 0,
+  "counts": {
+    "tests": 1,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "duration_seconds": 41.35370766700362,
+  "status": "passed",
+  "Source": "98804c6849c9966e05b5397126bab983a5fa0227",
+  "Native": "f8d9281232039f3ed3f92b7a14ae6530aa18baf41257a3c99a9629a50af61f64",
+  "SDK": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+  "pytest_args": [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-x",
+    "-ra",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "-p",
+    "no:cacheprovider",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/guarded-baseline/pytest.xml",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/guarded-baseline/pytest-tmp",
+    "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py::test_public_guarded_field_coefficient_diffusion[baseline]"
+  ],
+  "identity_sha256": "8adf7de1646ec4995a964afbd1339d05897de6cdc94006bc0c38bdca093ced03"
+}

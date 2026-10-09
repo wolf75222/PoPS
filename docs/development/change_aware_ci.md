@@ -102,12 +102,19 @@ files or C++ targets and route flags; they do not say that any test ran or that 
 ## Shards, prewarming, and the dedicated cache check
 
 The planner keeps fixed partition identities and publishes only nonempty matrix entries. C++
-targets are packed into the fixed eleven-way partition, and Python files into the fixed thirty
-seven-way partition, using deterministic duration-weighted bin packing. Empty bins are omitted from
+targets are packed into the fixed thirteen-way partition, and Python files into the fixed thirty
+eight-way partition, using deterministic duration-weighted bin packing. Empty bins are omitted from
 the GitHub matrix, but a nonempty bin keeps its original index; indices are never renumbered to
 fit one PR. Python's verification step reconstructs the same partition and fails unless every
 selected file appears exactly once, with the explicitly excluded dedicated file accounted for.
 C++ shards authenticate their selected `cpp-target:*` CTest labels before running cases.
+
+The synthetic AMR Program loader's nine cases consume six source-built fixture variants. CMake
+builds each variant once with the same native compiler, ABI, Kokkos and MPI contract, then each
+case copies and authenticates its binary in fresh local files before constructing fresh runtime
+state. This removes eleven compiler invocations from CTest without dropping cases or changing
+the seven-minute test watchdog. The target's build weight includes all six fixture builds;
+its updated build and test weights remain explicit estimates until complete CI receipts arrive.
 
 The `python_dimensions` output drives the serial native package build and prewarm matrices. They
 contain the selected declared dimensions, limited to native Dim1 and Dim2. With the current
@@ -139,6 +146,28 @@ changed component is marked `mpi`, or when a changed Python module's import clos
 manifest-owned MPI entrypoint or MPI orchestrator. The lane then uses the manifest's exact C++
 rank launches, Python MPI entrypoints, serial orchestrators that create their own rank worlds, and
 collective I/O checks. An unrelated mapped change does not create a partial MPI fragment.
+
+The MPI native build runs two sequential phases with separate 28-minute watchdogs inside a
+60-minute native-build cap; the complete job remains capped at 180 minutes. The manifest projection puts
+`test_program_runtime`, `test_amr_synthetic_program_loader_transaction`,
+`test_mpi_system_gather_scatter`, and `test_mpi_system_io_gather` in a strictly sequential compiler
+phase. The second phase builds the exact complement with parallelism four and the preset's
+unchanged single-slot heavy-TU pool. New manifest targets enter the complement automatically;
+missing anchors or a non-disjoint/incomplete partition fail planning. Python module linking and
+M4 compilation retain their separate 14-minute and 10-minute watchdogs. Their enclosing steps have
+20-minute and 12-minute caps, so the three build steps together permit at most 92 minutes within
+the unchanged job cap; previously all build commands shared one 60-minute step.
+
+This partition addresses the PR #680 `4adfddf` run, which reached 164 of 173 build tasks and linked
+80 of 84 targets before its single 28-minute watchdog expired. The program-runtime completion
+window was about 408 seconds, with sampled host memory headroom falling to 452 MiB. The loader's
+720-second build weight includes its six newly precompiled fixtures. Reserving 180 seconds for
+each of the four unfinished targets gives scheduling estimates of roughly 25 and 26 minutes for
+the two phases. That reserve is an explicit assumption, about twice the largest observed ordinary
+MPI completion window; it is not a measured duration. The earlier run benefited from compiler
+caches, and completion windows can overlap. These estimates do not establish cold-build safety or
+CI success: the complete build and unchanged 121-launch MPI test inventory still need an actual
+GitHub receipt.
 
 The `collective-field-protocols` policy covers the elliptic `interface`, `linear`, and `amr`
 header families and requests MPI for their collective contracts. The isolated

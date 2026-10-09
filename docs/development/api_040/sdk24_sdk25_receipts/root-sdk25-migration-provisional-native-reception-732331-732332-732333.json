@@ -1,0 +1,214 @@
+{
+  "actual_independent_readers_replayed": true,
+  "antiABA_counters_measured": false,
+  "ci_qualified": false,
+  "cpp_stage_failure_injected": false,
+  "gpu_qualified": false,
+  "header_signature": "8ee6d09b428cfe172d08008253c2ea490eb733f9b1458f6f2ed8da1584effbf5",
+  "historical2_fullgrown_storage_qualified": false,
+  "independent_artifacts_rewritten": false,
+  "inter_node_mpi_qualified": false,
+  "migration": {
+    "all_checks_passed": true,
+    "limits": [
+      "Historical2 valid projection only into8; no grown or diagnostics copied",
+      "Saved PASS demonstrates reason-specific guards were reached; no live rerun",
+      "No full-grown historical restart/scientific extension/MPI qualification",
+      "C25-style native compilation evidenced by source native_cxx route and compiled archives, not a separate retained all-model C25 reception"
+    ],
+    "links": 11,
+    "migrated_keys": [
+      "pops_checkpoint_version",
+      "t",
+      "macro_step",
+      "abi_key",
+      "blocks",
+      "temporal_restart_state",
+      "pops_spatial_contract",
+      "pops_embedded_boundary_contract",
+      "program_cadence_substeps",
+      "program_cadence_stride",
+      "program_cadence_window_steps",
+      "program_cadence_window_dt",
+      "program_cadence_window_start_time",
+      "program_last_dt",
+      "ncomp_blk",
+      "names_blk",
+      "field_provider_slots",
+      "program_hash",
+      "cache_nodes",
+      "cache_names",
+      "state_blk",
+      "auxiliary_checkpoint",
+      "history_names",
+      "history_depth_blk.rate",
+      "history_ncomp_blk.rate",
+      "history_policy_blk.rate",
+      "history_requested_stored_slots_blk.rate",
+      "history_stored_slots_blk.rate",
+      "history_storage_mode_blk.rate",
+      "history_init_blk.rate",
+      "history_fill_count_blk.rate",
+      "history_slot_dt_blk.rate",
+      "history_blk.rate_0",
+      "history_blk.rate_1",
+      "phi",
+      "program_exchange_state",
+      "program_exchange_offsets",
+      "continuation_transition_plan",
+      "runtime_consumer_graph",
+      "runtime_consumer_cursors",
+      "runtime_consumer_diagnostics",
+      "checkpoint_migration",
+      "pops_checkpoint_manifest",
+      "pops_restart_identity"
+    ],
+    "native_loader_cases": [
+      "test_dense_uniform_authority_refuses_spurious_regrid_replay_schedule",
+      "test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts",
+      "test_refused_mapping_publishes_no_destination[<lambda>-content SHA-256]",
+      "test_refused_mapping_publishes_no_destination[<lambda>-Program hash]",
+      "test_refused_mapping_publishes_no_destination[<lambda>-live resource budget]",
+      "test_refused_mapping_publishes_no_destination[<lambda>-authority or target lifecycle pins]",
+      "test_refused_mapping_publishes_no_destination[<lambda>-auxiliary checkpoint SHA-256]",
+      "test_refused_mapping_publishes_no_destination[<lambda>-auxiliary registry contract]",
+      "test_refused_mapping_publishes_no_destination[<lambda>-block mapping]",
+      "test_refused_mapping_publishes_no_destination[<lambda>-complete authority transfer set]",
+      "test_ambiguous_legacy_schema_is_refused_without_publication",
+      "test_tampered_current_authority_is_refused_without_publication",
+      "test_resealed_tampered_auxiliary_authority_is_refused_without_publication",
+      "test_resealed_nonempty_auxiliary_authority_is_refused_without_publication",
+      "test_authority_history_ledger_must_match_the_legacy_trajectory",
+      "test_existing_destination_is_never_replaced",
+      "test_destination_race_at_atomic_link_is_no_clobber"
+    ],
+    "native_sha256": "a661f3b1a7440850985d44f4b3936a94edd7059e570a20633bbe3f96bc64b97e",
+    "raw_files": 65,
+    "raw_receipt_sha256": "47c51b6d07ab898cedb10adc520ce27314a25ce960ff1fb9d0a838f6b2e76ced",
+    "schema": "sol61.sdk25-migration-native-offline@1",
+    "scope": "CPU1 migration/restart explicit valid_only_legacy8; not MPI or full-grown historical replay",
+    "source_cases": [
+      "test_checkpoint_migration_provenance_has_a_fixed_budgeted_envelope",
+      "test_checkpoint_migration_provenance_is_consumed_by_producer_and_restart",
+      "test_uniform_v2_authority_requires_an_empty_native_exchange_mailbox",
+      "test_frozen_v2_fixture_refuses_noncanonical_legacy_phi[1.0]",
+      "test_frozen_v2_fixture_refuses_noncanonical_legacy_phi[-0.0]",
+      "test_frozen_v2_fixture_refuses_noncanonical_legacy_phi[nan]"
+    ],
+    "source_freeze": "717936347672aeb4bc9146e2b3065bfd42cf1ef5",
+    "source_test_sha256": "f18415478cdc8ffcd006f5a4710ee3a574dde0c0bd96ede8278b1dae26ff7297",
+    "tests": 23,
+    "transfer_sha256": "1af7377d574b801d575a5ddc47db1194e165d0455612d52c6bea4e0c9589e79a"
+  },
+  "migration_all_model_C25_complete": false,
+  "migration_scope": "23 cases = 17 NativeLoader + 6 Source; CPU1 historical2-to8 migration and explicit valid_only_legacy8 restart, intended refusals and no-clobber",
+  "native_sha256": "a661f3b1a7440850985d44f4b3936a94edd7059e570a20633bbe3f96bc64b97e",
+  "performance_at_comparable_calculation_qualified": false,
+  "pins": {
+    "migration": {
+      "sha256": "74e8bf0d7fef2dbeb1561221c03a5f55205b0e289efb9e45e6e61592ff50f98c",
+      "verified": 4
+    },
+    "provisional": {
+      "sha256": "0d7dec2c313694301ce6415c082439a1a3b53ad14c45e510e542a8a241c924d0",
+      "verified": 195
+    }
+  },
+  "provisional_diagnostic_history_bits_measured": false,
+  "provisional_effects": {
+    "732332": {
+      "JUnit": [
+        {
+          "path": "output/pytest.xml",
+          "time": "127.440"
+        }
+      ],
+      "allModelsProgram_before_bind": true,
+      "installed_files": 1157,
+      "job": 732332,
+      "logical_scenarios": 1,
+      "native": "a661f3b1a7440850985d44f4b3936a94edd7059e570a20633bbe3f96bc64b97e",
+      "outcome": {
+        "antiABA_monotone_counter_observation": false,
+        "clock_before_after": [
+          0.0,
+          0
+        ],
+        "cursor_rows": {
+          "rows": [],
+          "schema_version": 1
+        },
+        "diagnostics_history_payload_equality_observed": false,
+        "fault_reached_each_rank": true,
+        "fullgrown_local_complete_restored": true,
+        "logical_cursor_restored": true,
+        "publication_compensated": true,
+        "published_clock": [
+          0.00390625,
+          1
+        ],
+        "valid_bits_restored": true
+      },
+      "production_files": 1192,
+      "regular_rehashed": 77,
+      "root_seal": false,
+      "schema": "sol61.sdk25.provisional-effect-independent@1",
+      "scope": "CPU or MPI2 one-node actual CP9 publication then explicit Python test fault; filesystem compensation and full State/valid/clock/logical cursor restore. No C++ stage fault, Field/history/Program diagnostic byte proof, anti-ABA counter measurement, math, retry, GPU/inter-node or performance.",
+      "shipped_source_files": 1148,
+      "source": "717936347672aeb4bc9146e2b3065bfd42cf1ef5",
+      "world": 1
+    },
+    "732333": {
+      "JUnit": [
+        {
+          "path": "output/rank1.xml",
+          "time": "130.347"
+        },
+        {
+          "path": "output/rank0.xml",
+          "time": "130.362"
+        }
+      ],
+      "allModelsProgram_before_bind": true,
+      "installed_files": 1157,
+      "job": 732333,
+      "logical_scenarios": 1,
+      "native": "a661f3b1a7440850985d44f4b3936a94edd7059e570a20633bbe3f96bc64b97e",
+      "outcome": {
+        "antiABA_monotone_counter_observation": false,
+        "clock_before_after": [
+          0.0,
+          0
+        ],
+        "cursor_rows": {
+          "rows": [],
+          "schema_version": 1
+        },
+        "diagnostics_history_payload_equality_observed": false,
+        "fault_reached_each_rank": true,
+        "fullgrown_local_complete_restored": true,
+        "logical_cursor_restored": true,
+        "publication_compensated": true,
+        "published_clock": [
+          0.00390625,
+          1
+        ],
+        "valid_bits_restored": true
+      },
+      "production_files": 1192,
+      "regular_rehashed": 103,
+      "root_seal": false,
+      "schema": "sol61.sdk25.provisional-effect-independent@1",
+      "scope": "CPU or MPI2 one-node actual CP9 publication then explicit Python test fault; filesystem compensation and full State/valid/clock/logical cursor restore. No C++ stage fault, Field/history/Program diagnostic byte proof, anti-ABA counter measurement, math, retry, GPU/inter-node or performance.",
+      "shipped_source_files": 1148,
+      "source": "717936347672aeb4bc9146e2b3065bfd42cf1ef5",
+      "world": 2
+    }
+  },
+  "provisional_scope": "real step1 CP9 filesystem publication then explicit Python fault; CPU1 and one-node MPI2 compensation/full-grown local+complete and valid State/clock restoration",
+  "reports_identical_on_replay": true,
+  "root_approval": true,
+  "schema": "root.sdk25-migration-provisional-native-reception@1",
+  "source_freeze": "717936347672aeb4bc9146e2b3065bfd42cf1ef5",
+  "whole_mission_complete": false
+}

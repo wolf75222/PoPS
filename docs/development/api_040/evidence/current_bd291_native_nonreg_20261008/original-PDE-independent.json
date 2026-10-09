@@ -1,0 +1,244 @@
+{
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "Source": "e01eb5b8b39b20762639be1e7dde45d12542b770",
+  "checkpoint": {
+    "array_payloads_checked": 46,
+    "clock": [
+      0.25,
+      1
+    ],
+    "history_names": [],
+    "n_ranks": 1,
+    "nlevels": 1,
+    "restart_identity": "1247ac7ce490d23432eb9bb2bd39dce72d26e209b6f35fcac71709df61082463",
+    "state_phi_raw_bytes_equal_saved": true
+  },
+  "core_files_rehashed": 1198,
+  "core_fingerprint": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "independent_method_math": {
+    "Ae": [
+      [
+        0
+      ]
+    ],
+    "Ai": [
+      [
+        1
+      ]
+    ],
+    "U0": "3",
+    "Y_directly_measured": false,
+    "Y_reference": "48/25",
+    "accepted": "84/25",
+    "be": [
+      1
+    ],
+    "bi": [
+      1
+    ],
+    "ce": [
+      0
+    ],
+    "ci": [
+      1
+    ],
+    "derivation": "Y=3/(1+h*(2+h)); constant screened operator eigenvalue1, F=(3+tau0)*Y; U_next=Y+hF",
+    "field": "144/25",
+    "h": "1/4",
+    "runtime_tau0": 0,
+    "wrong_Field_at_implicit_time_accepted": "87/25"
+  },
+  "limits": [
+    "One-level AMR/GeometricMG constant-state original case; no uniform-screened support inference",
+    "No original predictor Y NPY directly measured; Y is rational reference",
+    "CP identities/payload bytes and saved state/phi independently checked; no independent native semantic decoder or restart run",
+    "No MPI2/local ownership census/AMR2/3D/GPU/full94 or generic all-expressions claim",
+    "No Native import/run, Source/package mutation, or prior-receipt scientific inheritance by reviewer"
+  ],
+  "physical_pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-installed-build-53fd6ec2-20261008/core-manifest.json": {
+      "bytes": 197327,
+      "sha256": "0c871f738710bd736e099b0e7f21d2fb35d6b47958860556a08dc61c697b7ac5"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/integration/runtime/test_imex_nonautonomous_field.py": {
+      "bytes": 7926,
+      "sha256": "a87b22ed2d4a6139b4c92ee02b8c3266b2853a22c118c2219672ce5acfcabe2c"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/support/imex_nonautonomous_field_case.py": {
+      "bytes": 6451,
+      "sha256": "5643e94cac162ae4cf6cf213e6e0a86714e3e46ed827e8b3d0c9addb7856b022"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-independent-Python-science-af8-reception3-20261008/review.py": {
+      "bytes": 17056,
+      "sha256": "d3f33d9d7eea2211cc192706717c22d51a7ee5c6fbf99399ff9c438f7b9950c7"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/identity.json": {
+      "bytes": 2850,
+      "sha256": "1c64900ebf736f1fa62b197e2b4f5fab6a36c28b4b31053482739ebf19faa251"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/accepted-rank0.npy": {
+      "bytes": 640,
+      "sha256": "9650766cb14bb2881ca7898ad9626bfa0afbffa861910d288971708bad95ac02"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/accepted.npz": {
+      "bytes": 22928,
+      "sha256": "6e92a10cf495a1ce5f28f560dff25dae0c0771e179a5e554f1682b2b5caa9603"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/actual-compiler-inputs/rank0-input0.cpp": {
+      "bytes": 27912,
+      "sha256": "1a8fede68d464a8273aba80d89d54732c148e8ac78dcfbd3eaf5aa96ec011fb9"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/actual-compiler-inputs/rank0-input0.json": {
+      "bytes": 2617,
+      "sha256": "39ff22f91b00cea4d35ff0d7ed897e3a3a0af692aded4b8f22e70d74e10826b9"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/field-rank0.npy": {
+      "bytes": 640,
+      "sha256": "48f6302640b1f2dd1d51b065fab8e01c8c8a4ec1831aabd5d2f2c526aec8b4c3"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/initial-rank0.npy": {
+      "bytes": 640,
+      "sha256": "139584c391fc3021ccd10a16ac0e65f8223e5d961856dbc66cc28bf7046d1343"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/provenance-rank0/compiled-manifest.json": {
+      "bytes": 70300,
+      "sha256": "b3e5639539036fbe30eb9f9bd6f05d1211cbd4120120d66330e5577062d8abaa"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/provenance-rank0/layout-0/program.artifact.json": {
+      "bytes": 490,
+      "sha256": "1c12ea61b0359700e01f995df3f407d9b470e7394690106cea8f693d9e77a693"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/provenance-rank0/layout-0/program.cpp": {
+      "bytes": 31238,
+      "sha256": "66756deb6d535d35c5f844aa4d507d7289bef23c8362677edbd7c0c32c0810ea"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/provenance-rank0/layout-0/program.ir.json": {
+      "bytes": 137602,
+      "sha256": "0ec878d13ea45de1ac0969bfd67b032a64ad785010e6679a45e18541859e81d7"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/provenance-rank0/layout-0/program.so": {
+      "bytes": 1581392,
+      "sha256": "758b982b34f7f78b31a01758417fb198905d6307ee7954c28358ac7834ac2894"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/provenance-rank0/model-0-companions/56586aba0e523f5061051549fc1791a7f7e9aedfd1739337f48bec2969a472d4.so.pops-artifact.json": {
+      "bytes": 591,
+      "sha256": "2e4f9194080f3995d260f1183ce881520a48b2e655b52a04d582e36ee61c0a93"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/provenance-rank0/model-0-companions/56586aba0e523f5061051549fc1791a7f7e9aedfd1739337f48bec2969a472d4.so.pops-model-compile.json": {
+      "bytes": 2280,
+      "sha256": "314183c4f125a8aa9ff707d2079a98676fa47ba61b63f2e56a815b6b44e414f0"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/provenance-rank0/model-0-companions/56586aba0e523f5061051549fc1791a7f7e9aedfd1739337f48bec2969a472d4.so.pops-model.cpp": {
+      "bytes": 27912,
+      "sha256": "1a8fede68d464a8273aba80d89d54732c148e8ac78dcfbd3eaf5aa96ec011fb9"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/provenance-rank0/model-0.artifact.json": {
+      "bytes": 591,
+      "sha256": "2e4f9194080f3995d260f1183ce881520a48b2e655b52a04d582e36ee61c0a93"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/provenance-rank0/model-0.cpp": {
+      "bytes": 27912,
+      "sha256": "1a8fede68d464a8273aba80d89d54732c148e8ac78dcfbd3eaf5aa96ec011fb9"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/provenance-rank0/model-0.module-ir.json": {
+      "bytes": 37695,
+      "sha256": "855d0b17a1e98064880a91afd84ba6d21f74616f5c056da2df2a0b37ec071621"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/provenance-rank0/model-0.so": {
+      "bytes": 556472,
+      "sha256": "9f1f9c4beba03e5deb3f1c1de4ee733a6e7f9eab0285e42ae1f8692e618dc586"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/provenance-rank0/receipt.json": {
+      "bytes": 9673,
+      "sha256": "9a64b13632cd9cc243ca771e09e7a5b33dea3798d19cd3cb537ebca7875e4d38"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/nonautonomous-imex/receipt-rank0.json": {
+      "bytes": 1832,
+      "sha256": "8b62b09e4c1c3036cfded48d566f04a7b0e0d4560df58b22a6dae43f4c6001b6"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/pops-native-cache/061ed055988fd5a62d1eca2b7b09ba3bbb1c21c86048139205d62c3ae8dcf15e.so": {
+      "bytes": 1581392,
+      "sha256": "758b982b34f7f78b31a01758417fb198905d6307ee7954c28358ac7834ac2894"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/pops-native-cache/061ed055988fd5a62d1eca2b7b09ba3bbb1c21c86048139205d62c3ae8dcf15e.so.pops-artifact.json": {
+      "bytes": 490,
+      "sha256": "1c12ea61b0359700e01f995df3f407d9b470e7394690106cea8f693d9e77a693"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/pops-native-cache/56586aba0e523f5061051549fc1791a7f7e9aedfd1739337f48bec2969a472d4.so": {
+      "bytes": 556472,
+      "sha256": "9f1f9c4beba03e5deb3f1c1de4ee733a6e7f9eab0285e42ae1f8692e618dc586"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/pops-native-cache/56586aba0e523f5061051549fc1791a7f7e9aedfd1739337f48bec2969a472d4.so.pops-artifact.json": {
+      "bytes": 591,
+      "sha256": "2e4f9194080f3995d260f1183ce881520a48b2e655b52a04d582e36ee61c0a93"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/pops-native-cache/56586aba0e523f5061051549fc1791a7f7e9aedfd1739337f48bec2969a472d4.so.pops-model-compile.json": {
+      "bytes": 2280,
+      "sha256": "314183c4f125a8aa9ff707d2079a98676fa47ba61b63f2e56a815b6b44e414f0"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp/test_public_nonautonomous_imex0/pops-native-cache/56586aba0e523f5061051549fc1791a7f7e9aedfd1739337f48bec2969a472d4.so.pops-model.cpp": {
+      "bytes": 27912,
+      "sha256": "1a8fede68d464a8273aba80d89d54732c148e8ac78dcfbd3eaf5aa96ec011fb9"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest.log": {
+      "bytes": 1216,
+      "sha256": "3e421409e223b5a76900dfae1277fc5525f9e7914ab061d2e84a96e7f822ead6"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest.xml": {
+      "bytes": 666,
+      "sha256": "57fe2665f4e0ef9faf36607c20f108cfb3b4d7e8dcb6d299508e5caff9e831c2"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/result.json": {
+      "bytes": 1510,
+      "sha256": "cc8ec7af0986c0dbe1056e32caee7978eddd0d14b38d6431549e9762a6e59ea8"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/source-files.json": {
+      "bytes": 136555,
+      "sha256": "c3c4ebffbf50cf56cc7943b6af90b0e2ed5a8414889b930b35a88e94db7ba8b7"
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so": {
+      "bytes": 14446456,
+      "sha256": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b"
+    }
+  },
+  "producer_counts": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 1
+  },
+  "producer_seconds": 36.98297724999793,
+  "saved_arrays": {
+    "accepted": {
+      "bound": 1.2103610429875554e-11,
+      "max_abs_error": 4.818367926873179e-13,
+      "shape": [
+        1,
+        8,
+        8
+      ],
+      "values": 64
+    },
+    "field": {
+      "bound": 4.113848410531879e-11,
+      "max_abs_error": 1.9255708139098715e-12,
+      "shape": [
+        64
+      ],
+      "values": 64
+    },
+    "initial": {
+      "bound": 0.0,
+      "max_abs_error": 0.0,
+      "shape": [
+        1,
+        8,
+        8
+      ],
+      "values": 64
+    }
+  },
+  "status": "PASS_CURRENT_CORE_ORIGINAL_PDE_FILE_AND_MATH_RECEPTION",
+  "time_origin_metadata_nuance": "Fixture declares PHYSICAL_T0=1 but actual runtime starts0 and saved clock ends0.25; constant is not passed as runtime origin. Oracle uses actual tau0=0. Do not claim physical start1 from the unused/declarative receipt field."
+}

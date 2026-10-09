@@ -1,0 +1,157 @@
+{
+  "status": "STRICT_MATH_PASS_WITH_UNCHANGED_PRE_NATIVE_BUDGET",
+  "comparisons": {
+    "q0": {
+      "defect": 4.440892098500626e-16,
+      "bound": 1.4210854715202004e-14
+    },
+    "q1": {
+      "defect": 4.440892098500626e-16,
+      "bound": 1.5050694438145373e-13
+    },
+    "q2": {
+      "defect": 4.440892098500626e-16,
+      "bound": 1.677908088212615e-13
+    },
+    "qfinal": {
+      "defect": 6.661338147750939e-16,
+      "bound": 2.458583115919689e-13
+    },
+    "d_initial": {
+      "defect": 1.1102230246251565e-16,
+      "bound": 1.4210854715202004e-14
+    },
+    "phi0": {
+      "defect": 1.5432100042289676e-14,
+      "bound": 5.122298274075318e-10
+    },
+    "psi0": {
+      "defect": 1.5210055437364645e-14,
+      "bound": 3.0738266063687193e-10
+    },
+    "phi1": {
+      "defect": 2.6978419498391304e-14,
+      "bound": 5.122752594374205e-10
+    },
+    "psi1": {
+      "defect": 1.3433698597964394e-14,
+      "bound": 3.0740991985480523e-10
+    },
+    "phi2": {
+      "defect": 1.6653345369377348e-14,
+      "bound": 5.122810207255672e-10
+    },
+    "psi2": {
+      "defect": 2.1316282072803006e-14,
+      "bound": 3.0741337662769315e-10
+    },
+    "resident_phi": {
+      "defect": 1.6653345369377348e-14,
+      "bound": 5.122810207255672e-10
+    },
+    "resident_psi": {
+      "defect": 2.1316282072803006e-14,
+      "bound": 3.0741337662769315e-10
+    }
+  },
+  "resident_scalar_shape_mapping": {
+    "phi": {
+      "raw_shape": [
+        12,
+        16
+      ],
+      "component_count": 1,
+      "canonical_shape": [
+        1,
+        12,
+        16
+      ],
+      "rule": "Sourceauxiliary_component\u2192to_ranked_field has2Dscalarshape; addsingleknowncomponentaxis only"
+    },
+    "psi": {
+      "raw_shape": [
+        12,
+        16
+      ],
+      "component_count": 1,
+      "canonical_shape": [
+        1,
+        12,
+        16
+      ],
+      "rule": "Sourceauxiliary_component\u2192to_ranked_field has2Dscalarshape; addsingleknowncomponentaxis only"
+    }
+  },
+  "donor_exact_bytes": true,
+  "actual_q0_equals_bind_receiver": true,
+  "raw_actual_array_shapes": {
+    "q_final": [
+      1,
+      12,
+      16
+    ],
+    "donor_final": [
+      1,
+      12,
+      16
+    ],
+    "q_stage0": [
+      1,
+      12,
+      16
+    ],
+    "phi_stage0": [
+      1,
+      12,
+      16
+    ],
+    "psi_stage0": [
+      1,
+      12,
+      16
+    ],
+    "q_stage1": [
+      1,
+      12,
+      16
+    ],
+    "phi_stage1": [
+      1,
+      12,
+      16
+    ],
+    "psi_stage1": [
+      1,
+      12,
+      16
+    ],
+    "q_stage2": [
+      1,
+      12,
+      16
+    ],
+    "phi_stage2": [
+      1,
+      12,
+      16
+    ],
+    "psi_stage2": [
+      1,
+      12,
+      16
+    ],
+    "phi_resident": [
+      12,
+      16
+    ],
+    "psi_resident": [
+      12,
+      16
+    ]
+  },
+  "oracle_ready_sha256": "28ca67fc888d78ae3f57cc417759b4b9624692c9499d5d1ecacb1fc793b6b81e",
+  "budget_sha256": "bed47b146393f5b94bb37ee6a57684985951b769773ee0f956ed34dd84129cd3",
+  "actual_npz_sha256": "8c2f9e1fd39f32e253ed60453ed1f16d2a5f7e27b82733696dcaf7eeebac22c9",
+  "actual_bind_sha256": "c637495c5620b1369ec8b93bf66c5fa14bf84f203ab21085dd7e1e2f653228a9",
+  "pops_modules_loaded": []
+}

@@ -1,0 +1,162 @@
+{
+  "candidate_python_commit": "c28a8f4370bbf2e9d781ddf52ddcc59597ce2e65",
+  "full_comparison_raw_sha256": "b43945d66a2a9da46838c12bbeddb2da8b1e8fca86515af68bbc80f525d1ea5f",
+  "helper_sha256": "001cc7075b3448022c7e86f327d4090e231f57b08de1cbc94075fc26fb8b9b99",
+  "manifest_storage": "full manifests compared exactly before receipt compaction; canonical SHA256 retains every field including provenance",
+  "parent_python_commit": "3a03a2ef49d37c6fe779db85672fd2b1a89cf86f",
+  "profiles_equal": true,
+  "runs": [
+    {
+      "package": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-sol61-amr-right-preconditioner-review/python/pops/__init__.py",
+      "profiles": [
+        {
+          "authored_ir": "a594df49d43f9e93496554812b0b71f8f26f59d9bcf1c28de4c4c9ebb78f9fd5",
+          "cpp": "9e459b7e2a57fb3743f6ba930de9d79c6467282399ac5a61e36fd4d5204015d3",
+          "equation": "pops.solve-equation.v1:sha256:c5a925972d4935bb4956218c627b992437063e9aba63d4574ca5658565f7acdd",
+          "full_solve_request_sha256": "bace75e61c80f800145ec7d99728ce806fe2fbd432223d34fdddcf45c29cb9c5",
+          "ir_version": 8,
+          "module_hashes": [
+            "1a80dbf6ed99526f240372aa18b4d7da98a768752294331a73b4794a4111d652",
+            "7cf7c376a1a4de34df03443980bf1de6068bec0ebca7cfd980e8e9d58bc0bc7e",
+            "866eb454ff1f9f173099f6824119545dd00aa41a64e05a72ddb353e231c442cf"
+          ],
+          "module_manifest_sha256": [
+            "7e2f0391b139529aa3adfb4e7bf24c7df27fef235feda620591603e2f94ba05d",
+            "0856e13b338089c3b06edd516f4707c39e51a4d82e98990854b1a216bae13dec",
+            "f1dcda5db07d5fef6f2047b3592db69e152678048dbbf7c63573c22e0f763315"
+          ],
+          "resolved_ir": "a594df49d43f9e93496554812b0b71f8f26f59d9bcf1c28de4c4c9ebb78f9fd5",
+          "solver": "pops.prepared-spatial-newton.v1:sha256:36e7dafdee9749e11f4a39981f2041188409bb78f339ab0cf22fd519aa09f55e",
+          "uniform": false,
+          "width": 2
+        },
+        {
+          "authored_ir": "59ab71d259f6c2be65cfefab4b694dd3d92890b0a8ccc87f7e3ceef7db6db7df",
+          "cpp": "d57764d26637fb1d777f30245e414ef33d969533ba5f14e536b3251333d0afc6",
+          "equation": "pops.solve-equation.v1:sha256:c74527b0e802feaf5e960c52124bb21b3e1a22f7b068de37f164bcf4fdc2813e",
+          "full_solve_request_sha256": "52e4c64b7a5bdeaaaff3d7f04f678a1e20a14da9bc12be707e2d8d7dad312c43",
+          "ir_version": 8,
+          "module_hashes": [
+            "2ba749901077cf26c180c3669ca0f4aab04cf4779128a805c88bfc860344a445",
+            "f81418724a3ae45b3ed7cc03cd9016a3f4f1f4a36e11b6127285ca62a7fd3fe0",
+            "866eb454ff1f9f173099f6824119545dd00aa41a64e05a72ddb353e231c442cf"
+          ],
+          "module_manifest_sha256": [
+            "d53c3474c2b022d44c90ab855418def8234a399b0f6065eee5a9560a391a1541",
+            "31e28b5d6d65aad6c06927acb9abe4a1096cdfc24abb60c53cbc76dbc2b8005e",
+            "f1dcda5db07d5fef6f2047b3592db69e152678048dbbf7c63573c22e0f763315"
+          ],
+          "resolved_ir": "59ab71d259f6c2be65cfefab4b694dd3d92890b0a8ccc87f7e3ceef7db6db7df",
+          "solver": "pops.prepared-spatial-newton.v1:sha256:36e7dafdee9749e11f4a39981f2041188409bb78f339ab0cf22fd519aa09f55e",
+          "uniform": true,
+          "width": 3
+        },
+        {
+          "authored_ir": "41fac9b7f2fe7ee410c616727e53a5b5de604592f3670c5e080e5c2ad264d439",
+          "cpp": "be69f2c0a37b223c9201dc774dccfdba6c594a14105f97fdfab8853b6315a912",
+          "equation": "pops.solve-equation.v1:sha256:68c81e9905d091db694d4c35302de1f95451ac220992230b4c75c74a0b5d6e6f",
+          "full_solve_request_sha256": "1b275b058e30d9ad9a75b68882a36c96a90c386f2d30b15d2e110cb2cfc8eb99",
+          "ir_version": 8,
+          "module_hashes": [
+            "ada48e419ef91e399d22d422d53de74b8793b846953c8f969f872375b723d968",
+            "7daabe491bcfe8f27b046f9b0fa289166483e835e4ba7062d01dd919aac8f423",
+            "866eb454ff1f9f173099f6824119545dd00aa41a64e05a72ddb353e231c442cf"
+          ],
+          "module_manifest_sha256": [
+            "c24845135c646c5d88fce8a6ecafd0f5dc93307b0a615fc057eeee83eb22a4a6",
+            "bcadfc6ad10b4aa656eeaffc787666702fb28fa2bb6a60b6ebbb284ed0a3f27c",
+            "f1dcda5db07d5fef6f2047b3592db69e152678048dbbf7c63573c22e0f763315"
+          ],
+          "resolved_ir": "41fac9b7f2fe7ee410c616727e53a5b5de604592f3670c5e080e5c2ad264d439",
+          "solver": "pops.prepared-spatial-newton.v1:sha256:36e7dafdee9749e11f4a39981f2041188409bb78f339ab0cf22fd519aa09f55e",
+          "uniform": false,
+          "width": 5
+        }
+      ],
+      "source": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-sol61-amr-right-preconditioner-review"
+    },
+    {
+      "package": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-sol61-amr-python-jacobi-review/python/pops/__init__.py",
+      "profiles": [
+        {
+          "authored_ir": "a594df49d43f9e93496554812b0b71f8f26f59d9bcf1c28de4c4c9ebb78f9fd5",
+          "cpp": "9e459b7e2a57fb3743f6ba930de9d79c6467282399ac5a61e36fd4d5204015d3",
+          "equation": "pops.solve-equation.v1:sha256:c5a925972d4935bb4956218c627b992437063e9aba63d4574ca5658565f7acdd",
+          "full_solve_request_sha256": "bace75e61c80f800145ec7d99728ce806fe2fbd432223d34fdddcf45c29cb9c5",
+          "ir_version": 8,
+          "module_hashes": [
+            "1a80dbf6ed99526f240372aa18b4d7da98a768752294331a73b4794a4111d652",
+            "7cf7c376a1a4de34df03443980bf1de6068bec0ebca7cfd980e8e9d58bc0bc7e",
+            "866eb454ff1f9f173099f6824119545dd00aa41a64e05a72ddb353e231c442cf"
+          ],
+          "module_manifest_sha256": [
+            "7e2f0391b139529aa3adfb4e7bf24c7df27fef235feda620591603e2f94ba05d",
+            "0856e13b338089c3b06edd516f4707c39e51a4d82e98990854b1a216bae13dec",
+            "f1dcda5db07d5fef6f2047b3592db69e152678048dbbf7c63573c22e0f763315"
+          ],
+          "resolved_ir": "a594df49d43f9e93496554812b0b71f8f26f59d9bcf1c28de4c4c9ebb78f9fd5",
+          "solver": "pops.prepared-spatial-newton.v1:sha256:36e7dafdee9749e11f4a39981f2041188409bb78f339ab0cf22fd519aa09f55e",
+          "uniform": false,
+          "width": 2
+        },
+        {
+          "authored_ir": "59ab71d259f6c2be65cfefab4b694dd3d92890b0a8ccc87f7e3ceef7db6db7df",
+          "cpp": "d57764d26637fb1d777f30245e414ef33d969533ba5f14e536b3251333d0afc6",
+          "equation": "pops.solve-equation.v1:sha256:c74527b0e802feaf5e960c52124bb21b3e1a22f7b068de37f164bcf4fdc2813e",
+          "full_solve_request_sha256": "52e4c64b7a5bdeaaaff3d7f04f678a1e20a14da9bc12be707e2d8d7dad312c43",
+          "ir_version": 8,
+          "module_hashes": [
+            "2ba749901077cf26c180c3669ca0f4aab04cf4779128a805c88bfc860344a445",
+            "f81418724a3ae45b3ed7cc03cd9016a3f4f1f4a36e11b6127285ca62a7fd3fe0",
+            "866eb454ff1f9f173099f6824119545dd00aa41a64e05a72ddb353e231c442cf"
+          ],
+          "module_manifest_sha256": [
+            "d53c3474c2b022d44c90ab855418def8234a399b0f6065eee5a9560a391a1541",
+            "31e28b5d6d65aad6c06927acb9abe4a1096cdfc24abb60c53cbc76dbc2b8005e",
+            "f1dcda5db07d5fef6f2047b3592db69e152678048dbbf7c63573c22e0f763315"
+          ],
+          "resolved_ir": "59ab71d259f6c2be65cfefab4b694dd3d92890b0a8ccc87f7e3ceef7db6db7df",
+          "solver": "pops.prepared-spatial-newton.v1:sha256:36e7dafdee9749e11f4a39981f2041188409bb78f339ab0cf22fd519aa09f55e",
+          "uniform": true,
+          "width": 3
+        },
+        {
+          "authored_ir": "41fac9b7f2fe7ee410c616727e53a5b5de604592f3670c5e080e5c2ad264d439",
+          "cpp": "be69f2c0a37b223c9201dc774dccfdba6c594a14105f97fdfab8853b6315a912",
+          "equation": "pops.solve-equation.v1:sha256:68c81e9905d091db694d4c35302de1f95451ac220992230b4c75c74a0b5d6e6f",
+          "full_solve_request_sha256": "1b275b058e30d9ad9a75b68882a36c96a90c386f2d30b15d2e110cb2cfc8eb99",
+          "ir_version": 8,
+          "module_hashes": [
+            "ada48e419ef91e399d22d422d53de74b8793b846953c8f969f872375b723d968",
+            "7daabe491bcfe8f27b046f9b0fa289166483e835e4ba7062d01dd919aac8f423",
+            "866eb454ff1f9f173099f6824119545dd00aa41a64e05a72ddb353e231c442cf"
+          ],
+          "module_manifest_sha256": [
+            "c24845135c646c5d88fce8a6ecafd0f5dc93307b0a615fc057eeee83eb22a4a6",
+            "bcadfc6ad10b4aa656eeaffc787666702fb28fa2bb6a60b6ebbb284ed0a3f27c",
+            "f1dcda5db07d5fef6f2047b3592db69e152678048dbbf7c63573c22e0f763315"
+          ],
+          "resolved_ir": "41fac9b7f2fe7ee410c616727e53a5b5de604592f3670c5e080e5c2ad264d439",
+          "solver": "pops.prepared-spatial-newton.v1:sha256:36e7dafdee9749e11f4a39981f2041188409bb78f339ab0cf22fd519aa09f55e",
+          "uniform": false,
+          "width": 5
+        }
+      ],
+      "source": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-sol61-amr-python-jacobi-review"
+    }
+  ],
+  "schema": "sol61.amr-python-jacobi-independent@1",
+  "scope": "source only; no native execution",
+  "source_checks": {
+    "author_separate_selection": {
+      "passed": 21,
+      "seconds": 115.87
+    },
+    "independent": {
+      "passed": 11,
+      "seconds": 48.52
+    },
+    "native_executed": false,
+    "ruff": "PASS"
+  }
+}

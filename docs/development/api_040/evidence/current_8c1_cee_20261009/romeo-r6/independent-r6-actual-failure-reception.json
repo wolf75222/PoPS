@@ -1,0 +1,338 @@
+{
+  "status": "ACTUAL_GPU_BUILD_FAILED_NO_NATIVE_OR_SCIENTIFIC_ADMISSION",
+  "Source": "98804c6849c9966e05b5397126bab983a5fa0227",
+  "SDK": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+  "namespace": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009",
+  "observation_utc": "2026-10-09T02:43:20.301465+00:00",
+  "queue_accounting": [
+    {
+      "argv": [
+        "squeue",
+        "-j",
+        "738213,738214",
+        "-h",
+        "-o",
+        "%i|%j|%T|%R|%u"
+      ],
+      "exit": 0,
+      "stdout": "738214|pops988-r6-runtime|PENDING|(DependencyNeverSatisfied)|rmdraux\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "sacct",
+        "-j",
+        "738213,738214",
+        "-n",
+        "-X",
+        "-P",
+        "-o",
+        "JobID,State,ExitCode,Elapsed,NodeList"
+      ],
+      "exit": 0,
+      "stdout": "738213|FAILED|1:0|00:02:30|romeo-a043\n738214|PENDING|0:0|00:00:00|None assigned\n",
+      "stderr": ""
+    }
+  ],
+  "build": {
+    "job": 738213,
+    "state": "FAILED",
+    "exit": "1:0",
+    "elapsed": "00:02:30",
+    "node": "romeo-a043"
+  },
+  "runtime": {
+    "job": 738214,
+    "state": "PENDING",
+    "reason": "DependencyNeverSatisfied",
+    "elapsed": "00:00:00",
+    "node": "None assigned",
+    "no_runtime_executed": true
+  },
+  "fatal_TUs": 2,
+  "compiler_errors": [
+    {
+      "line": 3374,
+      "message": "  /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/tmp/tmpxft_0008fcc6_00000000-6_amr_field_solver_builtin.cudafe1.stub.c:31:23: error: 'struct pops::elliptic::amr::partitioned_transfer::RegionTransport<2, Kokkos::CudaSpace>::PackKernel' is private within this context"
+    },
+    {
+      "line": 3380,
+      "message": "  /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/tmp/tmpxft_0008fcc6_00000000-6_amr_field_solver_builtin.cudafe1.stub.c:40:23: error: 'struct pops::elliptic::amr::partitioned_transfer::RegionTransport<2, Kokkos::CudaSpace>::UnpackKernel' is private within this context"
+    },
+    {
+      "line": 3388,
+      "message": "  /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/tmp/tmpxft_0008fcc6_00000000-6_amr_field_solver_builtin.cudafe1.stub.c:292:485: error: 'struct pops::elliptic::amr::partitioned_transfer::RegionTransport<2, Kokkos::CudaSpace>::PackKernel' is private within this context"
+    },
+    {
+      "line": 3394,
+      "message": "  /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/tmp/tmpxft_0008fcc6_00000000-6_amr_field_solver_builtin.cudafe1.stub.c:292:485: error: 'struct pops::elliptic::amr::partitioned_transfer::RegionTransport<2, Kokkos::CudaSpace>::PackKernel' is private within this context"
+    },
+    {
+      "line": 3400,
+      "message": "  /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/tmp/tmpxft_0008fcc6_00000000-6_amr_field_solver_builtin.cudafe1.stub.c:292:485: error: 'struct pops::elliptic::amr::partitioned_transfer::RegionTransport<2, Kokkos::CudaSpace>::PackKernel' is private within this context"
+    },
+    {
+      "line": 3407,
+      "message": "  /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/tmp/tmpxft_0008fcc6_00000000-6_amr_field_solver_builtin.cudafe1.stub.c:295:41: error: 'struct pops::elliptic::amr::partitioned_transfer::RegionTransport<2, Kokkos::CudaSpace>::PackKernel' is private within this context"
+    },
+    {
+      "line": 3414,
+      "message": "  /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/tmp/tmpxft_0008fcc6_00000000-6_amr_field_solver_builtin.cudafe1.stub.c:328:489: error: 'struct pops::elliptic::amr::partitioned_transfer::RegionTransport<2, Kokkos::CudaSpace>::UnpackKernel' is private within this context"
+    },
+    {
+      "line": 3420,
+      "message": "  /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/tmp/tmpxft_0008fcc6_00000000-6_amr_field_solver_builtin.cudafe1.stub.c:328:489: error: 'struct pops::elliptic::amr::partitioned_transfer::RegionTransport<2, Kokkos::CudaSpace>::UnpackKernel' is private within this context"
+    },
+    {
+      "line": 3426,
+      "message": "  /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/tmp/tmpxft_0008fcc6_00000000-6_amr_field_solver_builtin.cudafe1.stub.c:328:489: error: 'struct pops::elliptic::amr::partitioned_transfer::RegionTransport<2, Kokkos::CudaSpace>::UnpackKernel' is private within this context"
+    },
+    {
+      "line": 3433,
+      "message": "  /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/tmp/tmpxft_0008fcc6_00000000-6_amr_field_solver_builtin.cudafe1.stub.c:331:41: error: 'struct pops::elliptic::amr::partitioned_transfer::RegionTransport<2, Kokkos::CudaSpace>::UnpackKernel' is private within this context"
+    },
+    {
+      "line": 3440,
+      "message": "  /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/tmp/tmpxft_0008fcc6_00000000-6_amr_field_solver_builtin.cudafe1.stub.c:600: error: 'struct pops::elliptic::amr::partitioned_transfer::RegionTransport<2, Kokkos::CudaSpace>::UnpackKernel' is private within this context"
+    },
+    {
+      "line": 3446,
+      "message": "  /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/tmp/tmpxft_0008fcc6_00000000-6_amr_field_solver_builtin.cudafe1.stub.c:600: error: 'struct pops::elliptic::amr::partitioned_transfer::RegionTransport<2, Kokkos::CudaSpace>::PackKernel' is private within this context"
+    },
+    {
+      "line": 3615,
+      "message": "  /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/source/include/pops/runtime/amr/tensor_composite_fac.hpp(1200): error: An extended __host__ __device__ lambda cannot be defined inside a class (\"Connection\") with private or protected access within another class"
+    },
+    {
+      "line": 3619,
+      "message": "  /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/source/include/pops/runtime/amr/tensor_composite_fac.hpp(1723): error: The enclosing parent function (\"coefficients_are_elliptic_\") for an extended __host__ __device__ lambda cannot have private or protected access within its class"
+    },
+    {
+      "line": 3623,
+      "message": "  /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/source/src/runtime/amr/amr_system.cpp(5729): error: An extended __host__ __device__ lambda cannot be defined inside a class (\"Impl\") with private or protected access within another class"
+    },
+    {
+      "line": 3627,
+      "message": "  /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/source/src/runtime/amr/amr_system.cpp(5769): error: An extended __host__ __device__ lambda cannot be defined inside a class (\"Impl\") with private or protected access within another class"
+    }
+  ],
+  "exact_failed_compile_commands": [
+    {
+      "line": 2966,
+      "command": "  /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/strict_nvcc_wrapper.sh -DKOKKOS_DEPENDENCE -DNDEBUG -DPOPS_CXX_COMPILER=\\\"/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/strict_nvcc_wrapper.sh\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a\\\" -DPOPS_MPI_ABI=\\\"e5470b6bd6171e0d0cc7991de36f6f9c26c61fb75841906b56aa106034f1b138\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/source/include -isystem /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/envs/pops_final_cuda_dim2/include -isystem /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/kokkos-unified-install/include --fmad=false -fopenmp -fno-fast-math -ffp-contract=off -O3 -DNDEBUG -std=c++20 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -extended-lambda -Wext-lambda-captures-this -arch=sm_90 -fopenmp -MD -MT src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o -MF src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o.d -o src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o -c /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/source/src/runtime/amr/amr_field_solver_builtin.cpp"
+    },
+    {
+      "line": 3556,
+      "command": "  /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/strict_nvcc_wrapper.sh -DKOKKOS_DEPENDENCE -DNDEBUG -DPOPS_CXX_COMPILER=\\\"/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/strict_nvcc_wrapper.sh\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a\\\" -DPOPS_MPI_ABI=\\\"e5470b6bd6171e0d0cc7991de36f6f9c26c61fb75841906b56aa106034f1b138\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/source/include -isystem /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/envs/pops_final_cuda_dim2/include -isystem /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/kokkos-unified-install/include --fmad=false -fopenmp -fno-fast-math -ffp-contract=off -O3 -DNDEBUG -std=c++20 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -extended-lambda -Wext-lambda-captures-this -arch=sm_90 -fopenmp -MD -MT src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o -MF src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o.d -o src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o -c /gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/source/src/runtime/amr/amr_system.cpp"
+    }
+  ],
+  "entry": {
+    "job": "738213",
+    "dimension": 2,
+    "scope": "official build entered; outcome pending"
+  },
+  "named_conda_selection": {
+    "CLI_env_list_authenticated": true,
+    "backend": "genuine Conda CLI",
+    "cli": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/miniforge/bin/conda",
+    "cli_sha256": "35e5ca115eee2d1b447fe00826ffec0d4fdb0b334236089a052fcf7faf0e6f21",
+    "env_list_sha256": "90c994e2e997e59510b5af7dfa0780c8979463bd4c007c3cb59a58402d42c93a",
+    "env_name": "pops_final_cuda_dim2",
+    "invocation": [
+      "conda",
+      "env",
+      "list"
+    ],
+    "scope": "Actual Slurm CLI selection only; not environment installation or Native qualification",
+    "selected_prefix": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/envs/pops_final_cuda_dim2"
+  },
+  "selected_environment": {
+    "CONDA_ENVS_PATH": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/envs",
+    "backend": "genuine Conda CLI named activation",
+    "env_name": "pops_final_cuda_dim2",
+    "prefix": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/envs/pops_final_cuda_dim2",
+    "scope": "Actual selected prefix before unchanged official Source988 builder; no compilation claimed"
+  },
+  "finally": {
+    "body": 1,
+    "footprint": 0,
+    "quota": 0,
+    "registry": 0
+  },
+  "managed_pointer_probe": {
+    "allocated_pointer": "0x4002e0012080",
+    "cuda_stream": "0xaaaad63c2e40",
+    "execution_backend": "Cuda",
+    "field_memory_space_type": "CudaSpace",
+    "HostSpace_accessible": true,
+    "Cuda_accessible": true,
+    "pointer_type": 3,
+    "cudaMemoryTypeManaged": 3,
+    "pointer_query_status": 0,
+    "launch_status": 0,
+    "stream_sync_status": 0,
+    "device": 0,
+    "raw_device_name": "NVIDIA GH200 120GB",
+    "compute_major": 9,
+    "compute_minor": 0,
+    "CUDA_runtime_library_version": 12060,
+    "CUDA_driver_version": 13010,
+    "CUDA_runtime_header_version": 12060,
+    "stamp": 8192,
+    "status": 0,
+    "scope": "Actual managed allocation and direct CUDA kernel probe, not production PDE kernel or numerical acceptance"
+  },
+  "GPU_admission_exists": false,
+  "file_pins": [
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/kokkos-unified-profile-manifest-r6.json",
+      "bytes": 98662,
+      "sha256": "547ddb08854b0f731908c2a9b69afc2d003278c2e2f79453c3a13bfe7d70a601"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/managed-pointer-launch-probe-r6.json",
+      "bytes": 622,
+      "sha256": "1099c8d051df7a3d93a2dde3af4bf6f44e8e87973ebccb8e288e763a67e8f755"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/namespace-footprint-r6-native-finally.json",
+      "bytes": 17735,
+      "sha256": "ff811213b7f4007bbb10ef2057f68e710b343f43dcb8fa8aef633d5d687bd305"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/namespace-footprint-r6-probe-finally.json",
+      "bytes": 17724,
+      "sha256": "b1fc70bb6529179dcba1db0529e1f527d29940b5827f0e8eca402661226d098d"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/namespace-footprint-r6-probe.json",
+      "bytes": 17716,
+      "sha256": "8b780b9c5174640a1b8af2271574cbb2544d08c3443d5d1ee6c12026623675a5"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/official-build-entered-r6.json",
+      "bytes": 81,
+      "sha256": "ec8b80ec9efa77c3652bd2e649767cd96b1b81c60b64dd33893433724bfb78c9"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/quota-after-r6-native-finally-parser-v2-raw.json",
+      "bytes": 1101,
+      "sha256": "dc889236cd35b0b1045399278e6302899ea28ddf7814f945200b78cc00eeacd1"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/quota-after-r6-native-finally-parser-v2.json",
+      "bytes": 2349,
+      "sha256": "5898f33491850d99393f56d6cf150ffd159168361664f84e161e12cbf18414e8"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/quota-after-r6-probe-finally-parser-v2-raw.json",
+      "bytes": 1100,
+      "sha256": "f1e58190bafdbeaa01dffd89a798d6aad6f07db3d79557c784b6b84addff13ee"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/quota-after-r6-probe-finally-parser-v2.json",
+      "bytes": 2347,
+      "sha256": "f08d65c218f6cf4fc1ec5b5b5da6628e6d0719fba16122879adc242c82f8c0c4"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/quota-r6-before-native-parser-v2-raw.json",
+      "bytes": 1103,
+      "sha256": "89ce0dfbdb289dbc775d747329f58addaed75666ff083cdc88535171ee7ebd3d"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/quota-r6-before-native-parser-v2.json",
+      "bytes": 2350,
+      "sha256": "8c18105f83f9e4ff308fa71f38b27208793098e44a3027f8bc431709a1f38aa4"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/quota-r6-before-probe-parser-v2-raw.json",
+      "bytes": 1102,
+      "sha256": "11dfc77b6255b32a4a410e4a7880efb5249c46cddeddad451bc8c99c224cc620"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/quota-r6-before-probe-parser-v2.json",
+      "bytes": 2349,
+      "sha256": "5083f69870893f9d71f13b7ac66275deea35c25a0b031f6ebc5981670cebc3c6"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/quota-root-before-r6-dispatch-parser-v2-raw.json",
+      "bytes": 1110,
+      "sha256": "bc618647514bbedb2f61bc6ff54b1129e909c90b8e8c3bfe821c4b382f29343e"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/quota-root-before-r6-dispatch-parser-v2.json",
+      "bytes": 2357,
+      "sha256": "edce78621fad311b34ffea832d675f4bc3cade5f849d8a800a2f23ed2457f810"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/r6-conda-name-selection.json",
+      "bytes": 690,
+      "sha256": "96203056b90e0fd4032db4af8ca527278370d3e89f17811c5c91995793813d74"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/r6-existing-runtime-admission.json",
+      "bytes": 2151,
+      "sha256": "6aae978862a49465722d3e549001438d878f8a1e7721edbe4f450a252cc18538"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/r6-native-finally-statuses.json",
+      "bytes": 65,
+      "sha256": "139c70d6e06de43aa323bc30f00975a1ebdf589cf315de1bc9409e80cf26518f"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/r6-prior-r5-cancellation.json",
+      "bytes": 1391,
+      "sha256": "ad3cc2387e717123cf672f084962b82737c3b4fb8edce3c42c0f8a3b65f7a629"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/r6-prior-r5-failure-admission.json",
+      "bytes": 399,
+      "sha256": "7ba84b2134b3e654b0eb9310d89f9c1ab18a9c402505e82cd753653d2f968692"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/r6-probe-finally-statuses.json",
+      "bytes": 65,
+      "sha256": "41378014d83036fc3aad20e1bfa018c050442538ed6f39340b07955417e6d978"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/r6-selected-environment.json",
+      "bytes": 431,
+      "sha256": "ff65362fd1d083f8493dd0b6a339fcdd6520596a95e8c808f9b2c9d182184b55"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/registration-after-r6-native-finally.json",
+      "bytes": 613,
+      "sha256": "d6bbc161dd647e489dccdf1349ec67d5d1a52548b05cdad9d766431635b6d6cf"
+    },
+    {
+      "path": "/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/registration-after-r6-probe-finally.json",
+      "bytes": 612,
+      "sha256": "09592c10fc88ee9a695293e1c7e00614dcb3a2664de91494e7bfcc64adc3604a"
+    }
+  ],
+  "local_pins": {
+    "official-build-r6-full.log": {
+      "bytes": 830573,
+      "sha256": "e04e4820d8cea7d2c135f113ffce0dc6d4d595b1710bc5cb849161e4c6be26c3"
+    },
+    "closed-accounting-and-full-log-readonly.json": {
+      "bytes": 1035520,
+      "sha256": "6c01f3bee4692ac3eac432777ff4ccaf461f4b5da25c5c025ae0e369b11d27d3"
+    },
+    "compiler-fatal-diagnostic-excerpts.txt": {
+      "bytes": 33395,
+      "sha256": "a6627561f3bddfee0ee76626e1236645b6ada741009fbcd1a521a2198ad0655b"
+    },
+    "snapshot-2026-10-09T023628.506603_0000.json": {
+      "bytes": 148252,
+      "sha256": "68bd011d7ecbbe92a3a08d0f021576fede9c0344aab431affd5b7ca1263a0cb4"
+    }
+  },
+  "limits": [
+    "Source988 GPU cohort distinct from CPU4017/Native939/SDKacf0 and current docs-only Main",
+    "Read-only SSH text/JSON/accounting; no submission/cancel/remote write/Conda/Native execution",
+    "Kokkos/CUDA library identities received from allocation-authored profile/admission records, not independently rehashing large library binaries",
+    "Managed pointer direct CUDA probe only; actual production wheel build failed and no Native artifact/science qualified",
+    "Runtime dependency remains pending at receipt; cancellation belongs to Root"
+  ]
+}

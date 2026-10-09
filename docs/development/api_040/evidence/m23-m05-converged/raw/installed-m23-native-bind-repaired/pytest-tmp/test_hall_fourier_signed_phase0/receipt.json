@@ -1,0 +1,348 @@
+{
+  "schema_version": 1,
+  "case": "M23_normalized_Hall_Fourier",
+  "status": "passed",
+  "scope": "periodic Dim1 transverse linear two-component classification witness",
+  "criteria": {
+    "initial_max_error": 3e-14,
+    "saved_state_max_error": 3e-10,
+    "phase_discrete_error": 3e-10,
+    "norm_discrete_error": 3e-10,
+    "time_error": 3e-14
+  },
+  "records": [
+    {
+      "cells": 32,
+      "order": [
+        0,
+        1
+      ],
+      "eta_h": 0.3,
+      "continuous_phase": -0.24,
+      "semidiscrete_phase": -0.23693155938399793,
+      "ssprk2_phase": -0.23693178105901802,
+      "ssprk2_norm_ratio": 1.00000000039391,
+      "observed_norm_ratio": 1.000000000393914,
+      "initial_max_error": 0.0,
+      "saved_state_max_error": 4.107825191113079e-15,
+      "phase_discrete_error": 1.755445327090822e-16,
+      "norm_discrete_error": 3.9968028886505635e-15,
+      "time_error": 0.0,
+      "accepted_steps": 100,
+      "mpi_ranks": 1,
+      "saved_state": "state_32_01_0.3.npz",
+      "saved_state_sha256": "e53416371a5ee24e8a923cb41cc70f7cb567640344e75258a5d29cab05d41c2f",
+      "run_report": {
+        "accepted_steps": 100,
+        "rejected_steps": 0,
+        "final_time": 0.2,
+        "final_macro_step": 100,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "71e5d0b39c69f328eb2acd877a6bb42a76d5bfc92d1eb2c3ea177d529c42a4e4"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "390a0661e75672152ef5fb81b15547884d3c06180a83f9c2315e547238719fd9"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "ccb2b062dcf7154a15374f92fcf841ab7cebacea0984b3c58f5856e10b709539"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "a5ebb532dc319a92a7e41edfe016b10bf0e425c781d2456cd427d10b458674ad"
+          }
+        },
+        "field_providers": []
+      }
+    },
+    {
+      "cells": 64,
+      "order": [
+        0,
+        1
+      ],
+      "eta_h": 0.3,
+      "continuous_phase": -0.24,
+      "semidiscrete_phase": -0.23922992737079063,
+      "ssprk2_phase": -0.2392301555596982,
+      "ssprk2_norm_ratio": 1.0000000004094203,
+      "observed_norm_ratio": 1.000000000409423,
+      "initial_max_error": 0.0,
+      "saved_state_max_error": 3.1086244689504383e-15,
+      "phase_discrete_error": 2.3068026910881914e-16,
+      "norm_discrete_error": 2.6645352591003757e-15,
+      "time_error": 0.0,
+      "accepted_steps": 100,
+      "mpi_ranks": 1,
+      "saved_state": "state_64_01_0.3.npz",
+      "saved_state_sha256": "a5a9ff7f59fe3cc6f4ad35a24ae6eb11b1a481fa41fe6ccbcc1797ad0aad1efd",
+      "run_report": {
+        "accepted_steps": 100,
+        "rejected_steps": 0,
+        "final_time": 0.2,
+        "final_macro_step": 100,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "da4d313eb9a3aa311c4a760c5c053526089cf9cfd207f968fabfdf71d6505956"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "8a849b8dce4c30ce11deb8d45950eca9a0f559cbc26ba78423bdc5fbe8a8f774"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "ccb2b062dcf7154a15374f92fcf841ab7cebacea0984b3c58f5856e10b709539"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "edf1c85c82dcae8342312c20b5cae55c0ee9be8949195557ad2d25fcc58c54a7"
+          }
+        },
+        "field_providers": []
+      }
+    },
+    {
+      "cells": 32,
+      "order": [
+        1,
+        0
+      ],
+      "eta_h": 0.3,
+      "continuous_phase": -0.24,
+      "semidiscrete_phase": -0.23693155938399793,
+      "ssprk2_phase": -0.23693178105901802,
+      "ssprk2_norm_ratio": 1.00000000039391,
+      "observed_norm_ratio": 1.000000000393914,
+      "initial_max_error": 0.0,
+      "saved_state_max_error": 4.107825191113079e-15,
+      "phase_discrete_error": 1.755445327090822e-16,
+      "norm_discrete_error": 3.9968028886505635e-15,
+      "time_error": 0.0,
+      "accepted_steps": 100,
+      "mpi_ranks": 1,
+      "saved_state": "state_32_10_0.3.npz",
+      "saved_state_sha256": "b4a21bd89567995472bc8c2bee9f8d3e74588de0e256eb054f35ce7ccf6a6826",
+      "run_report": {
+        "accepted_steps": 100,
+        "rejected_steps": 0,
+        "final_time": 0.2,
+        "final_macro_step": 100,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "928e251ea385165be9d8f70499923b1151ca822ee802510aaea0cd35d8a36b17"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "ecfae5a9dfd959b7109dc18fc5f719f2c75ebe3fcbc365bf92556d739bb308b7"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "ccb2b062dcf7154a15374f92fcf841ab7cebacea0984b3c58f5856e10b709539"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "0f3e10222317f3bd4c51c1ad8746ea1745aeead06bd77668830464bbb7321c9a"
+          }
+        },
+        "field_providers": []
+      }
+    },
+    {
+      "cells": 64,
+      "order": [
+        1,
+        0
+      ],
+      "eta_h": 0.3,
+      "continuous_phase": -0.24,
+      "semidiscrete_phase": -0.23922992737079063,
+      "ssprk2_phase": -0.2392301555596982,
+      "ssprk2_norm_ratio": 1.0000000004094203,
+      "observed_norm_ratio": 1.000000000409423,
+      "initial_max_error": 0.0,
+      "saved_state_max_error": 3.1086244689504383e-15,
+      "phase_discrete_error": 2.3068026910881914e-16,
+      "norm_discrete_error": 2.6645352591003757e-15,
+      "time_error": 0.0,
+      "accepted_steps": 100,
+      "mpi_ranks": 1,
+      "saved_state": "state_64_10_0.3.npz",
+      "saved_state_sha256": "659911fce78ccb4bb477c97fab1760359e067707aa44f43661b8353d659e3c99",
+      "run_report": {
+        "accepted_steps": 100,
+        "rejected_steps": 0,
+        "final_time": 0.2,
+        "final_macro_step": 100,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "7f9af53d809edf47258184b4b06e573ce65b8e477baf38023bc65aae9a156a8e"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9eb954a79e797d42d54e8bbbb0f3be7a533b3179e77e3e3de9b4c9f91f0a924b"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "ccb2b062dcf7154a15374f92fcf841ab7cebacea0984b3c58f5856e10b709539"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "8f00771209e36a10de7a03460115a9701f7f877d58214c7160697a01366bc51f"
+          }
+        },
+        "field_providers": []
+      }
+    },
+    {
+      "cells": 32,
+      "order": [
+        0,
+        1
+      ],
+      "eta_h": 0.0,
+      "continuous_phase": -0.0,
+      "semidiscrete_phase": -0.0,
+      "ssprk2_phase": 0.0,
+      "ssprk2_norm_ratio": 1.0,
+      "observed_norm_ratio": 1.0,
+      "initial_max_error": 0.0,
+      "saved_state_max_error": 0.0,
+      "phase_discrete_error": 3.230127886532199e-17,
+      "norm_discrete_error": 0.0,
+      "time_error": 0.0,
+      "accepted_steps": 100,
+      "mpi_ranks": 1,
+      "saved_state": "state_32_01_0.0.npz",
+      "saved_state_sha256": "df57f3136a41dc079a293ccb5b56a1505c163d03cb0d85db6b2e0595ea3806c4",
+      "run_report": {
+        "accepted_steps": 100,
+        "rejected_steps": 0,
+        "final_time": 0.2,
+        "final_macro_step": 100,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "a12651b59a0f8a208fd325a42f6a0cc28d7b9deac7a2e3aa85dda2c18fad885d"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "e06750748613456b0ee235b7f9f54a225076fd8c04542b9958f3ba739c5fdc7a"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "ccb2b062dcf7154a15374f92fcf841ab7cebacea0984b3c58f5856e10b709539"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "2ca93c3acb4a09d60132b3944a59d2565801d8cf4fa6501784976a7cb60db85e"
+          }
+        },
+        "field_providers": []
+      }
+    }
+  ],
+  "native_sha256": "42436a0ccef7c5504273c9e459f4bd946652597aa6ee025bc484ac595ad7ca02",
+  "threads_requested": 1,
+  "mpi_ranks": 1
+}

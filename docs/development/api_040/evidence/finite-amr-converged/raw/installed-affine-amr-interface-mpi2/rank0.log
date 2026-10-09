@@ -1,0 +1,13 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 3 items
+
+tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py::test_public_affine_body_and_local_solve_match_particles_on_amr[1] PASSED [ 33%]
+tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py::test_public_affine_body_and_local_solve_match_particles_on_amr[2] PASSED [ 66%]
+tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py::test_impossible_local_residual_rejects_without_amr_publication PASSED [100%]
+
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-affine-amr-interface-mpi2/rank0.xml -
+========================= 3 passed in 81.10s (0:01:21) =========================

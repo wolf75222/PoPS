@@ -1,0 +1,22 @@
+{
+  "Source": "7daee302e5af72d4c9b43c77167e349ddb21da5b",
+  "exit": 0,
+  "seconds": 0.16009508299612207,
+  "counts": {
+    "tests": 1,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "Native_blocked": [],
+  "Native_extension_attempts": [],
+  "Native_loaded": [],
+  "scope": "One targeted external pytest test: exact candidate function AST against actual frozen Main source; only four added ordered declarations, strict full inventory/CMake gates retained; no Main edits or CXX execution",
+  "original_cohort": {
+    "tests": 904,
+    "passed": 903,
+    "failed": 1,
+    "errors": 0,
+    "skipped": 0
+  }
+}

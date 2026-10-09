@@ -1,0 +1,208 @@
+{
+  "schema": "pops.independent-privateCPP-af8-retry2-lineage-reception@1",
+  "status": "ADMIT_ARTIFACT_LINEAGE_WITH_EXIT_LABEL_CORRECTION",
+  "created_utc": "2026-10-08T16:52:24.700476+00:00",
+  "Source": "db206100d81de834482c8a3b093ce30065aa1b43",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "installed_Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "cached_Native": "191113599e110ef0c95b07ed5a3616fe76dafa0b2a1536bc1e801cf225a78f3e",
+  "wheel_SHA": "cc87740c1a5b0fa1e15d43b34caff66eeca71e8defaa79d820532b6f2c12b012",
+  "original_wrapper_exit": 1,
+  "original_failed_ninja_link_manifest_exit": 143,
+  "original_error_site": "MPI_Finalize OFI poll",
+  "retry2_wrapper_exit": 0,
+  "preserved_original_before": true,
+  "negative_log_status_identical_to_Root_archive": true,
+  "preserved_original_a936_SO_verified": true,
+  "runtime_CXX_completed_in_negative_attempt": 2,
+  "runtime_CXX_in_retry2": 0,
+  "retry2_completed_link_manifest_action": 1,
+  "unchanged_af8_bindings_authenticated_reuse": 7,
+  "all_before_after_checkpoint_pins_verified": true,
+  "Source_before_after_equal_and_live_file_hashes": true,
+  "compiler_dependencies_prior_before_after_equal_and_live_hashes": true,
+  "package_inventory_before": 2793,
+  "package_inventory_after": 2793,
+  "installed_package_file_hashes_verified": true,
+  "wheel_payload_files_equal_to_installed": 1167,
+  "producer_exit_label_delta": "first_official_build_exit143_at_MPI_Finalize conflates wrapper exit1 and Ninja link/manifest exit143; preserve both accurately.",
+  "reviewer_actions": {
+    "Native_import": false,
+    "build": false,
+    "install": false,
+    "science": false,
+    "Main_edit": false,
+    "remote": false
+  },
+  "recorded_origin_doctor": "Producer actual_origin and actual_doctor records present; no reviewer import/rerun.",
+  "limits": [
+    "File/artifact admission only; Root still owns scientific GO.",
+    "No GNU13.3 CI repair, MPI scientific scope, GPU, 3D or Full94 inherited.",
+    "Ninja actions authenticate producer graph; internal compiler/cache execution unmeasured."
+  ],
+  "pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/before/.ninja_log": {
+      "sha256": "db438f0ee3173c48c7b00898d75ea4cad83ac0480c10a4982000c6d6510ffb9c",
+      "bytes": 6744
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/before/CMakeCache.txt": {
+      "sha256": "f623c1fde6aff79714d2fcd6b21e5da99eff46a9b27aafe0c31514c7a33542b2",
+      "bytes": 31847
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/before/CMakeFiles__rules.ninja": {
+      "sha256": "38eb8b65d877f9414db1a7b409b9e2d2103f5d3df19b2b6a3dab18c44e4228c6",
+      "bytes": 5147
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/before/Root-preserved-original-native.json": {
+      "sha256": "b5ce675e33eb3d0822fef841270eceb5c7c44de01b83e2d4d2ed71946c444d09",
+      "bytes": 304
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/before/binding-sources.json": {
+      "sha256": "de00de678069008bb399543ca0997af55dbd9ddb475fa64235f2dda464f1cc70",
+      "bytes": 3304
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/before/build.ninja": {
+      "sha256": "9e14f84ec661463b5efd1c6c54111ea263ce42ccfe1c661c95dfcfe39aacbb55",
+      "bytes": 93554
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/before/changed-runtime-objects.json": {
+      "sha256": "59c303b8cf3e3438d46e4e7f1e4b5c4d242385b2a59c4f96053bf9b8057cbdb8",
+      "bytes": 519
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/before/compiler-dependencies.json": {
+      "sha256": "72b202b279ac83e0751401d3eb3d890be541db4fa53d180ae37a00aafa8664b4",
+      "bytes": 234606
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/before/identity.json": {
+      "sha256": "7b42bc1d020f2436e0c5e3ab791582f0ae5d28c5e9392b595214a123bcc26415",
+      "bytes": 2341
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/before/package.json": {
+      "sha256": "d0957c569e075cdaf8795eda2afc36fc17b416e0c4b49e1565d3c771015d3989",
+      "bytes": 712147
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/before/planned-ninja-commands.txt": {
+      "sha256": "85fac09c07b24bebb0c89229f458341bf492db9802656476ba3794433463e341",
+      "bytes": 48172
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/before/seven-binding-objects.json": {
+      "sha256": "69fab75f140a0277d469629c1bbbec80b0f26c7d883c3e9ca53637aa32eb6279",
+      "bytes": 1782
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/before/source.json": {
+      "sha256": "55806c7b16ad706de84c4211418015355e22305fe640a827e032e608ea0efe9b",
+      "bytes": 1438022
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/after/.ninja_log": {
+      "sha256": "3f07d9f45f63b73c3ebcc4f06d806205818011a37978a2d892634354a8f6d4f4",
+      "bytes": 3671
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/after/CMakeCache.txt": {
+      "sha256": "517904c67a72d073a253ed6d7672411b7029f593056d5aa52e6d1e1537e1600a",
+      "bytes": 31847
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/after/CMakeFiles__rules.ninja": {
+      "sha256": "38eb8b65d877f9414db1a7b409b9e2d2103f5d3df19b2b6a3dab18c44e4228c6",
+      "bytes": 5147
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/after/binding-sources.json": {
+      "sha256": "de00de678069008bb399543ca0997af55dbd9ddb475fa64235f2dda464f1cc70",
+      "bytes": 3304
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/after/build.ninja": {
+      "sha256": "9e14f84ec661463b5efd1c6c54111ea263ce42ccfe1c661c95dfcfe39aacbb55",
+      "bytes": 93554
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/after/changed-runtime-objects.json": {
+      "sha256": "a642c1fadd4b7d8cf4801f362b237df4e85e87a398d0bafac26326017548c2f0",
+      "bytes": 519
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/after/compiler-dependencies.json": {
+      "sha256": "72b202b279ac83e0751401d3eb3d890be541db4fa53d180ae37a00aafa8664b4",
+      "bytes": 234606
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/after/identity.json": {
+      "sha256": "affc692f9f570b7f9324578c1ba82e5dd3a877b4bd88eaea6cb9d12acded9271",
+      "bytes": 2341
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/after/package.json": {
+      "sha256": "1c3d1dacec00fb3d0cb9390a447ccec84d067eb4709ed7de7ca2d26b47eed778",
+      "bytes": 712147
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/after/planned-ninja-commands.txt": {
+      "sha256": "85fac09c07b24bebb0c89229f458341bf492db9802656476ba3794433463e341",
+      "bytes": 48172
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/after/seven-binding-objects.json": {
+      "sha256": "69fab75f140a0277d469629c1bbbec80b0f26c7d883c3e9ca53637aa32eb6279",
+      "bytes": 1782
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/after/source.json": {
+      "sha256": "55806c7b16ad706de84c4211418015355e22305fe640a827e032e608ea0efe9b",
+      "bytes": 1438022
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so": {
+      "sha256": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+      "bytes": 14446456
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/pops/_native/dim2/_pops.cpython-312-darwin.so": {
+      "sha256": "191113599e110ef0c95b07ed5a3616fe76dafa0b2a1536bc1e801cf225a78f3e",
+      "bytes": 14446456
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/build-python.log": {
+      "sha256": "345355d769e2f688106f2a30502908e8dee62014809125080e47a5c39a90c22f",
+      "bytes": 9234
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/build-python-retry2.log": {
+      "sha256": "0e8edbeea845c93a2357448ea26de8205ce1d0046e2e9c4415a3a8d761f4245e",
+      "bytes": 66811
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/build-status.txt": {
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+      "bytes": 2
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/build-status-retry2.txt": {
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/build-receipt-retry2.json": {
+      "sha256": "0eb895e4599bc004ac2b7cce4eba45179f37aa6031f8acf4816ac0eb811bf6a9",
+      "bytes": 242593
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/receive-after-build-retry2.py": {
+      "sha256": "5443ac73a4c9d483947fa3d357f267f617e81add7374e4846a9e807dcd748a41",
+      "bytes": 8540
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-root-private-CPP-af8-build-dispatch-db206100-20261008/run-retry2-with-tcp.sh": {
+      "sha256": "9ba71416668c4a17356205a48d2bed3a7e4065971b3ce303676e270689fb63ea",
+      "bytes": 1639
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-root-private-CPP-af8-build-dispatch-db206100-20261008/dispatch.json": {
+      "sha256": "204f0580c547af11372fcfd26bd986a1f628af475cde3889a5daa1ec4170097b",
+      "bytes": 650
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-root-private-CPP-af8-build-dispatch-db206100-20261008/_pops.cpython-312-darwin.so": {
+      "sha256": "a9367a4af3c9989ea03ebcaf66b76b8e20f5dd5bcd5bdf16b6b1172e942b5ca2",
+      "bytes": 14447736
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/wheel/pops-1.1.0-cp312-cp312-macosx_26_0_arm64.whl": {
+      "sha256": "cc87740c1a5b0fa1e15d43b34caff66eeca71e8defaa79d820532b6f2c12b012",
+      "bytes": 9337758
+    }
+  },
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "producer_receipt": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/build-receipt-retry2.json",
+    "sha256": "0eb895e4599bc004ac2b7cce4eba45179f37aa6031f8acf4816ac0eb811bf6a9"
+  },
+  "producer_field_explicitly_excluded_from_admission": "build_attempt_lineage.first_official_build_exit143_at_MPI_Finalize",
+  "producer_bad_exit_boolean_admitted": false,
+  "producer_actual_doctor_all_true": true,
+  "producer_actual_origin": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+  "independent_source_and_installed_header_rehash": {
+    "signature": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+    "signed_headers": 383,
+    "raw_manifest_sha256": "3abe493f65ea3c9025e95fe22f1afac91df8dacccf1b891d454f5c66aa420406"
+  },
+  "native_binaries_literal_SDK_verified": true
+}

@@ -1,0 +1,779 @@
+{
+  "schema": 1,
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "Native": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+  "SDK": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+  "files": {
+    "build/native-build-admission.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/native-build-admission.json",
+      "bytes": 100224,
+      "sha256": "05f27f6c68525b852d517cfff476c715ca3aa78fbc7013311896510ca64beb68"
+    },
+    "build/build-result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/build-result.json",
+      "bytes": 1675,
+      "sha256": "14b56ec61fc729a4092379652cbae21373279225e5510adbec2bac63095d5420"
+    },
+    "build/invocation.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/invocation.json",
+      "bytes": 551,
+      "sha256": "a74f1cb6ad586715d38e9177fa1f64fa9f138abd2d33f4cfa845a2523cfbc64e"
+    },
+    "build/actual-official-invocation.sh": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/actual-official-invocation.sh",
+      "bytes": 562,
+      "sha256": "cc3092bca92d0dd23a4a2def3e68ed2bbbf9869d1d11c936827dc7653429f3f8"
+    },
+    "build/installed-wheel-proof.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/installed-wheel-proof.json",
+      "bytes": 1720,
+      "sha256": "d17eacba888152275d1ecb85d7957ad88109133324098c554376002190938c0a"
+    },
+    "build/core-manifest.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/core-manifest.json",
+      "bytes": 201091,
+      "sha256": "a32eb2880701986340023a95f67e84f0f798f67942a5520703da97a306587223"
+    },
+    "build/run-scientific-phase.py": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/run-scientific-phase.py",
+      "bytes": 4724,
+      "sha256": "ccda06b5391af05c24072e5a85922b5aba8dd92b55409881acace14915b4dcd9"
+    },
+    "build/run-matched-coupled-phase.py": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/run-matched-coupled-phase.py",
+      "bytes": 4935,
+      "sha256": "d19696a10f20846e911666a41a573c0ea061d8b6e29287a0644a5461b88c07c0"
+    },
+    "build/guarded-baseline-setup-refusal.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-setup-refusal.json",
+      "bytes": 614,
+      "sha256": "73c459d222edf645221dd1df8233ead9dd8d5c99be8b02db6e375c15b1712c5a"
+    },
+    "science/guarded-baseline-admitted/result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/result.json",
+      "bytes": 1644,
+      "sha256": "2e6630e297f987ad1882b97c815805557f543d7900c025d6b348623c4df52e69"
+    },
+    "science/guarded-baseline-admitted/identity.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/identity.json",
+      "bytes": 2840,
+      "sha256": "a4d385377e2e0dbe4dcb99a4b635ef2d236fd56dbb40a34548dee44979c42beb"
+    },
+    "science/guarded-baseline-admitted/source-files.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/source-files.json",
+      "bytes": 137489,
+      "sha256": "35761fc9e94e39881f0e78f03c0f2004e63efbc4cb36ddc95968f7fe4da73733"
+    },
+    "science/guarded-baseline-admitted/pytest.xml": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/pytest.xml",
+      "bytes": 707,
+      "sha256": "c40458c7c99a0c64811fadfb3a6774a9d9a8d1c2bd59ab7ef1e38d950168a308"
+    },
+    "science/guarded-variants/result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/result.json",
+      "bytes": 1785,
+      "sha256": "2f0a3abd320d6076343383ead641f1956f9cf9b8a374e3d735b5c823610e7d0b"
+    },
+    "science/guarded-variants/identity.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/identity.json",
+      "bytes": 2840,
+      "sha256": "a4d385377e2e0dbe4dcb99a4b635ef2d236fd56dbb40a34548dee44979c42beb"
+    },
+    "science/guarded-variants/source-files.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/source-files.json",
+      "bytes": 137489,
+      "sha256": "35761fc9e94e39881f0e78f03c0f2004e63efbc4cb36ddc95968f7fe4da73733"
+    },
+    "science/guarded-variants/pytest.xml": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest.xml",
+      "bytes": 1170,
+      "sha256": "fa78a3ba77e01e6399b6e9f19f57694b4061e5430c0c640f95b07eebc816a0b1"
+    },
+    "science/guarded-variants/producer-invocation.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/producer-invocation.json",
+      "bytes": 1269,
+      "sha256": "47047d0ffbfb747daa00b85fc3476b2291a798917d03c1d1be534882a9a66793"
+    },
+    "science/guarded-variants/producer-result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/producer-result.json",
+      "bytes": 1460,
+      "sha256": "95506dba870a8ca2a1ced707767bd4274c3779b9d0e4723bda8e88a635b6f97e"
+    },
+    "science/original-pde/result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/original-pde/run/result.json",
+      "bytes": 1614,
+      "sha256": "bc14cae14e6a66fc929a3d0ff5c7afa87e41b82c324630e494fae322a7e6300e"
+    },
+    "science/original-pde/identity.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/original-pde/run/identity.json",
+      "bytes": 2840,
+      "sha256": "a4d385377e2e0dbe4dcb99a4b635ef2d236fd56dbb40a34548dee44979c42beb"
+    },
+    "science/original-pde/source-files.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/original-pde/run/source-files.json",
+      "bytes": 137489,
+      "sha256": "35761fc9e94e39881f0e78f03c0f2004e63efbc4cb36ddc95968f7fe4da73733"
+    },
+    "science/original-pde/pytest.xml": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/original-pde/run/pytest.xml",
+      "bytes": 689,
+      "sha256": "cc667a7c9bce347f90ddcfe4dfccb9885fa498e811e971368a9de0a8370f8b13"
+    },
+    "science/original-pde/producer-invocation.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/original-pde/producer-invocation.json",
+      "bytes": 1083,
+      "sha256": "f10d352ca237b2ae43a133dc0ebfe41d3e0d8db9c1d22a2dde722d34b1ea81fd"
+    },
+    "science/original-pde/producer-result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/original-pde/producer-result.json",
+      "bytes": 1275,
+      "sha256": "d8f64139f7aea03b48b0367bd05f0356fb61eb55c687878b72d18f63648ce512"
+    },
+    "science/public10/result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/public10/run/result.json",
+      "bytes": 1799,
+      "sha256": "2b772720db9752820dcf231dbea151b396f74a85ea24d8fa428914e31307e053"
+    },
+    "science/public10/identity.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/public10/run/identity.json",
+      "bytes": 2840,
+      "sha256": "a4d385377e2e0dbe4dcb99a4b635ef2d236fd56dbb40a34548dee44979c42beb"
+    },
+    "science/public10/source-files.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/public10/run/source-files.json",
+      "bytes": 137489,
+      "sha256": "35761fc9e94e39881f0e78f03c0f2004e63efbc4cb36ddc95968f7fe4da73733"
+    },
+    "science/public10/pytest.xml": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/public10/run/pytest.xml",
+      "bytes": 4628,
+      "sha256": "008224d7b292a43e2126a9baea7625f809a5d6fbf36f9e112a02bf53f97be130"
+    },
+    "science/public10/producer-invocation.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/public10/producer-invocation.json",
+      "bytes": 1294,
+      "sha256": "6c1d0d4148067a1087ad90f6e466965c1694222376c451baef79859beb6716bf"
+    },
+    "science/public10/producer-result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/public10/producer-result.json",
+      "bytes": 1485,
+      "sha256": "91a1dbdde676ca45c2198de1c34dd2f6f34fa372a3c71eff8072c77cb0866209"
+    },
+    "science/retry-and-native8/result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/result.json",
+      "bytes": 2735,
+      "sha256": "9a856dbbde71b727308d93a7d0475d19d92140d5c6fce9506bf77193de853674"
+    },
+    "science/retry-and-native8/identity.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/identity.json",
+      "bytes": 2840,
+      "sha256": "a4d385377e2e0dbe4dcb99a4b635ef2d236fd56dbb40a34548dee44979c42beb"
+    },
+    "science/retry-and-native8/source-files.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/source-files.json",
+      "bytes": 137489,
+      "sha256": "35761fc9e94e39881f0e78f03c0f2004e63efbc4cb36ddc95968f7fe4da73733"
+    },
+    "science/retry-and-native8/pytest.xml": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/pytest.xml",
+      "bytes": 2354,
+      "sha256": "84ec25736c6155fb5191af34f85630c8da633788de0a6e59bad1d50cc50d1b7d"
+    },
+    "science/retry-and-native8/producer-invocation.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/producer-invocation.json",
+      "bytes": 2316,
+      "sha256": "18586c2540687b8d79d8cadd33d7a9f7b8b6043e04b56f3834a10be70a00fa54"
+    },
+    "science/retry-and-native8/producer-result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/producer-result.json",
+      "bytes": 2507,
+      "sha256": "eac885c1b8dd43ddb6fc35968a30d06ecea29ffb52379f1163490d3fb1895af4"
+    },
+    "science/coupled-matched-world1/result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/coupled-matched-world1/run/result.json",
+      "bytes": 1661,
+      "sha256": "9caa30c42be8b01008bf9222b73453bbc23f816b15687fcbe11bf7eebeab93a5"
+    },
+    "science/coupled-matched-world1/identity.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/coupled-matched-world1/run/identity.json",
+      "bytes": 2840,
+      "sha256": "a4d385377e2e0dbe4dcb99a4b635ef2d236fd56dbb40a34548dee44979c42beb"
+    },
+    "science/coupled-matched-world1/source-files.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/coupled-matched-world1/run/source-files.json",
+      "bytes": 137489,
+      "sha256": "35761fc9e94e39881f0e78f03c0f2004e63efbc4cb36ddc95968f7fe4da73733"
+    },
+    "science/coupled-matched-world1/pytest.xml": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/coupled-matched-world1/run/pytest.xml",
+      "bytes": 730,
+      "sha256": "5c91f5ed7945ea0eda298a2f8de70598eef56b0cfc366758cf189f32b31422f1"
+    },
+    "science/coupled-matched-world1/producer-invocation.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/coupled-matched-world1/producer-invocation.json",
+      "bytes": 1129,
+      "sha256": "b9697240c340d96ba815f774a012b8a2c4932bbe372399633718902a813b8b9e"
+    },
+    "science/coupled-matched-world1/producer-result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/coupled-matched-world1/producer-result.json",
+      "bytes": 1321,
+      "sha256": "43243d64bd6daa7ed89a1b4b017678bd3099ba03d0764ebca9b3edf9b72320d8"
+    },
+    "science/mpi2-representative/result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-representative/run/result.json",
+      "bytes": 2801,
+      "sha256": "9386916a77c7fc97697e1e66c8650c90098ed3e189f75c9abeae8af4dcba668f"
+    },
+    "science/mpi2-representative/rank1.identity.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-representative/run/rank1.identity.json",
+      "bytes": 555,
+      "sha256": "8621916dc3c2cf217f2a01a57c84151fa8b6ed819dd06c8caf679f3892cc7218"
+    },
+    "science/mpi2-representative/test-sources.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-representative/run/test-sources.json",
+      "bytes": 537,
+      "sha256": "0f8245841049a4e4756906fdcf803427c5d1af7ee86400fd347e5e7f5d675623"
+    },
+    "science/mpi2-representative/rank0.identity.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-representative/run/rank0.identity.json",
+      "bytes": 555,
+      "sha256": "ea1c6c50ae6779c49c078bf12a415c6ddcbe16cdde99515e6cbda19f2859809e"
+    },
+    "science/mpi2-representative/rank1.xml": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-representative/run/rank1.xml",
+      "bytes": 1139,
+      "sha256": "94b12207ce2056e8e663785a41b48be02db0e8ed1df030c9b702d5f80f10b4a4"
+    },
+    "science/mpi2-representative/rank0.xml": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-representative/run/rank0.xml",
+      "bytes": 1139,
+      "sha256": "5e755b92998992bcd74c6dfdf07bf3bb9698fa723224522d403b8ba61b5856f7"
+    },
+    "science/mpi2-representative/rank1.identity-check.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-representative/run/rank1.identity-check.json",
+      "bytes": 1309,
+      "sha256": "61a6fbe0564d6ebdccebca07fb4bc4ed966128c9a44aeb3d6401307e5fdb2def"
+    },
+    "science/mpi2-representative/rank0.identity-check.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-representative/run/rank0.identity-check.json",
+      "bytes": 1309,
+      "sha256": "61a6fbe0564d6ebdccebca07fb4bc4ed966128c9a44aeb3d6401307e5fdb2def"
+    },
+    "science/mpi2-representative/producer-invocation.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-representative/producer-invocation.json",
+      "bytes": 1327,
+      "sha256": "c604fab15419a350853be76d9f740cde7695036404c597d0faa71cb59c76aac4"
+    },
+    "science/mpi2-representative/producer-result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-representative/producer-result.json",
+      "bytes": 1518,
+      "sha256": "2e88a7bdbb98154ec5cc5cc5bd50331c5478e86425b6cf563da1741002777aee"
+    },
+    "science/mpi2-all/result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-all/run/result.json",
+      "bytes": 6868,
+      "sha256": "97acef688a25ad08ffeb33bafd2903e77296baa3c8d07588a127beb4a8db9041"
+    },
+    "science/mpi2-all/rank1.identity.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-all/run/rank1.identity.json",
+      "bytes": 555,
+      "sha256": "8621916dc3c2cf217f2a01a57c84151fa8b6ed819dd06c8caf679f3892cc7218"
+    },
+    "science/mpi2-all/test-sources.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-all/run/test-sources.json",
+      "bytes": 848,
+      "sha256": "c751e95a9259b27c4d3de640265fec71714c8bcab9ece2564b116b3d227fb35f"
+    },
+    "science/mpi2-all/rank0.identity.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-all/run/rank0.identity.json",
+      "bytes": 555,
+      "sha256": "ea1c6c50ae6779c49c078bf12a415c6ddcbe16cdde99515e6cbda19f2859809e"
+    },
+    "science/mpi2-all/rank1.xml": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-all/run/rank1.xml",
+      "bytes": 5959,
+      "sha256": "27d6d3bd14dd209dcc6528fce4cb9f7fe93fb045c30ebaf6c9922c60791aa319"
+    },
+    "science/mpi2-all/rank0.xml": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-all/run/rank0.xml",
+      "bytes": 5959,
+      "sha256": "27bfe721af660b4daa61a1449590c9bdc8778f21eb7e13cc24ba99a7835352ff"
+    },
+    "science/mpi2-all/rank1.identity-check.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-all/run/rank1.identity-check.json",
+      "bytes": 1309,
+      "sha256": "61a6fbe0564d6ebdccebca07fb4bc4ed966128c9a44aeb3d6401307e5fdb2def"
+    },
+    "science/mpi2-all/rank0.identity-check.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-all/run/rank0.identity-check.json",
+      "bytes": 1309,
+      "sha256": "61a6fbe0564d6ebdccebca07fb4bc4ed966128c9a44aeb3d6401307e5fdb2def"
+    },
+    "science/mpi2-all/producer-invocation.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-all/producer-invocation.json",
+      "bytes": 1474,
+      "sha256": "8af9511b0b414e860a9515428047ad8c9312974848f221ec84cb62468e084228"
+    },
+    "science/mpi2-all/producer-result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-all/producer-result.json",
+      "bytes": 1665,
+      "sha256": "b108619f8af0cbf5638c1d9be982dce44c0bc6a27d970cf4d8c7a1b616be8741"
+    },
+    "negatives/guarded-baseline-missing-kokkos/result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline/result.json",
+      "bytes": 1627,
+      "sha256": "6d9175abcfc433b504ebbe7aec18b0c20c03ee37c0ff6e318806a74ae975637b"
+    },
+    "negatives/guarded-baseline-missing-kokkos/identity.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline/identity.json",
+      "bytes": 2850,
+      "sha256": "6ae4bbcf08f04b2a8e3aa3de7ff35cbf01e4ec7699dad226406bf7285871c12f"
+    },
+    "negatives/guarded-baseline-missing-kokkos/pytest.xml": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline/pytest.xml",
+      "bytes": 863,
+      "sha256": "29f0f48f8e62487caa3f70dff6611b6b9d41c4c718b82871e6bdc547ceb21960"
+    },
+    "independent/native/independent-native-reception-4017-review-ready.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-native-reader-20261009/independent-native-reception-4017-review-ready.json",
+      "bytes": 3698,
+      "sha256": "c93d6542afbc113ab905963ea76763e755c62d9f5e00ebfecf925dd6fc903b9f"
+    },
+    "independent/native/actual-closed-native-reception-4017-v3-final.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-native-reader-20261009/actual-closed-native-reception-4017-v3-final.json",
+      "bytes": 38908,
+      "sha256": "6aff1c431789a91e5356f27d519fd0daa943bbecbf7609e52675298b01321f51"
+    },
+    "independent/native/actual-cache-installed-physical-delta.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-native-reader-20261009/actual-cache-installed-physical-delta.json",
+      "bytes": 992,
+      "sha256": "372cd65ae8d89f3fcbccfc6d35b8e512474d006eef0efc6ed9979dddfb71e73b"
+    },
+    "independent/guarded/science-review-ready.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-guarded-science-independent-review-4017-20261009/science-review-ready.json",
+      "bytes": 3554,
+      "sha256": "67621856de651ca769b1b24d1bf4cb36170c3031edcc127dee29251d67de4345"
+    },
+    "independent/guarded/independent-science-reception-v2.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-guarded-science-independent-review-4017-20261009/independent-science-reception-v2.json",
+      "bytes": 29241,
+      "sha256": "135f7e0967c0b797a2d683f2727d4e34fb366472f4ba9d083bed58f3f353cfd4"
+    },
+    "independent/original-public10/independent-reception-ready.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-original-public10-4017-20261009/independent-reception-ready.json",
+      "bytes": 13659,
+      "sha256": "b2c1499c23d0dc5c14758681964a98deadf90524842895e51e36316a011012d8"
+    },
+    "independent/original-public10/offline-reception.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-original-public10-4017-20261009/offline-reception.json",
+      "bytes": 46079,
+      "sha256": "3f19e6974e127d2d4ef21f357fac437e9ac973014e2488a57ae24204c1c7ebce"
+    },
+    "independent/original-public10/offline-supplement.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-original-public10-4017-20261009/offline-supplement.json",
+      "bytes": 4828,
+      "sha256": "dc0c4a70bdf3c0621b4b84c706efaa7b4db89b4125a43d0de9a1b5dc4465c10d"
+    },
+    "independent/original-public10/actual-phase-file-inventory.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-original-public10-4017-20261009/actual-phase-file-inventory.json",
+      "bytes": 75038,
+      "sha256": "703f2099b357f4f43cbe799dee80d1519e51aeee8f0a1d588ede94ae5131fe11"
+    },
+    "independent/retry-native8/current9-independent-reception-summary.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-retry-native8-independent-reception-4017-20261009/current9-independent-reception-summary.json",
+      "bytes": 21632,
+      "sha256": "bf8f57c381a9fc8219806ce3ad6491d4034eda26d1d48c1b07c4e98b2d5db27e"
+    },
+    "independent/retry-native8/current9-math-provenance-negatives.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-retry-native8-independent-reception-4017-20261009/current9-math-provenance-negatives.json",
+      "bytes": 14799,
+      "sha256": "b889b96adb6e2970b4b65ee66452ec7506b958ef0868e793e15d070f5ee08d66"
+    },
+    "independent/retry-native8/physical-pins.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-retry-native8-independent-reception-4017-20261009/physical-pins.json",
+      "bytes": 75503,
+      "sha256": "f09b670f408890ed4ea61a0421ba9aea0babdb7edcec469d381c2b6466fdbe66"
+    },
+    "independent/retry-native8/native8-reception.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-retry-native8-independent-reception-4017-20261009/native8-reception.json",
+      "bytes": 25879,
+      "sha256": "932070f925f7600a019a559255f2de0f45d8c82bb2f78f7a1fc370e87f782bb2"
+    },
+    "independent/retry-native8/own-retry-reception.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-retry-native8-independent-reception-4017-20261009/own-retry-reception.json",
+      "bytes": 9599,
+      "sha256": "50f30d4a390f647dae5f931fc67a41290e926e798be93554e7e452183af0eff9"
+    },
+    "independent/mpi2/final-reception-manifest.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-mpi2-current-4017-20261009/final-reception-manifest.json",
+      "bytes": 3024,
+      "sha256": "4f24cebc3312b83d53c94603fba154426aa9a2ec8b3ade7c9c7d619fb1a3747a"
+    },
+    "independent/mpi2/offline-reception-final.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-mpi2-current-4017-20261009/offline-reception-final.json",
+      "bytes": 824661,
+      "sha256": "28413164ce570c960f24b3a469bf273afdf804ab0d11110758ff874c11fb769e"
+    },
+    "independent/mpi2/REPORT.md": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-mpi2-current-4017-20261009/REPORT.md",
+      "bytes": 9304,
+      "sha256": "b78c956aad3516ec54cbd91afed7581c690f26473caac663c2f66c7b1174d42f"
+    },
+    "independent/mpi2/unchanged-guard-fixture-proof.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-mpi2-current-4017-20261009/unchanged-guard-fixture-proof.json",
+      "bytes": 472,
+      "sha256": "f56098d319f90655bd4726f843a8d1b7158465cb974ab39f37de0c4c477eba1f"
+    },
+    "independent/mpi2/matched-world1-addendum-manifest.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-mpi2-current-4017-20261009/matched-world1-addendum-manifest.json",
+      "bytes": 1866,
+      "sha256": "f1f81c2181fd9d613875bfa438bc2d773968eefc2acfc85e89afd342d71f0beb"
+    },
+    "independent/mpi2/matched-world1-addendum.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-mpi2-current-4017-20261009/matched-world1-addendum.json",
+      "bytes": 592079,
+      "sha256": "da5df2e4c55527aaf6bf0f83dfd3719acabcc02e3915cea7665a2ece1a19badc"
+    },
+    "independent/mpi2/matched-world1-journal-comparison.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-mpi2-current-4017-20261009/matched-world1-journal-comparison.json",
+      "bytes": 4147,
+      "sha256": "83716414409b7546133413d35866ecb9e1c5c6846491623489071d3559f22858"
+    },
+    "independent/mpi2/MATCHED_WORLD1_ADDENDUM.md": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-mpi2-current-4017-20261009/MATCHED_WORLD1_ADDENDUM.md",
+      "bytes": 2640,
+      "sha256": "d0cd250ff82e9870a848269c8e251f20f7a776416e6676396b4ca012a5b56905"
+    },
+    "independent/static-inputs/independent-reception-ready.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-native-independent-reception-4017-20261009/independent-reception-ready.json",
+      "bytes": 12423,
+      "sha256": "a9e8826f5200d3f9222e7539d30de73672c0f190ad7af1da61c919ef9b814768"
+    },
+    "independent/static-inputs/independent-reception.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-native-independent-reception-4017-20261009/independent-reception.json",
+      "bytes": 27855,
+      "sha256": "f1739a96b6bc8030dec2767a87c2fde6d75c0430ee9c7b57056e0370c053d802"
+    },
+    "independent/static-inputs/physical-file-inventory.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-native-independent-reception-4017-20261009/physical-file-inventory.json",
+      "bytes": 20038,
+      "sha256": "8d7c3da8824655aa15f524c6e853ff4d8beaf01dafc8fcd9d78eb433a5f8224d"
+    },
+    "independent/static-inputs/analytic-stage-controls.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-native-independent-reception-4017-20261009/analytic-stage-controls.json",
+      "bytes": 965,
+      "sha256": "52490b7ea625d58d51e471ccab6088c0db5d7d80d0c786f459894a74d6be6cfa"
+    },
+    "independent/static-inputs/independent-property-delta-review.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-native-independent-reception-4017-20261009/independent-property-delta-review.json",
+      "bytes": 895,
+      "sha256": "1fa2df0f0fecf95d60d527c29120143b8876594102cdf2a8eb516ba65c65c0d4"
+    },
+    "independent/static-protocol/protocol-counterreview-ready.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-independent-protocol-review-4017-20261009/protocol-counterreview-ready.json",
+      "bytes": 16828,
+      "sha256": "fd5969899577c9a1dbb6a8ad8a0e69aecd0442964e1353be53b0bba9435a6da8"
+    },
+    "independent/static-protocol/physical-build-admission-control.patch": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-independent-protocol-review-4017-20261009/physical-build-admission-control.patch",
+      "bytes": 5164,
+      "sha256": "cbbb3f7c21a80d317e286e20381186ae16e281f8969782d9c05595d7c97208f0"
+    },
+    "source904/final-reception.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/sol61-final-main-source-validation-4017d29d-20261009/final-reception.json",
+      "bytes": 1055,
+      "sha256": "d21facb0256def320a12a98af77abfbbc05a6ab0ee1a29de56a52c2a02392c48"
+    },
+    "source904/source-cohort-receipt.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/sol61-final-main-source-validation-4017d29d-20261009/source-cohort-receipt.json",
+      "bytes": 1689,
+      "sha256": "490c4541713b5355414fc25414de119fb1557a4ce559291fb542738fb586d419"
+    },
+    "source904/cohort.xml": {
+      "source": "/Users/romaindespoulain/dev/tmp/sol61-final-main-source-validation-4017d29d-20261009/cohort.xml",
+      "bytes": 149771,
+      "sha256": "ccc0ccfea7faf3d44ebb2a662b051a0b129b7dac6892ff79fa92105b4baa0fe0"
+    },
+    "static-inputs/variable-euler/run-receipt.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/run-receipt.json",
+      "bytes": 14762,
+      "sha256": "f8c3b5a6e9df95bcb7284878c0df993b241aad20fe17a4870b4a6916202ee361"
+    },
+    "static-inputs/variable-euler/invocation.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009-invocation.json",
+      "bytes": 894,
+      "sha256": "f64bb5456ce4d2c577df3f8544dda725fd03f69d30b333f7f1db5ff3dedcbe40"
+    },
+    "static-inputs/variable-euler/producer-result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009-producer-result.json",
+      "bytes": 262,
+      "sha256": "02990016982a7728a00d079ad5763200d559848ee21cc55ee91dc9309856b6c4"
+    },
+    "static-inputs/remaining5/run-receipt.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/run-receipt.json",
+      "bytes": 60813,
+      "sha256": "711d87dd4a9beadf6584e20f44e109a6257ab09531ca0b7e4c558d5d9636c11a"
+    },
+    "static-inputs/remaining5/invocation.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009-invocation.json",
+      "bytes": 1091,
+      "sha256": "87e114955f6a1ebe12288797643a967a48b50509ef11bfcb6be281509d68ec0c"
+    },
+    "static-inputs/remaining5/producer-result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009-producer-result.json",
+      "bytes": 257,
+      "sha256": "76893bad327335924a9cee2fd44672f7588e370fa5a72bd41d735e29a682c751"
+    },
+    "negatives/static-input-collector-property-failure.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-4017-20261009/run-receipt.json",
+      "bytes": 4045,
+      "sha256": "26cc3f457344ad0e171cc297eda6c3ae4c6460dc5cfacc0179a465c7160a9f95"
+    },
+    "static-inputs/reviewed-runner/run_native_reception.py": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-inputs-reviewed-runner-r2-4017-20261009/run_native_reception.py",
+      "bytes": 15455,
+      "sha256": "fa0296b91640c368535d92ea1d6d971727d34b1b8a5ed242ad301a35dd33619c"
+    },
+    "static-inputs/reviewed-runner/collector-property.patch": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-inputs-reviewed-runner-r2-4017-20261009/collector-property.patch",
+      "bytes": 752,
+      "sha256": "3a61d1dd99af0eefdd6da74e05bca1ce6cf449043fda8dff9f0a1fcbb7a7a874"
+    },
+    "ci-installed-mpi-world1/invocation.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-installed-mpi-world1-4017-20261009/invocation.json",
+      "bytes": 1027,
+      "sha256": "2ef3b9cb5cd55c61f10bb2a7d8b3b774462700eca5221f21c62ae22c3ab53d58"
+    },
+    "ci-installed-mpi-world1/result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-installed-mpi-world1-4017-20261009/result.json",
+      "bytes": 1156,
+      "sha256": "d0f6e882f743518c661e9b269e2e2ac7b34fb6464b476b3dfa1875a38a66e039"
+    },
+    "ci-installed-mpi-world1/selected.txt": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-installed-mpi-world1-4017-20261009/selected.txt",
+      "bytes": 55,
+      "sha256": "1fe5001d73dff725c02cf8a07e5eaf4c312edb1d03eba71ef9be45b5a95d8d33"
+    },
+    "ci-installed-mpi-world1/receipts/dim2/junit.xml": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-installed-mpi-world1-4017-20261009/receipts/dim2/junit.xml",
+      "bytes": 417,
+      "sha256": "0ce241b4862678259e3ac64ca49b731b4fddd7cad4317f2e7195a46dfde4d0ed"
+    },
+    "ci-installed-mpi-world1/receipts/dim2/installed-wheel-proof.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-installed-mpi-world1-4017-20261009/receipts/dim2/installed-wheel-proof.json",
+      "bytes": 1984,
+      "sha256": "2a3c2b3fbb592d4c099bab78482e89aa22174e0e3686851dd3c5061073060b6b"
+    },
+    "ci-installed-mpi-world1/receipts/dim2/installation-stages.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-installed-mpi-world1-4017-20261009/receipts/dim2/installation-stages.json",
+      "bytes": 1718,
+      "sha256": "811cf0de8b05c37423acc476ce47f9c3b7f623f6f12699e35c90ff4575be9850"
+    },
+    "ci-installed-mpi-world1/receipts/dim2/timings.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-installed-mpi-world1-4017-20261009/receipts/dim2/timings.json",
+      "bytes": 388,
+      "sha256": "b8cb84a94ff5b340b58e4613852ba759026be0b407e74046586568155dcdfeb1"
+    },
+    "ci-independent/independent-route-review.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/independent-route-review.json",
+      "bytes": 20319,
+      "sha256": "5e7ba54fb9cbf2c3b1edcf089843c87d97d83fc735646e5a070d98c78b6f6565"
+    },
+    "ci-independent/shard47-source-diagnosis-ready.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/shard47-source-diagnosis-ready.json",
+      "bytes": 15712,
+      "sha256": "2dcf725bac02824be079f8aafbdca0e2ba4e885bb1f3dd5fbbbd4470b3a05c50"
+    },
+    "ci-independent/shard47-two-dimensional-routing.patch": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/shard47-two-dimensional-routing.patch",
+      "bytes": 530,
+      "sha256": "d0300b8cf2311b5f48518b09daa596c381bd92992e6071967544c4b67878ff28"
+    },
+    "ci-independent/compile-cache-installed-route.patch": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-wheel-route-4017-20261009/compile-cache-installed-route.patch",
+      "bytes": 1756,
+      "sha256": "3b41a1a7f7c4e11741a2768a53439c812590bee7a44d78c29d17769e0b958f9f"
+    },
+    "ci-independent/candidate-scope-correction.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-wheel-route-4017-20261009/candidate-scope-correction.json",
+      "bytes": 892,
+      "sha256": "61996f4957c5fda0a4cbffd5d4b04783884198090ccf06a834228436fccfbe43"
+    },
+    "ci-exact-4017/actual-pr-4017-later.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-exact-4017-ci-reception-20261009/actual-pr-4017-later.json",
+      "bytes": 40343,
+      "sha256": "ce0ae49595fd0d28ce9645bf87f125fd60348d41c78d423a6a89155217d2f1f1"
+    },
+    "ci-exact-4017/actual-compile-cache-job-api.log": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-exact-4017-ci-reception-20261009/actual-compile-cache-job-api.log",
+      "bytes": 44715,
+      "sha256": "3121a33d0e8b5e6371e0d5bd5d1014dd48ddac840de47aa80a400d1deb9077f1"
+    },
+    "ci-exact-4017/actual-python-shard47-job-api.log": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-exact-4017-ci-reception-20261009/actual-python-shard47-job-api.log",
+      "bytes": 97268,
+      "sha256": "f5be705ca6ecd04d0e30044d701079a180d2cfef6e6c92a7eaa10015b8b60c5a"
+    },
+    "gpu-988-r4/actual-root-r4-stage-and-dispatch.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-root-r4-stage-and-dispatch.json",
+      "bytes": 7565,
+      "sha256": "5d943ed598f477ddbc1bd846e587e5022801e6de55650235be380e50ae3ef7d6"
+    },
+    "gpu-988-r4/actual-r4-job-progress-20261009T010802Z.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r4-job-progress-20261009T010802Z.json",
+      "bytes": 23303,
+      "sha256": "6644324758c204d104b75ea2cc3c6821e0f783d8a4923a546bc1a84e74e86fc2"
+    },
+    "gpu-988-r4/actual-r4-failed-dependency-cancellation.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r4-failed-dependency-cancellation.json",
+      "bytes": 639,
+      "sha256": "46924d2bedb24e526ad287053787ce6e06ea43e2563739983b4f9f8534409397"
+    },
+    "gpu-988-r4/actual-r5-readonly-preflight.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r5-readonly-preflight.json",
+      "bytes": 10220,
+      "sha256": "d61de4c377b0bffc8174bc131cb91c275f9599684634432d57485f7f946a1587"
+    },
+    "gpu-988-r5/actual-root-r5-stage-and-dispatch.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-root-r5-stage-and-dispatch.json",
+      "bytes": 7565,
+      "sha256": "9ba783a8630be01a37b964f55e131034098055c2c0e376110ea35b9cab0e6210"
+    },
+    "gpu-988-r5/root-r5-controller-reviewed.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-r5-controller-reviewed.json",
+      "bytes": 733,
+      "sha256": "33338f26aa3f0ddbfa29a6a41bb720e56804dd2572c9317fb29a80813c96e313"
+    },
+    "gpu-988-r5/root-r5-controller-from-r4.patch": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-r5-controller-from-r4.patch",
+      "bytes": 12070,
+      "sha256": "54997ada78a03e2373cdcb36d5573184f874fbe4d6d7ae640223c4d08b918073"
+    },
+    "gpu-988-r5/operational-source/r5-admission.template.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/r5-admission.template.json",
+      "bytes": 6939,
+      "sha256": "3a21bf6da8947b49cb692137cfc10de19b4c85211cf4277bde42f4a3ba712d72"
+    },
+    "gpu-988-r5/operational-source/root-reviewed-composition.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/root-reviewed-composition.json",
+      "bytes": 2744,
+      "sha256": "ff2756e1ca1e24dbb3edc40a2a57399ddece043bb8898fc680e18e2bf7d49b8e"
+    },
+    "gpu-988-r5/operational-source/r5-namespace-and-base-provenance.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/r5-namespace-and-base-provenance.json",
+      "bytes": 24085,
+      "sha256": "241be28f14ec092729c6cec71d7a048d987e97b4c1dc44c153e0bac0a2cb0ca5"
+    },
+    "gpu-988-r5/operational-source/build_phase_r5.sbatch": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/build_phase_r5.sbatch",
+      "bytes": 772,
+      "sha256": "0bfa12b5516f6d537c417e87956cf1d9a9aa4687986f49be0423579ae9bd1c08"
+    },
+    "gpu-988-r5/operational-source/runtime_context_r5.sh": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/runtime_context_r5.sh",
+      "bytes": 921,
+      "sha256": "1378875b47aaf16fd1222d9b0f509d6dd9e9578d0e92895e439940c2d89c6a72"
+    },
+    "gpu-988-r5/operational-source/synthetic-kokkos-environment-proof.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/synthetic-kokkos-environment-proof.json",
+      "bytes": 1980,
+      "sha256": "04ace143db49d1cb1b10e4f766fde233a0d4e4231bf543616dccd001fdd564d3"
+    },
+    "gpu-988-r5/operational-source/phase_rank_runner_r5.py": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/phase_rank_runner_r5.py",
+      "bytes": 6818,
+      "sha256": "cb7115f637f889d5e90bed17c0345fc0614c9bdf94d6ccc9357095b9e9e04ca6"
+    },
+    "gpu-988-r5/operational-source/candidate-manifest-r5.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/candidate-manifest-r5.json",
+      "bytes": 9425,
+      "sha256": "742bca45423e7763eeef24d00d7cf90311e5cca11822e79cf30ba164d0f8d48c"
+    },
+    "gpu-988-r5/operational-source/runtime_phase_r5.sbatch": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/runtime_phase_r5.sbatch",
+      "bytes": 1075,
+      "sha256": "cfe85ee73b81e8ed308a9e8c0a4c884f9869d5c1a767964e39e0125d698c351c"
+    },
+    "gpu-988-r5/operational-source/resume_probe_r5.sh": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/resume_probe_r5.sh",
+      "bytes": 2059,
+      "sha256": "4ca7f56bfd07da245c1d2dfc4b6f2fd376f2db509140acbfaeab7826ddade50c"
+    },
+    "gpu-988-r5/operational-source/capture_gpu_native_r5.py": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/capture_gpu_native_r5.py",
+      "bytes": 9854,
+      "sha256": "e91de487a476e58d83e30d38f253280500ac55253c005448779d5a197a364f17"
+    },
+    "gpu-988-r5/operational-source/read-r5-pins.py": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/read-r5-pins.py",
+      "bytes": 1966,
+      "sha256": "e1d58390fadbf172463b5a4eea2ea48d41e33a4a0ee42eb458919f55854ca8db"
+    },
+    "gpu-988-r5/operational-source/phase_quota_r5.py": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/phase_quota_r5.py",
+      "bytes": 510,
+      "sha256": "ea534f527ae56483240cf074a9a4492111e0aac16ea3580eee018d6b3189f20b"
+    },
+    "gpu-988-r5/operational-source/run_campaign_r5.sh": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/run_campaign_r5.sh",
+      "bytes": 2822,
+      "sha256": "d55fe5543c917bee59757dcb8dcc96324c1ba84c19b940d74861737eb71f5f47"
+    },
+    "gpu-988-r5/operational-source/capture_kokkos_profile_r5.py": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/capture_kokkos_profile_r5.py",
+      "bytes": 1925,
+      "sha256": "b33a1e9f7350f1acbbc2336f9747750236d6a1234f78c8fd26ef5087bd4e4602"
+    },
+    "gpu-988-r5/operational-source/r5-admission.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/r5-admission.json",
+      "bytes": 7203,
+      "sha256": "da9537653501e456cfff1b2eea484a5e5d9d5a56ea812cddce2dfb534e57ac01"
+    },
+    "gpu-988-r5/operational-source/build_native_r5.sh": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/build_native_r5.sh",
+      "bytes": 3639,
+      "sha256": "f586b80503e8f00f05928bf37d834fe03de0e78a6a736e8f6f769d5aadc086be"
+    },
+    "gpu-988-r5/operational-source/native_install_rpath_r5.py": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/native_install_rpath_r5.py",
+      "bytes": 14253,
+      "sha256": "e88c78f30aa832e53811ca864261a96ce858fde03a2faf296ef4b7467ca59c70"
+    },
+    "gpu-988-r5/operational-source/test_native_install_rpath_r5.py": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/test_native_install_rpath_r5.py",
+      "bytes": 10854,
+      "sha256": "5ce05f8b60e3c834006a829941df920be94f0197e3dc59732a192ef79a0911f6"
+    },
+    "gpu-988-r5/operational-source/synthetic_kokkos_environment.py": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/synthetic_kokkos_environment.py",
+      "bytes": 2776,
+      "sha256": "eda55b7c0e9cef5159ee28807844ae3d91cff6a36a4f355d969734b3f20c93fc"
+    },
+    "gpu-988-r5/operational-source/root-r5-staged-envelope.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/root-r5-staged-envelope.json",
+      "bytes": 1646,
+      "sha256": "f819d27d7c9dc8fef57f353d3ecd137ccbb59a086a83cedaea8cda9f7181a7b7"
+    },
+    "gpu-988-r5/operational-source/r5-static-validation.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/r5-static-validation.json",
+      "bytes": 2365,
+      "sha256": "2b193ac084873712d270dc14db360ce08154fbf31297c16c75901ac063418372"
+    },
+    "gpu-988-r5/operational-source/launch_phase_r5.py": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/launch_phase_r5.py",
+      "bytes": 3748,
+      "sha256": "a7bc9ad6ff2e44c2b183a78d26766650f94f271baf628b522a4da63a31612678"
+    },
+    "gpu-988-r5/independent-r5-review-ready.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-r5-independent-source-review-20261009/independent-r5-review-ready.json",
+      "bytes": 14191,
+      "sha256": "ac7955559983f9a2cc92e906c98a14b31fc3be3165f8e6d91a82117651ae39c3"
+    },
+    "history/STATUS-before-current-4017-reception.md": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/docs/development/api_040/STATUS_DRAFT_PR_20261009.md",
+      "bytes": 13797,
+      "sha256": "c659031b9122d52e6a169f99a40d5343bc211c465482531cf981a3cedac76f90"
+    }
+  },
+  "scope": "Byte-exact copies of current receipts, commands, XML and independent physical/math reports only. Raw binaries/data remain at authenticated paths; no scientific acceptance from file existence alone."
+}

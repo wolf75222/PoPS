@@ -1,0 +1,35 @@
+{
+  "Native_extension_attempts": [],
+  "Native_imports_blocked": [
+    "_pops",
+    "pops._pops",
+    "_pops",
+    "pops._pops"
+  ],
+  "Native_loaded": [],
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "cohort_result": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 904
+  },
+  "cohort_split": {
+    "SSP_static": 25,
+    "architecture": 873,
+    "owner": 6
+  },
+  "files": {
+    "cohort.xml": {
+      "bytes": 149771,
+      "sha256": "ccc0ccfea7faf3d44ebb2a662b051a0b129b7dac6892ff79fa92105b4baa0fe0"
+    },
+    "source-cohort-receipt.json": {
+      "bytes": 1689,
+      "sha256": "490c4541713b5355414fc25414de119fb1557a4ce559291fb542738fb586d419"
+    }
+  },
+  "prior_negative_evidence": "/Users/romaindespoulain/dev/tmp/sol61-final-main-source-validation-7daee302-20261009",
+  "scope": "Author integration validation of composed final Main Source. Own owner/CI patches are not independent review. No Native execution, CXX compilation, installation, MPI/GPU/remoteCI qualification.",
+  "tracked_tree_clean_after": true
+}

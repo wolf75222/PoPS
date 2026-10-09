@@ -1,0 +1,36 @@
+{
+  "contract": "pops.non-author-public-three-current-native-offline-reception@1",
+  "verdict": "ACCEPT_THREE_PUBLIC_NATIVE_TESTS_CURRENT_CAPTURE_WITH_LIMITS",
+  "metadata_Source": "e27d065a5eb7c086ced60b751a2468f729361ff0",
+  "qualified_native_build_Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "Native": "cee947c25c771f8c5a155e5f4cb990de308de14fe77e9f55c654e3b3837dee6f",
+  "SDK": "087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626",
+  "core_fingerprint": "95d0ccaa1e7aa39f9cbb01d539c4e31a5a7e6e143207b088fd9c2730482963f5",
+  "counts": {
+    "new_public_tests": 3,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "core_files_rehashed": 1221,
+    "source_install_wheel_payload": 1175,
+    "canonical_quantities": 42,
+    "populated_histories": 27,
+    "checkpoint_arrays": 432
+  },
+  "all42_quantities_byte_exact_prior_independent_captures": true,
+  "unchanged_frozen_pre_Native_oracle_and_original_budget": true,
+  "files_sha256": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/public-three-valid-e27d/receive_public_three.py": "5c8e14f81cc6b71a8350fd61d3d520cac70a9032c2dc0f848c8f8d6c30c77a84",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/public-three-valid-e27d/validation-command.json": "f15e31a1f40d2e65a874f2805349ef972d913209e8399319d7dcc3a09f795fff",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/public-three-valid-e27d/public-three-reception.json": "1ddfac5c0a93021acdbc4cdec78f67b763063bb3de2dc91d3719e0224c9ded24",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/public-three-valid-e27d/physical_protocol.py": "ad4c0860638f721fb67df7a267b8d9d0081d70a49e972fa98d11a5b1015f49d2",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/public-three-valid-e27d/PROTOCOL.md": "e0d1d7cb77059b204376733bcd780702c942a32d7a25aa6078fdb561d85159db"
+  },
+  "limits": [
+    "Three genuine new public tests pass CPUworld1; this is local runtime evidence, not GitHub CI or GPU/MPI2/longtime/refinement qualification.",
+    "Native remains compiled Source8c1f; e27d is metadata/CI/test-label Source and is not relabeled as a newly compiled Native build. Core1221 and installed/wheel1175 remain exact.",
+    "No persisted CG reports or per-stage publication clocks; no complete frontend-to-binary graph; conditional FE coefficient1 only, not unconditional positivity/entropy.",
+    "Original failed public-three cohort is preserved separately; this new3/3 capture does not rewrite its2PASS/1SourcegrammarFAIL."
+  ],
+  "noNative_PoPS_import_run_Main_env_build_install_SSH": true
+}

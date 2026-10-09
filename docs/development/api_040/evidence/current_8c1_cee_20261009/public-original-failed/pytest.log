@@ -1,0 +1,84 @@
+.F.                                                                      [100%]
+=================================== FAILURES ===================================
+_______________ test_public_three_stage_screened_fields[rename] ________________
+
+variant = 'rename'
+representative = Capture(arrays={'qfinal': array([[[2.11615813, 2.09845427, 2.06574182, 2.02300094, 1.97673854,
+         1.93399766, 1....c-three-native-tests/tmp/three-stage-screened-fields0/representative'), variant='representative', decay=Fraction(4, 5))
+tmp_path = PosixPath('/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10f727fe0>
+record_property = <function record_property.<locals>.append_property at 0x11f4bec00>
+
+    @pytest.mark.parametrize('variant',('representative','rename','decay'))
+    def test_public_three_stage_screened_fields(variant,representative,tmp_path,monkeypatch,record_property):
+        assert hashlib.sha256(BUDGET.read_bytes()).hexdigest()==BUDGET_SHA
+        frozen=json.loads(BUDGET.read_text())
+        # Baseline budget remains exactly the pre-Native independent budget. Changed
+        # decay uses the same independent derivation, fixed before its execution.
+        assert json.loads(json.dumps(tolerances(Physics())))==frozen
+        physics=replace(Physics(),decay=1.1) if variant=='decay' else Physics()
+        budget=tolerances(physics)
+        if variant=='representative':
+            actual=representative
+        else:
+            private_cache(monkeypatch,tmp_path/'private')
+            (tmp_path/'pre-execution-independent-budget.json').write_text(json.dumps(budget,indent=2)+'\n')
+>           actual=capture(variant,tmp_path/variant)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/python/integration/runtime/test_public_three_stage_screened_fields.py:56: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/python/support/stage_fields_public_fixture.py:75: in capture
+    authored=author_case(labels=labels,decay=decay);initial=literal_inputs()
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+examples/migration/scientific/api040_stage_fields_library.py:60: in author_case
+    phi_read=receiver_model.aux(label('phi_input','screened_first'))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../miniforge3/envs/pops/lib/python3.12/site-packages/pops/physics/_freeze.py:259: in guarded
+    result = __method(self, *args, **method_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../miniforge3/envs/pops/lib/python3.12/site-packages/pops/physics/board.py:606: in aux
+    return self._dsl.aux(name)
+           ^^^^^^^^^^^^^^^^^^^
+../../../miniforge3/envs/pops/lib/python3.12/site-packages/pops/physics/_freeze.py:259: in guarded
+    result = __method(self, *args, **method_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../miniforge3/envs/pops/lib/python3.12/site-packages/pops/physics/_facade.py:149: in aux
+    return self._m.aux(name)
+           ^^^^^^^^^^^^^^^^^
+../../../miniforge3/envs/pops/lib/python3.12/site-packages/pops/physics/_freeze.py:259: in guarded
+    result = __method(self, *args, **method_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../miniforge3/envs/pops/lib/python3.12/site-packages/pops/physics/_authoring_vars.py:113: in aux
+    name = _require_provider_component_name(name, where="provider")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = 'renamed-phi-input', where = 'provider'
+
+    def _require_provider_component_name(value: Any, *, where: str = "provider") -> str:
+        """Validate one source-level component spelling used as a generated C++ local.
+    
+        Identity and storage are resolved exclusively by the ProviderPack.  This
+        small authoring check only prevents an invalid formula local from reaching
+        the C++ compiler.
+        """
+        if not isinstance(value, str) or not value.isidentifier():
+>           raise ValueError(
+                "%s name must be a valid identifier (letters/digits/_, without a leading digit)"
+                % where
+            )
+E           ValueError: provider name must be a valid identifier (letters/digits/_, without a leading digit)
+
+../../../miniforge3/envs/pops/lib/python3.12/site-packages/pops/physics/_authoring_vars.py:32: ValueError
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_public_three_stage_screened_fields.py::test_public_three_stage_screened_fields[representative]
+tests/python/integration/runtime/test_public_three_stage_screened_fields.py::test_public_three_stage_screened_fields[rename]
+tests/python/integration/runtime/test_public_three_stage_screened_fields.py::test_public_three_stage_screened_fields[decay]
+  tests/python/integration/runtime/test_public_three_stage_screened_fields.py:42: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.parametrize('variant',('representative','rename','decay'))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/python/integration/runtime/test_public_three_stage_screened_fields.py::test_public_three_stage_screened_fields[rename]
+1 failed, 2 passed, 3 warnings in 66.54s (0:01:06)

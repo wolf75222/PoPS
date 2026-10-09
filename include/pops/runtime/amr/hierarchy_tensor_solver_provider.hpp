@@ -16,6 +16,7 @@
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/collective_exception.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
 
 #include <algorithm>
@@ -23,6 +24,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -77,6 +79,19 @@ enum class HierarchyTensorSolverExecutionPath : std::uint8_t {
 };
 
 namespace hierarchy_tensor_detail {
+
+// Named device callable: CUDA extended lambdas cannot originate in a private member.
+template <int Dim, class View>
+struct OriginalCandidateFiniteKernel {
+  View values;
+  int width;
+  POPS_HD Real operator()(const Index<Dim>& cell) const {
+    for (int component = 0; component < width; ++component)
+      if (!std::isfinite(values(cell, component)))
+        return Real(1);
+    return Real(0);
+  }
+};
 
 template <int Dim>
 Extent<Dim> ratio_extent(const ::pops::amr::RefinementRatio<Dim>& ratio) {
@@ -331,6 +346,7 @@ class PreparedHierarchyTensorSolver {
             [](void* context) noexcept {
               auto* prepared = static_cast<PreparedHierarchyTensorSolver*>(context);
               prepared->restore_or_terminate_(prepared->candidate_publication_);
+              prepared->original_accepted_candidate_ = nullptr;
             },
             nullptr,
             [](void* context) noexcept {
@@ -341,6 +357,126 @@ class PreparedHierarchyTensorSolver {
               static_cast<PreparedHierarchyTensorSolver*>(context)
                   ->validate_candidate_publication_();
             }});
+  }
+
+  /// Stage an externally evaluated original residual solution without publishing it.
+  /// The source operator owns synchronization and invocation authority; this method
+  /// only supplies the existing atomic publication images and collective Outcome.
+  SolveOutcome stage_original_field_candidate_collectively(
+      SolveReport report, const std::vector<field_type>* candidate, int maximum_iterations,
+      const ExecutionLane& lane, std::shared_ptr<PreparedHierarchyTensorSolver> owner,
+      std::function<void()> validate_authority,
+      std::function<void(std::vector<field_type>&)> synchronize_candidate) {
+    if (!prepared_lane_)
+      throw std::logic_error("original field publication has no prepared lane");
+    const auto& execution_lane = *prepared_lane_;
+    std::exception_ptr error;
+    try {
+      if (&lane != prepared_lane_ || !preparation_sealed_ || publication_active_ ||
+          owner.get() != this || !validate_authority || !synchronize_candidate ||
+          maximum_iterations < 0 || !solve_report_is_publishable(report, maximum_iterations))
+        throw std::invalid_argument("original field publication authority/report is invalid");
+    } catch (...) {
+      error = std::current_exception();
+    }
+    collectively_rethrow_exception(error, execution_lane, "original field publication admission");
+    ExactSolveReportConsensusScratch consensus;
+    if (!consensus.agrees(report, execution_lane))
+      throw std::invalid_argument("original field publication reports differ between ranks");
+    validate_authority();  // This authority callback owns its own collective protocol.
+    // A subsequent original invocation supersedes its old source receipt even
+    // when the same core/candidate address is reused and then rejected/discarded.
+    // Only this invocation's Accept hook can issue a new completed receipt.
+    original_accepted_candidate_ = nullptr;
+    if (!report.solved_value_available())
+      return SolveOutcome::collective_lane(std::move(report), execution_lane);
+
+    struct Publication {
+      std::shared_ptr<PreparedHierarchyTensorSolver> owner;
+      std::function<void()> validate;
+      const std::vector<field_type>* candidate;
+    };
+    std::shared_ptr<Publication> publication;
+    error = {};
+    try {
+      publication = std::make_shared<Publication>(
+          Publication{std::move(owner), std::move(validate_authority), candidate});
+      if (original_acceptance_generation_ == std::numeric_limits<std::uint64_t>::max())
+        throw std::overflow_error("original field acceptance generation exhausted");
+      if (!candidate || candidate->size() != candidate_publication_.size())
+        throw std::invalid_argument("original field publication candidate depth differs");
+      for (std::size_t level = 0; level < candidate->size(); ++level) {
+        const auto& source = (*candidate)[level];
+        auto& target = candidate_publication_[level];
+        if (source.layout() != target.layout() || source.distribution() != target.distribution() ||
+            source.local_rank() != target.local_rank() || source.ncomp() != target.ncomp())
+          throw std::invalid_argument("original field publication candidate layout/width differs");
+        for (std::size_t patch = 0; patch < target.local_size(); ++patch) {
+          const auto input = source.fab(patch).view();
+          const auto output = target.fab(patch).view();
+          const int width = target.ncomp();
+          for_each_cell(target.box(patch), [=] POPS_HD(const Index<Dim>& cell) {
+            for (int component = 0; component < width; ++component)
+              output(cell, component) = input(cell, component);
+          });
+        }
+      }
+      Kokkos::fence();
+    } catch (...) {
+      error = std::current_exception();
+    }
+    collectively_rethrow_exception(error, execution_lane, "original field candidate staging");
+    synchronize_candidate(candidate_publication_);
+    error = {};
+    try {
+      validate_candidate_publication_();
+      validate_finite_original_candidate_();
+    } catch (...) {
+      error = std::current_exception();
+    }
+    collectively_rethrow_exception(error, execution_lane, "original field candidate validation");
+    publication->validate();
+    // No live field was touched while preparing these images. Accept is the
+    // single publication point; rejection merely releases the reservation.
+    publication_active_ = true;
+    return SolveOutcome::collective_lane(
+        std::move(report), execution_lane,
+        SolveOutcome::PublicationHooks{
+            publication.get(),
+            [](void* context) noexcept {
+              auto* staged = static_cast<Publication*>(context);
+              staged->owner->restore_or_terminate_(staged->owner->candidate_publication_);
+              staged->owner->original_accepted_candidate_ = staged->candidate;
+              ++staged->owner->original_acceptance_generation_;
+            },
+            nullptr,
+            [](void* context) noexcept {
+              static_cast<Publication*>(context)->owner->release_publication_();
+            },
+            publication,
+            [](void* context) {
+              auto* staged = static_cast<Publication*>(context);
+              std::exception_ptr error;
+              try {
+                staged->owner->validate_candidate_publication_();
+                staged->owner->validate_finite_original_candidate_();
+              } catch (...) {
+                error = std::current_exception();
+              }
+              collectively_rethrow_exception(error, *staged->owner->prepared_lane_,
+                                             "original field publication pre-Accept");
+              staged->validate();
+            }});
+  }
+
+  // This stamp is minted only by the original Outcome Accept hook. A solved
+  // report, reservation, rejected candidate or a generic solve cannot mint it.
+  std::uint64_t accepted_original_candidate_generation(
+      const std::vector<field_type>* candidate, const ExecutionLane& lane) const {
+    if (&lane != prepared_lane_ || publication_active_ || !candidate ||
+        candidate != original_accepted_candidate_ || original_acceptance_generation_ == 0)
+      throw std::invalid_argument("original field source has no completed Accept receipt");
+    return original_acceptance_generation_;
   }
 
  protected:
@@ -385,12 +521,31 @@ class PreparedHierarchyTensorSolver {
 
   void release_publication_() noexcept { publication_active_ = false; }
 
+  void validate_finite_original_candidate_() const {
+    Real invalid = Real(0);
+    for (const auto& field : candidate_publication_)
+      for (std::size_t patch = 0; patch < field.local_size(); ++patch) {
+        const auto values = field.fab(patch).view();
+        const int width = field.ncomp();
+        invalid = std::max(invalid,
+                           for_each_cell_reduce_max(
+                               field.fab(patch).grown_box(),
+                               hierarchy_tensor_detail::OriginalCandidateFiniteKernel<
+                                   Dim, decltype(values)>{values, width}));
+      }
+    Kokkos::fence();
+    if (invalid != Real(0))
+      throw std::invalid_argument("original field publication contains a nonfinite value");
+  }
+
   std::vector<field_type> accepted_publication_;
   std::vector<field_type> candidate_publication_;
   const ExecutionLane* prepared_lane_ = nullptr;
   std::optional<ExecutionLane::ImmutableBorrow> prepared_lane_borrow_;
   bool preparation_sealed_ = false;
   bool publication_active_ = false;
+  const std::vector<field_type>* original_accepted_candidate_ = nullptr;
+  std::uint64_t original_acceptance_generation_ = 0;
 };
 
 template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
@@ -505,7 +660,7 @@ prepare_hierarchy_tensor_solver_collectively(
   std::string support_contract;
   std::string expected_contract;
   PreparedProviderSupport support;
-  long inspection_failure = 0;
+  std::exception_ptr inspection_error;
   try {
     hierarchy_tensor_detail::validate_request(request);
     const auto& rank_space = request.levels.front().distribution.rank_space();
@@ -522,10 +677,10 @@ prepare_hierarchy_tensor_solver_collectively(
     if (support.accepted())
       expected_contract = provider->expected_prepared_contract(request);
   } catch (...) {
-    inspection_failure = 1;
+    inspection_error = std::current_exception();
   }
-  if (all_reduce_max(inspection_failure, lane) != 0)
-    throw std::runtime_error("hierarchy tensor support inspection failed collectively");
+  collectively_rethrow_exception(inspection_error, lane,
+                                 "hierarchy tensor support inspection failed collectively");
   if (!all_ranks_agree_exact_ordered_byte_pairs({{"hierarchy-tensor-provider", declaration},
                                                  {"hierarchy-tensor-request", request_contract},
                                                  {"hierarchy-tensor-support", support_contract},
@@ -537,7 +692,7 @@ prepare_hierarchy_tensor_solver_collectively(
                                 std::to_string(support.code) + "): " + std::string(support.reason));
 
   std::unique_ptr<solver_type> prepared;
-  long preparation_failure = 0;
+  std::exception_ptr preparation_error;
   try {
     prepared = provider->prepare(request, lane);
     if (!prepared || prepared->exact_prepared_contract() != expected_contract ||
@@ -550,10 +705,10 @@ prepare_hierarchy_tensor_solver_collectively(
       throw std::invalid_argument("hierarchy tensor provider rejected its execution path");
     prepared->seal_preparation(lane);
   } catch (...) {
-    preparation_failure = 1;
+    preparation_error = std::current_exception();
   }
-  if (all_reduce_max(preparation_failure, lane) != 0)
-    throw std::runtime_error("hierarchy tensor preparation failed on at least one MPI rank");
+  collectively_rethrow_exception(preparation_error, lane,
+                                 "hierarchy tensor preparation failed collectively");
   return prepared;
 }
 

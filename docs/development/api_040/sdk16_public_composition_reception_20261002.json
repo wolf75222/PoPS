@@ -1,0 +1,156 @@
+{
+  "backend": "Dim2 x86 GCC15.3 C++20 Kokkos5.2.1 OpenMP/Serial MPICH4.1.2",
+  "build16_source": "89abaf8e69f4aff629450be7a90264c4b60d6996",
+  "cases": {
+    "cubature": {
+      "full_M17": false,
+      "mpi2_jobs": [
+        "731883",
+        "731884"
+      ],
+      "single_jobs": [
+        "731860",
+        "731861",
+        "731882"
+      ]
+    },
+    "fan_li15": {
+      "full_M17": false,
+      "logical_scenarios": 2,
+      "mpi2_job": "731885",
+      "steps": 2
+    },
+    "m16_explicit_degree5": {
+      "full_M16": false,
+      "logical_mpi_scenarios": 3,
+      "mpi2_job": "731841",
+      "single_job": "731840"
+    }
+  },
+  "installed_sdk16_files": 1153,
+  "limits": [
+    "MPI2 one node, replicated canonical raw carriers; no rank-local raw parity",
+    "No GPU, inter-node, Dim1/3 or current GitHub CI evidence",
+    "M16 full transport/realizability and M17 eight steps/other truncation/AMR/checkpoint remain open",
+    "Current SDK18 does not inherit SDK16 scientific acceptance"
+  ],
+  "native_sha256": "3f4e01cfa9d69dbd1148519a947c25895814cca4b5e010c5348ff9f7e41a3fff",
+  "production_equivalence_files": 1188,
+  "receipts": [
+    {
+      "name": "root-sdk16-build-reception-731834.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk16-build-reception-731834.json",
+      "schema": "root.sdk16.build-install-reception@1",
+      "sha256": "b63dbb2a33068013398b9980232ab2da8976d7957ca4fc749f07ce9398ea44b1"
+    },
+    {
+      "name": "root-sdk16-m16-scientific-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk16-m16-scientific-reception.json",
+      "schema": "root.sdk16.m16-scoped-scientific-reception@1",
+      "sha256": "d4fe90cc58a0e8a108370f27d1f70364652bcb727367f6c38e8674d9bb074649"
+    },
+    {
+      "name": "root-sdk16-cubature-scientific-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk16-cubature-scientific-reception.json",
+      "schema": "root.sdk16.cubature-scoped-scientific-reception@1",
+      "sha256": "0567bb9077fccdcd9f038bd0695e6a85bc9ffa20d6296e8b184e4909afd2a63a"
+    },
+    {
+      "name": "root-sdk16-cubature-scientific-reception-v2.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk16-cubature-scientific-reception-v2.json",
+      "schema": "root.sdk16.cubature-scoped-scientific-reception@2",
+      "sha256": "410b0ec4a7716b03e2a55bfe65dff253488faff36ef6f92912d3e80c957148b1"
+    },
+    {
+      "name": "root-sdk16-m17-scientific-reception-v3.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk16-m17-scientific-reception-v3.json",
+      "schema": "root.sdk16.m17-scoped-scientific-reception@3",
+      "sha256": "aeebdb71294cc47effd079b15bfd9c606e0fa48658acf4316ca7dfc06ec70c8b"
+    },
+    {
+      "name": "root-sdk17-build-reception-731975.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk17-build-reception-731975.json",
+      "schema": "root.sdk17.build-install-reception@1",
+      "sha256": "067b0258ae5c014ccf43fb7557355ed76e6444bdeb6ae1508223bfd58e92a066"
+    },
+    {
+      "name": "root-sdk18-build-reception-732009.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk18-build-reception-732009.json",
+      "schema": "root.sdk18.build-install-reception@1",
+      "sha256": "a20ca731187e441352cdf7730a7618022d36c4748065ccc59ec540c710d8818c"
+    },
+    {
+      "name": "root-sdk18-two-witnesses-scientific-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk18-two-witnesses-scientific-reception.json",
+      "schema": "root.sdk18-two-witnesses-scoped-scientific-reception@1",
+      "sha256": "5c8148b6abbe3e60016b55ed4f803ed2925c4739ca58cfa323f5cadae50a6447"
+    },
+    {
+      "name": "root-sdk18-c25-publication-reception-732025.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk18-c25-publication-reception-732025.json",
+      "schema": "root.sdk18-c25-mocked-publication-reception@1",
+      "sha256": "9bef343521ea5d3ac0d84cddd6e2b69bfa0e5195018293bf6e0c941c7fc1e85b"
+    },
+    {
+      "name": "root-sdk18-waves-mpi2-scientific-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk18-waves-mpi2-scientific-reception.json",
+      "schema": "root.sdk18-waves-mpi2-scoped-scientific-reception@1",
+      "sha256": "248f10a43795b73801503c2fa4b776786fed54f81db9db0c5723c9b0129ac05d"
+    },
+    {
+      "name": "root-sdk18-m16-state2-mpi2-negative-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk18-m16-state2-mpi2-negative-reception.json",
+      "schema": "root.sdk18-m16-state2-mpi2-negative-reception@1",
+      "sha256": "9fb874c01b91906413f8b488f60400b609058917bb28509d91915e483a7b1eb2"
+    }
+  ],
+  "run16_source": "9bdc6acd7a07b11d9ddfd6eebd75f514add51ef3",
+  "schema": "root.sdk16-public-composition-progress@1",
+  "sdk17": {
+    "failed_runtime_jobs": [
+      "731992",
+      "731993"
+    ],
+    "failure": "model_source_policy forwarded to Program compiler before Program/simulation",
+    "installed_files": 1155,
+    "job": "731975",
+    "native_cxx_objects_observed": 0,
+    "scientific_acceptance": false,
+    "shipped_sources": 1146,
+    "source": "d58489fc22c112f56a0091e0c2bc37ff26f309c9",
+    "source_inventory_files": 1190
+  },
+  "sdk18": {
+    "amr_gather_correction_native_received": false,
+    "codegen_source_sha256": "c90343018034d7259dacccfb6e37dc92f0e1c72735b8fa0f74c7a9ef31301d4b",
+    "cpu_scientific_receipt_sha256": "5c8148b6abbe3e60016b55ed4f803ed2925c4739ca58cfa323f5cadae50a6447",
+    "job": "732009",
+    "mpi2_m16_failed_job": "732028",
+    "mpi2_m16_negative_receipt_sha256": "9fb874c01b91906413f8b488f60400b609058917bb28509d91915e483a7b1eb2",
+    "mpi2_m16_scientific_acceptance": false,
+    "mpi2_waves_job": "732027",
+    "mpi2_waves_scientific_receipt_sha256": "248f10a43795b73801503c2fa4b776786fed54f81db9db0c5723c9b0129ac05d",
+    "publication_compiler_mock": true,
+    "publication_fault_job": "732025",
+    "publication_receipt_sha256": "9bef343521ea5d3ac0d84cddd6e2b69bfa0e5195018293bf6e0c941c7fc1e85b",
+    "root_build_receipt_sha256": "a20ca731187e441352cdf7730a7618022d36c4748065ccc59ec540c710d8818c",
+    "single_jobs": [
+      "732018",
+      "732019"
+    ],
+    "source": "c6b7a600033cb3ba42ca6adf7ca9c743e216ab87",
+    "status": "build, CPU witnesses, MPI2 waves and mocked publication fault received; M16 MPI2 signed-zero getter refused"
+  },
+  "shipped_sdk16_source_files": 1144,
+  "source_nonreg": {
+    "deselected": 1,
+    "failures": 0,
+    "root_receipt_sha256": "f1b99efbf61239b0e1d082f32ccd4fe5e1beaad0041ed43416d383bf64528e01",
+    "scope": "Source/host",
+    "seconds": 449.12479500006884,
+    "skips": 0,
+    "source": "c6b7a600033cb3ba42ca6adf7ca9c743e216ab87",
+    "tests": 325
+  },
+  "whole_mission_complete": false
+}

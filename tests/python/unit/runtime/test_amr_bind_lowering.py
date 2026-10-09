@@ -274,9 +274,15 @@ def test_implicit_pair_envelope_precedes_program_and_interface_install(
     import pops.runtime._lifecycle as lifecycle
     import pops.runtime._runtime_authorities as authorities
     from pops.runtime._continuation_transitions import ContinuationTransitionPlan
+    from tests.python.support.layout_plan import resolved_layout_contract
 
     events = []
     bind_schema = object()
+    # Even this ordering probe must provide the normalized layout consumed at
+    # the common geometry installation boundary.
+    layout_plan, _ = resolved_layout_contract(
+        None, target="amr_system", block_names=(),
+    )
     continuation = ContinuationTransitionPlan(json.dumps({
         "schema_version": 1,
         "kind": "pops.continuation-transitions",
@@ -286,6 +292,7 @@ def test_implicit_pair_envelope_precedes_program_and_interface_install(
     }, sort_keys=True, separators=(",", ":")))
     artifact = SimpleNamespace(
         bind_schema=bind_schema,
+        layout_plan=layout_plan,
         so_path="compiled-amr-program.so",
         plan=SimpleNamespace(
             field_plans={},

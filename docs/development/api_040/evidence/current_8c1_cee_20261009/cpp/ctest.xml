@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)"
+	tests="3"
+	failures="0"
+	disabled="0"
+	skipped="0"
+	hostname=""
+	time="394"
+	timestamp="2026-10-09T05:25:52"
+	>
+	<testcase name="test_mpi_composite_fac_partitioned_nd_np2" classname="test_mpi_composite_fac_partitioned_nd_np2" time="386.972" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;cpp-target:test_mpi_composite_fac_partitioned_nd;medium;mpi"/>
+		</properties>
+		<system-out>[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_mpi_composite_fac_partitioned_nd
+[ RUN      ] test_mpi_composite_fac_partitioned_nd.RunsPartitionedDimensionalMatrix
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_mpi_composite_fac_partitioned_nd
+[ RUN      ] test_mpi_composite_fac_partitioned_nd.RunsPartitionedDimensionalMatrix
+periodic FAC backend=mg refinement_case=0 partition_profile=0 exhaust_coarse=0 forcing_case=0 replicated_status=composite_fac_converged replicated_residual=1.0810732309352034e-09 partitioned_status=composite_fac_converged partitioned_residual=1.0810732309352034e-09
+periodic FAC backend=mg refinement_case=0 partition_profile=0 replicated_residual=1.0810732309352034e-09 partitioned_residual=1.0810732309352034e-09 max_partition_difference=2.2204460492503131e-16
+warm FAC refinement_case=0 initial_reference=1.4669623920211738 warm_reference=1.46...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="test_mpi_field_nullspace_preflight_np2" classname="test_mpi_field_nullspace_preflight_np2" time="0.695719" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;cpp-target:test_mpi_field_nullspace_preflight;medium;mpi"/>
+		</properties>
+		<system-out>[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_mpi_field_nullspace_preflight
+[ RUN      ] test_mpi_field_nullspace_preflight.ExactRankedDriftFailsCoherentlyIn1D2DAnd3D
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_mpi_field_nullspace_preflight
+[ RUN      ] test_mpi_field_nullspace_preflight.ExactRankedDriftFailsCoherentlyIn1D2DAnd3D
+[       OK ] test_mpi_field_nullspace_preflight.ExactRankedDriftFailsCoherentlyIn1D2DAnd3D (71 ms)
+[----------] 1 test from test_mpi_field_nullspace_preflight (71 ms total)
+
+[----------] Global test environment tear-down
+[       OK ] test_mpi_field_nullspace_preflight.ExactRankedDriftFailsCoherentlyIn1D2DAnd3D (71 ms)
+[----------] 1 test from test_mpi_field_nullspace_preflight (71 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (71 ms total)
+[  PASSED  ] 1 test.
+[==========] 1 tes...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="test_tensor_fac_conservative_interface_np2" classname="test_tensor_fac_conservative_interface_np2" time="6.65813" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;cpp-target:test_tensor_fac_conservative_interface;medium;mpi"/>
+		</properties>
+		<system-out>[==========] Running 8 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 8 tests from TensorFacConservativeInterface
+[ RUN      ] TensorFacConservativeInterface.ClosedJumpHasTwelveLegacyImbalanceAndZeroFineFluxBalance
+[==========] Running 8 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 8 tests from TensorFacConservativeInterface
+[ RUN      ] TensorFacConservativeInterface.ClosedJumpHasTwelveLegacyImbalanceAndZeroFineFluxBalance
+[       OK ] TensorFacConservativeInterface.ClosedJumpHasTwelveLegacyImbalanceAndZeroFineFluxBalance (24 ms)
+[ RUN      ] TensorFacConservativeInterface.PeriodicOriginsAnisotropicChildrenAndMappedCrossTermsConserve
+[       OK ] TensorFacConservativeInterface.ClosedJumpHasTwelveLegacyImbalanceAndZeroFineFluxBalance (26 ms)
+[ RUN      ] TensorFacConservativeInterface.PeriodicOriginsAnisotropicChildrenAndMappedCrossTermsConserve
+[       OK ] TensorFacConservativeInterface.PeriodicOriginsAnisotropicChildrenAndMappedCross...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+</testsuite>

@@ -229,6 +229,7 @@ class LevelGeometry:
     coordinate_system: str | None = None
     cell_measure: str | None = None
     axis_names: tuple[str, ...] = ()
+    node_coordinates: Any = field(default=None, repr=False, compare=False)
     valid_cells: Any = field(init=False, repr=False, compare=False)
     _native_valid_cells: InitVar[Any] = None
     _native_arrays: InitVar[Any] = None
@@ -350,6 +351,24 @@ class LevelGeometry:
             raise ValueError("cell_volumes must be finite and strictly positive")
         object.__setattr__(self, "coverage", coverage)
         object.__setattr__(self, "cell_volumes", volumes)
+        moving_1d_coordinates = self.coordinate_system == "pops://coordinates/moving-cartesian-1d@1"
+        endpoint_length_measure = self.cell_measure == "pops://cell-measures/endpoint-length@1"
+        if moving_1d_coordinates or endpoint_length_measure:
+            if dimension != 1:
+                raise ValueError("versioned moving 1D geometry requires spatial rank one")
+            if not (moving_1d_coordinates and endpoint_length_measure):
+                raise ValueError("versioned moving 1D geometry requires its coordinate/measure pair")
+        if moving_1d_coordinates and self.node_coordinates is None:
+            raise ValueError("moving geometry requires explicit physical node_coordinates")
+        if self.node_coordinates is not None:
+            nodes = _array(self.node_coordinates, dtype=np.float64, borrow=native)
+            expected = tuple(extent+1 for extent in shape)+(dimension,)
+            if nodes.shape != expected or not np.all(np.isfinite(nodes)):
+                raise ValueError("physical node_coordinates must have finite shape %r" % (expected,))
+            if dimension == 1 and (np.any(np.diff(nodes[:,0])<=0) or
+                                  not np.array_equal(np.diff(nodes[:,0]),volumes)):
+                raise ValueError("moving cell measures must equal physical endpoint differences")
+            object.__setattr__(self,"node_coordinates",nodes)
 
     @property
     def key(self) -> tuple[str, int]:
@@ -362,7 +381,7 @@ class LevelGeometry:
         return len(self.cell_shape)
 
     def to_data(self) -> dict[str, Any]:
-        return {
+        result = {
             "layout_identity": self.layout_identity.token,
             "layout_kind": self.layout_kind,
             "coordinate_system": self.coordinate_system,
@@ -377,6 +396,9 @@ class LevelGeometry:
             "coverage": array_evidence(self.coverage),
             "cell_volumes": array_evidence(self.cell_volumes),
         }
+        if self.node_coordinates is not None:
+            result["node_coordinates"] = array_evidence(self.node_coordinates)
+        return result
 
 
 @dataclass(frozen=True, slots=True)

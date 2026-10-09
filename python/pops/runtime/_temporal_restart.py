@@ -7,6 +7,7 @@ boundary is serializable; an older schema is an offline-migration input, never a
 """
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import math
 import operator
@@ -246,6 +247,7 @@ def _validate_program_schedule(value: Any) -> dict[str, Any]:
 def _validate_controller_state(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) not in (
         {"last_accepted_dt"}, {"last_accepted_dt", "fixed_dt_grid"},
+        {"last_accepted_dt", "external_frontier"}, {"last_accepted_dt", "program_frontier"},
     ):
         raise ValueError("temporal controller state has incomplete keys")
     last_dt = value["last_accepted_dt"]
@@ -278,6 +280,47 @@ def _validate_controller_state(value: Any) -> dict[str, Any]:
             (grid["steps"] == 0) != (grid["origin"] == grid["time"])
         ) or float.fromhex(grid["origin"]) > float.fromhex(grid["time"]):
             raise ValueError("FixedDt grid origin and accepted cursor are inconsistent")
+    if "external_frontier" in value:
+        row = value["external_frontier"]
+        if type(row) is not dict or set(row) != {
+            "schema_version", "start", "requested", "reached", "duration", "index",
+        } or type(row["schema_version"]) is not int or row["schema_version"] != 2 \
+                or type(row["index"]) is not int or row["index"] < 1:
+            raise ValueError("ExternalTimeGrid computed frontier has an invalid version or keys")
+        coordinates = {}
+        for name in ("start", "requested", "reached", "duration"):
+            try:
+                number = float.fromhex(row[name])
+            except (TypeError, ValueError):
+                raise ValueError("computed frontier coordinates must be hexadecimal floats") from None
+            if not math.isfinite(number) or number.hex() != row[name]:
+                raise ValueError("computed frontier coordinates must be canonical finite floats")
+            coordinates[name] = number
+        if coordinates["duration"] != coordinates["requested"] - coordinates["start"] \
+                or coordinates["start"] + coordinates["duration"] != coordinates["reached"] \
+                or coordinates["reached"] <= coordinates["start"]:
+            raise ValueError("computed frontier duration and reached coordinate disagree")
+    if "program_frontier" in value:
+        row = value["program_frontier"]
+        if type(row) is not dict or set(row) != {
+            "schema_version", "start", "requested_duration", "duration", "reached", "limit", "rejections",
+        } or type(row["schema_version"]) is not int or row["schema_version"] != 1:
+            raise ValueError("computed Program frontier has an invalid version or keys")
+        if type(row["rejections"]) is not int or row["rejections"] < 0:
+            raise ValueError("computed Program frontier rejections must be nonnegative")
+        numbers = {}
+        for name in ("start", "requested_duration", "duration", "reached", "limit"):
+            try:
+                number = float.fromhex(row[name])
+            except (TypeError, ValueError):
+                raise ValueError("Program frontier coordinates must be hexadecimal floats") from None
+            if not math.isfinite(number) or number.hex() != row[name]:
+                raise ValueError("Program frontier coordinates must be canonical finite floats")
+            numbers[name] = number
+        if numbers["duration"] <= 0.0 or numbers["requested_duration"] <= 0.0 \
+                or numbers["start"] + numbers["duration"] != numbers["reached"] \
+                or numbers["reached"] <= numbers["start"]:
+            raise ValueError("computed Program duration and reached coordinate disagree")
     return _json_copy(value, where="temporal controller state")
 
 
@@ -373,6 +416,60 @@ def _validate_controller_events(
     grid = controller.get("fixed_dt_grid")
     if grid is not None:
         _validate_fixed_grid_clock(grid, descriptor, time_hex, macro_step)
+    frontier = controller.get("external_frontier")
+    if descriptor["kind"] == "external_time_grid" and descriptor.get("frontier") == "computed" \
+            and macro_step > 0 and frontier is None:
+        raise ValueError("computed frontier is required after an accepted grid step")
+    if frontier is not None:
+        if descriptor["kind"] != "external_time_grid" or descriptor.get("frontier") != "computed":
+            raise ValueError("computed frontier requires its versioned ExternalTimeGrid policy")
+        from pops.time._step.strategy import ExternalTimeGrid
+        grid_values = ExternalTimeGrid.from_data(descriptor).restore_runtime_controls(strategy["controls"])[descriptor["grid_id"]]
+        if frontier["reached"] != time_hex or frontier["index"] >= len(grid_values):
+            raise ValueError("computed frontier differs from accepted checkpoint clock or grid")
+        requested = float.fromhex(frontier["requested"])
+        if float(grid_values[frontier["index"]]) != requested:
+            raise ValueError("computed requested frontier differs from declared grid point")
+        previous = float(grid_values[frontier["index"] - 1])
+        start_lower = start_upper = previous
+        for _ in range(descriptor["endpoint_ulps"]):
+            start_lower = math.nextafter(start_lower, -math.inf)
+            start_upper = math.nextafter(start_upper, math.inf)
+        if not start_lower <= float.fromhex(frontier["start"]) <= start_upper:
+            raise ValueError("computed frontier start differs from the preceding declared point")
+        if controller["last_accepted_dt"] != (
+            float.fromhex(frontier["reached"]) - float.fromhex(frontier["start"])).hex():
+            raise ValueError("computed frontier differs from the last accepted duration")
+        lower = upper = requested
+        for _ in range(descriptor["endpoint_ulps"]):
+            lower = math.nextafter(lower, -math.inf)
+            upper = math.nextafter(upper, math.inf)
+        if not lower <= float.fromhex(time_hex) <= upper:
+            raise ValueError("computed reached frontier violates declared endpoint_ulps")
+    program_frontier = controller.get("program_frontier")
+    if descriptor["kind"] == "computed_dt" and macro_step > 0 and program_frontier is None:
+        raise ValueError("ComputedDt accepted restart lacks its computed Program frontier")
+    if program_frontier is not None:
+        from pops.time._step.strategy import ComputedDt
+        if descriptor["kind"] != "computed_dt":
+            raise ValueError("computed Program frontier requires its ComputedDt policy")
+        policy = ComputedDt.from_data(descriptor)
+        request = policy.dt
+        if program_frontier["rejections"] > policy.max_rejections:
+            raise ValueError("computed Program frontier exceeds its retry budget")
+        for _ in range(program_frontier["rejections"]):
+            request *= policy.shrink
+        if program_frontier["reached"] != time_hex \
+                or program_frontier["requested_duration"] != request.hex():
+            raise ValueError("computed Program frontier differs from checkpoint clock or request")
+        upper = float.fromhex(program_frontier["limit"])
+        for _ in range(policy.endpoint_ulps):
+            upper = math.nextafter(upper, math.inf)
+        if float.fromhex(time_hex) > upper:
+            raise ValueError("computed Program frontier crosses its declared run limit")
+        if controller["last_accepted_dt"] != (
+            float.fromhex(program_frontier["reached"]) - float.fromhex(program_frontier["start"])).hex():
+            raise ValueError("computed Program frontier differs from its last accepted duration")
     if descriptor["kind"] != "error_controlled_dt":
         if events:
             raise ValueError(
@@ -506,8 +603,18 @@ class TemporalRestartState:
     status: str = "accepted"
     synchronized: bool = True
     _restored_pending: bool = field(default=False, repr=False)
+    _initial_strategy_declaration: dict[str, Any] | None = field(default=None, repr=False)
 
-    def configure_program(self, schedule: Any, *, time: Any, macro_step: Any) -> None:
+    def configure_program(self, schedule: Any, *, time: Any, macro_step: Any,
+                          strategy: Any = _UNSPECIFIED) -> None:
+        """Install schedule and initial controller authority before runtime publication."""
+        candidate = deepcopy(self)
+        candidate._configure_program_schedule(schedule, time=time, macro_step=macro_step)
+        if strategy is not _UNSPECIFIED:
+            candidate._configure_initial_strategy(strategy, time=time, macro_step=macro_step)
+        self.__dict__ = candidate.__dict__
+
+    def _configure_program_schedule(self, schedule: Any, *, time: Any, macro_step: Any) -> None:
         """Bind one immutable nested-clock contract before execution or restart."""
         now, step = _clock(time, macro_step)
         self._require_live_clock(now, step)
@@ -527,10 +634,42 @@ class TemporalRestartState:
             (self.clock_cursors, self.schedule_cursors, self.synchronization_cursors,
              self.history_cursors, self.cache_cursors) = cursors
 
+    def _configure_initial_strategy(self, strategy: Any, *, time: Any, macro_step: Any) -> None:
+        from pops.time._step.transaction import ensure_step_strategy
+
+        if strategy is None:
+            if self.strategy is not None or self._initial_strategy_declaration is not None:
+                raise RuntimeError("installed Program omits the accepted step strategy declaration")
+            return
+        policy = ensure_step_strategy(strategy)
+        if policy.initial_controls_contract != "pops.step-strategy.initial-runtime-controls@1":
+            raise TypeError("unsupported initial step-strategy controls contract")
+        declaration = _json_copy(policy.to_data(), where="installed initial step strategy")
+        if self.strategy is not None:
+            if self.strategy["strategy"] != declaration:
+                raise RuntimeError("installed step strategy differs from restored temporal strategy")
+            # Preserve exact runtime controls, queued decisions and the pending
+            # next-attempt obligation. Binding never consumes a restored cursor.
+            self._initial_strategy_declaration = declaration
+            return
+        self._initial_strategy_declaration = declaration
+        controls = policy.initial_runtime_controls()
+        if controls is None:
+            return
+        policy.validate_runtime_controls(controls)
+        manifest = validate_step_strategy_manifest({
+            "strategy": declaration, "controls": policy.runtime_controls_data(controls),
+        })
+        self.begin_run({"strategy": manifest, "program_schedule": self.program_schedule},
+                       time=time, macro_step=macro_step)
+
     def begin_run(self, strategy: dict[str, Any], *, time: Any, macro_step: Any) -> None:
         """Bind the controller for this run, enforcing the first post-restart attempt."""
         now, step = _clock(time, macro_step)
         candidate, prepared_schedule = _run_binding(strategy)
+        if self._initial_strategy_declaration is not None \
+                and candidate["strategy"] != self._initial_strategy_declaration:
+            raise RuntimeError("prepared run step strategy differs from the installed declaration")
         if prepared_schedule != self.program_schedule and prepared_schedule is not None:
             raise RuntimeError("prepared run schedule differs from the installed program schedule")
         self._require_live_clock(now, step)
@@ -546,6 +685,8 @@ class TemporalRestartState:
         if not self._restored_pending:
             if candidate != self.strategy:
                 self.controller_state.pop("fixed_dt_grid", None)
+                self.controller_state.pop("external_frontier", None)
+                self.controller_state.pop("program_frontier", None)
             self.strategy = candidate
             if (candidate["strategy"]["kind"] == "error_controlled_dt"
                     and step == 0
@@ -617,7 +758,7 @@ class TemporalRestartState:
 
     def accept(self, *, before_time: Any, before_step: Any,
                time: Any, macro_step: Any, consumed_event: Any = None,
-               fixed_dt_grid: Any = None) -> None:
+               fixed_dt_grid: Any = None, external_frontier: Any = None, program_frontier: Any = None) -> None:
         before, old_step = _clock(before_time, before_step)
         now, step = _clock(time, macro_step)
         if step != old_step + 1 or float.fromhex(now) <= float.fromhex(before):
@@ -626,6 +767,8 @@ class TemporalRestartState:
         controller = _validate_controller_state({
             "last_accepted_dt": (float.fromhex(now) - float.fromhex(before)).hex(),
             **({"fixed_dt_grid": fixed_dt_grid} if fixed_dt_grid is not None else {}),
+            **({"external_frontier": external_frontier} if external_frontier is not None else {}),
+            **({"program_frontier": program_frontier} if program_frontier is not None else {}),
         })
         if fixed_dt_grid is not None:
             if self.strategy is None or self.strategy["strategy"]["kind"] != "fixed_dt":
@@ -683,6 +826,9 @@ class TemporalRestartState:
                 "checkpoint requires an accepted synchronized step boundary; "
                 "the last attempt was %s" % self.status)
         if self.strategy is None:
+            if self._initial_strategy_declaration is not None:
+                raise RuntimeError("checkpoint requires runtime controls for the installed step strategy "
+                                   + self._initial_strategy_declaration["kind"])
             raise RuntimeError("checkpoint requires a declared step strategy")
         validate_step_strategy_manifest(self.strategy)
         if self.program_schedule is not None:

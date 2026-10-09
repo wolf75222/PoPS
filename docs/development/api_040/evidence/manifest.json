@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "note": "Early receipts; source-only and baseline results are not final installed acceptance.",
+  "files": [
+    {
+      "file": "baseline-imports.json",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/baseline-imports.json",
+      "bytes": 953,
+      "sha256": "8b36ebc7fc976801159e53654531b26eedd37ace9ee6c8c9370d58d4efb90826"
+    },
+    {
+      "file": "baseline-tests.log",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/baseline-tests.log",
+      "bytes": 640,
+      "sha256": "eb896b5ae1d724033827a9cf2afdf42db7ca013aa5298b45b5285bd6a004d921"
+    },
+    {
+      "file": "baseline-runtime-tests.log",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/baseline-runtime-tests.log",
+      "bytes": 110,
+      "sha256": "e8d1b296b9f476bbbba26f88a9ccbe8ff0457536945d4299d30ce84e5bbb2512"
+    },
+    {
+      "file": "symbolic-path-source-tests.log",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/symbolic-path-source-tests.log",
+      "bytes": 111,
+      "sha256": "4ab8d53eee09c620b7a91f2c9876888a445b22081677da9cf14ee7b5f5ed8957"
+    },
+    {
+      "file": "symbolic-path-reviewed-source.log",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/symbolic-path-reviewed-source.log",
+      "bytes": 4988,
+      "sha256": "869d2891d6c4d9b7a7165282ddadb2bd6cc17cbe28884804778fdb717a8fdc71"
+    },
+    {
+      "file": "symbolic-path-consistency-reviewed.log",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/symbolic-path-consistency-reviewed.log",
+      "bytes": 98,
+      "sha256": "45dc0fbc4f621dbc1b8bd036dbd56f83b97a50456bbf5b800d19939a5ec34634"
+    },
+    {
+      "file": "native-program-runtime-ctest.log",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/native-program-runtime-ctest.log",
+      "bytes": 10336,
+      "sha256": "58f1c30febed92ea143c3947bf1acb25dc9892070e5444e0749230dc27780f79"
+    },
+    {
+      "file": "astra-semantics-implementation.md",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/astra-semantics-implementation.md",
+      "bytes": 3557,
+      "sha256": "5e173cf41004a486e1f1b7af1088c861ba6dd6c0db80c64cdb5508788b1f92e4"
+    },
+    {
+      "file": "astra-cross-review-native.md",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/astra-cross-review-native.md",
+      "bytes": 1559,
+      "sha256": "103ce9915e4d459050458c15f789eae82e2eb282ffaf696f62d3b1a16605d998"
+    },
+    {
+      "file": "independent-review-astra.md",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/independent-review-astra.md",
+      "bytes": 2242,
+      "sha256": "77e4265e730290e65b9b6f1729dc164063b6f51d1fb77227642d0af037975420"
+    },
+    {
+      "file": "independent-review-symbolic-path.md",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/independent-review-symbolic-path.md",
+      "bytes": 5312,
+      "sha256": "6c151d16cf1c7404e0bd9dce1c0a9fb88867cc15c703efb0b1f8c460708f71d2"
+    },
+    {
+      "file": "astra-path-cache-review.md",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/astra-path-cache-review.md",
+      "bytes": 3162,
+      "sha256": "1135c2eb0990d6825cd4ce93a2b904011b3337b63168370e66daa00fff55aeba"
+    },
+    {
+      "file": "astra-protocols.md",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/outputs/astra-protocols.md",
+      "bytes": 6200,
+      "sha256": "dd765955240c26aba9407e2aaed8d4cb291e1690151116d696c5bd5c576299e0"
+    },
+    {
+      "file": "astra-c30-immutability.md",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/outputs/astra-c30-immutability.md",
+      "bytes": 5442,
+      "sha256": "420419951bfcf1ec5c6075d97060bb8b3481184fa38c300dd999e1ca481b81b6"
+    },
+    {
+      "file": "sol6-native-benchmark.md",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/sol6-native-benchmark.md",
+      "bytes": 2996,
+      "sha256": "0a841a512e6629dd523b66c47918f3a87f862da6cd6279599eef8299c38a2540"
+    },
+    {
+      "file": "reconstruction-bench-baseline.csv",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/reconstruction-bench-baseline.csv",
+      "bytes": 1410,
+      "sha256": "366fac4663299c558839e78853fba1e9742847da83252bc9d0e9051805f5e5c6"
+    },
+    {
+      "file": "reconstruction-bench-current-optimized.csv",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/reconstruction-bench-current-optimized.csv",
+      "bytes": 1388,
+      "sha256": "4e3247a3a09a6ff7e2f56d06cb71d8a046847147c3ad7e9b8a720fbbe86c6fcf"
+    },
+    {
+      "file": "astra-protocols-green-serial.xml",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/outputs/astra-protocols-green-serial.xml",
+      "bytes": 1714,
+      "sha256": "4da5f499f1e3eeb977fce8b383594bd7777e071a89aa1ecb00ff1ba5813b35fc"
+    },
+    {
+      "file": "astra-protocols-green-mpi.rank0.xml",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/outputs/astra-protocols-green-mpi.rank0.xml",
+      "bytes": 1906,
+      "sha256": "4c15e8fe6b284b8d71ded13b2d1cb52bfb2bc8aaad8ee72c8f6ee8f7501bb9b7"
+    },
+    {
+      "file": "astra-protocols-green-mpi.rank1.xml",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/outputs/astra-protocols-green-mpi.rank1.xml",
+      "bytes": 1906,
+      "sha256": "30665b68ef61c01f14ef49d4c74fdb36bb108d367fecda38e66e66ef540f9b6b"
+    },
+    {
+      "file": "astra-c30-red.xml",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/outputs/astra-c30-red.xml",
+      "bytes": 3975,
+      "sha256": "09003751d016a448d71b91a15557d83e839c2c076967fff1c17267ae11c77934"
+    },
+    {
+      "file": "astra-c30-focused-green.xml",
+      "original": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/outputs/astra-c30-focused-green.xml",
+      "bytes": 1543,
+      "sha256": "dacacbd88318bac509a478c1f45138384adc4c83a3d0930d5e0c9ff96add2ce3"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "candidate_package_root": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-sol61-global-golden-portability/python",
+  "cases": {
+    "(False, False)": {
+      "amr_system": "5bc0e475364bc3c15fa0f1d606dbafdb693493554fd4b4dc660e205768525224",
+      "full_plan_payload_sha256": "601bfde954402ba92edffe50673abf46107b32e38465041e7f9c10520db47d61",
+      "ir": "c509dfe7c3808b1c3050d54a247ca8230b412b72236ff3e5a60aabd2b6076568",
+      "manifest_version": 10,
+      "module_hash": "5b77d05ab8883d1772a42299fb3964527b6e7951dcd0be7f84a69e61c8fc5b82",
+      "module_manifest_sha256": "981d9aebbed60f2bc0812903314caea9601720be302751619546da1e07c93883",
+      "plan": "pops.resolved-plan.v1:sha256:b27e47a8770ded5db309cda667440f2d5c3c96f28b23d32aabd239f18e18076f",
+      "snapshot_artifact_sha256": "da93f36f4645e931e0f1f1b9fb8b83c58a61e4178300cf2d94f33da97f7d58c9",
+      "system": "28eab42dd5fb95af2343aa071dea648b8d7018fbb846b6055afcae0bf5f17a6c"
+    },
+    "(False, True)": {
+      "amr_system": "5bc0e475364bc3c15fa0f1d606dbafdb693493554fd4b4dc660e205768525224",
+      "full_plan_payload_sha256": "7f398ef701c9c28a657fc3374f598313c24f635cc676242ed4f5913de42a0abe",
+      "ir": "c509dfe7c3808b1c3050d54a247ca8230b412b72236ff3e5a60aabd2b6076568",
+      "manifest_version": 10,
+      "module_hash": "5b77d05ab8883d1772a42299fb3964527b6e7951dcd0be7f84a69e61c8fc5b82",
+      "module_manifest_sha256": "981d9aebbed60f2bc0812903314caea9601720be302751619546da1e07c93883",
+      "plan": "pops.resolved-plan.v1:sha256:7e07941fe4c21fe4306c7623cb274914bd6b6b562937812a2d592aefbfb2d1b2",
+      "snapshot_artifact_sha256": "66e3d9c53d57a939a75ff9f1c0f1beb003cf96850cf3a35363654d614133ec63",
+      "system": "28eab42dd5fb95af2343aa071dea648b8d7018fbb846b6055afcae0bf5f17a6c"
+    },
+    "(True, False)": {
+      "amr_system": "140165354e7e3fd24160ab89406b299e780c410639c7d4570527a0ed27f16097",
+      "full_plan_payload_sha256": "ed432d52f3bce3c6199991cc37f36313a7a46ee106bbf7f625a7ed38c6baa245",
+      "ir": "8a4a26facd9d30e550705acc88d1100c5520c0bee292bc1c4b76802c27b59e91",
+      "manifest_version": 11,
+      "module_hash": "24f1e9cd1744d69c26cffa26827b0a6855c30841d496b3f020cc668cc52c9178",
+      "module_manifest_sha256": "d696bb35a618e5e67869fab0880922de43c6071abd87e19a8d1cfe6a2dd077ea",
+      "plan": "pops.resolved-plan.v1:sha256:6ec31fdc4c1258722ce5982e01ec2f566943403aacdbefd46a45d66fa3fa49ab",
+      "snapshot_artifact_sha256": "2d89a01e47dbf14c543a43b2674b69fe07ffe033a675a06153656ee1d776a4fe",
+      "system": "9d6a88a0b27bb5cba826f1d18db6a3bda7b6085398ddbdcf4962b336e064f435"
+    },
+    "(True, True)": {
+      "amr_system": "140165354e7e3fd24160ab89406b299e780c410639c7d4570527a0ed27f16097",
+      "full_plan_payload_sha256": "021f1a5968e3a5be5bc06b23688e94eb24f1253f706f8439e3754aa2f1e107df",
+      "ir": "8a4a26facd9d30e550705acc88d1100c5520c0bee292bc1c4b76802c27b59e91",
+      "manifest_version": 11,
+      "module_hash": "24f1e9cd1744d69c26cffa26827b0a6855c30841d496b3f020cc668cc52c9178",
+      "module_manifest_sha256": "d696bb35a618e5e67869fab0880922de43c6071abd87e19a8d1cfe6a2dd077ea",
+      "plan": "pops.resolved-plan.v1:sha256:0ba583963c50eb148b53f67a4ad2c9ba35e3d865035ff08bdf4f7b39297f01b2",
+      "snapshot_artifact_sha256": "28b567ff7b8a8c1021cf1b75bf2bc404c001addf572d1e8b6a60e67dca0d68f0",
+      "system": "9d6a88a0b27bb5cba826f1d18db6a3bda7b6085398ddbdcf4962b336e064f435"
+    }
+  },
+  "changed_source_guards": 32,
+  "control_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-sol61-global-golden-portability/tests/review/sol61_global_plan_parity_control.py",
+  "control_sha256": "d0324584cf71f3655d86470c9d373f41cd6befb1b47d7a0c4f52c734da0315a5",
+  "full_payload_compared": true,
+  "native_execution": false,
+  "parent_commit": "368055dbe1f4c1f5fad4a11791508ae2b0520f03",
+  "provenance_normalized": false,
+  "status": "source-parent-parity-received"
+}

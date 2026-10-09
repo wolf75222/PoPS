@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-m",
+    "pytest",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-c11-t2-c36-runtime/pytest.xml",
+    "tests/python/integration/runtime/test_principal_group_runtime.py",
+    "tests/python/integration/runtime/test_nonnegative_diagonal_diffusion_runtime.py",
+    "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py",
+    "tests/python/integration/runtime/test_principal_numerical_bodies_runtime.py",
+    "tests/python/integration/runtime/test_api040_m04_combined_bound_runtime.py"
+  ],
+  "returncode": 2,
+  "duration_seconds": 217.21741804108024,
+  "counts": {
+    "tests": 2,
+    "failures": 2,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "failed",
+  "identity_sha256": "24b51dd7095952d176f3c4a03e5278b7fb0acca8a93e704cd7ec2d0ccdff114a",
+  "log_sha256": "9674855c49944082f5f08fbc6354d1fedf0ad47a7d6cdd951c95c500b9dd8371"
+}

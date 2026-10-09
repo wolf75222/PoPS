@@ -1,0 +1,31 @@
+{
+  "schema": "pops.native-late-field-refusal-plan@1",
+  "date_utc": "2026-10-08T19:57:03.365035+00:00",
+  "core": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "Source": "4fbd42ec55c6f2eb9948a410d7633f2594ec2ca3",
+  "pending": [
+    "actual Native first fail/control and independent receipt"
+  ],
+  "selectors": [
+    "tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py::test_public_late_refusal_same_artifact_control[euler]"
+  ],
+  "sequence": [
+    "representativeEuler late-failure/control then peer receipt",
+    "SSPRK2 late-failure/control and public automaticErrorControlledDt retry",
+    "world2 exactrank identities and same-processpytest",
+    "affected originalscience/nonreg on currentcore"
+  ],
+  "evidence_limits": [
+    "Native private accepted-state snapshot access is instrumentation, not claimed publicread API",
+    "No public parameter-update API; separate fail/control bindings are not same-instance parameter retry",
+    "No rank0-only authoredpredicate in this fixture",
+    "No retained issuedticket validator claim from byte snapshot comparison",
+    "Finite cases do not prove universal genericity"
+  ],
+  "run_executed": false,
+  "source_only_fixture_commit": true,
+  "run_dispatch_utc": "2026-10-08T20:02:37.890336+00:00",
+  "first_output": "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-Euler-first-4fbd42ec-ed2-20261008"
+}

@@ -1,0 +1,18 @@
+{
+  "actual_catalog_sha256": "2819d45722bac82f4d4b72d16c8fa77bed56a65a83d7f391e0a55bfb289845c9",
+  "baseline": "3302c4a19d94a0b08dbba9c05c4de3ae2debb232",
+  "baseline_catalog_digests": {
+    "component_catalog_semantic_sha256": "d47b60d2276e0255873cb7573417de84f0d4fcfb7d2adb5b77813420ae8e0d01",
+    "component_catalog_sha256": "8797c3721e51b181711c0d4d832688b5f32af7d184ce28b81422815010b465c3"
+  },
+  "baseline_generator_failure": "component_catalog_sha256 drifted from component_catalog.v2.json",
+  "baseline_payload_version": 8,
+  "computed_canonical_catalog_digests": {
+    "component_catalog_semantic_sha256": "d5b9b39c34236696fee592a902560209576475cf07119e33bd7e0a8d3519352d",
+    "component_catalog_sha256": "3300f2e69852d0b12cbcb12b2c90c1c1dbdd9cddde375d4633062a64d0857985"
+  },
+  "contract": "sol61.uniform-checkpoint9-release-migration@1",
+  "native_abi_change_claimed": false,
+  "native_abi_version": 8,
+  "payload_version": 9
+}

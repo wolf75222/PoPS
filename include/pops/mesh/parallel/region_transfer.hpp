@@ -472,6 +472,8 @@ class RegionTransport {
     execution_index_type elements = 0;
   };
 
+ public:
+  // NVCC's generated host stubs must be able to name the device functor types.
   struct PackKernel {
     device_buffer_type buffer{};
     FieldView<const Real, Dim> source{};
@@ -509,6 +511,7 @@ class RegionTransport {
     }
   };
 
+ private:
   KernelJob lower_(const job_type& job) const {
     const std::size_t execution_max =
         static_cast<std::size_t>(std::numeric_limits<execution_index_type>::max());

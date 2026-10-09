@@ -1,0 +1,332 @@
+{
+  "verdict": "SOURCE_MATH_ACCEPT; original admission gap blocked and external correction source-validated, pending Root nonauthor review before first Native run",
+  "source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "scope": "Independent nonauthor protocol math+Source/NumPy review, not Native reception. No Native/JIT/run/ROMEO/Main/env/install/cache mutation.",
+  "math_controls": {
+    "six_updates": [
+      {
+        "kind": "variable",
+        "method": "euler",
+        "operator_scalar_vector_Linf": 1.4210854715202004e-14,
+        "asymmetric_operator_Linf": 1.4210854715202004e-14,
+        "update_Linf": 0.0
+      },
+      {
+        "kind": "variable",
+        "method": "ssprk2",
+        "operator_scalar_vector_Linf": 1.4210854715202004e-14,
+        "asymmetric_operator_Linf": 1.4210854715202004e-14,
+        "update_Linf": 2.220446049250313e-16
+      },
+      {
+        "kind": "diagonal_linear",
+        "method": "euler",
+        "operator_scalar_vector_Linf": 0.0,
+        "asymmetric_operator_Linf": 0.0,
+        "update_Linf": 0.0
+      },
+      {
+        "kind": "diagonal_linear",
+        "method": "ssprk2",
+        "operator_scalar_vector_Linf": 0.0,
+        "asymmetric_operator_Linf": 0.0,
+        "update_Linf": 0.0
+      },
+      {
+        "kind": "diagonal_smooth",
+        "method": "euler",
+        "operator_scalar_vector_Linf": 0.0,
+        "asymmetric_operator_Linf": 0.0,
+        "update_Linf": 0.0
+      },
+      {
+        "kind": "diagonal_smooth",
+        "method": "ssprk2",
+        "operator_scalar_vector_Linf": 0.0,
+        "asymmetric_operator_Linf": 0.0,
+        "update_Linf": 0.0
+      }
+    ],
+    "independent_quadrature": {
+      "smooth_initial_Gauss_vs_monomial_Linf": 1.3322676295501878e-15,
+      "smooth_forcing_Gauss_vs_monomial_Linf": 4.440892098500626e-15,
+      "sinusoidal_initial_Gauss_vs_analytic_average_Linf": 1.3322676295501878e-15
+    },
+    "discriminating_wrong_oracle_Linf": {
+      "Dirichlet_full_cell_distance": 0.0008299724532232489,
+      "Neumann_lower_sign": 0.006400000000000183,
+      "smooth_pointwise_vs_cell_average_forcing": 2.6187686250622733e-06
+    },
+    "wrong_oracles_refused_original_tolerance": [
+      "Dirichlet_full_cell_distance",
+      "Neumann_lower_sign",
+      "smooth_pointwise_forcing"
+    ],
+    "scope": "Independent scalar NumPy/control references only; no PoPS or Native imported",
+    "pops_modules_loaded": []
+  },
+  "source_proofs": {
+    "package_path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/__init__.py",
+    "cases": [
+      {
+        "kind": "variable",
+        "method": "euler",
+        "weights": [
+          "1"
+        ],
+        "ssa_ops": [
+          "state",
+          "input_fields",
+          "diffusive_rhs",
+          "linear_combine"
+        ],
+        "input_field_tokens": 1,
+        "provider_slots": {
+          "diffusivity": 0,
+          "source_factor": 1
+        },
+        "provider_producers": [
+          "runtime_input"
+        ],
+        "serialization_sha256": "5db0716f68ddd15403d71aa0b8f97a9d84bd659f940b50c2d6ebbd75750ac9dc",
+        "original_and_detached_numeric_payload_identical": true,
+        "detachment_provenance_metadata_changed": true,
+        "reference_change_from_initial_Linf": 0.0004891701252787151,
+        "output_mutation_1e8_refused": true
+      },
+      {
+        "kind": "variable",
+        "method": "ssprk2",
+        "weights": [
+          "1/2",
+          "1/2"
+        ],
+        "ssa_ops": [
+          "state",
+          "input_fields",
+          "diffusive_rhs",
+          "linear_combine",
+          "input_fields",
+          "diffusive_rhs",
+          "linear_combine"
+        ],
+        "input_field_tokens": 2,
+        "provider_slots": {
+          "diffusivity": 0,
+          "source_factor": 1
+        },
+        "provider_producers": [
+          "runtime_input"
+        ],
+        "serialization_sha256": "851e29c50edaf1f3c98e9b89baac5ce76d8675e50b5439e90ea9b26370fb8d53",
+        "original_and_detached_numeric_payload_identical": true,
+        "detachment_provenance_metadata_changed": true,
+        "reference_change_from_initial_Linf": 0.0004842650900425127,
+        "output_mutation_1e8_refused": true
+      },
+      {
+        "kind": "diagonal_linear",
+        "method": "euler",
+        "weights": [
+          "1"
+        ],
+        "ssa_ops": [
+          "state",
+          "input_fields",
+          "diffusive_rhs",
+          "linear_combine"
+        ],
+        "input_field_tokens": 1,
+        "provider_slots": {
+          "a_x": 0,
+          "a_y": 1,
+          "forcing": 2
+        },
+        "provider_producers": [
+          "runtime_input"
+        ],
+        "serialization_sha256": "e25f03705001e71b4c994122c3a25e7813ac46115c37f6c512de117eeb7ac5cd",
+        "original_and_detached_numeric_payload_identical": true,
+        "detachment_provenance_metadata_changed": true,
+        "reference_change_from_initial_Linf": 0.0,
+        "output_mutation_1e8_refused": true
+      },
+      {
+        "kind": "diagonal_linear",
+        "method": "ssprk2",
+        "weights": [
+          "1/2",
+          "1/2"
+        ],
+        "ssa_ops": [
+          "state",
+          "input_fields",
+          "diffusive_rhs",
+          "linear_combine",
+          "input_fields",
+          "diffusive_rhs",
+          "linear_combine"
+        ],
+        "input_field_tokens": 2,
+        "provider_slots": {
+          "a_x": 0,
+          "a_y": 1,
+          "forcing": 2
+        },
+        "provider_producers": [
+          "runtime_input"
+        ],
+        "serialization_sha256": "b0fa2edcd53554979bf6bdece9fdd9d7ed9f43f31f4d0a11e443e8ba2fdbde84",
+        "original_and_detached_numeric_payload_identical": true,
+        "detachment_provenance_metadata_changed": true,
+        "reference_change_from_initial_Linf": 0.0,
+        "output_mutation_1e8_refused": true
+      },
+      {
+        "kind": "diagonal_smooth",
+        "method": "euler",
+        "weights": [
+          "1"
+        ],
+        "ssa_ops": [
+          "state",
+          "input_fields",
+          "diffusive_rhs",
+          "linear_combine"
+        ],
+        "input_field_tokens": 1,
+        "provider_slots": {
+          "a_x": 0,
+          "a_y": 1,
+          "forcing": 2
+        },
+        "provider_producers": [
+          "runtime_input"
+        ],
+        "serialization_sha256": "70337eefb2be4b4c5907e4f38e30078afe06564245d719cc17caec296e1f7fa4",
+        "original_and_detached_numeric_payload_identical": true,
+        "detachment_provenance_metadata_changed": true,
+        "reference_change_from_initial_Linf": 8.157882180492848e-05,
+        "output_mutation_1e8_refused": true
+      },
+      {
+        "kind": "diagonal_smooth",
+        "method": "ssprk2",
+        "weights": [
+          "1/2",
+          "1/2"
+        ],
+        "ssa_ops": [
+          "state",
+          "input_fields",
+          "diffusive_rhs",
+          "linear_combine",
+          "input_fields",
+          "diffusive_rhs",
+          "linear_combine"
+        ],
+        "input_field_tokens": 2,
+        "provider_slots": {
+          "a_x": 0,
+          "a_y": 1,
+          "forcing": 2
+        },
+        "provider_producers": [
+          "runtime_input"
+        ],
+        "serialization_sha256": "08c6d2e2980aafa70e1c5705a2d5bbfacf19908b0365207c26d6401bcf562613",
+        "original_and_detached_numeric_payload_identical": true,
+        "detachment_provenance_metadata_changed": true,
+        "reference_change_from_initial_Linf": 7.751694902502493e-05,
+        "output_mutation_1e8_refused": true
+      }
+    ],
+    "native_load_blocked_attempts": [],
+    "scope": "Actual installed Python Source author/validate/resolve/detach/proof and NumPy only; no Native/JIT/run/cache writes"
+  },
+  "admission_controls": {
+    "positive": "Exact real Root schema2 admission and separate exit0 build-result accepted without Native import",
+    "negative_refusals": [
+      "Source",
+      "SDK",
+      "core",
+      "Native",
+      "identity_Source",
+      "identity_Native",
+      "actual_build_exit_nonzero",
+      "actual_build_exit_bool",
+      "actual_build_result_Source",
+      "actual_build_result_SDK",
+      "installpath_outside_prefix",
+      "identity_installpath",
+      "packaging_origin_outside_sitepackages",
+      "packaging_wrong_native_variant",
+      "arbitrary_text",
+      "arbitrary_empty_json",
+      "modified_status_receipt_pin"
+    ],
+    "negative_count": 17,
+    "original_gap_counterexample": "Original authenticate Source prefix accepted arbitrary text receipt; complete original function never parses its content",
+    "unchanged_AST_functions": [
+      "run_case",
+      "main",
+      "sha",
+      "write_json"
+    ],
+    "build_admission_sha256": "05f27f6c68525b852d517cfff476c715ca3aa78fbc7013311896510ca64beb68",
+    "build_result_sha256": "14b56ec61fc729a4092379652cbae21373279225e5510adbec2bac63095d5420",
+    "actual_receipt_core_files": 1220,
+    "Native_bytes_verified_readonly": 14468728,
+    "scope": "Source/JSON/bytes controls only, no PoPS/Native import, compilation, binding, execution or cache mutation"
+  },
+  "original_reference_tests_invoked_without_pytest_or_PoPS": [
+    "test_linear_physical_manufactured_balance",
+    "test_periodic_constant_has_zero_diffusive_rate",
+    "test_periodic_internal_faces_telescope_independently_of_source",
+    "test_ssprk2_linear_reaction_polynomial"
+  ],
+  "delta": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-independent-protocol-review-4017-20261009/physical-build-admission-control.patch",
+  "delta_sha256": "cbbb3f7c21a80d317e286e20381186ae16e281f8969782d9c05595d7c97208f0",
+  "candidate_runner": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-independent-protocol-review-4017-20261009/candidate/run_native_reception.py",
+  "original_runner_sha256": "415eecea4a6b42c891fde0ed02e177c716065b2342e11d30b4804a0e49808bd1",
+  "candidate_runner_sha256": "83ec6b31a2afdc4a6b7562b318c8638cd6f340564f3c0d671d495a780abead75",
+  "references_sha256_unchanged": "a11c7d3dab64918203f51371d2627ac267b4cd5b86e9bb133ad1f2423454e982",
+  "limits": [
+    "diagonal_linear initial data is an exact discrete stationary state, so its final state alone cannot distinguish Euler/SSPRK2; Source proof and future actual stage/exchange checks plus variable/smooth are distinct discriminators",
+    "Detachment changes only normalization provenance metadata. Original/detached numeric payload equality and separate before/after serialized stability verified; initial blanket full-serialization equality assumption failed and is preserved",
+    "Static numerical reception remains n16/world1/one accepted step only; no AMR/MPI2/GPU/convergence or solved-field producer claim",
+    "Build receipt has no flat accepted status. External gate pins exact real schema2 receipt and sibling build-result, verifies actual exit0 and Source/Native/SDK/core/installpath. Incremental/reused-object qualification scope is preserved; no new-full-build assertion",
+    "Future actual outputs must satisfy original rtol2e-12/atol2e-13 and actual stage/temporal weights; no positive Native case exists in this receipt"
+  ],
+  "pins": {
+    "/Users/romaindespoulain/dev/tmp/sol61-static-inputs-native-reception-preparation-4017-20261009/run_native_reception.py": "415eecea4a6b42c891fde0ed02e177c716065b2342e11d30b4804a0e49808bd1",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-independent-protocol-review-4017-20261009/candidate/run_native_reception.py": "83ec6b31a2afdc4a6b7562b318c8638cd6f340564f3c0d671d495a780abead75",
+    "/Users/romaindespoulain/dev/tmp/sol61-static-inputs-native-reception-preparation-4017-20261009/references.py": "a11c7d3dab64918203f51371d2627ac267b4cd5b86e9bb133ad1f2423454e982",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-independent-protocol-review-4017-20261009/candidate/references.py": "a11c7d3dab64918203f51371d2627ac267b4cd5b86e9bb133ad1f2423454e982",
+    "/Users/romaindespoulain/dev/tmp/sol61-static-inputs-native-reception-preparation-4017-20261009/test_references.py": "0ada806be8bca80ea305fc1915785753e29880f5a3c08733a8186f3b42ef87d0",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-independent-protocol-review-4017-20261009/candidate/test_references.py": "0ada806be8bca80ea305fc1915785753e29880f5a3c08733a8186f3b42ef87d0",
+    "/Users/romaindespoulain/dev/tmp/sol61-static-inputs-native-reception-preparation-4017-20261009/PROTOCOL.md": "85e8b195d1c139e797214c9543ce7a58d12b4364d89aeb4ec30be90258886850",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-independent-protocol-review-4017-20261009/candidate/PROTOCOL.md": "85e8b195d1c139e797214c9543ce7a58d12b4364d89aeb4ec30be90258886850",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-independent-protocol-review-4017-20261009/physical-build-admission-control.patch": "cbbb3f7c21a80d317e286e20381186ae16e281f8969782d9c05595d7c97208f0",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-independent-protocol-review-4017-20261009/source_probe.py": "85454ac6cac07a22c98efcdd021ccb2b38b4d0e86602d88f04ba560121b38efe",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-independent-protocol-review-4017-20261009/source-probe.json": "a36459aed234fcab0e6680c7c3d2eec2bb8fc901f4c69b1aa70c00d8db9d4a47",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-independent-protocol-review-4017-20261009/source-probe-before-detached-serialization-assumption.py": "c38c890df554b592b4831e4fe88e3723f059873b0cd94398a0beecfbe402dd07",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-independent-protocol-review-4017-20261009/first-detach-serialization-difference.txt": "9649b14e052976f33712fb5c6f83c8ef0c5ac09b96680f540218e6d0b268e9a7",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-independent-protocol-review-4017-20261009/numpy_counterexamples.py": "82f0a5869d88ebbca45f1353d3a3b6b59ad33cacdedec393e2f15352dd0697da",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-independent-protocol-review-4017-20261009/numpy-counterexamples.json": "7fb1cd78a46624bb5b6e416c86f8cafafa9aa997835a483386a6e6005c2e00cf",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-independent-protocol-review-4017-20261009/admission_controls.py": "98aa68716c4917024b7b64490f44fcb9a7805d8456f803b89bbee4b1242a8fb1",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-independent-protocol-review-4017-20261009/admission-controls.json": "e3a30237880b3e2948423f417a5c32f6d222024402775f65011c5c44722da92a",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/integration/runtime/test_public_diffusion_matrix.py": "0fb40b1cc0d6e2172a2a24c6980089499dc30d2ddc590f2aac5886c182281298",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include/pops/numerics/diffusion/prepared_diffusion.hpp": "5f0adf266d50f6b38397179d78a88a1b56f177324ed1031d58b4b9cbfb9a1c39",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/numerics/diffusion.py": "b71b3cb13cc47e3076b13fd71b9a2bf6628c1ebd6ede37df2f9b97620b8390c1",
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/numerics/diffusion.py": "b71b3cb13cc47e3076b13fd71b9a2bf6628c1ebd6ede37df2f9b97620b8390c1",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/codegen/program_emit_diffusion.py": "72a1955b6fd3228af0aed171e70d79ff199dd03142c17050f76b30c74fbdb52d",
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/codegen/program_emit_diffusion.py": "72a1955b6fd3228af0aed171e70d79ff199dd03142c17050f76b30c74fbdb52d",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/codegen/program_accepted_ssp.py": "b264d64a072318848fd211cf81453a29a9783142c85916ea879a655a53331567",
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/codegen/program_accepted_ssp.py": "b264d64a072318848fd211cf81453a29a9783142c85916ea879a655a53331567",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/codegen/program_diffusion_exchanges.py": "3cf2ee71bd82cf1877105af87811acc8e9e01dab409fe4d6ccb0c6dd5edb5f6d",
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/codegen/program_diffusion_exchanges.py": "3cf2ee71bd82cf1877105af87811acc8e9e01dab409fe4d6ccb0c6dd5edb5f6d",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/codegen/program_models.py": "8e3a8704a9ad9d8765dbddf6e19a8fdf1bf09d7927d86bd929faedcb90290d89",
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/codegen/program_models.py": "8e3a8704a9ad9d8765dbddf6e19a8fdf1bf09d7927d86bd929faedcb90290d89"
+  }
+}

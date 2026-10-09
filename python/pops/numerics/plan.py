@@ -7,6 +7,7 @@ import json
 from typing import Any
 
 from pops.descriptors import Descriptor
+from pops.blockage import Blockage, BlockageClass, BlockageValueError
 from pops.identity import Identity, make_identity, semantic_identity
 from pops.model import Handle, OperatorHandle, OwnerKind
 
@@ -16,7 +17,7 @@ _RATE_METHOD_PROTOCOL = (
 )
 
 
-class UnsupportedBalanceRealizationError(ValueError):
+class UnsupportedBalanceRealizationError(BlockageValueError):
     """A retained equation has no selected native numerical realization."""
 
     code = "unsupported_balance_realization"
@@ -24,7 +25,13 @@ class UnsupportedBalanceRealizationError(ValueError):
 
     def __init__(self, rate: OperatorHandle, reason: str) -> None:
         self.context = {"rate": rate.local_id, "reason": reason}
-        super().__init__("[%s] rate %r: %s" % (self.code, rate.local_id, reason))
+        super().__init__(
+            "[%s] rate %r: %s" % (self.code, rate.local_id, reason),
+            blockage=Blockage(
+                BlockageClass.IMPL, self.phase, rate.qualified_id,
+                "numerical_realization_unavailable", "selected_rate_realization",
+            ),
+        )
 
 
 def _validate_selected_balance_coverage(model: Any, selected: Mapping, *, states: Any) -> None:
@@ -343,6 +350,7 @@ class ResolvedDiscretizationPlan:
     boundaries: tuple[Any, ...]
     sources: tuple[ResolvedNumericalBinding, ...]
     interfaces: tuple[Any, ...]
+    principal_groups: tuple[Any, ...] = ()
     identity: Identity = field(init=False)
 
     def __post_init__(self) -> None:
@@ -374,10 +382,20 @@ class ResolvedDiscretizationPlan:
             "boundaries": [_callable_projection(row, "resolved boundary") for row in self.boundaries],
             "sources": [row.to_data() for row in self.sources],
             "interfaces": [_callable_projection(row, "resolved interface") for row in self.interfaces],
+            "principal_groups": [group.to_data() for group in self.principal_groups],
         }
 
     def to_data(self) -> dict[str, Any]:
         return {**self._payload(), "identity": self.identity.token}
+
+    def joint_ghost_depth(self) -> int:
+        """Every packed input covers all row stencils, in either coordinate system."""
+        return max((method.ghost_depth for group in self.principal_groups
+                    for method in group.methods), default=1)
+
+    def joint_primitive_ghost_depth(self) -> int:
+        """Compatibility name for the shared conservative/primitive storage requirement."""
+        return self.joint_ghost_depth()
 
     def primary_spatial(self) -> Any:
         """Project independently evaluated rates onto one native transport installation.
@@ -409,7 +427,12 @@ class ResolvedDiscretizationPlan:
                 storage_depths.append(None)
         installed = [index for index, depth in enumerate(storage_depths) if depth is None]
         if not installed:
-            return methods[max(range(len(methods)), key=storage_depths.__getitem__)]
+            selected = methods[max(range(len(methods)), key=storage_depths.__getitem__)]
+            joint_depth = self.joint_ghost_depth()
+            if joint_depth > selected.ghost_depth:
+                from .state_storage import StateStorage
+                return StateStorage(ghost_depth=joint_depth)
+            return selected
         first = installed[0]
         if any(configurations[index] != configurations[first] for index in installed[1:]):
             raise ValueError(
@@ -425,7 +448,8 @@ class ResolvedDiscretizationPlan:
 
         if isinstance(dimension, bool) or dimension not in (1, 2, 3):
             raise ValueError("AMR stencil dimension must be 1, 2, or 3")
-        ghost_depth = max(row.method.ghost_depth for row in self.rates)
+        ghost_depth = max(self.joint_ghost_depth(),
+                          *(row.method.ghost_depth for row in self.rates))
         lookahead = max(row.method.formal_order - 1 for row in self.rates)
         evidence = {
             "plan": self.identity.to_data(),
@@ -531,6 +555,8 @@ class DiscretizationPlan(Descriptor):
             root_kind = value.owner_path.nodes[0].kind
             if root_kind in (OwnerKind.CASE, OwnerKind.SHARED):
                 return case.resolve(value)
+            if value.kind == "state" and value not in states:
+                return case.resolve(value)
             return case.resolve(value, block=block)
 
         rates = []
@@ -624,6 +650,7 @@ class DiscretizationPlan(Descriptor):
             (resolve_interface(value) for value in self.interfaces.values()),
             key=lambda value: _projection_sort_key(value, "resolved interfaces"),
         ))
+        from .principal import resolve_principal_groups
         return ResolvedDiscretizationPlan(
             resolved_block,
             resolved_rates,
@@ -634,6 +661,7 @@ class DiscretizationPlan(Descriptor):
             )),
             resolve_pairs(self.sources.items(), "sources"),
             resolved_interfaces,
+            resolve_principal_groups(case, block),
         )
 
     def inspect(self) -> dict[str, Any]:

@@ -1,0 +1,66 @@
+{
+  "date_utc": "2026-10-08T17:47:07.381743+00:00",
+  "scope": "Original exact small receipts; db206100/ed2 science distinct from subsequent source-only candidates and failedGPU campaign",
+  "files": {
+    "native-independent.json": {
+      "sha256": "b325344a1c888b3c2c3edb269478b919815949c91de6c967028cea71c18fba7b",
+      "bytes": 12160,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-privateCPP-af8-retry2-lineage-db206100-20261008/reception.json"
+    },
+    "native-root.json": {
+      "sha256": "86b0ded2194bd52efec1fd7577f242ce521fe81980e4e6b5c1d6df299b739cc6",
+      "bytes": 1601,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-root-private-CPP-af8-build-dispatch-db206100-20261008/root-native-admission.json"
+    },
+    "exit-label-correction.json": {
+      "sha256": "baa7d212e15a08d97ecbd93f741e4d733f923504406e6f7f562fbd9f2b44e8e1",
+      "bytes": 776,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-root-private-CPP-af8-build-dispatch-db206100-20261008/producer-exit-label-correction.json"
+    },
+    "pde1-independent.json": {
+      "sha256": "c7e3cf5fbf597963d0b5b93d7b744b43f2b1d1e767aa984f85a5ae42f9fd98d0",
+      "bytes": 17006,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-originalPDE1-db-ed2-reception-20261008/reception.json"
+    },
+    "own-retry-independent.json": {
+      "sha256": "f75435cb0529f7092c9a7c8b850ac496b9445dc2e3ac13039cf0806a700d6454",
+      "bytes": 75470,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-OwnRetry-db-ed2-reception-20261008/reception.json"
+    },
+    "native8-independent.json": {
+      "sha256": "d271c3f4b14e6c5ef0ab9a44a0f4e95538fd200fb715e731e904486c63e12872",
+      "bytes": 137302,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-Native8-db-ed2-reception-20261008/reception.json"
+    },
+    "gpu-plan-review-v3.json": {
+      "sha256": "b9f7a2c05d09f301549fd239b20ee9624a4ded4a67977510b7806afc5c0b3309",
+      "bytes": 4457,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/sol61-independent-db206-full-gpu-plan-review-v3-20261008/review.json"
+    },
+    "gpu737948-submission.json": {
+      "sha256": "58f9041993a7eca5a34713a646a32c10d694c89bb5627b96537b38646c0cf662",
+      "bytes": 919,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/sol61-db206-full-gpu-private-preparation-20261008/root-single-dispatch-v3-attempt2.json"
+    },
+    "diffusive-hook-independent-source.json": {
+      "sha256": "a366282fdc39b8f59f784a7ce3a2c0bf2e01254155c381a01143d7e88e9795c1",
+      "bytes": 4673,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-witness-v1-db206100-20261008/independent-hook-source-review.json"
+    },
+    "diffusive-hook-source.json": {
+      "sha256": "e63251689776b7ba9cfb0e7ddfd766beecbe65d94a1990ed441a15fac8d2a700",
+      "bytes": 7770,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/source-review-receipt.json"
+    },
+    "ci-duration-candidate.json": {
+      "sha256": "ac4ff034cfddd7fa06dc956a7b67d81c75d4629a00c1cbd6ea68b1c81c9be2b2",
+      "bytes": 36463,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-ci-duration-candidate-20261008/receipt.json"
+    },
+    "native-typing-version-candidate.json": {
+      "sha256": "5a5a52ca258eefcb470401ea4710da4d172a8e72b7ccc6bbac3a0a59a675dfa4",
+      "bytes": 5003,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-architecture-contract-candidate-20261008/receipt.json"
+    }
+  }
+}

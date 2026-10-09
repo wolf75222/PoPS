@@ -20,6 +20,13 @@ def _scalar_data(value: Any) -> dict[str, Any]:
     return scalar_data(value)
 
 
+def _dense_bytes_identity_data(value: Any) -> dict[str, str]:
+    """New budget domain only: CBOR's legacy integer domain remains signed int64."""
+    if type(value) is not int or not 0 < value < 2**64:
+        raise ValueError("FullResidualBasisLU@1 requires exact positive uint64 max_dense_bytes")
+    return {"uint64_hex": f"{value:016x}"}
+
+
 def _runtime_number(value: Any) -> float:
     if isinstance(value, Mapping):
         encoded = value.get("value")
@@ -44,10 +51,15 @@ class PreparedFieldNonlinear:
     options: Any
     capabilities: frozenset[str]
     identity: Identity
+    convergence: Any = None
 
     def __post_init__(self) -> None:
         if self.target not in ("system", "amr_system"):
             raise ValueError("PreparedFieldNonlinear target is unsupported")
+        if self.convergence is not None:
+            from .convergence import validate_convergence
+            validate_convergence(self.convergence)
+            object.__setattr__(self, "convergence", MappingProxyType({key: dict(value) if isinstance(value, Mapping) else value for key, value in self.convergence.items()}))
         options = MappingProxyType(dict(self.options))
         required = {
             "tolerance",
@@ -70,23 +82,33 @@ class PreparedFieldNonlinear:
             raise ValueError("PreparedFieldNonlinear identity is not canonical")
 
     def _payload(self) -> dict[str, Any]:
-        return {
-            "schema_version": 1,
+        data = {
+            "schema_version": 1 if self.convergence is None else 2,
             "target": self.target,
             "options": dict(self.options),
             "capabilities": sorted(self.capabilities),
         }
+        if self.convergence is not None:
+            data["convergence"] = {key: dict(value) if isinstance(value, Mapping) else value for key, value in self.convergence.items()}
+        return data
 
     def to_data(self) -> dict[str, Any]:
         return {**self._payload(), "identity": self.identity.token}
 
     def install(self, runtime: Any, provider_slot: str) -> None:
-        setter = getattr(runtime, "set_field_newton_plan", None)
+        self.__post_init__()
+        name = "set_field_newton_plan" if self.convergence is None else "set_field_newton_convergence_plan"
+        setter = getattr(runtime, name, None)
         if not callable(setter):
             raise TypeError(
                 "prepared nonlinear provider requires the field nonlinear install protocol"
             )
         o = self.options
+        extra = ()
+        if self.convergence is not None:
+            from .convergence import validate_convergence
+            relative, absolute = validate_convergence(self.convergence)
+            extra = (1 if self.convergence["kind"] == "relative" else 2, relative, absolute)
         setter(
             provider_slot,
             _runtime_number(o["tolerance"]),
@@ -96,6 +118,7 @@ class PreparedFieldNonlinear:
             o["restart"],
             _runtime_number(o["armijo"]),
             _runtime_number(o["minimum_step"]),
+            *extra,
         )
 
 
@@ -220,8 +243,22 @@ class Newton(Descriptor):
         restart: Any = 30,
         armijo: Any = 1.0e-4,
         minimum_step: Any = 1.0 / 1024.0,
+        right_preconditioner: str | None = None,
+        max_dense_bytes: int | None = None,
     ) -> None:
-        self.tolerance = _positive_float(tolerance, "tolerance")
+        if right_preconditioner is not None and (type(right_preconditioner) is not str or
+                right_preconditioner not in ("SpatialBasisJacobi@1", "FullResidualBasisLU@1")):
+            raise ValueError("Newton right_preconditioner must be None, SpatialBasisJacobi@1 or FullResidualBasisLU@1")
+        if right_preconditioner == "FullResidualBasisLU@1":
+            if type(max_dense_bytes) is not int or not 0 < max_dense_bytes < 2**64:
+                raise ValueError("FullResidualBasisLU@1 requires exact positive uint64 max_dense_bytes")
+        elif max_dense_bytes is not None:
+            raise ValueError("max_dense_bytes belongs only to FullResidualBasisLU@1")
+        self._max_dense_bytes = max_dense_bytes
+        self._right_preconditioner = right_preconditioner
+        from .convergence import lower_tolerance
+        self._convergence = lower_tolerance(tolerance)
+        self.tolerance = 1.0e-8 if self._convergence is not None else _positive_float(tolerance, "tolerance")
         self.max_iterations = _positive_int(max_iterations, "max_iterations")
         self.linear_tolerance = _positive_float(linear_tolerance, "linear_tolerance")
         self.linear_max_iterations = _positive_int(linear_max_iterations, "linear_max_iterations")
@@ -236,7 +273,7 @@ class Newton(Descriptor):
         return "newton_krylov"
 
     def options(self) -> dict[str, Any]:
-        return {
+        data = {
             "tolerance": self.tolerance,
             "max_iterations": self.max_iterations,
             "linear_tolerance": self.linear_tolerance,
@@ -245,9 +282,46 @@ class Newton(Descriptor):
             "armijo": self.armijo,
             "minimum_step": self.minimum_step,
         }
+        if self.right_preconditioner is not None:
+            data["right_preconditioner"] = self.right_preconditioner
+        if self.max_dense_bytes is not None:
+            data["max_dense_bytes"] = _dense_bytes_identity_data(self.max_dense_bytes)
+        return data
+
+    @property
+    def convergence(self):
+        return None if self._convergence is None else {key: dict(value) if isinstance(value, Mapping) else value for key, value in self._convergence.items()}
+
+    def numerical_options(self) -> dict[str, Any]:
+        """The seven unchanged Newton/GMRES numerical controls."""
+        return {key: value for key, value in self.options().items()
+                if key not in ("right_preconditioner", "max_dense_bytes")}
+
+    @property
+    def max_dense_bytes(self) -> int | None:
+        """Explicit per-rank dense-array/map/numeric-tower budget, not a Newton tolerance."""
+        return self._max_dense_bytes
+
+    @property
+    def right_preconditioner(self) -> str | None:
+        """Explicit AMR original-operator realization; None preserves identity GMRES.
+
+        SpatialBasisJacobi@1 prepares one inverse field with 1 + stored spatial
+        DOFs actual composite operator applications. It is a reference provider,
+        not the efficient cached-diagonal provider of a future realization.
+        FullResidualBasisLU@1 evaluates 2*active DOFs complete residuals per
+        Newton iterate, stores a replicated O(N**2) matrix and pivots O(N**3).
+        It requires max_dense_bytes; it is an AMR reference realization.
+        """
+        return self._right_preconditioner
 
     def to_data(self) -> dict[str, Any]:
-        return {"scheme": self.scheme, **self.options()}
+        data = {"scheme": self.scheme, **self.options()}
+        if self.convergence is not None:
+            data["convergence"] = self.convergence
+        if self.right_preconditioner is not None:
+            data["right_preconditioner"] = self.right_preconditioner
+        return data
 
     def capabilities(self) -> CapabilitySet:
         return CapabilitySet(
@@ -256,7 +330,7 @@ class Newton(Descriptor):
                 "jvp": True,
                 "line_search": True,
                 "publication_atomic": True,
-                "uniform": True,
+                "uniform": self.right_preconditioner is None,
                 "amr": True,
             }
         )
@@ -272,6 +346,8 @@ class Newton(Descriptor):
 
     def lower_field_nonlinear(self, *, target: str, layout: Any) -> PreparedFieldNonlinear:
         del layout
+        if self.right_preconditioner is not None:
+            raise ValueError(f"{self.right_preconditioner} requires a Program original FieldProblem on AMR; installed field plans do not implement it")
         if target not in ("system", "amr_system"):
             raise ValueError("Newton field outer solve requires a uniform or AMR system")
         authored = self.options()
@@ -290,18 +366,25 @@ class Newton(Descriptor):
             }
         )
         payload = {
-            "schema_version": 1,
+            "schema_version": 1 if self.convergence is None else 2,
             "target": target,
             "options": options,
             "capabilities": sorted(capabilities),
         }
+        if self.convergence is not None:
+            payload["convergence"] = self.convergence
         return PreparedFieldNonlinear(
-            target, options, capabilities, make_identity("prepared-field-nonlinear", payload)
+            target, options, capabilities, make_identity("prepared-field-nonlinear", payload), self.convergence
         )
 
 
 class LocalNewton(Descriptor):
-    """Typed controls for the single prepared cell-local nonlinear provider."""
+    """Typed controls for the single prepared cell-local nonlinear provider.
+
+    ``step_tolerance`` optionally stops a stagnating iteration. A small step is
+    not convergence: if the original residual still fails its tolerance, this
+    stop produces a safeguard failure for the solve's explicit consumer.
+    """
 
     category = "nonlinear_solver"
     native_id = "pops::LocalNewton"

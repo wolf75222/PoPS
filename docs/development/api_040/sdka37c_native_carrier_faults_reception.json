@@ -1,0 +1,164 @@
+{
+  "fixture_author": "703d29f9",
+  "header_signature": "a37c25c95add0cd1e3a3968309fda11de7dd032229f988f6501a1bfefa3f2923",
+  "independent_saved_archive_review": "c8610dce",
+  "independent_source_review": "9b0d37b5",
+  "installed_source_files": 1132,
+  "limits": [
+    "Representative full AMR science still fails partial-topology guard.",
+    "No GPU, device/OOM fault, crash durability, regrid/ownership redistribution or concurrent PDE receipt.",
+    "Direct restart transactions do not qualify standalone commit/finalize.",
+    "MPI scenarios are collective; one test per rank does not double the number of scenarios."
+  ],
+  "modes": [
+    {
+      "after": {
+        "bytes": 2917,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-refusals-serial-dim2/after/identity.json",
+        "sha256": "945a02c18258178fc3ea260a35c706da11b49e21b1e0b02407257bfa6b7eb848"
+      },
+      "before": {
+        "bytes": 2917,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-refusals-serial-dim2/identity.json",
+        "sha256": "945a02c18258178fc3ea260a35c706da11b49e21b1e0b02407257bfa6b7eb848"
+      },
+      "mode": "serial",
+      "named_refusal_scenarios": 9,
+      "rank_rows": [
+        {
+          "rank": 0,
+          "raw_xml": {
+            "bytes": 816,
+            "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-refusals-serial-dim2/pytest.xml",
+            "sha256": "67308a7972c11b97a0dd1ea519a6183a65f8057225d263f5fcc06dc457a90396"
+          },
+          "real_coarse_Q0_uint64_plus_one": true,
+          "rollback_byte_exact": true,
+          "saved_receipt": {
+            "bytes": 47835,
+            "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-refusals-serial-dim2/pytest-tmp/test_native_amr12_state_carrie0/amr12-carrier-failures/receipt-rank0.json",
+            "sha256": "3eb4129b19d0b45f48d2b2f74d770981016d2e510b024745457a0e6f27a9b97e"
+          }
+        }
+      ],
+      "ranks": 1,
+      "refusal_names": [
+        "capture-during-transaction",
+        "native-array-shape",
+        "native-truncated",
+        "native-type",
+        "restore-after-rollback",
+        "restore-outside-transaction",
+        "transport-dtype",
+        "transport-shape",
+        "valid-state-contradicts-scientific-projection"
+      ],
+      "result": {
+        "bytes": 1704,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-refusals-serial-dim2/result.json",
+        "sha256": "703d52f24f88ec7a3b216138170ba0dceae8f20670205ccb856ec9dd2ccb4448"
+      },
+      "seconds": 128.8263522500638,
+      "tests_per_rank": 1
+    },
+    {
+      "after": {
+        "bytes": 2917,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-refusals-mpi2-dim2/after/identity.json",
+        "sha256": "945a02c18258178fc3ea260a35c706da11b49e21b1e0b02407257bfa6b7eb848"
+      },
+      "before": {
+        "bytes": 2917,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-refusals-mpi2-dim2/before/identity.json",
+        "sha256": "945a02c18258178fc3ea260a35c706da11b49e21b1e0b02407257bfa6b7eb848"
+      },
+      "mode": "mpi2",
+      "named_refusal_scenarios": 10,
+      "rank_rows": [
+        {
+          "rank": 0,
+          "raw_xml": {
+            "bytes": 813,
+            "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-refusals-mpi2-dim2/rank0.xml",
+            "sha256": "29f645da7d635c8bd6fdf6a7c1985d598a9c621ea30d87ed9622d55c5a29a710"
+          },
+          "real_coarse_Q0_uint64_plus_one": true,
+          "rollback_byte_exact": true,
+          "saved_receipt": {
+            "bytes": 42020,
+            "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-refusals-mpi2-dim2/rank0-tmp/test_native_amr12_state_carrie0/amr12-carrier-failures/receipt-rank0.json",
+            "sha256": "f41381c8e63b0dfe4053b7eb607ee998870d74c3c828c77c56147ffbcc0377ae"
+          },
+          "worker_identity": {
+            "bytes": 579,
+            "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-refusals-mpi2-dim2/rank0.identity.json",
+            "sha256": "7258330f620d23f4aceb2ce630268fc449a2dc87c2329c3518342ade88c47c35"
+          }
+        },
+        {
+          "rank": 1,
+          "raw_xml": {
+            "bytes": 813,
+            "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-refusals-mpi2-dim2/rank1.xml",
+            "sha256": "4b2ff1ddb2e36e4b5c8e8025faca9c1c45a7058529de5b5f56c43063a0bc21f8"
+          },
+          "real_coarse_Q0_uint64_plus_one": true,
+          "rollback_byte_exact": true,
+          "saved_receipt": {
+            "bytes": 42038,
+            "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-refusals-mpi2-dim2/rank0-tmp/test_native_amr12_state_carrie0/amr12-carrier-failures/receipt-rank1.json",
+            "sha256": "317b7a10f6407724306040ff0b5e39cef73b625c7b7420f9c29603cec0a2fe08"
+          },
+          "worker_identity": {
+            "bytes": 579,
+            "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-refusals-mpi2-dim2/rank1.identity.json",
+            "sha256": "aca43881d2d269879e85867313cc11c895d0e67a8e68c84b221d1a27c378793e"
+          }
+        }
+      ],
+      "ranks": 2,
+      "refusal_names": [
+        "capture-during-transaction",
+        "native-array-shape",
+        "native-truncated",
+        "native-type",
+        "rank-zero-divergent-archive",
+        "restore-after-rollback",
+        "restore-outside-transaction",
+        "transport-dtype",
+        "transport-shape",
+        "valid-state-contradicts-scientific-projection"
+      ],
+      "result": {
+        "bytes": 2393,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdka37-amr12-refusals-mpi2-dim2/result.json",
+        "sha256": "7ad259fc910e36b4b3903e26874f3786fd037c67f75349765e1d2d4ca94547de"
+      },
+      "seconds": 256.5973006251734,
+      "tests_per_rank": 1
+    }
+  ],
+  "native_build_source": "bb668797c2bc15b9fcfc744e94d9bde874ec5e7d",
+  "native_scientific_acceptance": false,
+  "native_sha256": "13b3d024eed5f2776e96dbee6f674fe2e7f48ccf3ff31382b13749444cfe18f7",
+  "package_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/lib/python3.12/site-packages/pops/__init__.py",
+  "preserved_native": {
+    "bytes": 13672632,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/preserved-sdka37c-pre-tag-selection-package/_native/dim2/_pops.cpython-312-darwin.so",
+    "sha256": "13b3d024eed5f2776e96dbee6f674fe2e7f48ccf3ff31382b13749444cfe18f7"
+  },
+  "preserved_package_receipt": {
+    "bytes": 934,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/preserved-sdka37c-pre-tag-selection-package.json",
+    "sha256": "a6977fa20573422fc8e2089e24fa1a73d9a3d389f48c2f122d0e19c17e437d26"
+  },
+  "protocol_reception": true,
+  "root_offline_audit": {
+    "bytes": 7433,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/verify-sdka37-carrier-fault-reception.py",
+    "sha256": "e647d7157b3fa71e43b89e933f45668b34c399c54aa1fefb0401cc36436b3541"
+  },
+  "schema": "root.api040.sdka37c-native-carrier-faults@1",
+  "scope": "Native accepted state-carrier/diagnostic codec, asymmetric collective refusal, real valid-state contradiction before publication, exact rollback.",
+  "test_source": "84284034c83e511ed4405d8bc4f57f4eddbb946a"
+}

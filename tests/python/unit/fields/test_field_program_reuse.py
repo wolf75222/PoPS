@@ -50,11 +50,13 @@ def _emit_variant(variant):
 def test_exact_repeated_stage_reuses_only_one_successful_native_solve():
     code = _emit_variant("same")
     assert code.count("ctx.solve_prepared_linear(") == 1
-    assert code.count("++field_solve_count_0;") == 1
-    assert code.count("++field_reuse_count_0;") == 1
+    assert code.count("++(*field_counters_0)[0];") == 1
+    assert code.count("++(*field_counters_0)[1];") == 1
     assert "field.solves/" in code and "field.reuses/" in code
     # Counters live in the invocation, so attempts/restarts cannot retain old candidates.
-    assert "pops::Real field_solve_count_0 = pops::Real(0)" in code
+    assert "std::array<pops::Real, 2>{pops::Real(0), pops::Real(0)}" in code
+    assert code.index("ctx.install([=](double dt)") < code.index("field_counters_0;")
+    assert code.index('"Program field diagnostic preparation"') < code.index("ctx.solve_prepared_linear(")
 
 
 @pytest.mark.parametrize("variant", ("fresh_stage", "changed_state", "effect_barrier", "solver",
@@ -62,12 +64,12 @@ def test_exact_repeated_stage_reuses_only_one_successful_native_solve():
 def test_new_context_state_effect_or_solver_invalidates_field_reuse(variant):
     code = _emit_variant(variant)
     assert code.count("ctx.solve_prepared_linear(") == 2
-    assert code.count("++field_solve_count_0;") == 2
-    assert "++field_reuse_count_0;" not in code
+    assert code.count("++(*field_counters_0)[0];") == 2
+    assert "++(*field_counters_0)[1];" not in code
 
 
 def test_proven_momentum_only_transform_reuses_density_and_coefficient_inputs():
     code = _emit_variant("momentum_update")
     assert "transformed_2_" in code
     assert code.count("ctx.solve_prepared_linear(") == 1
-    assert code.count("++field_reuse_count_0;") == 1
+    assert code.count("++(*field_counters_0)[1];") == 1

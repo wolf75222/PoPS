@@ -1,0 +1,76 @@
+from fractions import Fraction
+import pytest
+from pops.moments.closures import DiscreteEntropyQuadrature,DiscreteEntropyCertificate
+
+@pytest.mark.parametrize('basis,covector,target',[
+    (((1.,1.,1.),(-.5,0.,.5)),(.5,-1.),(1.,.9)),
+    (((-.5,0.,.5),(1.,1.,1.)),(-1.,.5),(.9,1.)),
+])
+def test_permuted_basis_certificate_has_exact_original_separator(basis,covector,target):
+    q=DiscreteEntropyQuadrature((-.5,0.,.5),(1.,2.,3.),basis)
+    c=DiscreteEntropyCertificate(q,covector,label='declared_support')
+    assert c.margin(target)==-.4
+    assert sum(Fraction(a)*Fraction(b) for a,b in zip(covector,target,strict=True))<0
+    assert c.to_data()['basis']==[list(r) for r in basis]
+
+@pytest.mark.parametrize('vector',[(.25,-1.),(0.,0.),(True,0.),(float('nan'),1.),(1.,)])
+def test_forged_support_certificate_refused(vector):
+    q=DiscreteEntropyQuadrature((-.5,0.,.5),(1.,1.,1.),((1.,1.,1.),(-.5,0.,.5)))
+    with pytest.raises(ValueError):DiscreteEntropyCertificate(q,vector,label='support')
+
+def test_true_public_graph_resolve_emit_has_two_distinct_diagnostics():
+    import pops
+    from examples.migration.scientific.api040_m18_w09 import make_case
+    from pops.codegen.program_models import ProgramModelGraph
+    from pops.codegen.program_codegen import emit_cpp_program
+    case,layout,_=make_case()
+    resolved=pops.resolve(pops.validate(case),layout=layout)
+    source=emit_cpp_program(resolved.time,model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks),target='system')
+    assert source.index('upper_support_target_infeasible')<source.index('upper_support_finite_dual_not_certified')<source.index('solve_prepared_local_nonlinear')
+    assert 'AcceptAllLocalCandidates' in source  # declared guard, not a hidden solver recipe
+
+@pytest.mark.parametrize('scale',[2.0**-1073,2.0**-500,1.,2.0**500])
+def test_exact_binary_scaling_preserves_interior(scale):
+    q=DiscreteEntropyQuadrature((-.5,0.,.5),(1.,1.,1.),((1.,1.,1.),(-.5,0.,.5)))
+    c=DiscreteEntropyCertificate(q,(scale/2,-scale),label='scaled')
+    assert c.covector==(.5,-1.)
+    assert c.margin((1.,.49))>0
+    assert c.margin((1.,.5))==0
+    assert c.margin((1.,.9))<0
+
+def test_lossy_dynamic_range_normalization_refused():
+    q=DiscreteEntropyQuadrature((0.,1.),(1.,1.),((1.,1.),(0.,1.)))
+    with pytest.raises(ValueError,match='exactly'):
+        DiscreteEntropyCertificate(q,(float.fromhex('0x1.fffffffffffffp+1023'),5e-324),label='lossy')
+
+@pytest.mark.parametrize('bad',[float('inf'),float('-inf'),float('nan')])
+def test_one_nonfinite_cell_is_indeterminate_before_domain_decisions(bad):
+    import numpy as np
+    class Recorder:
+        def __init__(self): self.failed=[]; self.stopped=False
+        def value(self,label,values): return np.asarray(values)
+        def min(self,value): return float(np.fmin.reduce(value.ravel()))
+        def guard(self,label,seed,condition,*,action):
+            if not self.stopped and not condition:
+                self.failed.append(label);self.stopped=True
+            return seed
+    q=DiscreteEntropyQuadrature((-.5,0.,.5),(1.,1.,1.),((1.,1.,1.),(-.5,0.,.5)))
+    c=DiscreteEntropyCertificate(q,(.5,-1.),label='support')
+    p=Recorder()
+    with np.errstate(all='ignore'):
+        c.guard_finite_dual(p,object(),(np.array([1.,1.]),np.array([.49,bad])))
+    assert p.failed==['support_arithmetic_indeterminate']
+
+def test_error_envelopes_remain_paired_with_each_spatial_cell():
+    import numpy as np
+    class Recorder:
+        def __init__(self): self.failed=[]
+        def value(self,label,values): return np.asarray(values)
+        def min(self,value): return float(np.min(value))
+        def guard(self,label,seed,condition,*,action):
+            if not condition:self.failed.append(label)
+            return seed
+    q=DiscreteEntropyQuadrature((-.5,0.,.5),(1.,1.,1.),((1.,1.,1.),(-.5,0.,.5)))
+    p=Recorder(); DiscreteEntropyCertificate(q,(.5,-1.),label='support').guard_finite_dual(p,object(),(np.array([1.,1e16]),np.array([.49,5e15+1.])))
+    assert 'support_target_infeasible' not in p.failed
+    assert 'support_finite_dual_not_certified' in p.failed

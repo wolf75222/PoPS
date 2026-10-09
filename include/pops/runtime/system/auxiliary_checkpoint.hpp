@@ -11,6 +11,7 @@
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/system/exact_aux_registry.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -81,6 +82,8 @@ struct AuxiliaryCheckpointAcceptedState final {
   std::vector<AuxiliaryCheckpointStorageGroup<Dim>> groups;
   std::vector<AuxiliaryCheckpointComponent<Dim>> components;
   std::vector<AuxiliaryCheckpointProviderPublication> providers;
+  // Accepted storage may retain a lazy cache whose last publication is now invalidated.
+  std::vector<std::string> invalidated_providers;
 
   friend bool operator==(const AuxiliaryCheckpointAcceptedState&,
                          const AuxiliaryCheckpointAcceptedState&) = default;
@@ -103,6 +106,8 @@ struct AuxiliaryCheckpointEmptyAttestation final {
 namespace auxiliary_checkpoint_detail {
 
 inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'U', 'X', '2'};
+
+inline constexpr std::array<std::uint8_t, 8> kInvalidatedMagic{'P', 'O', 'P', 'S', 'A', 'U', 'X', '3'};
 
 class Writer final {
  public:
@@ -134,6 +139,16 @@ class Writer final {
 class Reader final {
  public:
   explicit Reader(std::span<const std::uint8_t> bytes) : bytes_(bytes) {}
+
+  [[nodiscard]] bool read_invalidated_version() {
+    require_(kMagic.size());
+    const auto magic = bytes_.subspan(cursor_, kMagic.size());
+    const bool invalidated = std::equal(magic.begin(), magic.end(), kInvalidatedMagic.begin());
+    if (!invalidated && !std::equal(magic.begin(), magic.end(), kMagic.begin()))
+      fail_("unsupported magic/version");
+    cursor_ += kMagic.size();
+    return invalidated;
+  }
 
   void expect_raw(std::span<const std::uint8_t> expected) {
     require_(expected.size());
@@ -276,6 +291,9 @@ AuxiliaryStorageShape<Dim> read_shape(Reader& in) {
 }
 
 inline void write_point(Writer& out, const AuxiliaryEvaluationPoint& point) {
+  // The physical payload is an issuing Program's transient stage authority. Keep
+  // the existing checkpoint wire shape; restored derived providers recompute on
+  // their next live physical point (which differs from this discrete-only stamp).
   point.validate();
   out.string(point.clock);
   out.u64(point.accepted_step);
@@ -325,7 +343,7 @@ inline void require_valid_kind(AuxiliaryProviderKind kind) {
 
 template <int Dim>
 [[nodiscard]] AuxiliaryCheckpointAcceptedState<Dim> read_state(Reader& in) {
-  in.expect_raw(kMagic);
+  const bool invalidated_version = in.read_invalidated_version();
   if (in.i32() != Dim)
     throw std::runtime_error("invalid exact auxiliary checkpoint: native dimension differs");
   AuxiliaryCheckpointAcceptedState<Dim> state;
@@ -360,6 +378,12 @@ template <int Dim>
       throw std::runtime_error("invalid exact auxiliary checkpoint: invalid point tag");
     if (present)
       provider.accepted_point = read_point(in);
+  }
+  if (invalidated_version) {
+    state.invalidated_providers.resize(in.size(sizeof(std::uint64_t)));
+    if (state.invalidated_providers.empty())
+      throw std::runtime_error("invalid exact auxiliary checkpoint: empty invalidation extension");
+    for (auto& identity : state.invalidated_providers) identity = in.string();
   }
   in.finish();
   return state;
@@ -399,6 +423,17 @@ void validate_state(const AuxiliaryCheckpointAcceptedState<Dim>& state) {
       throw std::invalid_argument("auxiliary checkpoint has duplicate provider identity");
   }
 
+  std::string previous;
+  for (const auto& identity : state.invalidated_providers) {
+    const auto provider = providers.find(identity);
+    if (provider == providers.end() || provider->second->kind == AuxiliaryProviderKind::input ||
+        !provider->second->accepted_point)
+      throw std::invalid_argument("auxiliary checkpoint invalidation requires an accepted non-input provider");
+    if (!previous.empty() && identity <= previous)
+      throw std::invalid_argument("auxiliary checkpoint invalidations are not unique canonical identities");
+    previous = identity;
+  }
+
   std::map<std::string, bool> keys;
   std::map<std::pair<std::string, std::size_t>, bool> group_components;
   for (const auto& component : state.components) {
@@ -434,8 +469,11 @@ void validate_state(const AuxiliaryCheckpointAcceptedState<Dim>& state) {
 /// its rank-local checkpoint path after this exact metadata image has been captured.
 template <int Dim>
 [[nodiscard]] AuxiliaryCheckpointAcceptedState<Dim> capture_auxiliary_checkpoint_state(
-    const ExactAuxiliaryRegistry<Dim>& registry) {
+    const ExactAuxiliaryRegistry<Dim>& registry,
+    const std::vector<std::string>& invalidated = {}) {
   AuxiliaryCheckpointAcceptedState<Dim> state;
+  state.invalidated_providers = invalidated;
+  std::sort(state.invalidated_providers.begin(), state.invalidated_providers.end());
   state.registry_contract = std::string(registry.collective_contract());
   state.accepted_generation = registry.accepted_generation();
   for (const auto& group : registry.storage_groups())
@@ -444,7 +482,11 @@ template <int Dim>
   const auto& accepted_points = registry.accepted_points();
   for (std::size_t index = 0; index < registry.provider_count(); ++index) {
     const auto& provider = registry.provider(index);
-    state.providers.push_back({provider.identity(), provider.kind(), accepted_points[index]});
+    auto durable_point = accepted_points[index];
+    // Checkpoints carry discrete accepted provenance, not a live Program stage lease.
+    // Runtime rollback snapshots copy the complete registry instead.
+    if (durable_point) durable_point->physical_evaluation.reset();
+    state.providers.push_back({provider.identity(), provider.kind(), std::move(durable_point)});
     for (const auto& output : provider.outputs())
       state.components.push_back({provider.identity(), provider.kind(), output.key, output.contract,
                                   output.shape, registry.address_of(output.key)});
@@ -459,7 +501,7 @@ template <int Dim>
   namespace detail = auxiliary_checkpoint_detail;
   detail::validate_state(state);
   detail::Writer out;
-  out.raw(detail::kMagic);
+  out.raw(state.invalidated_providers.empty() ? detail::kMagic : detail::kInvalidatedMagic);
   out.i32(Dim);
   out.string(state.registry_contract);
   out.u64(state.accepted_generation);
@@ -490,6 +532,10 @@ template <int Dim>
     out.u64(provider.accepted_point ? 1U : 0U);
     if (provider.accepted_point)
       detail::write_point(out, *provider.accepted_point);
+  }
+  if (!state.invalidated_providers.empty()) {
+    out.size(state.invalidated_providers.size());
+    for (const auto& identity : state.invalidated_providers) out.string(identity);
   }
   return std::move(out).take();
 }

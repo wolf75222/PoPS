@@ -1,0 +1,165 @@
+{
+  "status": "received",
+  "owner_pins_sha256": "a5496e2c2d8313918b17fe0602d580118023b113a8af67f3558e95ab2745c07c",
+  "datasets": [
+    {
+      "run": "serial",
+      "order": [
+        0,
+        1
+      ],
+      "state_errors": [
+        2.7755575615628914e-17,
+        4.218847493575595e-15
+      ],
+      "original_residuals": [
+        1.6653345369377348e-16,
+        5.467848396278896e-15
+      ],
+      "parameter_error": 1.1102230246251565e-16,
+      "forcing_error": 1.1102230246251565e-16,
+      "second_seed_original_residual": 0.07294921079353184,
+      "counter_equation_residuals": {
+        "transpose_diffusion": 0.005817664773379971,
+        "wrong_capture_route": 0.1433613244682831,
+        "scaled_stale_forcing": 0.07079834343938568,
+        "seed_substituted_as_rhs": 0.14635227992851002,
+        "opaque_local_only_equations": 0.026671161190325726
+      },
+      "two_solutions_difference": 4.218847493575595e-15
+    },
+    {
+      "run": "serial",
+      "order": [
+        1,
+        0
+      ],
+      "state_errors": [
+        2.7755575615628914e-17,
+        4.163336342344337e-15
+      ],
+      "original_residuals": [
+        1.1102230246251565e-16,
+        5.2735593669694936e-15
+      ],
+      "parameter_error": 1.1102230246251565e-16,
+      "forcing_error": 1.1102230246251565e-16,
+      "second_seed_original_residual": 0.07294921079353184,
+      "counter_equation_residuals": {
+        "transpose_diffusion": 0.005817664773379971,
+        "wrong_capture_route": 0.14336132446828306,
+        "scaled_stale_forcing": 0.07079834343938507,
+        "seed_substituted_as_rhs": 0.1463522799285094,
+        "opaque_local_only_equations": 0.02667116119032581
+      },
+      "two_solutions_difference": 4.135580766728708e-15
+    },
+    {
+      "run": "serial",
+      "order": [
+        2,
+        0,
+        1
+      ],
+      "state_errors": [
+        5.551115123125783e-17,
+        4.163336342344337e-15
+      ],
+      "original_residuals": [
+        1.1102230246251565e-16,
+        5.329070518200751e-15
+      ],
+      "parameter_error": 1.1102230246251565e-16,
+      "forcing_error": 1.6653345369377348e-16,
+      "second_seed_original_residual": 0.07294921079353184,
+      "counter_equation_residuals": {
+        "transpose_diffusion": 0.005817664773379971,
+        "wrong_capture_route": 0.14336132446828315,
+        "scaled_stale_forcing": 0.07079834343938551,
+        "seed_substituted_as_rhs": 0.14635227992850985,
+        "opaque_local_only_equations": 0.02667116119032581
+      },
+      "two_solutions_difference": 4.163336342344337e-15
+    },
+    {
+      "run": "mpi2",
+      "order": [
+        0,
+        1
+      ],
+      "state_errors": [
+        2.7755575615628914e-17,
+        4.218847493575595e-15
+      ],
+      "original_residuals": [
+        1.6653345369377348e-16,
+        5.467848396278896e-15
+      ],
+      "parameter_error": 1.1102230246251565e-16,
+      "forcing_error": 1.1102230246251565e-16,
+      "second_seed_original_residual": 0.07294921079353184,
+      "counter_equation_residuals": {
+        "transpose_diffusion": 0.005817664773379971,
+        "wrong_capture_route": 0.1433613244682831,
+        "scaled_stale_forcing": 0.07079834343938568,
+        "seed_substituted_as_rhs": 0.14635227992851002,
+        "opaque_local_only_equations": 0.026671161190325726
+      },
+      "two_solutions_difference": 4.218847493575595e-15
+    },
+    {
+      "run": "mpi2",
+      "order": [
+        1,
+        0
+      ],
+      "state_errors": [
+        2.7755575615628914e-17,
+        4.163336342344337e-15
+      ],
+      "original_residuals": [
+        1.1102230246251565e-16,
+        5.2735593669694936e-15
+      ],
+      "parameter_error": 1.1102230246251565e-16,
+      "forcing_error": 1.1102230246251565e-16,
+      "second_seed_original_residual": 0.07294921079353184,
+      "counter_equation_residuals": {
+        "transpose_diffusion": 0.005817664773379971,
+        "wrong_capture_route": 0.14336132446828306,
+        "scaled_stale_forcing": 0.07079834343938507,
+        "seed_substituted_as_rhs": 0.1463522799285094,
+        "opaque_local_only_equations": 0.02667116119032581
+      },
+      "two_solutions_difference": 4.135580766728708e-15
+    },
+    {
+      "run": "mpi2",
+      "order": [
+        2,
+        0,
+        1
+      ],
+      "state_errors": [
+        5.551115123125783e-17,
+        4.163336342344337e-15
+      ],
+      "original_residuals": [
+        1.1102230246251565e-16,
+        5.329070518200751e-15
+      ],
+      "parameter_error": 1.1102230246251565e-16,
+      "forcing_error": 1.6653345369377348e-16,
+      "second_seed_original_residual": 0.07294921079353184,
+      "counter_equation_residuals": {
+        "transpose_diffusion": 0.005817664773379971,
+        "wrong_capture_route": 0.14336132446828315,
+        "scaled_stale_forcing": 0.07079834343938551,
+        "seed_substituted_as_rhs": 0.14635227992850985,
+        "opaque_local_only_equations": 0.02667116119032581
+      },
+      "two_solutions_difference": 4.163336342344337e-15
+    }
+  ],
+  "scope": "actual saved nonlinear field solutions only; no new PoPS execution"
+}

@@ -84,7 +84,8 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         return int(ci)
 
     def condensed_coeffs(self, name: Any = None, state: Any = None, linear_operator: Any = None,
-                         subset: Any = None, c: Any = None, th_dt: Any = None, c_rho: Any = 0) -> Any:
+                         subset: Any = None, c: Any = None, th_dt: Any = None, c_rho: Any = 0,
+                         *, gradient_map: Any = None, base_tensor: Any = None) -> Any:
         """Assemble the per-cell tensor coefficient ``A = I + c*rho*M^{-1}`` of the condensed operator
         from an authored linear operator J (``M = I - th_dt*J``) on the exact-ranked momentum @p subset
         and a State (rho at @p c_rho). Returns a ``condensed_coeffs`` bundle carrying one row-major
@@ -92,7 +93,14 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         The codegen inverts M with ``pops::detail::block_inverse<Dim>`` inline.
 
         @p c = theta^2*dt^2*alpha and @p th_dt = theta*dt are scalars (numbers or dt-polynomials). rho
-        (a conservative var) enters only the outer c*rho factor, never M (R2)."""
+        (a conservative var) enters only the outer c*rho factor, never M (R2).
+
+        Optional local-linear operators ``gradient_map=C`` and ``base_tensor=K`` author
+        ``A=K+c*rho*C.T*M^{-1}*C`` on the same subset. Their default is the identity.
+        For mapped coordinates, rho is the stored coordinate-volume density; K includes
+        the volume Jacobian and C maps coordinate gradients to physical gradients.
+        Both maps must depend only on prepared auxiliary values or parameters.
+        """
         if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("condensed_coeffs: a State value is required (state=...)")
         opname = self._condensed_operator_name(linear_operator, state)
@@ -102,19 +110,32 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         return self._new("condensed_coeffs", "condensed_coeffs", (state,),
                          {"linear_operator": opname, "subset": sub,
                           "spatial_dimension": len(sub), "c": c_d, "th_dt": th_d,
-                          "c_rho": self._comp_index(c_rho, "c_rho", "condensed_coeffs")}, name,
+                          "c_rho": self._comp_index(c_rho, "c_rho", "condensed_coeffs"),
+                          "gradient_map": None if gradient_map is None else
+                          self._condensed_operator_name(gradient_map, state),
+                          "base_tensor": None if base_tensor is None else
+                          self._condensed_operator_name(base_tensor, state)}, name,
                          state.block)
 
     def condensed_rhs(self, out: Any = None, phi_n: Any = None, state: Any = None,
                       linear_operator: Any = None, subset: Any = None, th_dt: Any = None,
-                      g: Any = None) -> Any:
+                      g: Any = None, *, gradient_map: Any = None,
+                      base_tensor: Any = None, charge_component: Any = None) -> Any:
         """Record the fused RHS ``out = -Lap(phi_n) - g*div(M^{-1} momentum)`` (F = M^{-1} applied to the
         momentum @p subset) -- the generic counterpart of ``P.schur_rhs``. @p out is a 1-component
         scalar_field, @p phi_n the warm-start potential (its ghosts are filled for the Laplacian), @p
         state a State. @p th_dt = theta*dt, @p g = theta*dt*alpha (numbers or dt-polynomials). The
-        codegen fuses the bare -Lap with the centered divergence of the block-inverse flux inline."""
+        codegen fuses the bare -Lap with the centered divergence of the block-inverse flux inline.
+
+        ``gradient_map=C`` and ``base_tensor=K`` replace these terms by
+        ``-div(K grad(phi_n)) - g*div(C.T*M^{-1} momentum)``. Supplying a conservative
+        ``charge_component`` replaces the first term by that component of State: this is the
+        algebraically folded Gauss-law projection and does not require an old potential.
+        """
         if not (isinstance(out, ProgramValue) and out.vtype == "scalar_field"):
             raise ValueError("condensed_rhs: out must be a scalar_field value")
+        if phi_n is None and charge_component is not None:
+            phi_n = out
         if not (isinstance(phi_n, ProgramValue) and phi_n.vtype == "scalar_field"):
             raise ValueError("condensed_rhs: phi_n must be a scalar_field value")
         if not (isinstance(state, ProgramValue) and state.vtype == "state"):
@@ -125,12 +146,19 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         g_d = self._coeff_dict(g, "g", "condensed_rhs")
         return self._new("scalar_field", "condensed_rhs", (out, phi_n, state),
                          {"linear_operator": opname, "subset": sub,
-                          "spatial_dimension": len(sub), "th_dt": th_d, "g": g_d},
+                          "spatial_dimension": len(sub), "th_dt": th_d, "g": g_d,
+                          "gradient_map": None if gradient_map is None else
+                          self._condensed_operator_name(gradient_map, state),
+                          "base_tensor": None if base_tensor is None else
+                          self._condensed_operator_name(base_tensor, state),
+                          "charge_component": None if charge_component is None else
+                          self._comp_index(charge_component, "charge_component", "condensed_rhs")},
                          out.name, state.block)
 
     def condensed_reconstruct(self, name: Any = None, state: Any = None, phi: Any = None,
                               linear_operator: Any = None, subset: Any = None, th_dt: Any = None,
-                              c_rho: Any = 0) -> Any:
+                              c_rho: Any = 0, *, gradient_map: Any = None,
+                              gradient_scale: Any = 1) -> Any:
         """Record the velocity reconstruction ``v^{n+theta} = M^{-1}(v^n - th_dt*grad phi)`` IN PLACE on
         @p state (rho frozen; mom = rho*v written back over the @p subset) -- the generic counterpart of
         ``P.schur_reconstruct``. @p phi is the solved potential (a scalar_field or 1-component State),
@@ -153,7 +181,11 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         return self._new("state", "condensed_reconstruct", (state, phi),
                          {"linear_operator": opname, "subset": sub,
                           "spatial_dimension": len(sub), "th_dt": th_d,
-                          "c_rho": self._comp_index(c_rho, "c_rho", "condensed_reconstruct")}, name,
+                          "c_rho": self._comp_index(c_rho, "c_rho", "condensed_reconstruct"),
+                          "gradient_map": None if gradient_map is None else
+                          self._condensed_operator_name(gradient_map, state),
+                          "gradient_scale": self._coeff_dict(
+                              gradient_scale, "gradient_scale", "condensed_reconstruct")}, name,
                          state.block, space=state.space)
 
     def condensed_energy(self, name: Any = None, state: Any = None, state_old: Any = None,

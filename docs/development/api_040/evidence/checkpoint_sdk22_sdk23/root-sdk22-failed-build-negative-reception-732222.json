@@ -1,0 +1,40 @@
+{
+  "ci_qualified": false,
+  "failure": "GCC system.cpp400 range-for BoxArray missing begin/end",
+  "independent_pins": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk22-failed-build-independent-732222/pins.json",
+    "sha256": "4485abcb052ad3c9327a514071d551f51ea5413b9f3e15291b3af31a10c368bb",
+    "verified": 22
+  },
+  "independent_reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk22-failed-build-independent-732222/receive.py",
+    "sha256": "ff4790a2081f16d9efccf34d9ef0e20b693f543919302b6e374f59d080e75941"
+  },
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk22-failed-build-independent-732222/report.json",
+    "sha256": "fa1cc5ab076e92dd9dbfc1b85050848d90ed5e2e2568697cc9198f06d412f475"
+  },
+  "job": 732222,
+  "limits": [
+    "Printed header/compile flags are failed-source facts, not installed Native22 authority.",
+    "No source terminal-after snapshot or installed-after snapshot in this export; pending live postfailure supplement must remain separate.",
+    "Archive+preservation snapshot do not qualify new SDK22."
+  ],
+  "live_postfailure_supplement": {
+    "file_inventory_equal_to_before": true,
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/installed-live-postfailed-build22-732222.json",
+    "regular_inventory_count": 1156,
+    "remote_path": "/project/r250127/api040-composition15-mpich-20261002-v15/postbuild-failure22-732222/installed-live-after.json",
+    "scope": "Separate live snapshot after failed job; original export kept unchanged",
+    "sha256": "bc9980c209ee044399f3b19db292a278ac10527ff96feaf558e37d9c9e907da9"
+  },
+  "native22_installed": false,
+  "native_scientific_acceptance": false,
+  "preserved_sdk21_archive_payload_verified": 1156,
+  "root_negative_build_reception": true,
+  "root_recomputed_report_equal": true,
+  "schema": "root.sdk22-failed-build-negative-reception@1",
+  "source_freeze": "99c805690cbca380abe5d08b157aafaa1959cb3e",
+  "source_git_blobs_verified": 1191,
+  "terminal": "FAILED1:0"
+}

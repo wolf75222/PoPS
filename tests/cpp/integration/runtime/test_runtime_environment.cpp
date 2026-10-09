@@ -1,10 +1,43 @@
 #include <gtest/gtest.h>
 
+#include <pops/mesh/storage/fab.hpp>
 #include <pops/runtime/runtime_environment.hpp>
 
 #include <string>
 
 using namespace pops;
+
+TEST(RuntimeEnvironment, ReportsActualFabMemoryResidence) {
+  using FieldMemorySpace = typename Fab<kNativeDimension>::memory_space;
+  static_assert(std::is_same_v<FieldMemorySpace,
+                              Kokkos::DefaultExecutionSpace::memory_space>);
+  const RuntimeEnvironmentReport report = runtime_environment_report();
+  if constexpr (std::is_same_v<FieldMemorySpace, Kokkos::HostSpace>) {
+    EXPECT_EQ(report.field_memory_space, "host");
+  } else if constexpr (Kokkos::SpaceAccessibility<Kokkos::DefaultHostExecutionSpace,
+                                                 FieldMemorySpace>::accessible) {
+    EXPECT_EQ(report.field_memory_space, "managed");
+  } else {
+    EXPECT_EQ(report.field_memory_space, "device");
+  }
+
+  Box<kNativeDimension> valid{};
+  for (int axis = 0; axis < kNativeDimension; ++axis)
+    valid.hi[axis] = 1;
+  Fab<kNativeDimension> fab(valid, 2);
+  const auto storage = fab.storage();
+  Kokkos::parallel_for(
+      "runtime_environment_actual_field_residence",
+      Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, fab.size()),
+      KOKKOS_LAMBDA(const std::size_t index) {
+        storage(index) = static_cast<Real>(index) + Real{0.25};
+      });
+  Kokkos::DefaultExecutionSpace{}.fence("runtime_environment_field_residence");
+  auto host = fab.create_host_mirror();
+  fab.copy_to_host(host);
+  for (std::size_t index = 0; index < fab.size(); ++index)
+    EXPECT_EQ(host(index), static_cast<Real>(index) + Real{0.25});
+}
 
 TEST(RuntimeEnvironment, ReportsDimensionPrecisionAndBackends) {
   const RuntimeEnvironmentReport report = runtime_environment_report();

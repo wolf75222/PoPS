@@ -1,0 +1,20 @@
+{
+  "argv": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "/Users/romaindespoulain/dev/tmp/PoPS-root-stage-fields-native-protocol-20261009/mechanically-reviewed-runner-r2/run_native_capture.py",
+    "--checkout",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+    "--build-receipt",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/native-build-admission.json",
+    "--build-receipt-sha",
+    "182f374d82334398832430a146ba9516c995dd27bd827dc76a9624c0211585fb",
+    "--out",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-representative/run",
+    "--variant",
+    "representative"
+  ],
+  "runner_sha256": "3c4972d8a294b9ff98370fb854fbdd1c707d12a473be1df0ac4edba17e4a8dd5",
+  "build_admission_sha256": "182f374d82334398832430a146ba9516c995dd27bd827dc76a9624c0211585fb",
+  "timestamp_utc": "2026-10-09T03:09:55.018984+00:00",
+  "scope": "Actual new installed Source/Native capture; separate independent math reception required."
+}

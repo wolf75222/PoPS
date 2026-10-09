@@ -37,6 +37,7 @@ from .manifest import (
     build_module_manifest,
 )
 from .module import Module
+from .global_quantity import GlobalQuantityHandle, GlobalQuantityRef
 from .operators import (
     OPERATOR_FAMILIES,
     OPERATOR_KINDS,
@@ -112,6 +113,7 @@ __all__ = [
     "OPERATOR_FAMILIES", "OPERATOR_KINDS", "OPERATOR_REQUIREMENT_KEYS",
     "OPERATOR_SIGNATURE_CONTRACTS", "operator_family", "validate_operator_signature",
     "Handle", "StateHandle", "ParamHandle", "OperatorHandle", "OwnerPath", "OwnerKind",
+    "GlobalQuantityHandle", "GlobalQuantityRef",
     "OwnerSegment",
     "OwnershipError", "MissingOwnershipError", "DoubleOwnershipError",
     "AmbiguousReferenceError", "IdentityCollisionError",
@@ -133,3 +135,6 @@ __all__ = [
 
 from pops._ir.quantity import PhysicalDimension, PhysicalSupport
 __all__ += ["PhysicalDimension", "PhysicalSupport"]
+
+from .flux_waves import FluxWaveLaw
+__all__.append("FluxWaveLaw")

@@ -1,0 +1,336 @@
+{
+  "verdict": "INDEPENDENT_ACCEPT_CURRENT9_WITH_SAVEDPAYLOAD_LIMITS",
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "Native": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+  "SDK": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+  "core": "743bc354455285b4828e6d80039949317c31f63ac6fc3c5432ae2897487594a8",
+  "core_rows_rehashed": 1220,
+  "counts": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 9
+  },
+  "producer_exit": 0,
+  "producer_seconds": 615.7589796250031,
+  "pytest_seconds": 615.0074989170025,
+  "selected_cases": [
+    "tests/python/integration/runtime/test_imex_checkpoint_sealed_retry.py::test_original_imex_checkpoint_retry_replays_one_completed_seal",
+    "tests/python/integration/runtime/test_final_imex_original_reception.py::test_original_manual_state_field_restart",
+    "tests/python/integration/runtime/test_final_imex_original_reception.py::test_original_preset_parity_and_rejected_rollback",
+    "tests/python/integration/runtime/test_imex_checkpoint_publication_rollback.py::test_original_imex_final_checkpoint_failure_restores_science_and_outputs",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_system_direct_step_requires_the_installed_python_program_strategy",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_native_linear_history_uses_bracketing_slots_and_restarts_exactly",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_restart_restores_default_field_onto_fresh_unmaterialized_target"
+  ],
+  "identities_before_after": {
+    "Source_before_after": true,
+    "Native_inprocess_before_pytest_asserted": true,
+    "Native_current_offline_after_bytes_match": true,
+    "native_terminal_sameprocess_identity_packet": "not separately recorded; no synthetic after-packet invented",
+    "SDK_before_identity_and_current_CP_ABI_CPP_DSO_tokens_verified": true,
+    "core_current_after_rehashed": true,
+    "scope": "CPU OpenMP2/MPI-enabled world1 Dim2, original AMR actual2levels; no MPI2/GPU/3D transfer"
+  },
+  "actual_inventory": {
+    "files": 300,
+    "CP_total": 23,
+    "CP_payloads_total": 1121,
+    "own_retry_CP": 6,
+    "own_retry_payloads": 312,
+    "native8_CP": 17,
+    "native8_payloads": 809,
+    "negative_corrupt": 3,
+    "negative_integrity_valid_semantic_invalid": 6,
+    "science_NPZ": 22,
+    "standalone_NPY": 28,
+    "DSOs": 20
+  },
+  "full_science_pairs": {
+    "own_retry": [
+      {
+        "array_payloads": 4,
+        "full_JSON_and_Program_equal": true,
+        "pair": [
+          "reference-rank0",
+          "accepted-rank0"
+        ],
+        "stats_projection_only": false,
+        "values_compared": 10240
+      },
+      {
+        "array_payloads": 4,
+        "full_JSON_and_Program_equal": true,
+        "pair": [
+          "accepted-rank0",
+          "restored-rank0"
+        ],
+        "stats_projection_only": false,
+        "values_compared": 10240
+      },
+      {
+        "array_payloads": 4,
+        "full_JSON_and_Program_equal": true,
+        "pair": [
+          "continuous-rank0",
+          "restarted-rank0"
+        ],
+        "stats_projection_only": false,
+        "values_compared": 10240
+      }
+    ],
+    "manual_preset_restart_rejection": [
+      {
+        "array_payloads": 4,
+        "full_JSON_and_Program_equal": true,
+        "pair": [
+          "accepted",
+          "restored"
+        ],
+        "stats_projection_only": false,
+        "values_compared": 10240
+      },
+      {
+        "array_payloads": 4,
+        "full_JSON_and_Program_equal": true,
+        "pair": [
+          "accepted",
+          "preset"
+        ],
+        "stats_projection_only": false,
+        "values_compared": 10240
+      },
+      {
+        "array_payloads": 4,
+        "full_JSON_and_Program_equal": true,
+        "pair": [
+          "continuous",
+          "restarted"
+        ],
+        "stats_projection_only": false,
+        "values_compared": 10240
+      },
+      {
+        "array_payloads": 4,
+        "full_JSON_and_Program_equal": true,
+        "pair": [
+          "rejected-before",
+          "rejected-after"
+        ],
+        "stats_projection_only": false,
+        "values_compared": 10240
+      }
+    ],
+    "publication_before_after": {
+      "array_payloads": 4,
+      "full_JSON_and_Program_equal": true,
+      "pair": [
+        "before-rank0",
+        "after-rank0"
+      ],
+      "stats_projection_only": true,
+      "values_compared": 10240
+    }
+  },
+  "sealed_retry": {
+    "bytes": 178783,
+    "captures": 1,
+    "current_target_inode_not_inferred_from_recorded_source": true,
+    "factories": 1,
+    "observed_current_target_inode": [
+      16777229,
+      340270178
+    ],
+    "publications": 2,
+    "recorded_reused_source_inode": [
+      16777229,
+      340270178
+    ],
+    "retained_attempts_and_final_target_byte_equal": true,
+    "sha256": "3a5907a14cf45f1f5d592e821f2321a728e0511829bb4f8db9368ffc0c16e393"
+  },
+  "publication_rollback": {
+    "committed_before_failure_retained": true,
+    "failure": {
+      "transaction_depth": 1,
+      "numerical_acceptance": false
+    },
+    "newly_published_files_removed": 7,
+    "output_tree_files_after_rollback": 0,
+    "actual_stats_before": [
+      {
+        "path": "temporal/transaction_stats",
+        "value": {
+          "accepted": 0,
+          "failed": 0,
+          "rejected": 0
+        }
+      }
+    ],
+    "actual_stats_after": [
+      {
+        "path": "temporal/transaction_stats",
+        "value": {
+          "accepted": 0,
+          "failed": 0,
+          "rejected": 0
+        }
+      }
+    ],
+    "52payload_CP_before_after_exact_except_allowed_reseal_and_stats": true
+  },
+  "independent_uniform_math": {
+    "macro_history": {
+      "checkpoint_state_expected_rational": "23/20",
+      "actual_Linf_defect": 2.220446049250313e-16,
+      "history_lags": [
+        "11/10",
+        "1"
+      ],
+      "next_reference_rational_unmeasured": "49/40",
+      "limit": "Final macro-history 1.225 state is asserted by Native fixture/JUnit but no final raw array was saved; not independently received here"
+    },
+    "child_history": [
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/pytest-tmp/test_uniform_child_clock_histo0/child-linear-final-reference.npz",
+        "expected_rational": "85766121/64000000",
+        "Linf_defect": 4.440892098500626e-16
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/pytest-tmp/test_uniform_child_clock_histo0/child-linear-final-split.npz",
+        "expected_rational": "85766121/64000000",
+        "Linf_defect": 4.440892098500626e-16
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/pytest-tmp/test_uniform_child_clock_histo0/child-linear-final-resumed.npz",
+        "expected_rational": "85766121/64000000",
+        "Linf_defect": 4.440892098500626e-16
+      }
+    ],
+    "adaptive": {
+      "accepted_dt_rational": [
+        "1/16",
+        "5/64",
+        "25/512"
+      ],
+      "checkpoint_time_rational": "97/512",
+      "checkpoint_state_rational": "4490909/4194304",
+      "Linf_defect": 0.0,
+      "queued_dt_rational": "125/2048",
+      "actual_transaction_stats": {
+        "accepted": 3,
+        "failed": 0,
+        "rejected": 1
+      },
+      "scope": "Unbounded deadline probe arithmetic predicts two rejections; saved split uses declared checkpoint t_end, clipping last proposal before its guard, so its measured rejected statistic1 is not overwritten with the unbounded-probe count2",
+      "limit": "Final six-step adaptive arrays not retained; their exact resumed/reference equality is Native/JUnit evidence, not a new offline raw-array receipt"
+    }
+  },
+  "actual_CPP_DSO_scope": [
+    {
+      "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/pytest-tmp/imex-original0/preset-provenance/provenance-rank0/receipt.json",
+      "sha256": "340de5f4d15b1242266fedb0e0c5f36ffdd410ebaa749bcf4a6fdd8ddb11ee68",
+      "entries": [
+        {
+          "component": "block-tracer",
+          "source_DSO_pair_verified": true,
+          "compiler_to_binary_graph_proof": false
+        },
+        {
+          "component": "program-pops.handle.v1::case:scalar_advection_imex_amr::layout::default",
+          "retained_program_CPP_DSO_verified": true,
+          "retained_program_command": null,
+          "limit": "Program command is NULL when recorded as such; retained source/DSO bytes verified, no Program compiler-command or compiler-to-binary graph proof inferred"
+        }
+      ]
+    },
+    {
+      "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/pytest-tmp/imex-original0/provenance-rank0/receipt.json",
+      "sha256": "7470c565a8eabce05921d2296e6f541645a85379242be374ad0707c7c9bf4367",
+      "entries": [
+        {
+          "component": "block-tracer",
+          "source_DSO_pair_verified": true,
+          "compiler_to_binary_graph_proof": false
+        },
+        {
+          "component": "program-pops.handle.v1::case:scalar_advection_imex_amr::layout::default",
+          "retained_program_CPP_DSO_verified": true,
+          "retained_program_command": "/usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG=\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI=\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\" -I /Users/romaindespoulain/miniforge3/envs/pops/include -undefined dynamic_lookup -MMD -MF <compiler-dependencies> -MT /Users/romaindespoulain/.cache/pops/dsl/a81581d25be3f8d45dd9ac39eea4cca0d5992e5996aed3775b0677e6588afea1.so -I /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include <generated> -o /Users/romaindespoulain/.cache/pops/dsl/a81581d25be3f8d45dd9ac39eea4cca0d5992e5996aed3775b0677e6588afea1.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so",
+          "limit": "Program command is NULL when recorded as such; retained source/DSO bytes verified, no Program compiler-command or compiler-to-binary graph proof inferred"
+        }
+      ]
+    },
+    {
+      "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/provenance-rank0/receipt.json",
+      "sha256": "fa0a6c238f160453c846df0ab2041710075da73e7ef7f0985c853f98c453eb00",
+      "entries": [
+        {
+          "component": "block-tracer",
+          "source_DSO_pair_verified": true,
+          "compiler_to_binary_graph_proof": false
+        },
+        {
+          "component": "program-pops.handle.v1::case:scalar_advection_imex_amr::layout::default",
+          "retained_program_CPP_DSO_verified": true,
+          "retained_program_command": "/usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG=\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI=\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\" -I /Users/romaindespoulain/miniforge3/envs/pops/include -undefined dynamic_lookup -MMD -MF <compiler-dependencies> -MT /Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/pytest-tmp/test_original_imex_checkpoint_0/pops-native-cache/a81581d25be3f8d45dd9ac39eea4cca0d5992e5996aed3775b0677e6588afea1.so -I /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include <generated> -o /Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/pytest-tmp/test_original_imex_checkpoint_0/pops-native-cache/a81581d25be3f8d45dd9ac39eea4cca0d5992e5996aed3775b0677e6588afea1.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so",
+          "limit": "Program command is NULL when recorded as such; retained source/DSO bytes verified, no Program compiler-command or compiler-to-binary graph proof inferred"
+        }
+      ]
+    },
+    {
+      "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/provenance-rank0/receipt.json",
+      "sha256": "862f89caa6fd555290a43f1f94c1048b33fc8771e1d7b7c0223aa250606336ad",
+      "entries": [
+        {
+          "component": "block-tracer",
+          "source_DSO_pair_verified": true,
+          "compiler_to_binary_graph_proof": false
+        },
+        {
+          "component": "program-pops.handle.v1::case:scalar_advection_imex_amr::layout::default",
+          "retained_program_CPP_DSO_verified": true,
+          "retained_program_command": "/usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG=\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI=\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\" -I /Users/romaindespoulain/miniforge3/envs/pops/include -undefined dynamic_lookup -MMD -MF <compiler-dependencies> -MT /Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/pytest-tmp/test_original_imex_final_check0/pops-native-cache/a81581d25be3f8d45dd9ac39eea4cca0d5992e5996aed3775b0677e6588afea1.so -I /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include <generated> -o /Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/pytest-tmp/test_original_imex_final_check0/pops-native-cache/a81581d25be3f8d45dd9ac39eea4cca0d5992e5996aed3775b0677e6588afea1.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so",
+          "limit": "Program command is NULL when recorded as such; retained source/DSO bytes verified, no Program compiler-command or compiler-to-binary graph proof inferred"
+        }
+      ]
+    }
+  ],
+  "limits": [
+    "No fixture body in these nine was authored by this receiver; prior reader code reused, no historical receipt/array/PASS read for current admission",
+    "Counts23/1121 happen to equal older cohort; each current archive/token/raw payload independently checked, no count or result inherited",
+    "Actual pytest command has no -x; exact nine PASS observed, no inherited fail-first claim",
+    "Current retained Model source/DSO hash/SDK and flags verified; compiler_to_binary_graph_proof remains false. Retained Program command=NULL recorded honestly, no compile graph proof inferred",
+    "Final macrohistory and adaptive state arrays not persisted; terminal Native/JUnit assertions and offline CP/reference reception remain distinct. Direct-step guard has no retained before/after array snapshot",
+    "Original coupled AMR State/Field complete bits, metadata/clocks/Program and CP restart IDs accepted; no new independent composite elliptic residual/continuum exact solution or gauge decoder claimed",
+    "Dirichlet0 field problem has no separate explicit gauge-named payload; opaque native checkpoint bytes preserved/compared, not decoded into invented gauge keys",
+    "No global94, broad scientific convergence, remote CI or GPU closure"
+  ],
+  "reader_errors_preserved": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-retry-native8-independent-reception-4017-20261009/initial-reader-errors.txt",
+  "pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-retry-native8-independent-reception-4017-20261009/own-retry-reception.json": "50f30d4a390f647dae5f931fc67a41290e926e798be93554e7e452183af0eff9",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-retry-native8-independent-reception-4017-20261009/native8-reception.json": "932070f925f7600a019a559255f2de0f45d8c82bb2f78f7a1fc370e87f782bb2",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-retry-native8-independent-reception-4017-20261009/current9-math-provenance-negatives.json": "b889b96adb6e2970b4b65ee66452ec7506b958ef0868e793e15d070f5ee08d66",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-retry-native8-independent-reception-4017-20261009/physical-pins.json": "f09b670f408890ed4ea61a0421ba9aea0babdb7edcec469d381c2b6466fdbe66",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-retry-native8-independent-reception-4017-20261009/receive_current9.py": "6133e578315100aa2f01415304e377e6cd33332a99d21c41522039b012d8e896",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-retry-native8-independent-reception-4017-20261009/offline_common.py": "28aab45407ae32a6f2347fb4fe1c5315f0053249ea81dac8f2e67fba3b6747ee",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-retry-native8-independent-reception-4017-20261009/supplement_current9.py": "cd864a7d9185376ef5d34d4576965bed3c08569039262dc59b26f3234a3aff37",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-retry-native8-independent-reception-4017-20261009/receive-before-current-core-schema-fix.py": "810fb163f4592c276e7e3c55eada2fb48b0a643f97cfb9757a45a6784603a7c8",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-retry-native8-independent-reception-4017-20261009/supplement-before-pin-size-schema-fix.py": "ed25ed45e4d285f3d8c1f1af169f290ea1987275aacf5a4397672ef8e3199cc6",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-retry-native8-independent-reception-4017-20261009/supplement-before-none-program-command-fix.py": "58f86c902fa21639dc2ac887c023c50ae30ff78e8c959aa3396e183475711505",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-retry-native8-independent-reception-4017-20261009/initial-reader-errors.txt": "ed9cd6cd267b9e9713e4d864881541e786d57bb1eb8c7ed073ac9379deccd000",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/pytest.xml": "84ec25736c6155fb5191af34f85630c8da633788de0a6e59bad1d50cc50d1b7d",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/result.json": "9a856dbbde71b727308d93a7d0475d19d92140d5c6fce9506bf77193de853674",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/identity.json": "a4d385377e2e0dbe4dcb99a4b635ef2d236fd56dbb40a34548dee44979c42beb",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/pytest.log": "60d40c1ea5d405418af642458e80a4093428df80a17653322dab19c58ca6ce8f",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/producer-result.json": "eac885c1b8dd43ddb6fc35968a30d06ecea29ffb52379f1163490d3fb1895af4",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/producer-invocation.json": "18586c2540687b8d79d8cadd33d7a9f7b8b6043e04b56f3834a10be70a00fa54",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/producer.log": "9a856dbbde71b727308d93a7d0475d19d92140d5c6fce9506bf77193de853674",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/native-build-admission.json": "05f27f6c68525b852d517cfff476c715ca3aa78fbc7013311896510ca64beb68",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/build-result.json": "14b56ec61fc729a4092379652cbae21373279225e5510adbec2bac63095d5420",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/core-manifest.json": "a32eb2880701986340023a95f67e84f0f798f67942a5520703da97a306587223"
+  },
+  "scope": "File-only/NumPy nonauthor reception of actual saved4017/939 outputs. No PoPS/Native imports or executions, Main/prefix/cache/env/ROMEO changes."
+}

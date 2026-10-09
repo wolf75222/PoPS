@@ -1,0 +1,281 @@
+{
+  "contract": "pops.non-author-r5-source-review@1",
+  "verdict": "SOURCE_PREPARATION_ACCEPT; ROOT_FRESH_ADMISSION_AND_ACTUAL_R5_NATIVE_PENDING",
+  "candidate": "/Users/romaindespoulain/dev/tmp/sol61-gh200-runtime-linkage-resume-r5-20261009",
+  "candidate_manifest_sha256": "742bca45423e7763eeef24d00d7cf90311e5cca11822e79cf30ba164d0f8d48c",
+  "manifest_file_members_verified": 23,
+  "Source": "98804c6849c9966e05b5397126bab983a5fa0227",
+  "SDK": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+  "core": "b756f21226ad09e2108026bc9c3bfce9a251d1480e8a81e0e733db0c0845871a",
+  "semantic_delta": "Onlynewruntime-discoverybehavior adds exportKokkos_ROOT=$ROOT/kokkos-unified-install andexportPOPS_KOKKOS_ROOT=$Kokkos_ROOT immediatelyafterowncondaactivationandprefixguard,beforeactualbuildKokkosguard/child/ranks. Retainedownprefixguard/CMakeKokkos_ROOT/Kokkos_DIR unchanged. MechanicalR5namespaceplusmandatoryglobal+priorR4+currentR5entry-markerguards areexplicitlyseparatefromtwoexportdelta.",
+  "comparison": [
+    {
+      "file": "build_phase_r5.sbatch",
+      "R4_base_sha256": "5b633ffe1468dec2f27d947791bc8e8cf57342310c6474a57b236c99e99c8f29",
+      "R5_sha256": "0bfa12b5516f6d537c417e87956cf1d9a9aa4687986f49be0423579ae9bd1c08",
+      "normalized_equal": true,
+      "permitted_changes": "mechanicalnamespaceonly"
+    },
+    {
+      "file": "runtime_context_r5.sh",
+      "R4_base_sha256": "d10f17a90f4a262ac374db958f99be62d14063bba50a5f837fc016d807241c7b",
+      "R5_sha256": "1378875b47aaf16fd1222d9b0f509d6dd9e9578d0e92895e439940c2d89c6a72",
+      "normalized_equal": false,
+      "permitted_changes": "twoKokkosexports"
+    },
+    {
+      "file": "phase_rank_runner_r5.py",
+      "R4_base_sha256": "0a47c48f9d2401da488d70f38ac2fe4a6d79059735effed74aa7c62af2e92ca5",
+      "R5_sha256": "cb7115f637f889d5e90bed17c0345fc0614c9bdf94d6ccc9357095b9e9e04ca6",
+      "normalized_equal": true,
+      "permitted_changes": "mechanicalnamespaceonly"
+    },
+    {
+      "file": "runtime_phase_r5.sbatch",
+      "R4_base_sha256": "5e286235825e355d1254dcaa15b745c5fbb6f4affaaa1c5f5b9efcbe3242b097",
+      "R5_sha256": "cfe85ee73b81e8ed308a9e8c0a4c884f9869d5c1a767964e39e0125d698c351c",
+      "normalized_equal": true,
+      "permitted_changes": "mechanicalnamespaceonly"
+    },
+    {
+      "file": "resume_probe_r5.sh",
+      "R4_base_sha256": "80e13991d14863a55a4fc2ac2dc6bbe88e8fde2ab481388bea3af1914d4f09bb",
+      "R5_sha256": "4ca7f56bfd07da245c1d2dfc4b6f2fd376f2db509140acbfaeab7826ddade50c",
+      "normalized_equal": true,
+      "permitted_changes": "mechanicalnamespaceonly"
+    },
+    {
+      "file": "capture_gpu_native_r5.py",
+      "R4_base_sha256": "ce0eb01ada4cbabad54f42f4ae93352987f299ed319574244684b95e96229746",
+      "R5_sha256": "e91de487a476e58d83e30d38f253280500ac55253c005448779d5a197a364f17",
+      "normalized_equal": true,
+      "permitted_changes": "mechanicalnamespaceonly"
+    },
+    {
+      "file": "read-r5-pins.py",
+      "R4_base_sha256": "98505bbafda028c9a97362fbbede4afa3b97a92c262e0e30a7f9f996d9049296",
+      "R5_sha256": "e1d58390fadbf172463b5a4eea2ea48d41e33a4a0ee42eb458919f55854ca8db",
+      "normalized_equal": false,
+      "permitted_changes": "priorR4markerabsenceguard"
+    },
+    {
+      "file": "phase_quota_r5.py",
+      "R4_base_sha256": "c2d970518130db10f0bbef07d1f83844ef87551d15a92d41361536ba225b0294",
+      "R5_sha256": "ea534f527ae56483240cf074a9a4492111e0aac16ea3580eee018d6b3189f20b",
+      "normalized_equal": true,
+      "permitted_changes": "mechanicalnamespaceonly"
+    },
+    {
+      "file": "run_campaign_r5.sh",
+      "R4_base_sha256": "f4be3ce74eceaadaca98ed7316cd3779139037a692c94cba835dbd4c5094a261",
+      "R5_sha256": "d55fe5543c917bee59757dcb8dcc96324c1ba84c19b940d74861737eb71f5f47",
+      "normalized_equal": true,
+      "permitted_changes": "mechanicalnamespaceonly"
+    },
+    {
+      "file": "capture_kokkos_profile_r5.py",
+      "R4_base_sha256": "cf25fea18892cd3cca914b98d4b4e045f6a56ffa2286c28802ae1c1ec22049d5",
+      "R5_sha256": "b33a1e9f7350f1acbbc2336f9747750236d6a1234f78c8fd26ef5087bd4e4602",
+      "normalized_equal": true,
+      "permitted_changes": "mechanicalnamespaceonly"
+    },
+    {
+      "file": "build_native_r5.sh",
+      "R4_base_sha256": "dc485158ab821ed68465961c59c1af650d12549953fe193a8683541a1fd1aa28",
+      "R5_sha256": "f586b80503e8f00f05928bf37d834fe03de0e78a6a736e8f6f769d5aadc086be",
+      "normalized_equal": false,
+      "permitted_changes": "priorR4markerabsenceguard"
+    },
+    {
+      "file": "native_install_rpath_r5.py",
+      "R4_base_sha256": "e88c78f30aa832e53811ca864261a96ce858fde03a2faf296ef4b7467ca59c70",
+      "R5_sha256": "e88c78f30aa832e53811ca864261a96ce858fde03a2faf296ef4b7467ca59c70",
+      "normalized_equal": true,
+      "permitted_changes": "mechanicalnamespaceonly"
+    },
+    {
+      "file": "test_native_install_rpath_r5.py",
+      "R4_base_sha256": "f8844228c628f1adb99a6e4e334a0f4a73a8264eb45d2c94db9d9a35627f3016",
+      "R5_sha256": "5ce05f8b60e3c834006a829941df920be94f0197e3dc59732a192ef79a0911f6",
+      "normalized_equal": true,
+      "permitted_changes": "mechanicalnamespaceonly"
+    },
+    {
+      "file": "launch_phase_r5.py",
+      "R4_base_sha256": "1e642bc84a16c8220d78b6c376d84d3058c8521bcda371e18fdab75fbbe4952e",
+      "R5_sha256": "a7bc9ad6ff2e44c2b183a78d26766650f94f271baf628b522a4da63a31612678",
+      "normalized_equal": true,
+      "permitted_changes": "mechanicalnamespaceonly"
+    }
+  ],
+  "invariants": "NormalizedR4\u2192R5 operational14files exactexcepttwoexportsandfreshpriorR4markerabsence guards. CUDAcachedfirstLD maintained; acceptedCMakeRPATHproof/nativepackaging,finallystatuspriority,foregroundphaseparser,quota/grace/growthfilters,rawselectors/numericalequations/compilerflags unchanged. Newperphasefilenames/markers useR5; retainedR3/R4files appearonlyaspreviousimmutableevidence orabsenceguards.",
+  "controls": {
+    "Python_AST_and_Bash_parse": "Allcandidateoperationalfilespass",
+    "local_synthetic_cases": 13,
+    "synthetics": [
+      {
+        "name": "R4unsetguardrefuses",
+        "exit": 1,
+        "stdout": "",
+        "stderr": "bash: line 1: Kokkos_ROOT: unbound variable\n"
+      },
+      {
+        "name": "R5exactownprefixandaliases",
+        "exit": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "name": "R5childexport",
+        "exit": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "name": "syntheticchildrank0",
+        "exit": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "name": "syntheticchildrank1",
+        "exit": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "name": "Inheritedforeigndiscoveryreplaced",
+        "exit": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "name": "Foreignrootafterexportrefused",
+        "exit": 1,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "name": "allmarkersabsent",
+        "exit": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "name": "existing-official-build-entered.json",
+        "exit": 1,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "name": "existing-official-build-entered-r4.json",
+        "exit": 1,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "name": "existing-official-build-entered-r5.json",
+        "exit": 1,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "name": "actualRootGOfalsepreflightrefusal",
+        "exit": 1,
+        "stderr": "Traceback (most recent call last):\n  File \"/Users/romaindespoulain/dev/tmp/sol61-gh200-runtime-linkage-resume-r5-20261009/read-r5-pins.py\", line 5, in <module>\n    assert a['Root_GO']is True and os.getuid()==100267\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+      },
+      {
+        "name": "actualgrowthNullrefusal",
+        "exit": 1,
+        "stderr": "Traceback (most recent call last):\n  File \"/Users/romaindespoulain/dev/tmp/sol61-gh200-runtime-linkage-resume-r5-20261009/phase_quota_r5.py\", line 5, in <module>\n    remaining=a[key];assert type(remaining)is int and remaining>=0\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+      }
+    ],
+    "Python_exact_marker_asserts": [
+      {
+        "marker": "official-build-entered.json",
+        "Python_guard": false
+      },
+      {
+        "marker": "official-build-entered-r4.json",
+        "Python_guard": false
+      },
+      {
+        "marker": "official-build-entered-r5.json",
+        "Python_guard": false
+      }
+    ],
+    "RPATH_new_namespace_synthetic_tests": 17,
+    "Native_or_GPU_test_claim": false
+  },
+  "admission": "TemplateRoot_GOFalse,actualReadonlyPreflightNone andallthreegrowthNone independentlychecked; actualadmissionfalse andgrowthNone routes refuse locally. Rootmustsupplyfreshquota/preflight/growth/GO; candidateitselfisnotadmittedfordispatch. No guessedcapacity ornewNativehash.",
+  "prior_actual_R4_scope": {
+    "progress_sha256": "6644324758c204d104b75ea2cc3c6821e0f783d8a4923a546bc1a84e74e86fc2",
+    "actual_probe_sha256": "996efc74708a4d50c916c2f72c69f554a11f3134dc72c3940438cf1e4f07b390",
+    "probe": {
+      "allocated_pointer": "0x4002a0012080",
+      "cuda_stream": "0xaaab208a3070",
+      "execution_backend": "Cuda",
+      "field_memory_space_type": "CudaSpace",
+      "HostSpace_accessible": true,
+      "Cuda_accessible": true,
+      "pointer_type": 3,
+      "cudaMemoryTypeManaged": 3,
+      "pointer_query_status": 0,
+      "launch_status": 0,
+      "stream_sync_status": 0,
+      "device": 0,
+      "raw_device_name": "NVIDIA GH200 120GB",
+      "compute_major": 9,
+      "compute_minor": 0,
+      "CUDA_runtime_library_version": 12060,
+      "CUDA_driver_version": 13010,
+      "CUDA_runtime_header_version": 12060,
+      "stamp": 8192,
+      "status": 0,
+      "scope": "Actual managed allocation and direct CUDA kernel probe, not production PDE kernel or numerical acceptance"
+    },
+    "Native_entry_marker_exists": false,
+    "Native_build_log_exists": false,
+    "Native_admission_exists": false,
+    "actual_failure": "Kokkos_ROOT unbound atbuild_native_r4.sh47,beforeofficial-buildenteredmarker",
+    "scope": "ReadactualpriorRootcapturedreceipts only. DirectUM/launchmicroprobePASS distinctfromNative-entryFAIL, noproductionPDE/GPU/norm2qualification."
+  },
+  "separate_CPU_cohort": "CurrentCPUSource4017/Native939/SDKacf0/core743 receptiondoesnotqualifythisGPUcandidateSource988/SDKde2/coreb756. R4directmanagedallocationandCudaSpaceaccess/kernelstampPASS996efc isnotproductionNative/PDE/MPIGPUqualification; R4Nativeentryunboundfailure andabsentNativebuildmarkers/log/admission preserved.",
+  "source_corrections_needed": null,
+  "evidence_paths_sha256": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-r5-independent-source-review-20261009/independent-static-synthetics.json": "e4f4840a64b7d3f74f3215618a8f6b852c4341f13473f374753518b512428d0f",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-r5-independent-source-review-20261009/independent-python-marker-proof.json": "30707c40f297a6bab138e0cea25dc85c575fcee55191f3ab37b8518206617341",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-r5-independent-source-review-20261009/prior-r4-evidence-distinction.json": "f670f24cec43a7303a14d991d8f6b412ee66715119a9e588eef930b051743da0",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-r5-independent-source-review-20261009/r5-rpath-namespace-tests.log": "af364b0773a0d71db091822f5e374ad8d73dea06fb06a9f8c9f4ed7955a3b4b3"
+  },
+  "candidate_file_hashes": {
+    "r5-admission.template.json": "3a21bf6da8947b49cb692137cfc10de19b4c85211cf4277bde42f4a3ba712d72",
+    "r5-namespace-and-base-provenance.json": "241be28f14ec092729c6cec71d7a048d987e97b4c1dc44c153e0bac0a2cb0ca5",
+    "build_phase_r5.sbatch": "0bfa12b5516f6d537c417e87956cf1d9a9aa4687986f49be0423579ae9bd1c08",
+    "runtime_context_r5.sh": "1378875b47aaf16fd1222d9b0f509d6dd9e9578d0e92895e439940c2d89c6a72",
+    "synthetic-kokkos-environment-proof.json": "04ace143db49d1cb1b10e4f766fde233a0d4e4231bf543616dccd001fdd564d3",
+    "phase_rank_runner_r5.py": "cb7115f637f889d5e90bed17c0345fc0614c9bdf94d6ccc9357095b9e9e04ca6",
+    "candidate-manifest-r5.json": "742bca45423e7763eeef24d00d7cf90311e5cca11822e79cf30ba164d0f8d48c",
+    "runtime_phase_r5.sbatch": "cfe85ee73b81e8ed308a9e8c0a4c884f9869d5c1a767964e39e0125d698c351c",
+    "resume_probe_r5.sh": "4ca7f56bfd07da245c1d2dfc4b6f2fd376f2db509140acbfaeab7826ddade50c",
+    "capture_gpu_native_r5.py": "e91de487a476e58d83e30d38f253280500ac55253c005448779d5a197a364f17",
+    "read-r5-pins.py": "e1d58390fadbf172463b5a4eea2ea48d41e33a4a0ee42eb458919f55854ca8db",
+    "phase_quota_r5.py": "ea534f527ae56483240cf074a9a4492111e0aac16ea3580eee018d6b3189f20b",
+    "r5-comparison-from-root-reviewed-r4.patch": "eb0711c1a4c1ce7d66a33de95c7a02b34fc4a4cbaa0fcc93f5d8d52451c7f1ed",
+    "README.md": "da9abdab12b1f98e04a83a6c30edfa4161ba1781de6b844c66f5537790d2f072",
+    "r5-minimal-semantic-delta.patch": "a696ace1f8dde9822b0ff3e58e0746d61dfb50aa446de5d8c489a49ea14ad647",
+    "run_campaign_r5.sh": "d55fe5543c917bee59757dcb8dcc96324c1ba84c19b940d74861737eb71f5f47",
+    "capture_kokkos_profile_r5.py": "b33a1e9f7350f1acbbc2336f9747750236d6a1234f78c8fd26ef5087bd4e4602",
+    "build_native_r5.sh": "f586b80503e8f00f05928bf37d834fe03de0e78a6a736e8f6f769d5aadc086be",
+    "native_install_rpath_r5.py": "e88c78f30aa832e53811ca864261a96ce858fde03a2faf296ef4b7467ca59c70",
+    "test_native_install_rpath_r5.py": "5ce05f8b60e3c834006a829941df920be94f0197e3dc59732a192ef79a0911f6",
+    "synthetic_kokkos_environment.py": "eda55b7c0e9cef5159ee28807844ae3d91cff6a36a4f355d969734b3f20c93fc",
+    "r5-additive-files.patch": "697d97b020aa837a676a957278bfd9f2d159858038c4f641e3515ebbd3c4b66f",
+    "r5-static-validation.json": "2b193ac084873712d270dc14db360ce08154fbf31297c16c75901ac063418372",
+    "launch_phase_r5.py": "a7bc9ad6ff2e44c2b183a78d26766650f94f271baf628b522a4da63a31612678"
+  },
+  "no_SSH_or_remote_action": true,
+  "no_ARM_CUDA_PoPS_Native_execution": true,
+  "no_Main_environment_or_frozen_author_mutation": true,
+  "actual_R5_Native_science_claim": false
+}

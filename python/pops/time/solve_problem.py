@@ -9,6 +9,20 @@ from typing import Any
 from pops.identity.scalar import exact_numeric_scalar
 
 
+@dataclass(frozen=True, slots=True)
+class _SpatialFieldResidual:
+    """Frozen physical field tuple and its exact co-located equation captures."""
+
+    field: Any
+    prototype: Any
+    coefficients: Any
+    captures: tuple[Any, ...]
+    local_expressions: tuple[Any, ...]
+    finite_difference_step: Any
+    physical_boundary: str
+    source_contract: Any
+
+
 def _frozen_product(value: Any, *, where: str) -> Any:
     if isinstance(value, Mapping):
         return MappingProxyType(dict(value))
@@ -57,18 +71,46 @@ class CoupledImplicitEuler:
 
 @dataclass(frozen=True, slots=True)
 class LocalResidual:
-    """A cell-local residual callback and its exact initial temporal state."""
+    """A local equation, its algorithmic seed, and optional frozen equation inputs.
+
+    With captures, the body is called as ``residual(P, iterate, **captures)``.
+    Without captures the historical ``residual(P, iterate, initial)`` form remains.
+    A capture is an equation argument; changing the seed does not change it.
+
+    A named mapping of State seeds forms a co-located local unknown product.
+    Its body receives an immutable mapping of unknowns and returns the same keys
+    with one component-expression tuple per State. The consumed result is indexed
+    by the exact BlockHandles. Product bodies support component expressions and
+    local Program source/apply calls on their exact arguments. Captured fields
+    retain their frozen State provenance; they do not become field solves at the
+    Newton candidate. Candidate-dependent auxiliary provider evaluation requires
+    a separate local realization and is rejected by code generation.
+    """
 
     residual: Any
     initial: Any
+    captures: Any = None
 
     def __post_init__(self) -> None:
         if not callable(self.residual):
             raise TypeError("LocalResidual residual must be an IR-building callable")
+        if isinstance(self.initial, Mapping):
+            if not self.initial or any(type(key) is not str or not key.isidentifier()
+                                       for key in self.initial):
+                raise TypeError("LocalResidual product requires non-empty named unknowns")
+            object.__setattr__(self, "initial", MappingProxyType(
+                {key: self.initial[key] for key in sorted(self.initial)}))
+        if self.captures is not None:
+            if not isinstance(self.captures, Mapping) or any(
+                    not isinstance(key, str) or not key.isidentifier() for key in self.captures):
+                raise TypeError("LocalResidual captures require named equation inputs")
+            object.__setattr__(self, "captures", MappingProxyType(dict(self.captures)))
 
     def build_with(self, *, program: Any, prepared_solver: Any, name: Any = None) -> Any:
+        if isinstance(self.initial, Mapping):
+            return program._build_local_product(self, prepared_solver, name=name)
         return program._solve_local_nonlinear(
-            residual=self.residual, initial_guess=self.initial,
+            residual=self.residual, initial_guess=self.initial, captures=self.captures,
             prepared=prepared_solver, name=name)
 
 

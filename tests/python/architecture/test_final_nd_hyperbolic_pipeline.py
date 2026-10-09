@@ -101,6 +101,47 @@ def test_hllc_and_roe_are_axis_generic_euler_capabilities() -> None:
     assert "model.template roe_dissipation<Axis>" in finite_volume
 
 
+def test_generated_model_include_closure_has_only_generic_law_contracts() -> None:
+    """Generated system/AMR models must not inherit the built-in Euler physics."""
+    include_pattern = re.compile(r"#\s*include\s*<\s*(pops/[^>]+?)\s*>")
+    roots = {
+        match.group(1)
+        for emitter in (ROOT / "python/pops/codegen").glob("*.py")
+        for match in include_pattern.finditer(_source(emitter))
+    }
+    assert {
+        "pops/runtime/builders/compiled/dsl_block.hpp",
+        "pops/runtime/builders/compiled/amr_dsl_block.hpp",
+        "pops/numerics/spatial/nd/state_conversion.hpp",
+        "pops/numerics/moments/normalized_moment_path.hpp",
+        "pops/physics/composition/no_source.hpp",
+    } <= roots
+
+    closure: dict[str, str] = {}
+    pending = list(roots)
+    while pending:
+        header = pending.pop()
+        if header in closure:
+            continue
+        source = _source(ROOT / "include" / header)
+        closure[header] = source
+        pending.extend(match.group(1) for match in include_pattern.finditer(source))
+
+    assert "pops/numerics/spatial/nd/conservation_law.hpp" in closure
+    assert not {
+        "pops/numerics/spatial/nd/conservation_laws.hpp",
+        "pops/numerics/spatial/nd/state_schema.hpp",
+        "pops/physics/bricks/hyperbolic.hpp",
+        "pops/physics/bricks/source.hpp",
+        "pops/physics/fluids/euler.hpp",
+    }.intersection(closure)
+    model_definition = re.compile(
+        r"\b(?:class|struct)\s+(?:IdealGasEuler|EulerStateSchema|"
+        r"PotentialForceND|GravityForceND|MagneticLorentzForceND)\b"
+    )
+    assert not [header for header, source in closure.items() if model_definition.search(source)]
+
+
 def test_umbrella_and_manifest_do_not_promote_specialized_2d_fallbacks() -> None:
     umbrella = _source(CORE[6])
     manifest = _source(ROOT / "include/pops_headers.manifest")
@@ -114,6 +155,9 @@ def test_umbrella_and_manifest_do_not_promote_specialized_2d_fallbacks() -> None
     ):
         assert fallback not in umbrella
     assert "api pops/numerics/spatial/nd/reconstruction.hpp" in manifest
+    assert "api pops/numerics/spatial/nd/conservation_law.hpp" in manifest
+    assert "api pops/numerics/spatial/nd/state_conversion.hpp" in manifest
+    assert "api pops/physics/composition/no_source.hpp" in manifest
     assert "api pops/numerics/spatial/operators/cartesian_operator.hpp" in manifest
     assert "prepared_cartesian_nd.hpp" not in manifest
     assert "sdk-support pops/numerics/spatial/operators/masked_operator.hpp" in manifest

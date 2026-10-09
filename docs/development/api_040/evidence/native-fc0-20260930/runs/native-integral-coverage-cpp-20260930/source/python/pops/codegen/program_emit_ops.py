@@ -1,0 +1,1572 @@
+"""pops.codegen.program_emit_ops : the per-op SSA -> C++ dispatcher.
+
+Extracted verbatim from ``pops.codegen.program_codegen`` (Spec-4 file-size budget).
+``_emit_op`` lowers a SINGLE SSA op to C++ (appending to the line list, recording its
+token), shared by the top-level body walk (``program_emit_control._emit_body``) and the
+control-flow sub-blocks; it dispatches to the model kernels, the matrix-free / generic
+condensed-implicit emitters, control flow and the schedule wrap
+(``program_emit_{model_kernels,solve,condensed,control,schedule}``).
+"""
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
+from fractions import Fraction
+from typing import Any
+
+from pops.identity.scalar import scalar_cpp
+from pops.time.references import block_name, state_name
+from pops.codegen.program_emit_kernels import (
+    _PROFILE_SKIP_OPS,
+    _coeff_cpp,
+    _coeff_metadata_cpp,
+    _deref,
+    _emit_cell_compare_kernel,
+    _emit_where_kernel,
+    _model_impl,
+    _named_fluxes,
+    _prepare_provider_values,
+    program_provider_consumer_qid,
+)
+from pops.codegen.program_emit_model_kernels import (
+    _emit_apply_kernel,
+    _emit_coupled_rate_kernel,
+    _emit_flux_kernel,
+    _emit_local_transform_kernel,
+    _emit_solve_local_linear_kernel,
+    _emit_solve_local_nonlinear_kernel,
+    _emit_solve_coupled_implicit_kernel,
+    _emit_source_kernel,
+)
+from pops.codegen.program_emit_condensed import emit_condensed_op
+from pops.codegen.program_emit_control import (
+    _coupled_rate_components,
+    _emit_branch,
+    _emit_range,
+    _emit_subcycle,
+    _emit_while,
+)
+from pops.codegen.program_emit_solve import (
+    _consumed_solve_action,
+    _append_solve_report_guard,
+    _emit_matrix_free_operator,
+    _emit_solve_linear,
+)
+from pops.codegen.program_emit_schedule import _emit_schedule_wrap
+from pops.codegen.program_emit_field_routes import field_point_cpp, resolved_field_route
+from pops.identity import make_identity
+
+
+def _child_history_store_is_delegated(program: Any, value: Any, *, target: str) -> bool:
+    """Bind an automatic child-state store to its unique child-tick publication site."""
+    if target != "system":
+        # AMR retains its explicit composed-clock capability refusal in _emit_subcycle.
+        return False
+    states = [state for state, store in program._time_history_stores.items()
+              if store.id == value.id and state.clock != program.clock]
+    if not states:
+        return False
+    if len(states) != 1:
+        raise ValueError("automatic child history store has ambiguous state ownership")
+    (state,) = states
+    from pops.time._program.temporal_manifest import _walk
+
+    sites = [node for node in _walk(program._values)
+             if node.op == "subcycle" and node.clock == state.clock
+             and node.inputs[0].block == state.block
+             and node.inputs[0].state_ref == state.state]
+    if len(sites) != 1:
+        raise ValueError("automatic child history requires exactly one matching subcycle")
+    if (state not in program._time_history_configs
+            or not any(node is value for node in program._values)
+            or value.inputs[0].block != state.block
+            or value.inputs[0].state_ref != state.state
+            or value.inputs[0].clock != state.clock or value.clock != state.clock
+            or value.attrs["history"] != "%s.%s" % (block_name(state.block), state_name(state.state))
+            or sites[0].inputs[0].clock != state.clock):
+        raise ValueError("automatic child history has an unsupported publication binding")
+    # _emit_subcycle publishes the loop input inside LogicalEvaluationScope, then rotates this
+    # clock's rings at the tick tail. The authored macro-level marker retains its SSA alias only;
+    # publishing here as well would leave a pending macro-dt sample before the first child tick.
+    return True
+
+
+def _rhs_flux_temporal_family(value: Any, named_fluxes: Any = None) -> str:
+    """Identify one resolved spatial flux independently of its temporal evaluation node."""
+    block = value.block
+    if not block.is_resolved:
+        block = block._resolved(block.owner_path.canonical())
+    route = {"kind": "default"} if named_fluxes is None else {
+        "kind": "named", "fluxes": tuple(named_fluxes)
+    }
+    return make_identity("program-flux-family", {
+        "block": block.canonical_identity(), "route": route
+    }).token
+
+
+def _required_block_index(block_idx: Any, block: Any, where: str) -> int:
+    """Return an explicitly declared runtime block index, never an index-0 fallback."""
+    if not isinstance(block_idx, Mapping):
+        raise ValueError(
+            "%s: runtime block routing is unavailable; lowering requires Program._block_indices()"
+            % where)
+    if block is None:
+        raise ValueError("%s: a block-qualified Program value is required" % where)
+    try:
+        index = block_idx[block]
+    except KeyError:
+        raise ValueError(
+            "%s: block %r is not declared in the Program block-index map"
+            % (where, block)) from None
+    if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+        raise ValueError("%s: invalid runtime block index %r" % (where, index))
+    return index
+
+
+def _value_owner_block(value: Any) -> Any:
+    """Return one declared block identity carried by ``value``, or None."""
+    block = getattr(value, "block", None)
+    if block is not None:
+        return block
+    state_ref = getattr(value, "state_ref", None)
+    return getattr(state_ref, "block_ref", None)
+
+
+def _unique_dataflow_owner_block(value: Any, *, where: str,
+                                 additional_values: Any = (), allow_unqualified: bool = False) -> Any:
+    """Return the single authenticated block on ``value``'s producer dataflow.
+
+    Top-level generated Cartesian ops may themselves be unqualified. Their owner is
+    the unique BlockHandle on the op or its producer SSA, never a default index.
+    """
+    seen: set[int] = set()
+    owners: list[Any] = []
+
+    def visit(node: Any) -> None:
+        ident = getattr(node, "id", None)
+        key = ident if isinstance(ident, int) else id(node)
+        if key in seen:
+            return
+        seen.add(key)
+        block = _value_owner_block(node)
+        if block is not None and block not in owners:
+            owners.append(block)
+        for item in getattr(node, "inputs", ()) or ():
+            visit(item)
+
+    visit(value)
+    for additional in additional_values:
+        visit(additional)
+    if len(owners) == 1:
+        return owners[0]
+    if not owners:
+        if allow_unqualified:
+            return None
+        raise ValueError(
+            "%s: generated Cartesian operator has no unique authenticated owner block"
+            % where)
+    raise ValueError(
+        "%s: generated Cartesian operator has conflicting owner blocks %s"
+        % (where, sorted(block_name(item) for item in owners)))
+
+
+def _cartesian_generated_owner_index(block_idx: Any, value: Any, *, where: str) -> int:
+    """Map a generated Cartesian op to its unique runtime owner index."""
+    return _required_block_index(
+        block_idx, _unique_dataflow_owner_block(value, where=where), where)
+
+
+def _canonical_metadata_int(value: Any, *, where: str) -> int:
+    """Decode one graph-canonical integer without accepting an approximate numeric cast."""
+    if isinstance(value, bool):
+        raise TypeError("%s must be an exact integer" % where)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, Mapping) and set(value) == {"scalar"}:
+        scalar = value["scalar"]
+        if isinstance(scalar, Mapping) and scalar.get("kind") == "integer" \
+                and isinstance(scalar.get("value"), str):
+            try:
+                return int(scalar["value"])
+            except ValueError:
+                pass
+    raise TypeError("%s must be an exact graph-canonical integer" % where)
+
+
+def _append_local_auxiliary_preparation(
+    program: Any, solve: Any, lines: list[str], *, provider_plans: Any,
+    consumer_qid: str, block: int | None, state: str, label: str,
+) -> None:
+    """Consume only numerical prerequisite failure through this local solve's authored action."""
+    binding = provider_plans.preparation_binding(consumer_qid)
+    if binding["target"] != "system" or binding["count"] == 0:
+        return
+    status = "local_auxiliary_status_%d" % solve.id
+    report = "local_auxiliary_report_%d" % solve.id
+    outcome = "local_auxiliary_outcome_%d" % solve.id
+    action_kind, action_statuses = _consumed_solve_action(program, solve)
+    action = ("pops::SolveAction::kRejectAttempt"
+              if action_kind == "reject_attempt" and "invalid_evaluation" in action_statuses
+              else "pops::SolveAction::kFailRun")
+    lines += [
+        "const auto %s = ctx.prepare_provider_values_for_solve(%s, %d, %s, %d);"
+        % (status, json.dumps(consumer_qid), block, state, binding["evaluation_id"]),
+        "if (%s == pops::runtime::system::AuxiliaryPublicationStatus::nonfinite_candidate) {"
+        % status,
+        "  pops::SolveReport %s;" % report,
+        "  %s.mark_failed(pops::SolveStatus::kInvalidEvaluation, %s, "
+        '"auxiliary_nonfinite_candidate");' % (report, action),
+        "  pops::SolveOutcome %s = pops::SolveOutcome::collective_lane("
+        "std::move(%s), ctx.prepared_execution_lane());" % (outcome, report),
+    ]
+    _append_solve_report_guard(program, solve, outcome, lines, label=label)
+    lines.append("}")
+
+
+def _append_pointwise_solve_report(
+        program: Any, solve: Any, status: str, lines: list[str], *,
+        label: str, stem: str, active_mask: str | None = None,
+        block: int | None = None) -> None:
+    """Reduce typed per-cell status and consume one collective ``SolveReport``.
+
+    Pointwise kernels own the report they create, so they author its failure disposition before
+    constructing the outcome. Prepared/provider solves retain their native action authority.
+    """
+    action_kind, action_statuses = _consumed_solve_action(program, solve)
+
+    def failure_action(status_name: str) -> str:
+        if action_kind == "reject_attempt" and status_name in action_statuses:
+            return "pops::SolveAction::kRejectAttempt"
+        return "pops::SolveAction::kFailRun"
+
+    code = "%s_code_%d" % (stem, solve.id)
+    report = "%s_report_%d" % (stem, solve.id)
+    lane = "%s_lane" % report
+    lines.append(
+        "const pops::ExecutionLane& %s = ctx.prepared_execution_lane();" % lane
+    )
+    if active_mask is None:
+        reduction = "pops::all_reduce_max(pops::reduce_max_local(%s, 0), %s)" % (
+            status,
+            lane,
+        )
+    else:
+        if block is None:
+            raise ValueError("pointwise masked solve reduction requires a runtime block index")
+        reduction = "ctx.pointwise_status_max(%d, %s, %s, %s)" % (
+            block,
+            status,
+            active_mask,
+            lane,
+        )
+    lines.append("const int %s = static_cast<int>(%s);" % (code, reduction))
+    lines.append("pops::SolveReport %s;" % report)
+    lines.append("if (%s == 0) %s.mark_solved();" % (code, report))
+    lines.append(
+        "else if (%s == 1) %s.mark_failed(pops::SolveStatus::kIterationLimit, %s);"
+        % (code, report, failure_action("iteration_limit")))
+    lines.append(
+        "else if (%s == 2) %s.mark_failed(pops::SolveStatus::kSingular, %s);"
+        % (code, report, failure_action("singular")))
+    lines.append(
+        "else %s.mark_failed(pops::SolveStatus::kInvalidEvaluation, %s);"
+        % (report, failure_action("invalid_evaluation")))
+    outcome = "%s_outcome_%d" % (stem, solve.id)
+    lines.append(
+        "pops::SolveOutcome %s = pops::SolveOutcome::collective_lane("
+        "std::move(%s), %s);" % (outcome, report, lane)
+    )
+    _append_solve_report_guard(program, solve, outcome, lines, label=label)
+
+
+def _append_local_nonlinear_report(
+    program: Any, solve: Any, status: str, report: str, lines: list[str]
+) -> str:
+    """Reduce one prepared local solve and return its collective ``SolveOutcome`` token."""
+    action_kind, _ = _consumed_solve_action(program, solve)
+    failure_action = (
+        "pops::SolveAction::kRejectAttempt"
+        if action_kind == "reject_attempt"
+        else "pops::SolveAction::kFailRun"
+    )
+    lane = "%s_lane" % report
+    priority = "%s_priority" % report
+    lines.append(
+        "const pops::ExecutionLane& %s = ctx.prepared_execution_lane();" % lane
+    )
+    lines.append(
+        "const int %s = static_cast<int>(pops::all_reduce_max("
+        "pops::reduce_max_local(%s, 10), %s));" % (priority, status, lane)
+    )
+    reduced = {
+        "status": "%s_status" % report,
+    }
+    lines.append(
+        "const int %s = pops::local_nonlinear_status_code("
+        "pops::local_nonlinear_status_from_priority(%s));" % (reduced["status"], priority)
+    )
+    fields = (
+        ("iterations", 1, "int"),
+        ("evaluations", 2, "int"),
+        ("reference_residual", 3, "real"),
+        ("residual", 4, "real"),
+        ("step", 5, "real"),
+        ("condition", 6, "real"),
+        ("safeguard_steps", 7, "int"),
+    )
+    for suffix, component, kind in fields:
+        token = "%s_%s" % (report, suffix)
+        reduced[suffix] = token
+        expression = "pops::all_reduce_max(pops::reduce_max_local(%s, %d), %s)" % (
+            status,
+            component,
+            lane,
+        )
+        if kind == "int":
+            lines.append("const int %s = static_cast<int>(%s);" % (token, expression))
+        else:
+            lines.append("const pops::Real %s = %s;" % (token, expression))
+    location = "%s_failure_location" % report
+    reported_failure = "%s_reported_failure" % report
+    failed_count = "%s_failed_count" % report
+    lines += [
+        "const pops::Real %s = pops::all_reduce_sum("
+        "pops::reduce_sum_local(%s, 9), %s);" % (failed_count, status, lane),
+        "pops::LocalNonlinearFailureLocation<pops::kNativeDimension> %s;" % location,
+        "if (%s > pops::Real(0))" % failed_count,
+        "  %s = pops::collective_first_local_nonlinear_failure(%s, %s, 10, 8, %s);"
+        % (location, status, priority, lane),
+        "if (%s > pops::Real(0) && (!%s.found || %s.priority != %s))"
+        % (failed_count, location, location, priority),
+        "  throw std::runtime_error("
+        '"local nonlinear collective status/location precedence mismatch");',
+        "const pops::SolveFailureLocation %s = %s.found ? "
+        "pops::SolveFailureLocation::from<pops::kNativeDimension>(%s.index, %s.component) : "
+        "pops::SolveFailureLocation{};"
+        % (reported_failure, location, location, location),
+    ]
+    lines.append(
+        "pops::SolveReport %s = pops::local_nonlinear_solve_report("
+        "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);"
+        % (
+            report,
+            reduced["status"],
+            reduced["iterations"],
+            reduced["evaluations"],
+            reduced["reference_residual"],
+            reduced["residual"],
+            reduced["step"],
+            reduced["condition"],
+            reduced["safeguard_steps"],
+            reported_failure,
+            failure_action,
+        )
+    )
+    outcome = report.replace("_report_", "_outcome_", 1)
+    if outcome == report:
+        outcome = "%s_outcome" % report
+    lines.append(
+        "pops::SolveOutcome %s = pops::SolveOutcome::collective_lane("
+        "std::move(%s), %s);" % (outcome, report, lane)
+    )
+    return outcome
+
+
+def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
+             prelude: Any = None, block_idx: Any = None, target: Any = "system",
+             field_plans: Any = None,
+             has_shared_interface_implicit_jacvec: bool = False, *,
+             implicit_spatial_residual: bool = False) -> None:
+    """Lower a SINGLE op to C++, appending to @p lines and recording its C++ token in @p var. Shared
+    by the top-level walk and the while sub-blocks (a while body re-runs this per op each pass), so
+    reductions / compares / linear_combine all lower identically inside the loop. @p base is the
+    block-state value of THIS op's block (its C++ var is the loop variable inside a while sub-block);
+    @p committed_ids is the set of committed value ids (empty inside a sub-block: a body combine is
+    never a commit). @p prelude collects INSTALL-TIME lines (persistent scratch + apply lambdas) for
+    the matrix-free Krylov ops; None inside a sub-block (those ops only appear at the top level for
+    now). @p block_idx maps exact ``BlockHandle`` identities to runtime indices (ADC-426). Missing
+    routing is always an error; even a one-block Program reaches index 0 through an explicit map."""
+    bidx = (_required_block_index(block_idx, v.block, "emit op %r" % v.name)
+            if v.block is not None else None)
+    from pops.codegen.program_models import model_for_node
+    node_model = model_for_node(model, v) if model is not None and (
+        v.block is not None or v.attrs.get("operator_handle") is not None) else model
+    provider_plans = var.get(("program_provider_plans",))
+    from pops.codegen.program_field_reuse import observe_operation
+    observe_operation(v, var, model=node_model)
+    # PER-NODE PROFILING (ADC-459): bracket this op's emitted C++ with a steady_clock pair
+    # recorded under "node:<v.name>" (shown by sim.profile_report next to the coarse phases). A
+    # now() + ctx.profile_record pair (NOT a RAII ProfileScope { }) keeps the emitted declarations
+    # at step-body scope -- later nodes read them (e.g. r2 / acc3). Additive, ~free when profiling
+    # is off (record early-returns), changes no numerics; ops emitting no statement (pure inline
+    # token: cfl / compare) are skipped by the len guard below. _start marks this op's first line.
+    _profile_start = len(lines)
+    # Operation lowering explicitly identifies the storage setup needed by both cadence
+    # branches. Evaluation context and kernels remain in the guarded body.
+    output_setup_end = None
+    evaluation_prelude = []
+    if v.op in {"source", "implicit_source", "local_transform", "affine_moment_update", "apply",
+                "solve_local_linear", "solve_local_nonlinear", "solve_implicit_source"}:
+        from pops.time._evaluation_point import evaluation_stage_fraction
+        # Unqualified sources use explicit ARK coordinates; an authored partition takes precedence.
+        # Solves use implicit coordinates. Generic apply/transform require unambiguous intent.
+        ark_partition = ("explicit" if v.op == "source" else
+                         None if v.op in {"apply", "local_transform", "affine_moment_update"} else "implicit")
+        stage = evaluation_stage_fraction(v, ark_partition=ark_partition)
+        evaluation_prelude.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+    if v.op == "post_synchronization":
+        var[v.id] = "/* post_synchronization */"
+    elif v.op in ("layout_map_export", "layout_map_import"):
+        from pops.codegen.program_emit_mapping_regions import emit_map_port
+        emit_map_port(v, var, lines, block_idx)
+    elif v.op == "state":
+        var[v.id] = "u%d" % v.id
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.state(%d);" % (var[v.id], bidx))
+        output_setup_end = len(lines)
+    elif v.op == "synchronize":
+        (source,) = v.inputs
+        relation = v.attrs.get("relation")
+        from pops.time._schedule.synchronization import SampleAndHold, relation_data
+
+        expected = relation_data(SampleAndHold())
+        point = v.point.time if hasattr(v.point, "time") else v.point
+        if relation == expected:
+            lines.append(
+                "ctx.synchronize_sample_and_hold(%s, %s, %d, %s);"
+                % (json.dumps(source.clock.qualified_id), json.dumps(v.clock.qualified_id),
+                   int(point.step), scalar_cpp(point.offset)))
+            var[v.id] = var[source.id]
+        elif isinstance(relation, Mapping) \
+                and relation.get("kind") == "history_interpolation":
+            capability = relation.get("interpolation")
+            if not isinstance(capability, Mapping) or set(capability) != {
+                    "kind", "schema_version", "minimum_samples"} \
+                    or capability.get("kind") != "linear" \
+                    or _canonical_metadata_int(
+                        capability["schema_version"],
+                        where="LinearInterpolation schema_version",
+                    ) != 1 \
+                    or _canonical_metadata_int(
+                        capability["minimum_samples"],
+                        where="LinearInterpolation minimum_samples",
+                    ) != 2:
+                raise NotImplementedError(
+                    "history synchronization capability %r has no native lowering; "
+                    "supported capability: LinearInterpolation()" % capability)
+            if source.op != "history":
+                raise ValueError(
+                    "LinearInterpolation native lowering requires one retained history value")
+            contract = relation["provider"]["contract"]
+            depth = _canonical_metadata_int(
+                contract["depth"], where="LinearInterpolation history depth")
+            temporal = program.temporal_manifest()
+            ticks = {
+                row["id"]: int(row["ticks_per_macro"]) for row in temporal["clocks"]
+            }
+            coordinate = (
+                (Fraction(point.step) + Fraction(point.offset.to_python()))
+                * Fraction(ticks[source.clock.qualified_id], ticks[v.clock.qualified_id])
+            )
+            if coordinate < -depth or coordinate > 0:
+                raise ValueError(
+                    "LinearInterpolation target %s lies outside retained history [-%d, 0]"
+                    % (coordinate, depth))
+            var[v.id] = "u%d" % v.id
+            lines.append(
+                "pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
+                % (var[v.id], int(v.id), var[source.id]))
+            lines.append(
+                "ctx.interpolate_history_linear(%s, %s, %d, %d, %s, %s, %d, %s);"
+                % (
+                    var[v.id],
+                    json.dumps(source.attrs["history"]),
+                    depth,
+                    bidx,
+                    json.dumps(source.clock.qualified_id),
+                    json.dumps(v.clock.qualified_id),
+                    int(point.step),
+                    scalar_cpp(point.offset),
+                )
+            )
+        else:
+            raise NotImplementedError(
+                "synchronization provider %r has no native lowering; supported provider: "
+                "SampleAndHold() or LinearInterpolation()" % relation)
+    elif v.op == "input_fields":
+        from pops.codegen.program_emit_input_fields import emit_input_fields
+        emit_input_fields(v, var, lines, node_model, provider_plans, bidx, target)
+    elif v.op == "solve_fields":
+        # Per-stage field solve: the callable Case field operator re-solves phi from THIS
+        # stage's explicit state (the shared aux is re-filled before the stage's RHS reads it; the
+        # first stage state == U^n == the context's current state). Multi-block:
+        # solve_fields_from_state_at(point, provider, idx, U_stage) is a genuinely COUPLED solve --
+        # the Poisson RHS is Sum_s elliptic_rhs_s(U_s), block idx at its exact active level/stage
+        # state, every other block contributing its live state into the shared phi/aux.
+        (state_in,) = v.inputs  # solve_fields inputs = (state,)
+        field_ref = v.attrs.get("field")
+        if field_ref is None:
+            raise ValueError("solve_fields node has no exact field identity")
+        field, _ = resolved_field_route(field_ref, field_plans)
+        lines += field_point_cpp(program, v, field)
+        boundary_point = "field_boundary_point_%d" % v.id
+        lines.append(
+            "const auto %s = ctx.boundary_evaluation_point(%d);"
+            % (boundary_point, v.id)
+        )
+        report = "field_report_%d" % v.id
+        solve_stmt = (
+            "pops::SolveOutcome %s = "
+            "ctx.solve_fields_from_state_at(%s, %s, %d, %s);"
+            % (report, boundary_point, json.dumps(field), bidx, var[state_in.id])
+        )
+        lines.append(solve_stmt)
+        _append_solve_report_guard(program, v, report, lines, label="field_solve")
+        var[v.id] = var[state_in.id]
+    elif v.op == "solve_fields_from_blocks":
+        # Coupled multi-block field solve (ADC-457): a SIMULTANEOUS solve, EVERY listed block at
+        # its OWN stage state -- the Poisson RHS is Sum_s elliptic_rhs_s(U_s) over all coupled
+        # blocks, not a single-target override. Lowers through the context-owned workspace seam: the
+        # generated initializer_list is stack/static request data (no per-step host vector), and the
+        # context remaps each exact Program block to its installed native block. An input whose block
+        # was never declared via T.state fails loud at emit.
+        if not isinstance(block_idx, Mapping):
+            raise ValueError(
+                "solve_fields_from_blocks: runtime block routing is unavailable")
+        bmap = block_idx
+        overrides = []
+        for st in v.inputs:  # inputs = the N state values, slotted by their own block index
+            index = _required_block_index(
+                bmap, st.block, "solve_fields_from_blocks input node %r" % st.id)
+            overrides.append("{%d, &%s}" % (index, var[st.id]))
+        field_ref = v.attrs.get("field")
+        if field_ref is None:
+            raise ValueError("solve_fields_from_blocks node has no exact field identity")
+        field, _ = resolved_field_route(field_ref, field_plans)
+        lines += field_point_cpp(program, v, field)
+        boundary_point = "field_boundary_point_%d" % v.id
+        lines.append(
+            "const auto %s = ctx.boundary_evaluation_point(%d);"
+            % (boundary_point, v.id)
+        )
+        report = "field_report_%d" % v.id
+        lines.append(
+            "pops::SolveOutcome %s = ctx.solve_fields_from_blocks_at(%s, %d, %s, {%s});"
+            % (
+                report,
+                boundary_point,
+                int(v.id),
+                json.dumps(field),
+                ", ".join(overrides),
+            )
+        )
+        _append_solve_report_guard(program, v, report, lines, label="field_solve")
+        # solve_fields_from_blocks returns a FieldContext (the shared aux); its var aliases the first
+        # listed state so a downstream rhs(state, fields) reads the refreshed shared aux like any
+        # solve_fields result (the FieldContext carries no readable buffer of its own).
+        var[v.id] = var[v.inputs[0].id]
+    elif v.op == "principal_rate":
+        from .program_emit_principal import emit_principal_rate
+        emit_principal_rate(v, var, lines, node_model, block_idx, target)
+    elif v.op == "coupled_rate":
+        # A coupled rate (collisions / ionization, Spec 3 criterion 27, ADC-457): ONE multi-state
+        # for_each_cell kernel fills the per-block rate scratch of EVERY participating block at
+        # once -- the component formulas reference cons vars from MULTIPLE input states, so the
+        # blocks cannot be lowered as independent single-block rates. Allocate one rate scratch per
+        # block (shaped like that block's state, via rhs_scratch_like), emit the shared kernel that
+        # binds each input state's exact-ranked FieldView + conservative names and writes all block
+        # scratches, and record
+        # each block's scratch name so the coupled_rate_out for that block aliases it. All input
+        # states are co-located (same ba/dm as the System aux), so a single shared loop is sound
+        # (the same co-distribution every aux-reading kernel relies on; see _kernel_open).
+        components = _coupled_rate_components(program, v, model)
+        by_block = {s.block: s for s in v.inputs}
+        if target == "system":
+            for block in components:
+                index = _required_block_index(
+                    block_idx, block, "preflight coupled rate %r" % v.name)
+                lines.append(
+                    "ctx.require_cartesian_generated_operator(%d, %s);"
+                    % (index, json.dumps("coupled_rate")))
+        scratch = {}
+        for subslot, blk in enumerate(components):   # bundle / expr block order
+            scratch[blk] = "cr%d_%s" % (v.id, block_name(blk))
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, %d, %s);"
+                         % (scratch[blk], int(v.id), subslot, var[by_block[blk].id]))
+        from pops._ir.native_call import native_functions
+        functions = native_functions(components)
+        if functions or v.attrs.get("joint_application") is not None:
+            driver = next(iter(scratch))
+            index = _required_block_index(block_idx, driver, "joint interaction status")
+            status, active = "joint_status_%d" % v.id, "joint_active_%d" % v.id
+            lines.append("auto& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
+                         % (status, v.id, scratch[driver]))
+            lines.append("const auto* %s = ctx.pointwise_active_mask(%d, %s);"
+                         % (active, index, status))
+            reason = "joint_reason_%d" % v.id if functions else None
+            if reason is not None:
+                lines.append("static_assert(std::numeric_limits<pops::Real>::digits >= 34, "
+                             "\"native reason-code aggregation requires 34 exact mantissa bits\");")
+                lines.append("auto& %s = ctx.scalar_scratch(%d, 1, %s, 1, 0);"
+                             % (reason, v.id, scratch[driver]))
+            lines += _emit_coupled_rate_kernel(components, by_block, var, scratch,
+                                               status=status, active_mask=active, reason=reason)
+            from pops.time.references import canonical_handle
+            identity = canonical_handle(v.attrs["operator_handle"]).qualified_id
+            lines.append("const pops::Real joint_collective_status_%d = "
+                         "ctx.pointwise_status_max(%d, %s, %s, ctx.prepared_execution_lane());"
+                         % (v.id, index, status, active))
+            reason_cpp = "0"
+            if reason is not None:
+                lines.append("const auto joint_collective_reason_%d = static_cast<unsigned long long>("
+                             "ctx.max_component(%d, %s, 0));" % (v.id, index, reason))
+                reason_cpp = "static_cast<unsigned>(joint_collective_reason_%d %% 4294967296ULL)" % v.id
+            lines.append("ctx.consume_pointwise_evaluation_status(%d, %d, joint_collective_status_%d, %s, %s);"
+                         % (index, v.id, v.id, json.dumps(identity), reason_cpp))
+        else:
+            lines += _emit_coupled_rate_kernel(components, by_block, var, scratch)
+        # Per-block names live in this emission's local token table. Codegen is a pure read of the
+        # Program: repeated emission never writes scratch metadata back into frozen authoring state.
+        var.update({("coupled_scratch", v.id, blk): scratch[blk] for blk in scratch})
+        var[v.id] = scratch[next(iter(scratch))]     # a stable alias (the bundle has no single value)
+    elif v.op == "coupled_rate_out":
+        # Pure projection of one block out of the coupled bundle: its var aliases that block's rate
+        # scratch (filled by the coupled_rate kernel above). Emits nothing -- like the FieldContext
+        # alias of solve_fields_from_blocks. The producing coupled_rate is the node's sole input.
+        (coupled_in,) = v.inputs
+        var[v.id] = var[("coupled_scratch", coupled_in.id, v.attrs["out_block"])]
+    elif v.op == "solve_coupled_implicit":
+        product = v.attrs.get("problem_kind") == "local_residual_product"
+        from .program_emit_local_product import product_components, product_residual_lines
+        components = product_components(v) if product else _coupled_rate_components(program, v, model)
+        initial_inputs = v.inputs[:v.attrs["output_count"]] if product else v.inputs
+        by_block = {state.block: state for state in initial_inputs}
+        if target == "system":
+            for block in components:
+                index = _required_block_index(
+                    block_idx, block, "preflight coupled implicit solve %r" % v.name)
+                lines.append(
+                    "ctx.require_cartesian_generated_operator(%d, %s);"
+                    % (index, json.dumps("solve_coupled_implicit")))
+        scratch = {}
+        for subslot, block in enumerate(components):
+            scratch[block] = "ci%d_%s" % (v.id, block_name(block))
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, %d, %s);"
+                         % (scratch[block], int(v.id), subslot, var[by_block[block].id]))
+        status = "ci_status_%d" % v.id
+        prototype_block = next(iter(components))
+        prototype = var[by_block[prototype_block].id]
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 0, %s, 11, 0);"
+                     % (status, int(v.id), prototype))
+        environment, fab_setup = None, []
+        if product and v.attrs["product_version"] == 2:
+            from .program_emit_local_product import product_operator_environments
+            from pops.time._evaluation_point import evaluation_stage_fraction
+            environment, fab_setup, preparations = product_operator_environments(
+                v, model, provider_plans, block_idx, var)
+            for operation, qid, physical_block, origin in preparations:
+                stage = evaluation_stage_fraction(operation,
+                    ark_partition="explicit" if operation.op == "source" else None)
+                lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+                lines.append("{")
+                _append_local_auxiliary_preparation(
+                    program, v, lines, provider_plans=provider_plans, consumer_qid=qid,
+                    block=physical_block, state=origin, label="local_product_%d" % operation.id)
+                lines.append("}")
+            stage = evaluation_stage_fraction(v, ark_partition="implicit")
+            lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+        lines += _emit_solve_coupled_implicit_kernel(
+            components, by_block, var, scratch, status,
+            controls=v.attrs, coefficient=v.attrs.get("coefficient", 1),
+            original_residual=product_residual_lines(v, var, environment) if product else None,
+            all_inputs=tuple(item for item in v.inputs if item.vtype == "state"),
+            fab_setup=fab_setup)
+        report = "ci_report_%d" % v.id
+        outcome = _append_local_nonlinear_report(program, v, status, report, lines)
+        _append_solve_report_guard(
+            program, v, outcome, lines, label="coupled_implicit")
+        var.update({("coupled_solution", v.id, block): token
+                    for block, token in scratch.items()})
+        var[v.id] = scratch[next(iter(scratch))]
+    elif v.op == "history":
+        # Read the SYSTEM-OWNED history slot (a MultiFab&, ADC-406a): lag steps back. The reference
+        # is bound to a C++ name the affine combine then reads like any other state/RHS term. An
+        # explicit-ncomp read (ADC-427: the read-first 1-component cross-step carry) lowers to the
+        # ZERO COLD-START variant -- its very first read (before any store) returns the zero-filled
+        # slot, the declared step-0 value -- while the default multistep read keeps the fail-loud
+        # ctx.history byte-identical (a store-first scheme reading before its store is a config error).
+        var[v.id] = "h%d" % v.id
+        if "ncomp" in v.attrs:
+            if target == "amr_system" and bidx is not None:
+                lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.history_zero_start(%s, %d, %d, %d);"
+                             % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"]),
+                                int(v.attrs["ncomp"]), bidx))
+                output_setup_end = len(lines)
+            else:
+                lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.history_zero_start(%s, %d, %d);"
+                             % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"]),
+                                int(v.attrs["ncomp"])))
+                output_setup_end = len(lines)
+        else:
+            if target == "amr_system":
+                lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.history(%s, %d, %d);"
+                             % (var[v.id], json.dumps(v.attrs["history"]),
+                                int(v.attrs["lag"]), bidx))
+                output_setup_end = len(lines)
+            else:
+                lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.history(%s, %d);"
+                             % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"])))
+                output_setup_end = len(lines)
+    elif v.op == "store_history":
+        # Side-effect: copy the value into the current slot of the history (the cold-start fill on
+        # the first store happens System-side). store_history is a State-typed node but carries no
+        # readable value -- nothing combines it. Its var maps to the stored value (a harmless alias).
+        (value_in,) = v.inputs
+        if _child_history_store_is_delegated(program, v, target=target):
+            pass
+        elif target == "amr_system" and bidx is not None:
+            lines.append("ctx.store_history(%s, %s, %d);"
+                         % (json.dumps(v.attrs["history"]), var[value_in.id], bidx))
+        else:
+            lines.append("ctx.store_history(%s, %s);"
+                         % (json.dumps(v.attrs["history"]), var[value_in.id]))
+        var[v.id] = var[value_in.id]
+    elif v.op == "fill_boundary":
+        # Side effect on the field's ghosts (the valid cells are untouched). The result aliases the
+        # input field (any subsequent op reading it sees the same C++ MultiFab, now with filled
+        # halos). Forwards to ctx.fill_boundary (the shared transport-BC ghost exchange).
+        (x,) = v.inputs
+        lines.append("ctx.fill_boundary(%s);" % var[x.id])
+        var[v.id] = var[x.id]
+    elif v.op == "project":
+        # In-place positivity projection of the state (the block's own project closure). The result
+        # aliases the input state. Forwards to ctx.apply_projection(idx, state) (ADC-426: the op's
+        # own block, so each block runs its own projection).
+        (state_in,) = v.inputs
+        step_projection = v.attrs.get("step_projection")
+        if step_projection is not None:
+            if not isinstance(step_projection, str) or not step_projection:
+                raise TypeError("project step_projection must be a non-empty string")
+        if target == "system" and node_model is not None:
+            impl = _model_impl(node_model)
+            if impl._proj is None:
+                raise ValueError("Program projection requires the selected model projection closure")
+            if provider_plans is None:
+                raise ValueError("Program projection requires its exact provider-plan collector")
+            # The authenticated operator pack, rather than the aggregate native model
+            # pack, selects only this closure's inputs. Native registry preparation
+            # publishes them from this exact SSA state before the installed closure reads.
+            pack = impl._component_operator_provider_packs.get("projection")
+            binding = provider_plans.bind_pack(
+                pack, program_provider_consumer_qid(node_model, v.id, v.block))
+            lines += _prepare_provider_values(binding, bidx, var[state_in.id])
+        lines.append("ctx.apply_projection(%d, %s);" % (bidx, var[state_in.id]))
+        if step_projection is not None:
+            lines.append("ctx.note_step_projection(%s);" % json.dumps(step_projection))
+        var[v.id] = var[state_in.id]
+    elif v.op in {"local_transform", "affine_moment_update"}:
+        bidx = _required_block_index(block_idx, v.block, "emit op %r" % v.name)
+        if prelude is None:
+            raise NotImplementedError(
+                "%s requires an install-time resource scope" % v.op)
+        state_in = v.inputs[0]
+        var[v.id] = "u%d" % v.id
+        status = "transform_status_field_%d" % v.id
+        state_resource = "transform_state_resource_%d" % v.id
+        status_resource = "transform_status_resource_%d" % v.id
+        active_mask = "transform_active_mask_%d" % v.id
+        from pops.codegen._resolution import _spatial_coordinate_transforms
+
+        spatial_map = target == "amr_system" and id(v) in _spatial_coordinate_transforms(program)
+        # A source-first affine result becomes the prototype for transport RHS
+        # scratch. It therefore needs the same authenticated level/block owner
+        # as a composite coordinate-map result, including after rollback.
+        owned_amr_result = target == "amr_system" and (
+            spatial_map or v.op == "affine_moment_update")
+        if not owned_amr_result:
+            prelude.append(
+                "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.scratch_state_like(ctx.state(%d)));"
+                % (state_resource, bidx))
+        if target == "amr_system":
+            # Rollback retires context scratches without necessarily replacing level closures.
+            # Reacquire the exact node/level/block resources before each invocation.
+            if owned_amr_result:
+                lines.append("pops::MultiFab<pops::kNativeDimension>* %s = nullptr;" % state_resource)
+            lines.append("pops::MultiFab<pops::kNativeDimension>* %s = nullptr;" % status_resource)
+            lines.append("ctx.prepare_spatial_collectively([&] {")
+            if owned_amr_result:
+                lines.append("  %s = &ctx.scratch_state(%d, 0, ctx.state(%d));"
+                             % (state_resource, int(v.id), bidx))
+            lines.append("  %s = &ctx.scalar_scratch(%d, 0, ctx.state(%d), 1, 0);"
+                         % (status_resource, int(v.id), bidx))
+            lines.append("});")
+        else:
+            prelude.append(
+                "auto* %s = &ctx.scalar_scratch(%d, 0, ctx.state(%d), 1, 0);"
+                % (status_resource, int(v.id), bidx))
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *%s;" % (var[v.id], state_resource))
+        output_setup_end = len(lines)
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *%s;" % (status, status_resource))
+        lines.append(
+            "const pops::MultiFab<pops::kNativeDimension>* %s = ctx.pointwise_active_mask(%d, %s);"
+            % (active_mask, bidx, var[v.id]))
+        if v.op == "affine_moment_update":
+            from pops.codegen.program_emit_affine_moments import emit_affine_moment_kernel
+            lines += emit_affine_moment_kernel(
+                node_model, v.attrs, var[state_in.id], var[v.inputs[1].id], var[v.id],
+                status, active_mask, bidx, provider_plans=provider_plans,
+                consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block))
+        else:
+            lines += _emit_local_transform_kernel(
+                node_model, v.attrs["transform"], var[state_in.id], var[v.id], status,
+                active_mask, bidx,
+                provider_plans=provider_plans,
+                consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
+            )
+        reduced = "transform_failed_%d" % v.id
+        # AMR transforms (including after-synchronization and composite Q maps) are
+        # produced and checked collectively one level at a time. Sibling statuses
+        # do not exist yet, or belong to a previous invocation of this same node.
+        status_reduction = (
+            "pointwise_level_status_max" if target == "amr_system" else "pointwise_status_max"
+        )
+        lines.append(
+            "const pops::Real %s = ctx.%s("
+            "%d, %s, %s, ctx.prepared_execution_lane());"
+            % (reduced, status_reduction, bidx, status, active_mask)
+        )
+        lines.append("if (%s != pops::Real(0)) {" % reduced)
+        lines.append(
+            "  throw pops::runtime::program::StepAttemptRejected("
+            "pops::SolveStatus::kInvalidEvaluation, %s, %s);"
+            % (json.dumps(v.op), json.dumps(
+                "transform '%s' rejected a non-finite or out-of-domain state"
+                % v.attrs.get("transform", v.op))))
+        lines.append("}")
+    elif v.op == "cell_compare":
+        # A PER-CELL threshold (spec op 17, ADC-418): mask(i,j,0) = field(i,j,0) <cmp> value ? 1 : 0,
+        # a fresh 1-component scalar_field. Lowered to a for_each_cell select kernel (the mask the
+        # `where` op selects on); no aux / model needed -- it reads component 0 of the input field.
+        (field_in,) = v.inputs
+        var[v.id] = "m%d" % v.id
+        if target == "system":
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (bidx, json.dumps("cell_compare")))
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 0, %s, 1, 1);"
+                     % (var[v.id], int(v.id), var[field_in.id]))
+        output_setup_end = len(lines)
+        lines += _emit_cell_compare_kernel(var[field_in.id], var[v.id], v.attrs["cmp"],
+                                           v.attrs["value"])
+    elif v.op == "where":
+        # A PER-CELL conditional select (spec op 17, ADC-418): out(i,j,c) = mask ? a(i,j,c) :
+        # b(i,j,c), COMPONENT-WISE. A fresh scratch the same shape as `a` (its vtype / ncomp); the
+        # ternary is decided per cell inside the kernel (NOT the scalar lazy ``branch`` op).
+        mask_in, a_in, b_in = v.inputs
+        var[v.id] = "w%d" % v.id
+        if target == "system":
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (bidx, json.dumps("where")))
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
+                     % (var[v.id], int(v.id), var[a_in.id]))
+        output_setup_end = len(lines)
+        lines += _emit_where_kernel(var[mask_in.id], var[a_in.id], var[b_in.id], var[v.id])
+    elif v.op == "record_scalar":
+        # Store the (already-computed) Scalar into the System diagnostics map under its name. A
+        # side-effecting op; its var maps to the recorded scalar (a harmless alias). The scalar input
+        # is a 'reduce' result emitted earlier in the body (a const pops::Real local).
+        (scalar_in,) = v.inputs
+        lines.append("ctx.record_scalar(%s, %s);"
+                     % (json.dumps(v.attrs["diagnostic"]), var[scalar_in.id]))
+        var[v.id] = var[scalar_in.id]
+    elif v.op == "record_balance_term":
+        # Dedicated, non-bindable sink for a validated Program.record_balance term. Ordinary
+        # record_scalar names cannot enter the reserved native attempt mailbox.
+        from pops.codegen.program_balance_due import balance_record_due_expression
+
+        (scalar_in,) = v.inputs
+        due = balance_record_due_expression(var, v.id)
+        if due != "false":
+            lines.append(
+                "if (%s) { ctx.record_balance_term(%s, %s, %s); }"
+                % (
+                    due,
+                    json.dumps(v.attrs["route"]),
+                    json.dumps(v.attrs["term"]),
+                    var[scalar_in.id],
+                )
+            )
+        var[v.id] = var[scalar_in.id]
+    elif v.op == "diffusive_rhs":
+        from pops.codegen.program_emit_diffusion import _emit_diffusive_rhs
+        from pops.codegen.program_partition_stability import has_independent_diffusion_transport
+        defer_bound = (has_independent_diffusion_transport(node_model)
+                       and any(node is v for node in program._values)
+                       and v.attrs.get("schedule") is None)
+        _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
+                            defer_explicit_bound=defer_bound)
+        var[("partition_frequency", v.id)] = "diffusion_frequency_%d" % v.id
+        if defer_bound:
+            key = ("partition_stability_deferred",)
+            var[key] = var.get(key, frozenset()) | frozenset((v.id,))
+    elif v.op == "rhs" and v.attrs.get("path_conservative", False):
+        from pops.codegen.program_emit_path import emit_path_rhs
+        emit_path_rhs(v, var, lines, node_model, provider_plans, bidx, target)
+    elif v.op == "rhs":
+        bidx = _required_block_index(block_idx, v.block, "emit op %r" % v.name)
+        state_in = v.inputs[0]  # rhs inputs = (state[, fields]); the state is first
+        var[v.id] = "r%d" % v.id
+        named_fluxes = _named_fluxes(v)
+        requested = v.attrs.get("sources")
+        named = [s for s in (requested or []) if s != "default"]
+        if target == "system" and (named_fluxes is not None or named):
+            operation = "named_flux" if named_fluxes is not None else "named_source"
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (bidx, json.dumps(operation)))
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = "
+                     "ctx.rhs_scratch(%d, 0, %s);"
+                     % (var[v.id], int(v.id), var[state_in.id]))
+        output_setup_end = len(lines)
+        named_source_subslot = 3
+        want_flux = v.attrs.get("flux", True)
+        # ADC-425 routing (spec criterion 17): the default/composite source is folded in iff the
+        # caller did NOT exclude it -- i.e. sources is None (the legacy default) OR "default" is in
+        # the explicit list. An EMPTY list [] (or a list of only named sources) excludes it -> flux
+        # only. None and [] are recorded distinctly in the IR, so this is unambiguous.
+        want_default_source = requested is None or "default" in requested
+        from pops.time._evaluation_point import evaluation_stage_fraction
+        stage = evaluation_stage_fraction(v, ark_partition="explicit")
+        lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+        from pops.codegen.program_emit_kernels import prepare_default_rhs_providers
+        lines += prepare_default_rhs_providers(
+            node_model, v, bidx, var[state_in.id], provider_plans, target=target,
+            flux=want_flux and named_fluxes is None, source=want_default_source)
+        from pops.codegen.program_rhs_input_trace import emit_rhs_input_trace
+        input_trace = (emit_rhs_input_trace(v, bidx, var[state_in.id], lines, target)
+                       if want_flux else None)
+        var[("rhs_input_trace", v.id)] = input_trace
+        trace_suffix = ", " + input_trace if input_trace is not None else ""
+        if not want_flux:
+            # SOURCE-ONLY (ADC-430): flux=False -- NO -div F base (the rhs_scratch starts at zero).
+            # The default/composite source is added iff requested (the same want_default_source
+            # routing as flux=True): "default" present (or None) -> ctx.source_default_into (S only,
+            # the exact mirror of neg_div_flux_default_into); excluded -> R stays the zeroed scratch.
+            # The named source_terms below axpy on top either way -- so flux=False,sources=["default"]
+            # is the default source only; flux=False,sources=["s"] is just s; flux=False,sources=[]
+            # is the zero RHS. Named fluxes are rejected upstream (no flux base to divide). This is
+            # the fix: before ADC-430 a flux=False stage still emitted the -div F base (it ignored the
+            # flux attr), double-adding the flux on any non-zero-flux model in a Lie/Strang split.
+            if want_default_source:
+                lines.append("ctx.source_default_into(%d, %s, %s);"
+                             % (bidx, var[state_in.id], var[v.id]))
+        elif named_fluxes is None:
+            family = _rhs_flux_temporal_family(v)
+            family_suffix = ", " + json.dumps(family) if target == "amr_system" else ""
+            from pops.codegen.program_transport_quadrature import declare_transport_faces
+            faces = declare_transport_faces(v, node_model, var, lines)
+            authored_face = (getattr(_model_impl(node_model), "_user_face", None)
+                             if node_model is not None else None)
+            user_face_frequency = None
+            if authored_face is not None:
+                from pops.numerics.riemann.user import authenticated_user_face
+                authenticated_user_face(authored_face)
+                user_face_frequency = "user_face_frequency_%d" % v.id
+                lines.append("pops::Real %s=0;" % user_face_frequency)
+                if faces is None:
+                    faces = "user_face_faces_%d" % v.id
+                    lines.append("std::vector<pops::nd::FaceField<pops::kNativeDimension>> %s;" % faces)
+            if faces is not None:
+                frequency_suffix = (",&" + user_face_frequency) if user_face_frequency else ""
+                if target == "amr_system" and user_face_frequency:
+                    # The final AMR argument follows temporal family and input trace.
+                    frequency_suffix = (",nullptr,&" + user_face_frequency
+                                        if input_trace is None else ",&" + user_face_frequency)
+                lines.append("ctx.neg_div_flux_default_with_faces_into(%d, %s, %s, %d, %s%s%s);"
+                             % (bidx, var[state_in.id], var[v.id], int(v.id), faces,
+                                family_suffix + trace_suffix, frequency_suffix))
+                if user_face_frequency:
+                    var[("user_face_frequency", v.id)] = user_face_frequency
+                    var[("partition_frequency", v.id)] = user_face_frequency
+                if want_default_source:
+                    source = "transport_source_%d" % v.id
+                    lines.append("auto& %s = ctx.rhs_scratch(%d, 2, %s);"
+                                 % (source, int(v.id), var[state_in.id]))
+                    lines.append("ctx.source_default_into(%d, %s, %s%s);"
+                                 % (bidx, var[state_in.id], source, trace_suffix))
+                    lines.append("ctx.axpy(%s, static_cast<pops::Real>(1), %s);"
+                                 % (var[v.id], source))
+            elif want_default_source:
+                # R <- -div F + default/composite source (ctx.rhs_into) for THIS op's block (ADC-426
+                # bidx), the historical path: sources is None (legacy) or "default" is requested.
+                lines.append("ctx.rhs_into(%d, %s, %s, %d%s);"
+                             % (bidx, var[state_in.id], var[v.id], int(v.id),
+                                family_suffix + trace_suffix))
+            else:
+                # FLUX-ONLY (ADC-425): "default" is NOT among the requested sources (the empty list
+                # [] or a named-only list) -> R <- -div F(U) WITHOUT the model's default source
+                # (ctx.neg_div_flux_default_into), for THIS op's block (bidx). The named source_terms
+                # below are then axpy'd on top -- sources=[] is flux only, ["a","b"] is flux + a + b.
+                lines.append("ctx.neg_div_flux_default_into(%d, %s, %s, %d%s);"
+                             % (bidx, var[state_in.id], var[v.id], int(v.id),
+                                family_suffix + trace_suffix))
+        else:
+            # NAMED fluxes (ADC-419): R <- -div(sum of selected named fluxes). Evaluate the SUM of
+            # the flux expressions into one exact-ranked scratch field per authored x[/y[/z] axis.
+            # The retained block package first fills state/aux halos; one generic centered stencil
+            # then accumulates every axis. There is no 2D fx/fy execution route.
+            impl = _model_impl(node_model)
+            axes = tuple(impl._flux_terms[named_fluxes[0]])
+            flux_vars = {axis: "%s_f%s" % (var[v.id], axis) for axis in axes}
+            lines.append("ctx.prepare_generated_state(%d, %s, %d%s);"
+                         % (bidx, var[state_in.id], int(v.id), trace_suffix))
+            for axis_index, axis in enumerate(axes):
+                lines.append(
+                    "pops::MultiFab<pops::kNativeDimension>& %s = "
+                    "ctx.rhs_scratch(%d, %d, %s);"
+                    % (flux_vars[axis], int(v.id), axis_index + 1, var[state_in.id])
+                )
+            named_source_subslot = 1 + len(axes)
+        plan_exprs = []
+        if named_fluxes is not None:
+            for flux_name in named_fluxes:
+                for axis_terms in impl._flux_terms[flux_name].values():
+                    plan_exprs.extend(axis_terms)
+        for source_name in named:
+            plan_exprs.extend(_model_impl(node_model)._source_terms[source_name])
+        consumer_qid = (
+            program_provider_consumer_qid(node_model, v.id, v.block)
+            if plan_exprs or named_fluxes is not None or named
+            else None
+        )
+        if named_fluxes is not None:
+            if consumer_qid is None:
+                raise ValueError(
+                    "named-flux kernel requires an explicit Program consumer qid"
+                )
+            # The named-flux kernel and named sources below are one Program node:
+            # their shared plan is the first-use union, not an operator plan.
+            lines += _emit_flux_kernel(
+                node_model, named_fluxes, var[state_in.id], flux_vars, bidx,
+                provider_plans=provider_plans, consumer_qid=consumer_qid,
+                plan_exprs=plan_exprs,
+            )
+            lines.append(
+                "ctx.neg_div_named_flux_into(%d, %s, %s, {%s}, %d%s);"
+                % (
+                    bidx,
+                    var[state_in.id],
+                    var[v.id],
+                    ", ".join("&%s" % flux_vars[axis] for axis in axes),
+                    int(v.id),
+                    ", " + json.dumps(_rhs_flux_temporal_family(v, named_fluxes))
+                    if target == "amr_system" else "",
+                )
+            )
+        for source_subslot, s in enumerate(named, start=named_source_subslot):
+            # R += S_s(U, aux): assemble the named source into a scratch (same per-cell kernel as
+            # the standalone 'source' op) and axpy it onto R.
+            ssrc = "%s_%s" % (var[v.id], s)
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = "
+                         "ctx.rhs_scratch(%d, %d, %s);"
+                         % (ssrc, int(v.id), source_subslot, var[state_in.id]))
+            if consumer_qid is None:
+                raise ValueError(
+                    "named-source kernel requires an explicit Program consumer qid"
+                )
+            lines += _emit_source_kernel(
+                node_model, s, var[state_in.id], ssrc, bidx,
+                provider_plans=provider_plans, consumer_qid=consumer_qid,
+                plan_exprs=plan_exprs,
+            )
+            lines.append("ctx.axpy(%s, static_cast<pops::Real>(1), %s);" % (var[v.id], ssrc))
+        if want_flux:
+            from pops.codegen.program_partition_stability import emit_transport_frequency
+            emit_transport_frequency(v, var, lines, model=node_model, block_index=bidx,
+                                     target=target)
+    elif v.op == "implicit_source":
+        state_in = v.inputs[0]
+        var[v.id] = "r%d" % v.id
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
+                     % (var[v.id], int(v.id), var[state_in.id]))
+        output_setup_end = len(lines)
+        lines.append("ctx.source_default_into(%d, %s, %s);"
+                     % (bidx, var[state_in.id], var[v.id]))
+        keep = ",".join(str(int(index)) for index in v.attrs["keep_components"])
+        lines.append("ctx.apply_source_mask(%s, {%s});" % (var[v.id], keep))
+    elif v.op == "solve_implicit_source":
+        state_in = v.inputs[0]
+        var[v.id] = "u%d" % v.id
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
+                     % (var[v.id], int(v.id), var[state_in.id]))
+        output_setup_end = len(lines)
+        lines.append(
+            "ctx.lincomb(%s, static_cast<pops::Real>(1), %s, static_cast<pops::Real>(0), %s);"
+            % (var[v.id], var[state_in.id], var[state_in.id]))
+        outcome = "implicit_source_outcome_%d" % v.id
+        report = "implicit_source_report_%d" % v.id
+        lines.append(
+            "pops::SolveOutcome %s = ctx.solve_source_default(%d, %s, static_cast<pops::Real>(dt), "
+            "ctx.block_newton_options(%d));"
+            % (outcome, bidx, var[v.id], bidx))
+        lines.append(
+            "const pops::SolveReport %s = pops::consume_solve_outcome(std::move(%s));"
+            % (report, outcome))
+        lines.append("ctx.publish_newton_report(%d, %s);" % (bidx, report))
+    elif v.op == "source":
+        state_in = v.inputs[0]  # source inputs = (state[, fields]); the state is first
+        var[v.id] = "r%d" % v.id
+        if target == "system":
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (bidx, json.dumps("named_source")))
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
+                     % (var[v.id], int(v.id), var[state_in.id]))
+        output_setup_end = len(lines)
+        lines += _emit_source_kernel(
+            node_model, v.attrs["source"], var[state_in.id], var[v.id], bidx,
+            provider_plans=provider_plans,
+            consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
+        )
+    elif v.op == "apply":
+        state_in = v.inputs[0]  # apply inputs = (state[, fields]); the state is first
+        var[v.id] = "r%d" % v.id
+        if target == "system":
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (bidx, json.dumps("linear_source_apply")))
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
+                     % (var[v.id], int(v.id), var[state_in.id]))
+        output_setup_end = len(lines)
+        lines += _emit_apply_kernel(node_model, v.attrs["linear_source"], var[state_in.id], var[v.id],
+                                    bidx, provider_plans=provider_plans,
+                                    consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block))
+    elif v.op == "solve_local_linear":
+        rhs_in = v.inputs[0]  # solve inputs = (rhs_state, op_value[, fields]); rhs first
+        var[v.id] = "u%d" % v.id
+        status = "local_solve_status_%d" % v.id
+        if target == "system":
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (bidx, json.dumps("solve_local_linear")))
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
+                     % (var[v.id], int(v.id), var[base.id]))
+        output_setup_end = len(lines)
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
+                     % (status, int(v.id), var[v.id]))
+        consumer_qid = program_provider_consumer_qid(node_model, v.id, v.block)
+        kernel = _emit_solve_local_linear_kernel(
+            node_model, v.attrs["linear_source"], v.attrs["a_coeff"],
+            var[rhs_in.id], var[v.id], status, bidx,
+            provider_plans=provider_plans,
+            consumer_qid=consumer_qid,
+        )
+        _append_local_auxiliary_preparation(
+            program, v, lines, provider_plans=provider_plans, consumer_qid=consumer_qid,
+            block=bidx, state=var[rhs_in.id], label="local_linear")
+        lines += kernel
+        _append_pointwise_solve_report(
+            program, v, status, lines, label="local_linear", stem="local_solve")
+    elif v.op == "solve_local_nonlinear":
+        # Generated code supplies the residual and controls; the single prepared provider owns the
+        # nonlinear algorithm and keeps the candidate private until the report is consumed.
+        guess_in = v.inputs[0]  # solve inputs = (initial_guess,)
+        var[v.id] = "u%d" % v.id
+        status = "ln_status_%d" % v.id
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
+                     % (var[v.id], int(v.id), var[base.id]))
+        output_setup_end = len(lines)
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 1, %s, 11, 0);"
+                     % (status, int(v.id), var[base.id]))
+        active_mask = "local_solve_active_mask_%d" % v.id
+        lines.append(
+            "const pops::MultiFab<pops::kNativeDimension>* %s = ctx.pointwise_active_mask(%d, %s);"
+            % (active_mask, bidx, status))
+        consumer_qid = program_provider_consumer_qid(node_model, v.id, v.block)
+        kernel = _emit_solve_local_nonlinear_kernel(
+            node_model, v, var[guess_in.id], var[v.id], status, active_mask, bidx,
+            capture_vars=tuple(var[item.id] for item in v.inputs[1:]),
+            provider_plans=provider_plans,
+            consumer_qid=consumer_qid,
+        )
+        _append_local_auxiliary_preparation(
+            program, v, lines, provider_plans=provider_plans, consumer_qid=consumer_qid,
+            block=bidx, state=var[guess_in.id], label="local_nonlinear")
+        lines += kernel
+        report = "ln_report_%d" % v.id
+        outcome = _append_local_nonlinear_report(program, v, status, report, lines)
+        _append_solve_report_guard(
+            program, v, outcome, lines, label="local_nonlinear")
+    elif v.op == "field_gradient":
+        from pops.codegen.program_emit_field_gradient import emit_field_gradient
+        emit_field_gradient(v, var, lines, prelude, target=target)
+    elif v.op == "field_publication":
+        from pops.codegen.program_emit_field_publication import emit_field_publication
+        emit_field_publication(v, var, lines, model, target=target,
+                               provider_plans=provider_plans, block_idx=block_idx)
+    elif v.op in ("field_problem_load", "field_problem_coefficients", "field_component"):
+        from pops.codegen.program_emit_field_problem import emit_field_problem_value
+
+        emit_field_problem_value(v, var, lines, prelude, target=target)
+    elif v.op == "field_state_cell_mean":
+        from pops.fields._observation_contract import validate_field_state_cell_mean
+
+        source = validate_field_state_cell_mean(v)
+        if target != "system":
+            raise NotImplementedError("field cell-mean State projection requires the qualified Uniform System route")
+        var[v.id] = var[source.id]
+    elif v.op == "scalar_field":
+        # Qualified AMR scalars bind current-attempt storage; uniform and unqualified scalars
+        # retain their layout-bound install lifetime. Matrix-free apply sub-blocks manage their
+        # own session-private scalar storage in _emit_matrix_free_operator. This branch handles
+        # top-level / step-body declarations, where prelude is available.
+        if prelude is None:
+            raise NotImplementedError(
+                "scalar_field is only lowerable at the top level / step body or inside a "
+                "matrix_free_operator apply sub-block, not inside a control-flow (if/while/range) body")
+        sp = "sf%d" % v.id
+        var[v.id] = "(*%s)" % sp
+        ncomp = int(v.attrs.get("ncomp", 1))
+        owner = None
+        if target == "amr_system":
+            # Scalar storage has no intrinsic block. Its exact authored consumers
+            # qualify it; an unrelated same-shaped block is never a prototype.
+            owner = _unique_dataflow_owner_block(
+                v, where="AMR scalar field %r" % v.name,
+                additional_values=(value for value in program._values
+                                   if any(item is v for item in value.inputs)),
+                allow_unqualified=True)
+        if owner is not None:
+            owner_index = _required_block_index(block_idx, owner, "AMR scalar field")
+            rebound = v.id in var.get(("hierarchy_retained_bindings",), ())
+            produce = "false" if rebound else "true"
+            lines.append(
+                "auto* %s = &ctx.retained_scalar(%d, %d, %d, %s);"
+                % (sp, v.id, owner_index, ncomp, produce))
+        else:
+            prelude.append("auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.alloc_scalar_field(%d, 1));"
+                           % (sp, ncomp))
+    elif v.op == "vector_field":
+        if prelude is None:
+            raise NotImplementedError(
+                "vector_field is only lowerable at the top level / step body or inside a "
+                "matrix_free_operator apply sub-block")
+        sp = "sf%d" % v.id
+        var[v.id] = "(*%s)" % sp
+        ncomp = int(v.attrs["ncomp"])
+        prelude.append(
+            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+            "ctx.alloc_scalar_field(%d, 1));" % (sp, ncomp))
+        sources = ", ".join("&%s" % _deref(var[value.id]) for value in v.inputs)
+        lines.append(
+            "ctx.pack_vector(*%s, std::array<const pops::MultiFab<"
+            "pops::kNativeDimension>*, pops::kNativeDimension>{%s});"
+            % (sp, sources))
+    elif v.op == "laplacian":
+        # Step-body bare Laplacian (e.g. Lap phi^n for the condensed RHS). Inside an apply sub-block
+        # this op is handled by _emit_matrix_free_operator; here it is the top-level path.
+        o, i = v.inputs
+        if target == "system":
+            owner = _cartesian_generated_owner_index(
+                block_idx, v, where="preflight laplacian %r" % v.name)
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (owner, json.dumps("laplacian")))
+        lines.append("ctx.laplacian(%s, %s);" % (_deref(var[o.id]), _deref(var[i.id])))
+        var[v.id] = var[o.id]
+    elif v.op == "gradient":
+        o, p = v.inputs
+        if target == "system":
+            owner = _cartesian_generated_owner_index(
+                block_idx, v, where="preflight gradient %r" % v.name)
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (owner, json.dumps("gradient")))
+        lines.append("ctx.gradient(%s, %s);" % (_deref(var[o.id]), _deref(var[p.id])))
+        var[v.id] = var[o.id]
+    elif v.op == "divergence":
+        o, flux = v.inputs
+        if target == "system":
+            owner = _cartesian_generated_owner_index(
+                block_idx, v, where="preflight divergence %r" % v.name)
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (owner, json.dumps("divergence")))
+        lines.append("ctx.divergence(%s, %s);"
+                     % (_deref(var[o.id]), _deref(var[flux.id])))
+        var[v.id] = var[o.id]
+    elif v.op in ("condensed_coeffs", "condensed_rhs", "condensed_reconstruct", "condensed_energy"):
+        # GENERIC condensed-implicit solve (ADC-637): the tensor coefficient A = I + c*rho*M^{-1} bundle,
+        # the fused RHS -Lap(phi^n) - g*div(M^{-1}(m)), the velocity reconstruction and the kinetic-energy
+        # increment, emitted INLINE via pops::detail::block_inverse<Dim> from an authored J (M = I -
+        # th_dt*J) on a momentum subset -- no coupling/schur call. The thin dispatch lives in
+        # program_emit_condensed to keep this router (and its budget) small; condensed_coeffs allocates
+        # its persistent row-major tensor field there.
+        if target == "system" and v.op == "condensed_rhs":
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (bidx, json.dumps("condensed_rhs")))
+        emit_condensed_op(
+            v, var, node_model, lines, prelude,
+            provider_plans=provider_plans,
+            consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
+            program_block=_required_block_index(
+                block_idx, v.block, "condensed op %r" % v.name
+            ),
+            target=target,
+        )
+    elif v.op == "matrix_free_operator":
+        # Install-time: emit the apply lambda `apply_A{id}` into the prelude. Its persistent scratch
+        # (the scalar_field ops of the apply sub-block) are shared_ptr fields, captured by value so
+        # they outlive the install call and are reused across every Krylov iteration (alloc-once).
+        # The lambda is itself captured by the step closure ([=]) and passed to pops::*_solve. An
+        # rhs_jacvec apply (ADC-431) also captures persistent jac_uk / jac_r0 scratch the lambda
+        # dereferences; the step body refreshes them from the live iterate / rhs(U^k) here (@p lines).
+        _emit_matrix_free_operator(
+            program, v, var, prelude, lines, field_plans=field_plans, target=target, model=model,
+            has_shared_interface_implicit_jacvec=(
+                has_shared_interface_implicit_jacvec
+            ))
+    elif v.op in ("apply_in", "apply_out", "apply_laplacian_coeff"):
+        # The lambda in/out placeholders and the coefficiented apply matvec only appear INSIDE a
+        # matrix_free_operator apply sub-block (lowered by _emit_matrix_free_operator); they never
+        # lower standalone at the top level.
+        raise NotImplementedError(
+            "emit_cpp_program: op '%s' (value '%s') is only lowerable inside a matrix_free_operator "
+            "apply sub-block" % (v.op, v.name))
+    elif v.op == "solve_spatial_nonlinear":
+        from pops.codegen.program_emit_spatial_solve import emit_spatial_solve
+
+        def emit_residual(node: Any, residual_base: Any, residual_vars: Any,
+                          residual_lines: Any, residual_prelude: Any) -> None:
+            _emit_op(program, node, residual_base, set(), residual_vars, model,
+                     residual_lines, residual_prelude, block_idx, target, field_plans,
+                     has_shared_interface_implicit_jacvec, implicit_spatial_residual=True)
+
+        emit_spatial_solve(program, v, base, var, model, lines, prelude, block_idx,
+                           field_plans, target, emit_residual)
+    elif v.op == "solve_linear":
+        _emit_solve_linear(program, v, base, var, prelude, lines, target=target)
+    elif v.op in ("solve_outcome", "solve_outcome_component"):
+        # Python graph/authoring requires an explicit consumed outcome before a solve result can feed
+        # effects. The solve-producing operation has already constructed and guarded its native
+        # SolveReport using the exact action attached to this outcome. These projections are therefore
+        # zero-cost aliases of a scratch that is reachable only after the guard accepted it.
+        (source,) = v.inputs
+        if v.op == "solve_outcome_component" and "out_block" in v.attrs:
+            solve = source.inputs[0]
+            var[v.id] = var[("coupled_solution", solve.id, v.attrs["out_block"])]
+        else:
+            var[v.id] = var[source.id]
+    elif v.op == "reduce":
+        # A collective owner/block/layout/lane-authenticated raw active-domain algebra
+        # reduction -> a C++ scalar. Inactive cells are excluded; there is no kappa/volume
+        # weighting. Physical weighted integrals stay System services. Route every
+        # operation through ProgramContext with the exact Program block owner. All ranks
+        # execute the same context call, including ranks that own no box.
+        var[v.id] = "s%d" % v.id
+        kind = v.attrs["kind"]
+        if v.block is None:
+            from pops.codegen.program_emit_field_problem import field_observation_reduction
+            reduction = field_observation_reduction(v, var, target=target)
+            lines.append("const pops::Real %s = %s;" % (var[v.id], reduction))
+            return
+        owner = _required_block_index(block_idx, v.block, "reduce value %r" % v.name)
+        if kind == "norm2":
+            (u,) = v.inputs
+            reduction = "ctx.norm2(%d, %s)" % (owner, var[u.id])
+        elif kind == "norm_inf":
+            (u,) = v.inputs
+            reduction = "ctx.norm_inf(%d, %s)" % (owner, var[u.id])
+        elif kind in ("sum", "max", "min", "abs_sum"):
+            (u,) = v.inputs
+            comp = int(v.attrs.get("comp", 0))
+            context_op = {
+                "sum": "sum_component",
+                "max": "max_component",
+                "min": "min_component",
+                "abs_sum": "abs_sum_component",
+            }[kind]
+            reduction = "ctx.%s(%d, %s, %d)" % (
+                context_op,
+                owner,
+                var[u.id],
+                comp,
+            )
+        else:  # dot
+            a, b = v.inputs
+            reduction = "ctx.dot(%d, %s, %s)" % (
+                owner,
+                var[a.id],
+                var[b.id],
+            )
+        from pops.codegen.program_balance_due import balance_value_due_expression
+
+        due = balance_value_due_expression(var, v.id)
+        if due is not None:
+            reduction = "(%s) ? (%s) : pops::Real(0)" % (due, reduction)
+        lines.append("const pops::Real %s = %s;" % (var[v.id], reduction))
+    elif v.op == "cfl":
+        # The dt_bound's runtime cfl argument -- the C++ parameter of pops_program_dt_bound. It is
+        # NOT a statement; its token is the bound parameter name (spec s18 / ADC-417).
+        var[v.id] = "cfl"
+    elif v.op == "hmin":
+        # MIN physical cell size (ctx.hmin(), = the native CFL's hmin). A scalar local (spec s18).
+        var[v.id] = "s%d" % v.id
+        lines.append("const pops::Real %s = ctx.hmin();" % var[v.id])
+    elif v.op == "max_wave_speed":
+        # Max |wave speed| of the block on the state (ctx.max_wave_speed(idx, u)): the SAME per-block
+        # reduction the native CFL reads, REUSED (spec s18). A collective reduction -> a scalar local.
+        # ADC-426: the wave speed of the input state's OWN block (idx of u.block).
+        (u,) = v.inputs
+        var[v.id] = "s%d" % v.id
+        lines.append("const pops::Real %s = ctx.max_wave_speed(%d, %s);"
+                     % (var[v.id], _required_block_index(
+                         block_idx, u.block, "max_wave_speed input"), var[u.id]))
+    elif v.op == "scalar_op":
+        # Scalar arithmetic (add/sub/mul/div) over scalar locals / literal constants -> a new scalar
+        # local. Used by the dt_bound expression cfl * hmin / max_wave_speed (spec s18).
+        var[v.id] = "s%d" % v.id
+        toks = []
+        for kind, val in v.attrs["operands"]:
+            if kind == "v":
+                toks.append(var[v.inputs[val].id])
+            else:  # a literal constant
+                toks.append(scalar_cpp(val))
+        cppop = {"add": "+", "sub": "-", "mul": "*", "div": "/"}[v.attrs["fn"]]
+        expression = "(%s %s %s)" % (toks[0], cppop, toks[1])
+        from pops.codegen.program_balance_due import balance_value_due_expression
+
+        due = balance_value_due_expression(var, v.id)
+        if due is not None:
+            expression = "(%s) ? (%s) : pops::Real(0)" % (due, expression)
+        lines.append("const pops::Real %s = %s;" % (var[v.id], expression))
+    elif v.op == "compare":
+        # A predicate over scalars -> an inline boolean C++ expression (no statement of its own; the
+        # while op embeds it directly in `if (!(<expr>)) break;`).
+        lhs = v.inputs[0]
+        if len(v.inputs) == 2:  # scalar vs scalar
+            rhs_tok = var[v.inputs[1].id]
+        else:  # scalar vs float tolerance
+            rhs_tok = scalar_cpp(v.attrs["rhs"])
+        var[v.id] = "(%s %s %s)" % (var[lhs.id], v.attrs["cmp"], rhs_tok)
+        var[("when_predicate", v.id)] = var[v.id]  # emission-local schedule predicate token
+    elif v.op == "acceptance_guard":
+        value, condition = v.inputs
+        action = v.attrs["action"]
+        from pops.time.solve_outcome import FailRun, RejectAttempt
+        message = "acceptance guard %r failed" % v.attrs["guard"]
+        lines.append("if (!(%s)) {" % var[condition.id])
+        if type(action) is RejectAttempt:
+            lines.append(
+                "  throw pops::runtime::program::StepAttemptRejected("
+                "pops::SolveStatus::kInvalidEvaluation, \"guard\", %s);"
+                % json.dumps(message))
+        elif type(action) is FailRun:
+            lines.append("  throw std::runtime_error(%s);" % json.dumps(message))
+        else:  # guarded by Program.guard; defense in depth for a forged IR
+            raise TypeError("acceptance_guard has an unsupported terminal action")
+        lines.append("}")
+        var[v.id] = var[value.id]
+    elif v.op == "while":
+        _emit_while(
+            program, v, base, var, model, lines, prelude, block_idx, field_plans,
+            target=target)
+    elif v.op == "range":
+        _emit_range(
+            program, v, base, var, model, lines, prelude, block_idx, field_plans,
+            target=target)
+    elif v.op == "subcycle":
+        _emit_subcycle(
+            program, v, base, var, model, lines, prelude, block_idx, field_plans, target=target)
+    elif v.op == "branch":
+        _emit_branch(
+            program, v, base, var, model, lines, prelude, block_idx, field_plans,
+            target=target)
+    elif v.op == "pointwise_expression":
+        from pops.codegen.program_emit_expressions import emit_pointwise_kernel, pointwise_output_template
+        template_var = var[pointwise_output_template(v).id]
+        var[v.id] = "u%d" % v.id
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
+                     % (var[v.id], v.id, template_var))
+        output_setup_end = len(lines)
+        status = "expression_status_%d" % v.id
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 1, %s, 1, 0);"
+                     % (status, v.id, template_var))
+        lines += emit_pointwise_kernel(v, var, var[v.id], block_index=bidx, status=status)
+        reduction = "pointwise_level_status_max" if target == "amr_system" else "pointwise_status_max"
+        lines.append("if (ctx.%s(%d, %s, expression_active_%d, ctx.prepared_execution_lane()) != pops::Real(0)) {"
+                     % (reduction, bidx, status, v.id))
+        lines.append("  throw pops::runtime::program::StepAttemptRejected("
+                     "pops::SolveStatus::kInvalidEvaluation, \"pointwise_expression\", "
+                     "\"non-finite scientific expression input or intermediate\");")
+        lines.append("}")
+    elif v.op == "linear_combine":
+        from pops.codegen.program_partition_stability import (
+            emit_partition_stability, has_independent_diffusion_transport,
+        )
+        # An authenticated implicit residual is an equation evaluation, not an explicit
+        # state advance. Its captured predictor already received its outer-stage bound.
+        if (not implicit_spatial_residual and node_model is not None
+                and has_independent_diffusion_transport(node_model)):
+            emit_partition_stability(v, var, lines, block_index=bidx, include_transport=True)
+        terms = list(zip(v.inputs, v.attrs["coeffs"], strict=True))
+        if (not implicit_spatial_residual
+                and v.id in var.get(("explicit_state_updates",), frozenset())):
+            from pops.codegen.program_partition_stability import emit_user_face_stability
+            emit_user_face_stability(v, var, lines, block_index=bidx)
+        if v.id in committed_ids:
+            # Commit: block state <- c_base * base + sum(non-base coeff * term), in place.
+            c_base = {0: 0}
+            acc = "acc%d" % v.id
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
+                         % (acc, int(v.id), var[base.id]))
+            for inp, coeff in terms:
+                if inp.id == base.id:
+                    c_base = coeff
+                else:
+                    lines.append("ctx.axpy(%s, %s, %s, dt, %s);"
+                                 % (acc, _coeff_cpp(coeff), var[inp.id],
+                                    _coeff_metadata_cpp(coeff)))
+            lines.append(
+                "ctx.lincomb(%s, %s, %s, static_cast<pops::Real>(1), %s, dt, %s, {{0, 1, 1}});"
+                % (var[base.id], _coeff_cpp(c_base), var[base.id], acc,
+                   _coeff_metadata_cpp(c_base)))
+            var[v.id] = var[base.id]  # the commit wrote the block state in place (no final copy)
+        else:
+            var[v.id] = "u%d" % v.id  # an intermediate stage state (scratch, zero-initialized)
+            # A scalar_field combine (ADC-427: the phi^{n+1} extrapolation) has no block, so it has no
+            # base block-state to shape the scratch: template it on the FIRST scalar input instead (a
+            # 1-component field, same (ba, dm)). A State combine shapes it on the block base as before.
+            template = var[terms[0][0].id] if v.vtype == "scalar_field" else var[base.id]
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
+                         % (var[v.id], int(v.id), template))
+            output_setup_end = len(lines)
+            for inp, coeff in terms:
+                lines.append("ctx.axpy(%s, %s, %s, dt, %s);"
+                             % (var[v.id], _coeff_cpp(coeff), var[inp.id],
+                                _coeff_metadata_cpp(coeff)))
+    # UNIFIED SCHEDULER (ADC-458, Spec 3 sections 17-18): if this op carries a non-always schedule,
+    # wrap the statements it just emitted (lines[_profile_start:]) in the due-test guard + policy
+    # branch. Done HERE, after the op lowered itself, so EVERY schedulable node (field solve, rhs,
+    # source, linear_combine, where, ...) reuses the one general mechanism -- no per-op special
+    # case. The wrap nests INSIDE the per-node profiling pair below (the profiler times the guarded
+    # block as the node's cost). An always() schedule (or no schedule) leaves the lines untouched.
+    evaluation_start = output_setup_end if output_setup_end is not None else _profile_start
+    lines[evaluation_start:evaluation_start] = evaluation_prelude
+    _emit_schedule_wrap(program, v, var, lines, _profile_start,
+                        output_setup_end=output_setup_end)
+    # PER-NODE PROFILING (ADC-459): if this op emitted at least one statement, bracket those
+    # statements with the steady_clock pair (see the note at the top of _emit_op). A ProfileScope is
+    # named "node:<v.name>"; profile_record(name, _pt) accumulates now() - _pt into the System
+    # Profiler. Inserted only when lines grew (a pure inline-token op emits nothing and is skipped).
+    # The pure reference-binding ops (state / history bind a MultiFab&; hmin reads a cached scalar)
+    # do no per-step numerical work, so they are not wrapped -- the report keeps the meaningful
+    # work nodes (rhs / solve_fields / linear_combine / source / apply / reductions / loops).
+    if v.op not in _PROFILE_SKIP_OPS and len(lines) > _profile_start:
+        node_name = json.dumps("node:%s" % v.name)
+        pt = "_pt%d" % v.id  # unique per node id (no redefinition at body scope or in a loop pass)
+        lines.insert(_profile_start,
+                     "const auto %s = std::chrono::steady_clock::now();  // ProfileScope %s"
+                     % (pt, node_name))
+        lines.append("ctx.profile_record(%s, %s);" % (node_name, pt))

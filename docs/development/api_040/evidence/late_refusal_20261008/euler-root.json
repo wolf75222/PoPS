@@ -1,0 +1,11 @@
+{
+  "date_utc": "2026-10-08T20:12:09.093474+00:00",
+  "Source": "29e9143c2d7234811030da3c10b897649978ec34",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "core": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "peer": "/Users/romaindespoulain/dev/tmp/PoPS-independent-late-refusal-Euler-positive-29e-ed2-reception-20261008/reception.json",
+  "peer_sha256": "761cbdc5ab5bb9754c781501bbd1fc3a7966797f2365bd443ea375b714bd4372",
+  "pins_rehashed": 28,
+  "GO": "Bounded SSPRK2 failure/control then adaptive retry after physical history expectation correction.",
+  "scope": "FiniteAMR1Euler initial accepted envelope; histories initially uninitialized; exact private journal, no public snapshot/ticketrevocation/phasecensus/same-instanceparams claim"
+}

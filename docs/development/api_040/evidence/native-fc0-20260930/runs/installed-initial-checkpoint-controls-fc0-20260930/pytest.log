@@ -1,0 +1,188 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 122 items
+
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_real_install_tail_prepares_initial_checkpoint_before_any_run[policy0-uniform] FAILED [  0%]
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_real_install_tail_prepares_initial_checkpoint_before_any_run[policy0-amr] FAILED [  1%]
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_real_install_tail_prepares_initial_checkpoint_before_any_run[policy1-uniform] FAILED [  2%]
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_real_install_tail_prepares_initial_checkpoint_before_any_run[policy1-amr] FAILED [  3%]
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_real_install_tail_prepares_initial_checkpoint_before_any_run[policy2-uniform] FAILED [  4%]
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_real_install_tail_prepares_initial_checkpoint_before_any_run[policy2-amr] FAILED [  4%]
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_undeclared_program_can_bind_without_inventing_a_controller[uniform] PASSED [  5%]
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_undeclared_program_can_bind_without_inventing_a_controller[amr] PASSED [  6%]
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_initial_composite_leaves_have_one_exact_controller[policy0] PASSED [  7%]
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_initial_composite_leaves_have_one_exact_controller[policy1] PASSED [  8%]
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_initial_composite_leaves_have_one_exact_controller[policy2] PASSED [  9%]
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_pending_external_grid_has_declared_authority_but_no_invented_controls PASSED [  9%]
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_restored_controls_are_preserved_and_bind_does_not_consume_next_attempt PASSED [ 10%]
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_wrong_installed_descriptor_and_invalid_initial_controls_fail_atomically PASSED [ 11%]
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_unknown_initial_controls_contract_fails_before_schedule_publication PASSED [ 12%]
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_pending_composite_cannot_hide_different_declarations PASSED [ 13%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_accepted_attempt_advances_cursor_and_round_trips_exact_controller_state PASSED [ 13%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_system_direct_step_requires_the_installed_python_program_strategy PASSED [ 14%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_nested_clock_cursors_round_trip_at_only_the_accepted_boundary PASSED [ 15%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_restart_rejects_a_different_installed_nested_clock_schedule PASSED [ 16%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_temporal_schedule_refuses_a_providerless_cross_clock_relation PASSED [ 17%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_temporal_schedule_rejects_history_provider_registry_drift[state-replacement0] PASSED [ 18%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_temporal_schedule_rejects_history_provider_registry_drift[space-replacement1] PASSED [ 18%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_temporal_schedule_rejects_history_provider_registry_drift[depth-3] PASSED [ 19%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_temporal_schedule_rejects_history_provider_registry_drift[validity-replacement3] PASSED [ 20%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_temporal_schedule_rejects_history_provider_registry_drift[interpolation-replacement4] PASSED [ 21%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_temporal_schedule_rejects_history_provider_source_clock_drift PASSED [ 22%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible PASSED [ 22%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_native_linear_history_uses_bracketing_slots_and_restarts_exactly PASSED [ 23%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart PASSED [ 24%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_strict_temporal_manifest_refuses_missing_or_unsynchronized_state PASSED [ 25%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_strict_controller_state_matches_the_accepted_macro_step PASSED [ 26%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_frozen_release_v2_fixture_is_refused_offline_and_at_runtime_boundary PASSED [ 27%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_strict_temporal_sections_reject_extra_keys_and_invalid_values[strategy-value0-strategy] PASSED [ 27%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_strict_temporal_sections_reject_extra_keys_and_invalid_values[controller_state-value1-controller] PASSED [ 28%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_strict_temporal_sections_reject_extra_keys_and_invalid_values[event_queue-value2-event] PASSED [ 29%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_strict_temporal_sections_reject_extra_keys_and_invalid_values[transaction_stats-value3-statistics] PASSED [ 30%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_preflight_rejects_incomplete_dynamic_indexes_before_native_restore PASSED [ 31%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_preflight_rejects_noncanonical_scheduled_cache_name PASSED [ 31%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_program_cadence_checkpoint_preserves_exact_variable_dt_window PASSED [ 32%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_restart_restores_clock_before_selective_history_replay PASSED [ 33%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_capture_uses_field_slots_without_materializing_default_field[field_slots0-field_values0] PASSED [ 34%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_capture_uses_field_slots_without_materializing_default_field[field_slots1-field_values1] PASSED [ 35%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_capture_defers_field_free_alias_until_every_native_gather_finishes PASSED [ 36%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_capture_default_field_keeps_the_legacy_phi_as_an_exact_alias PASSED [ 36%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_phi_alias_validation_and_restore_uses_default_once PASSED [ 37%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_restart_preflight_accepts_unmaterialized_default_on_configured_target PASSED [ 38%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_restart_preflight_rejects_unavailable_default_authority PASSED [ 39%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_restart_preflight_rejects_materialized_default_when_checkpoint_omits_it PASSED [ 40%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_restart_preflight_rejects_unknown_or_reordered_named_slots[checkpoint0-materialized0-configured0] PASSED [ 40%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_restart_preflight_rejects_unknown_or_reordered_named_slots[checkpoint1-materialized1-configured1] PASSED [ 41%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_restart_preflight_rejects_unknown_or_reordered_named_slots[checkpoint2-materialized2-configured2] PASSED [ 42%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_restart_preflight_keeps_field_free_and_named_only_exact_match PASSED [ 43%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_restart_restores_default_field_onto_fresh_unmaterialized_target PASSED [ 44%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_program_cadence_checkpoint_rejects_incomplete_or_inconsistent_state[<lambda>-missing] PASSED [ 45%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_program_cadence_checkpoint_rejects_incomplete_or_inconsistent_state[<lambda>-exact integer] PASSED [ 45%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_program_cadence_checkpoint_rejects_incomplete_or_inconsistent_state[<lambda>-macro-step phase0] PASSED [ 46%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_program_cadence_checkpoint_rejects_incomplete_or_inconsistent_state[<lambda>-finite] PASSED [ 47%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_program_cadence_checkpoint_rejects_incomplete_or_inconsistent_state[<lambda>-binary64_0] PASSED [ 48%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_program_cadence_checkpoint_rejects_incomplete_or_inconsistent_state[<lambda>-last dt] PASSED [ 49%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_program_cadence_checkpoint_rejects_incomplete_or_inconsistent_state[<lambda>-binary64_1] PASSED [ 50%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_program_cadence_checkpoint_rejects_incomplete_or_inconsistent_state[<lambda>-macro-step phase1] PASSED [ 50%]
+tests/python/unit/runtime/test_temporal_restart_state.py::test_program_cadence_checkpoint_rejects_installed_configuration_mismatch PASSED [ 51%]
+tests/python/unit/runtime/test_step_strategy.py::test_step_strategy_is_closed_exact_and_validated PASSED [ 52%]
+tests/python/unit/runtime/test_step_strategy.py::test_resolve_requires_the_installed_authored_strategy PASSED [ 53%]
+tests/python/unit/runtime/test_step_strategy.py::test_prepared_program_run_retains_exact_strategy_and_detached_controls PASSED [ 54%]
+tests/python/unit/runtime/test_step_strategy.py::test_all_four_controllers_execute_real_native_attempts PASSED [ 54%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_merges_a_roundoff_equivalent_final_landing PASSED [ 55%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_grid_lands_after_accumulated_roundoff_and_strict_resume[13] PASSED [ 56%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_grid_lands_after_accumulated_roundoff_and_strict_resume[52] PASSED [ 57%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_grid_lands_after_accumulated_roundoff_and_strict_resume[208] PASSED [ 58%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_grid_does_not_absorb_a_genuine_future_remainder PASSED [ 59%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_grid_resets_after_clipping_and_does_not_publish_on_rejection PASSED [ 59%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_grid_rejects_mismatched_restart_metadata[change0] PASSED [ 60%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_grid_rejects_mismatched_restart_metadata[change1] PASSED [ 61%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_grid_rejects_mismatched_restart_metadata[change2] PASSED [ 62%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_grid_rejects_mismatched_restart_metadata[change3] PASSED [ 63%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_grid_rejects_mismatched_restart_metadata[change4] PASSED [ 63%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_grid_rejects_mismatched_restart_metadata[change5] PASSED [ 64%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_grid_is_broadcast_and_resets_on_strategy_change PASSED [ 65%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_legacy_envelope_starts_at_the_authenticated_restored_boundary PASSED [ 66%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_malformed_acceptance_does_not_consume_a_queued_event PASSED [ 67%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_grid_large_count_is_rejected_without_floating_overflow PASSED [ 68%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_preserves_authored_interval_when_binary64_sum_lands_exactly PASSED [ 68%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_refuses_a_nonadvancing_terminal_equality PASSED [ 69%]
+tests/python/unit/runtime/test_step_strategy.py::test_fixed_dt_refuses_a_positive_interval_below_the_current_time_ulp PASSED [ 70%]
+tests/python/unit/runtime/test_step_strategy.py::test_error_controlled_exhaustion_preserves_rejection_and_exact_attempt_count PASSED [ 71%]
+tests/python/unit/runtime/test_step_strategy.py::test_structured_rejection_phase_precedes_legacy_message_parsing PASSED [ 72%]
+tests/python/unit/runtime/test_step_strategy.py::test_error_controller_preserves_both_dispositions_without_changing_retry_policy[retry] PASSED [ 72%]
+tests/python/unit/runtime/test_step_strategy.py::test_error_controller_preserves_both_dispositions_without_changing_retry_policy[reject] PASSED [ 73%]
+tests/python/unit/runtime/test_step_strategy.py::test_controls_are_validated_before_controller_or_manifest_publication PASSED [ 74%]
+tests/python/unit/runtime/test_step_strategy.py::test_controller_identity_normalizes_controls_but_rejects_a_failed_run_clone PASSED [ 75%]
+tests/python/unit/runtime/test_step_strategy.py::test_error_controller_restores_the_exact_next_proposal_after_restart PASSED [ 76%]
+tests/python/unit/runtime/test_step_strategy.py::test_error_controller_step_zero_checkpoint_has_a_restorable_initial_event PASSED [ 77%]
+tests/python/unit/runtime/test_step_strategy.py::test_error_controller_queue_head_drives_attempt_replacement_and_next_decision PASSED [ 77%]
+tests/python/unit/runtime/test_step_strategy.py::test_error_controller_clips_the_queue_head_explicitly_at_the_run_deadline PASSED [ 78%]
+tests/python/unit/runtime/test_step_strategy.py::test_registered_strategy_and_controller_own_extension_and_restart_protocols PASSED [ 79%]
+tests/python/unit/runtime/test_step_strategy.py::test_registered_strategy_provider_owns_strict_restart_reconstruction PASSED [ 80%]
+tests/python/unit/runtime/test_step_strategy.py::test_temporal_owner_uses_one_raw_attempt_and_preserves_authenticated_strategy[fixed-dt] PASSED [ 81%]
+tests/python/unit/runtime/test_step_strategy.py::test_temporal_owner_uses_one_raw_attempt_and_preserves_authenticated_strategy[error-controlled] PASSED [ 81%]
+tests/python/unit/runtime/test_step_strategy.py::test_temporal_owner_uses_one_raw_attempt_and_preserves_authenticated_strategy[external-grid] PASSED [ 82%]
+tests/python/unit/runtime/test_step_strategy.py::test_direct_facade_fixed_step_commits_one_temporal_envelope[uniform] PASSED [ 83%]
+tests/python/unit/runtime/test_step_strategy.py::test_direct_facade_fixed_step_commits_one_temporal_envelope[amr] PASSED [ 84%]
+tests/python/unit/runtime/test_step_strategy.py::test_multi_layout_attempt_advances_child_raw_targets_and_accepts_once PASSED [ 85%]
+tests/python/unit/runtime/test_step_strategy.py::test_native_target_resolution_never_invokes_dynamic_delegation PASSED [ 86%]
+tests/python/unit/runtime/test_step_strategy.py::test_runtime_instance_keeps_error_controller_and_strategy_across_macro_steps PASSED [ 86%]
+tests/python/unit/runtime/test_step_strategy.py::test_prepared_multi_layout_run_preserves_local_histories_through_checkpoint_and_restart PASSED [ 87%]
+tests/python/unit/runtime/test_step_strategy.py::test_prepared_multi_layout_run_refuses_forged_schedule_before_begin[missing] PASSED [ 88%]
+tests/python/unit/runtime/test_step_strategy.py::test_prepared_multi_layout_run_refuses_forged_schedule_before_begin[swapped] PASSED [ 89%]
+tests/python/unit/runtime/test_step_strategy.py::test_prepared_multi_layout_run_refuses_forged_schedule_before_begin[modified-live] PASSED [ 90%]
+tests/python/unit/runtime/test_step_strategy.py::test_prepared_multi_layout_run_refuses_forged_schedule_before_begin[schema-type] PASSED [ 90%]
+tests/python/unit/runtime/test_step_strategy.py::test_prepared_multi_layout_begin_allocation_failure_keeps_all_original_leaves PASSED [ 91%]
+tests/python/unit/runtime/test_step_strategy.py::test_composite_temporal_shared_authority_refuses_real_divergence[controller_state-value0] PASSED [ 92%]
+tests/python/unit/runtime/test_step_strategy.py::test_composite_temporal_shared_authority_refuses_real_divergence[event_queue-value1] PASSED [ 93%]
+tests/python/unit/runtime/test_step_strategy.py::test_composite_temporal_shared_authority_refuses_real_divergence[transaction_stats-value2] PASSED [ 94%]
+tests/python/unit/runtime/test_step_strategy.py::test_composite_temporal_shared_authority_refuses_real_divergence[time_hex-0x1.47ae147ae147bp-7] PASSED [ 95%]
+tests/python/unit/runtime/test_step_strategy.py::test_composite_temporal_restore_authenticates_layout_bindings_before_publication[truncated] PASSED [ 95%]
+tests/python/unit/runtime/test_step_strategy.py::test_composite_temporal_restore_authenticates_layout_bindings_before_publication[reordered] PASSED [ 96%]
+tests/python/unit/runtime/test_step_strategy.py::test_composite_temporal_restore_authenticates_layout_bindings_before_publication[swapped] PASSED [ 97%]
+tests/python/unit/runtime/test_step_strategy.py::test_composite_temporal_restore_authenticates_layout_bindings_before_publication[schema-type] PASSED [ 98%]
+tests/python/unit/runtime/test_step_strategy.py::test_composite_temporal_rejects_conflicting_shared_clock_rates PASSED [ 99%]
+tests/python/unit/runtime/test_step_strategy.py::test_composite_checkpoint_preflight_authenticates_uniform_and_amr_temporal_envelopes PASSED [100%]
+
+=================================== FAILURES ===================================
+_ test_real_install_tail_prepares_initial_checkpoint_before_any_run[policy0-uniform] _
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py:70: in test_real_install_tail_prepares_initial_checkpoint_before_any_run
+    assert Path(pops.__file__).resolve() == ROOT / "python/pops/__init__.py"
+E   AssertionError: assert PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py') == (PosixPath('/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS') / 'python/pops/__init__.py')
+E    +  where PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py') = resolve()
+E    +    where resolve = PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py').resolve
+E    +      where PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py') = Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py')
+E    +        where '/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py' = pops.__file__
+_ test_real_install_tail_prepares_initial_checkpoint_before_any_run[policy0-amr] _
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py:70: in test_real_install_tail_prepares_initial_checkpoint_before_any_run
+    assert Path(pops.__file__).resolve() == ROOT / "python/pops/__init__.py"
+E   AssertionError: assert PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py') == (PosixPath('/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS') / 'python/pops/__init__.py')
+E    +  where PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py') = resolve()
+E    +    where resolve = PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py').resolve
+E    +      where PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py') = Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py')
+E    +        where '/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py' = pops.__file__
+_ test_real_install_tail_prepares_initial_checkpoint_before_any_run[policy1-uniform] _
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py:70: in test_real_install_tail_prepares_initial_checkpoint_before_any_run
+    assert Path(pops.__file__).resolve() == ROOT / "python/pops/__init__.py"
+E   AssertionError: assert PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py') == (PosixPath('/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS') / 'python/pops/__init__.py')
+E    +  where PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py') = resolve()
+E    +    where resolve = PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py').resolve
+E    +      where PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py') = Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py')
+E    +        where '/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py' = pops.__file__
+_ test_real_install_tail_prepares_initial_checkpoint_before_any_run[policy1-amr] _
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py:70: in test_real_install_tail_prepares_initial_checkpoint_before_any_run
+    assert Path(pops.__file__).resolve() == ROOT / "python/pops/__init__.py"
+E   AssertionError: assert PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py') == (PosixPath('/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS') / 'python/pops/__init__.py')
+E    +  where PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py') = resolve()
+E    +    where resolve = PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py').resolve
+E    +      where PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py') = Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py')
+E    +        where '/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py' = pops.__file__
+_ test_real_install_tail_prepares_initial_checkpoint_before_any_run[policy2-uniform] _
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py:70: in test_real_install_tail_prepares_initial_checkpoint_before_any_run
+    assert Path(pops.__file__).resolve() == ROOT / "python/pops/__init__.py"
+E   AssertionError: assert PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py') == (PosixPath('/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS') / 'python/pops/__init__.py')
+E    +  where PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py') = resolve()
+E    +    where resolve = PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py').resolve
+E    +      where PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py') = Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py')
+E    +        where '/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py' = pops.__file__
+_ test_real_install_tail_prepares_initial_checkpoint_before_any_run[policy2-amr] _
+tests/python/unit/runtime/test_initial_checkpoint_strategy.py:70: in test_real_install_tail_prepares_initial_checkpoint_before_any_run
+    assert Path(pops.__file__).resolve() == ROOT / "python/pops/__init__.py"
+E   AssertionError: assert PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py') == (PosixPath('/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS') / 'python/pops/__init__.py')
+E    +  where PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py') = resolve()
+E    +    where resolve = PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py').resolve
+E    +      where PosixPath('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py') = Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py')
+E    +        where '/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py' = pops.__file__
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-initial-checkpoint-controls-fc0-20260930/pytest.xml -
+=========================== short test summary info ============================
+FAILED tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_real_install_tail_prepares_initial_checkpoint_before_any_run[policy0-uniform]
+FAILED tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_real_install_tail_prepares_initial_checkpoint_before_any_run[policy0-amr]
+FAILED tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_real_install_tail_prepares_initial_checkpoint_before_any_run[policy1-uniform]
+FAILED tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_real_install_tail_prepares_initial_checkpoint_before_any_run[policy1-amr]
+FAILED tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_real_install_tail_prepares_initial_checkpoint_before_any_run[policy2-uniform]
+FAILED tests/python/unit/runtime/test_initial_checkpoint_strategy.py::test_real_install_tail_prepares_initial_checkpoint_before_any_run[policy2-amr]
+================== 6 failed, 116 passed in 183.14s (0:03:03) ===================

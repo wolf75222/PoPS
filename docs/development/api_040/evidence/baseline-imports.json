@@ -1,0 +1,16 @@
+{
+  "python": "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+  "pops_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py",
+  "package_version": "1.0.0",
+  "native_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+  "native_sha256": "ac9129b1ca51cec68c977c658d170be8a996fe39461a00a2499c9e281d38dda0",
+  "baseline_source_commit": "3a93ba7f1b3fc46ee85a06d9d3482c9b4ece7feb",
+  "sys_path": [
+    "",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python312.zip",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload",
+    "/Users/romaindespoulain/.local/lib/python3.12/site-packages",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages"
+  ]
+}

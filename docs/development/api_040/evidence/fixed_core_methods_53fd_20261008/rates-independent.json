@@ -1,0 +1,227 @@
+{
+  "schema": "pops.independent-public-SSPRK2-rates-53fd-ed2@1",
+  "status": "PASS",
+  "Source": "53fd6ec25fd67351aefe0a5d2ac1101be7041a78",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "core_hash": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "core_files": 1198,
+  "actual_XML_counts": {
+    "tests": 1,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "actual_wall_seconds": 35.12299116599752,
+  "math": {
+    "lambda_h": 38.973679354221176,
+    "z": 0.015224093497742647,
+    "Euler_predictor_gain": 0.9847759065022573,
+    "SSPRK2_accepted_gain": 0.9848917930136714,
+    "field_time": 0.00390625,
+    "field_coefficient": 3.00390625,
+    "face_integral_FV_errors": {
+      "initial": {
+        "error": 6.661338147750939e-16,
+        "bound": 2.2737367544323206e-12
+      },
+      "predictor": {
+        "error": 6.661338147750939e-16,
+        "bound": 2.2737367544323206e-12
+      },
+      "accepted": {
+        "error": 6.661338147750939e-16,
+        "bound": 2.2737367544323206e-12
+      },
+      "phi_stage": {
+        "error": 5.862865748440527e-12,
+        "bound": 1.4647123675443233e-10
+      }
+    },
+    "wrong_field_separations": {
+      "wrong_final_field": 4.2432196982744586e-06,
+      "wrong_time_field": 0.007859389224472046,
+      "wrong_live_field": 0.000557434028012338,
+      "accepted_vs_predictor": 5.6465433737384885e-05
+    },
+    "guards_unchanged": true
+  },
+  "checkpoint": {
+    "payloads": 72,
+    "restart_identity": "201a967af51b63a0571bf6d77cd6237f1b81bb4927552c211a9beaf2612a8d2b",
+    "n_levels": 1,
+    "n_ranks": 1,
+    "state_Y_phi_history_rawbytes_equal_saved": true
+  },
+  "actual_CPP": {
+    "model_source_hash_matches_complete_provenance": true,
+    "nonempty_stage_tau_RHS": true,
+    "physical_load": "(3+stage_tau)*u",
+    "two_actual_diffusion_evaluations_coefficient": 0.1,
+    "two_actual_dt_half_weights": true,
+    "Field_reads_Y_before_final_RK2_endpoint": true
+  },
+  "official_package": {
+    "wheel_sha256": "64174ea5855a9978c3ae7b61ed116be96217911a68b1a2fab434b059fca0bc90",
+    "payloads_exact_installed": 1168,
+    "Native_ed2_authenticated_reuse": true,
+    "producer_doctor_all_true": true
+  },
+  "actual_context": {
+    "allocator_lifetime": "process-lifetime ManagedArena; blocks are released by a Kokkos finalize hook, the arena tables are intentionally never destroyed",
+    "allocator_mode": "kokkos_shared_space_managed_arena",
+    "amr_refinement_ratio": null,
+    "amr_refinement_ratio_rank": 2,
+    "amr_refinement_ratio_selection": "hierarchy_exact_rank",
+    "comm_allocator_mode": "kokkos_shared_host_pinned_space",
+    "communicator": "MPI_COMM_WORLD",
+    "dimension": 2,
+    "field_memory_space": "host",
+    "has_kokkos": true,
+    "kokkos_atexit_finalize_registered": true,
+    "kokkos_backend": "OpenMP",
+    "kokkos_concurrency": 2,
+    "kokkos_device": "cpu",
+    "kokkos_finalized": false,
+    "kokkos_initialized": true,
+    "kokkos_initialized_by_pops": true,
+    "kokkos_lifecycle": "PoPS lazily initialized Kokkos and registered an atexit finalize hook",
+    "kokkos_ownership": "pops-owned-lazy",
+    "kokkos_shared_space": "Host",
+    "kokkos_stream": "Kokkos::OpenMP::synchronous",
+    "kokkos_stream_synchronous": true,
+    "mpi_active": true,
+    "mpi_atexit_finalize_registered": true,
+    "mpi_compiled": true,
+    "mpi_initialized_by_pops": true,
+    "mpi_ownership": "pops-owned",
+    "mpi_rank": 0,
+    "mpi_ranks": 1,
+    "mpi_thread_level": 3,
+    "precision": "double",
+    "real_bytes": 8,
+    "supports_custom_communicator": false,
+    "supports_mixed_precision": false,
+    "supports_single_precision": false
+  },
+  "reviewer_actions": {
+    "Native_import": false,
+    "run": false,
+    "compiler": false,
+    "build": false,
+    "install": false,
+    "Main_edit": false,
+    "remote": false
+  },
+  "limits": [
+    "First genuine weighted-rates public SSPRK2, AMR1/world1/OpenMP2 only. Retainedcomposition/Euler/metamorphic/MPI2/latefailure/GPU/3D/Full94 on this newcore separatelypending.",
+    "Previous77434 detached-authority compile failure preserved and not a physical/math result.",
+    "No local ownership census or universal languagegenericity inferred."
+  ],
+  "pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest.log": {
+      "sha256": "e1c195300ba24b5c8346d5c85019b70e7a5884385f7f2ca8fcd011d52f662d95",
+      "bytes": 1260
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/result.json": {
+      "sha256": "10f40961249e7c82a0b64075a90af480257420c00fe08de62269c6ce282c86c4",
+      "bytes": 1610
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/identity.json": {
+      "sha256": "dfc98f2af5abe1e63988a75c1fc53b4a20951d79458349e2b42ac0ea2e06e124",
+      "bytes": 2850
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/source-files.json": {
+      "sha256": "c3c4ebffbf50cf56cc7943b6af90b0e2ed5a8414889b930b35a88e94db7ba8b7",
+      "bytes": 136555
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest.xml": {
+      "sha256": "f3000d22d7e5466f434a0f387e23a3e0a79d6491af37febb43631b9cd6d61120",
+      "bytes": 691
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-ssprk2/accepted.npz": {
+      "sha256": "c87c2969ad9bbca9f1a092bc473b8cd5d6f7bfd472a4298509d387496a77c2c8",
+      "bytes": 47513
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/85995f4dd0d673164cf856e24d334d4b94700f3e12bf37381083519bd4882689.so.pops-artifact.json": {
+      "sha256": "bfb1b3462bdd80828e4b40e303f8b34545916f6ae5775b13454474862beefad9",
+      "bytes": 591
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/85995f4dd0d673164cf856e24d334d4b94700f3e12bf37381083519bd4882689.so": {
+      "sha256": "461ad0866266059242f674a7c309c9c86f0c5c00e1cebd5cdfa77226b9f7ba87",
+      "bytes": 555496
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/b6a8a0230a13d2b0981a20e72d1e4054354839386bf207bf4817b14c42e880c0.so.pops-artifact.json": {
+      "sha256": "0bb6081a95e1be810f20863cf08450c29149746485f3d2e614a9d67c357367f4",
+      "bytes": 490
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/b6a8a0230a13d2b0981a20e72d1e4054354839386bf207bf4817b14c42e880c0.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/85995f4dd0d673164cf856e24d334d4b94700f3e12bf37381083519bd4882689.so.pops-model.cpp": {
+      "sha256": "e6d3e84c7d91e68eb9a76663e3ba4a01ed1bf997a502d31f707df2643f894820",
+      "bytes": 25964
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/85995f4dd0d673164cf856e24d334d4b94700f3e12bf37381083519bd4882689.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/b6a8a0230a13d2b0981a20e72d1e4054354839386bf207bf4817b14c42e880c0.so": {
+      "sha256": "8930ce7f091142723da684034cf957c771f971de99799f0c52af9bd2ba973984",
+      "bytes": 1985136
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/85995f4dd0d673164cf856e24d334d4b94700f3e12bf37381083519bd4882689.so.pops-model-compile.json": {
+      "sha256": "99bfe28ed1587ce0cf8787f80f207d728879008d9b9111463b7272f5a4a1d791",
+      "bytes": 2312
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/pops-native-cache/.85995f4dd0d673164cf856e24d334d4b94700f3e12bf37381083519bd4882689.pops-stage-gflounj2.so.pops-cache.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-ssprk2/rank0/accepted.npy": {
+      "sha256": "c33033709cba59a30a0e606eaf39cb427d6e1dd7bc0c5a86f80185110c44c1cb",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-ssprk2/rank0/program0.cpp": {
+      "sha256": "e316357f4a1fc1828e78181b77b2b2e350e6d6038727032fb0a4c70d571d121f",
+      "bytes": 35727
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-ssprk2/rank0/inputs.json": {
+      "sha256": "4be9a47bd0b8596957aa33010fa3efdf2328df87d1480ad09ddb2e9416e75c56",
+      "bytes": 1183
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-ssprk2/rank0/actual-receipt.json": {
+      "sha256": "d172afe04b3d86e5d35b2d4ae9fd5cd0d3807c7f3904548de9a7dff113f5c521",
+      "bytes": 78139
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-ssprk2/rank0/model0.cpp": {
+      "sha256": "e6d3e84c7d91e68eb9a76663e3ba4a01ed1bf997a502d31f707df2643f894820",
+      "bytes": 25964
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-ssprk2/rank0/phi_stage.npy": {
+      "sha256": "f0a0f73e9926e20dbb4716594cb4841e77aff67ff8774823fdee4ea3e390b669",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-ssprk2/rank0/initial.npy": {
+      "sha256": "4102d2d4214ddb1a9f53e014eaa551448021d191025de25d150033d2a09a9085",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-second-installed-public-SSPRK2-rates-53fd6ec2-ed2-20261008/pytest-tmp/test_public_diffusion_predicto0/diffusion-field-ssprk2/rank0/predictor.npy": {
+      "sha256": "3745eac39212385289e89e9ca72b7954e05d8a5a3323cd6769d9327580c07c5b",
+      "bytes": 1664
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-installed-build-53fd6ec2-20261008/core-manifest.json": {
+      "sha256": "0c871f738710bd736e099b0e7f21d2fb35d6b47958860556a08dc61c697b7ac5",
+      "bytes": 197327
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-installed-build-53fd6ec2-20261008/root-package-admission.json": {
+      "sha256": "d0b3bdf72ddb819cd46ad4dca313bd041eb372e8e68f34e18b28f22ed34f9f48",
+      "bytes": 789
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-installed-build-53fd6ec2-20261008/wheel/pops-1.1.0-cp312-cp312-macosx_26_0_arm64.whl": {
+      "sha256": "64174ea5855a9978c3ae7b61ed116be96217911a68b1a2fab434b059fca0bc90",
+      "bytes": 9344509
+    }
+  }
+}

@@ -388,6 +388,15 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     routing is always an error; even a one-block Program reaches index 0 through an explicit map."""
     bidx = (_required_block_index(block_idx, v.block, "emit op %r" % v.name)
             if v.block is not None else None)
+    if v.id in var.get(("moving_deferred_rates",), ()):
+        # The interval producer evaluates these exact authored bodies with its
+        # actual geometry/time. No immutable-metric RHS is issued here.
+        var[v.id] = "/* interval-owned physical body */"
+        return
+    if v.op in {"geometry_state", "reynolds_update"}:
+        from .program_emit_moving import emit_moving_op
+        emit_moving_op(program, v, var, lines, prelude, model, block_idx)
+        return
     from pops.codegen.program_models import model_for_node
     node_model = model_for_node(model, v) if model is not None and (
         v.block is not None or v.attrs.get("operator_handle") is not None) else model
@@ -404,17 +413,29 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     # Operation lowering explicitly identifies the storage setup needed by both cadence
     # branches. Evaluation context and kernels remain in the guarded body.
     output_setup_end = None
+    delegated_before_write = None
     evaluation_prelude = []
-    if v.op in {"source", "implicit_source", "local_transform", "apply",
+    if v.op in {"source", "implicit_source", "local_transform", "affine_moment_update", "apply", "integral_candidate",
                 "solve_local_linear", "solve_local_nonlinear", "solve_implicit_source"}:
         from pops.time._evaluation_point import evaluation_stage_fraction
         # Unqualified sources use explicit ARK coordinates; an authored partition takes precedence.
         # Solves use implicit coordinates. Generic apply/transform require unambiguous intent.
         ark_partition = ("explicit" if v.op == "source" else
-                         None if v.op in {"apply", "local_transform"} else "implicit")
+                         None if v.op in {"apply", "local_transform", "affine_moment_update"} else "implicit")
         stage = evaluation_stage_fraction(v, ark_partition=ark_partition)
         evaluation_prelude.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
-    if v.op == "post_synchronization":
+    if v.op == "integral_candidate":
+        from pops.time._program.integrals import integral_identity, integral_units_bytes
+        units = program._integral_units.get(v.attrs.get("integral"))
+        if (v.vtype != "scalar" or v.inputs or v.attrs.get("capture_version") != 1
+                or v.attrs.get("scope") != "candidate" or units is None
+                or v.attrs.get("units") != integral_units_bytes(units)):
+            raise ValueError("integral candidate capture metadata changed")
+        var[v.id] = "integral_capture_%d" % v.id
+        lines.append("const auto %s = ctx.capture_integral_candidate(%s,%s);" %
+                     (var[v.id], json.dumps(integral_identity(program,v.attrs["integral"])),
+                      json.dumps(v.attrs["units"])))
+    elif v.op == "post_synchronization":
         var[v.id] = "/* post_synchronization */"
     elif v.op in ("layout_map_export", "layout_map_import"):
         from pops.codegen.program_emit_mapping_regions import emit_map_port
@@ -507,20 +528,30 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         if field_ref is None:
             raise ValueError("solve_fields node has no exact field identity")
         field, _ = resolved_field_route(field_ref, field_plans)
+        from pops.time._evaluation_point import evaluation_stage_fraction
+
+        stage = evaluation_stage_fraction(v)
+        lines.append("{")
+        lines.append("auto field_stage_scope_%d = ctx.stage_evaluation_scope(%d, %d);"
+                     % (v.id, stage.numerator, stage.denominator))
         lines += field_point_cpp(program, v, field)
         boundary_point = "field_boundary_point_%d" % v.id
-        lines.append(
-            "const auto %s = ctx.boundary_evaluation_point(%d);"
-            % (boundary_point, v.id)
-        )
         report = "field_report_%d" % v.id
-        solve_stmt = (
-            "pops::SolveOutcome %s = "
-            "ctx.solve_fields_from_state_at(%s, %s, %d, %s);"
-            % (report, boundary_point, json.dumps(field), bidx, var[state_in.id])
-        )
+        from .program_value_authority import field_uses_value_authority, field_value_overrides_cpp
+        if field_uses_value_authority(v, var):
+            solve_stmt = ("pops::SolveOutcome %s = "
+                          "ctx.solve_fields_from_program_values_at(%s, %d, %s, {%s});" % (
+                              report, boundary_point, v.id, json.dumps(field),
+                              field_value_overrides_cpp(v, var, block_idx)))
+        else:
+            solve_stmt = (
+                "pops::SolveOutcome %s = "
+                "ctx.solve_fields_from_state_at(%s, %s, %d, %s);"
+                % (report, boundary_point, json.dumps(field), bidx, var[state_in.id])
+            )
         lines.append(solve_stmt)
         _append_solve_report_guard(program, v, report, lines, label="field_solve")
+        lines.append("}")
         var[v.id] = var[state_in.id]
     elif v.op == "solve_fields_from_blocks":
         # Coupled multi-block field solve (ADC-457): a SIMULTANEOUS solve, EVERY listed block at
@@ -542,28 +573,37 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         if field_ref is None:
             raise ValueError("solve_fields_from_blocks node has no exact field identity")
         field, _ = resolved_field_route(field_ref, field_plans)
+        from pops.time._evaluation_point import evaluation_stage_fraction
+
+        stage = evaluation_stage_fraction(v)
+        lines.append("{")
+        lines.append("auto field_stage_scope_%d = ctx.stage_evaluation_scope(%d, %d);"
+                     % (v.id, stage.numerator, stage.denominator))
         lines += field_point_cpp(program, v, field)
         boundary_point = "field_boundary_point_%d" % v.id
-        lines.append(
-            "const auto %s = ctx.boundary_evaluation_point(%d);"
-            % (boundary_point, v.id)
-        )
         report = "field_report_%d" % v.id
+        from .program_value_authority import field_uses_value_authority, field_value_overrides_cpp
+        checked_values = field_uses_value_authority(v, var)
         lines.append(
-            "pops::SolveOutcome %s = ctx.solve_fields_from_blocks_at(%s, %d, %s, {%s});"
+            "pops::SolveOutcome %s = ctx.%s(%s, %d, %s, {%s});"
             % (
                 report,
+                "solve_fields_from_program_values_at" if checked_values else "solve_fields_from_blocks_at",
                 boundary_point,
                 int(v.id),
                 json.dumps(field),
-                ", ".join(overrides),
+                field_value_overrides_cpp(v, var, block_idx) if checked_values else ", ".join(overrides),
             )
         )
         _append_solve_report_guard(program, v, report, lines, label="field_solve")
+        lines.append("}")
         # solve_fields_from_blocks returns a FieldContext (the shared aux); its var aliases the first
         # listed state so a downstream rhs(state, fields) reads the refreshed shared aux like any
         # solve_fields result (the FieldContext carries no readable buffer of its own).
         var[v.id] = var[v.inputs[0].id]
+    elif v.op == "principal_rate":
+        from .program_emit_principal import emit_principal_rate
+        emit_principal_rate(v, var, lines, node_model, block_idx, target)
     elif v.op == "coupled_rate":
         # A coupled rate (collisions / ionization, Spec 3 criterion 27, ADC-457): ONE multi-state
         # for_each_cell kernel fills the per-block rate scratch of EVERY participating block at
@@ -576,6 +616,16 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # states are co-located (same ba/dm as the System aux), so a single shared loop is sound
         # (the same co-distribution every aux-reading kernel relies on; see _kernel_open).
         components = _coupled_rate_components(program, v, model)
+        from .program_emit_control import _coupled_rate_provider_binding
+        provider_impl, provider_binding = _coupled_rate_provider_binding(
+            components, model, v, provider_plans)
+        provider_kwargs = {}
+        if provider_binding is not None:
+            from pops.time._evaluation_point import evaluation_stage_fraction
+            stage = evaluation_stage_fraction(v, ark_partition="explicit")
+            evaluation_prelude.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+            provider_kwargs = dict(provider_impl=provider_impl, provider_binding=provider_binding,
+                                   program_block=bidx)
         by_block = {s.block: s for s in v.inputs}
         if target == "system":
             for block in components:
@@ -584,9 +634,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 lines.append(
                     "ctx.require_cartesian_generated_operator(%d, %s);"
                     % (index, json.dumps("coupled_rate")))
+        from .cpp_symbols import block_scratch_identifiers
+        tokens = block_scratch_identifiers("cr%d_" % v.id,
+                                           (block_name(block) for block in components))
         scratch = {}
         for subslot, blk in enumerate(components):   # bundle / expr block order
-            scratch[blk] = "cr%d_%s" % (v.id, block_name(blk))
+            scratch[blk] = tokens[block_name(blk)]
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, %d, %s);"
                          % (scratch[blk], int(v.id), subslot, var[by_block[blk].id]))
         from pops._ir.native_call import native_functions
@@ -606,7 +659,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 lines.append("auto& %s = ctx.scalar_scratch(%d, 1, %s, 1, 0);"
                              % (reason, v.id, scratch[driver]))
             lines += _emit_coupled_rate_kernel(components, by_block, var, scratch,
-                                               status=status, active_mask=active, reason=reason)
+                                               status=status, active_mask=active, reason=reason,
+                                               **provider_kwargs)
             from pops.time.references import canonical_handle
             identity = canonical_handle(v.attrs["operator_handle"]).qualified_id
             lines.append("const pops::Real joint_collective_status_%d = "
@@ -620,7 +674,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append("ctx.consume_pointwise_evaluation_status(%d, %d, joint_collective_status_%d, %s, %s);"
                          % (index, v.id, v.id, json.dumps(identity), reason_cpp))
         else:
-            lines += _emit_coupled_rate_kernel(components, by_block, var, scratch)
+            lines += _emit_coupled_rate_kernel(components, by_block, var, scratch, **provider_kwargs)
         # Per-block names live in this emission's local token table. Codegen is a pure read of the
         # Program: repeated emission never writes scratch metadata back into frozen authoring state.
         var.update({("coupled_scratch", v.id, blk): scratch[blk] for blk in scratch})
@@ -632,8 +686,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         (coupled_in,) = v.inputs
         var[v.id] = var[("coupled_scratch", coupled_in.id, v.attrs["out_block"])]
     elif v.op == "solve_coupled_implicit":
-        components = _coupled_rate_components(program, v, model)
-        by_block = {state.block: state for state in v.inputs}
+        product = v.attrs.get("problem_kind") == "local_residual_product"
+        from .program_emit_local_product import product_components, product_residual_lines
+        components = product_components(v) if product else _coupled_rate_components(program, v, model)
+        initial_inputs = v.inputs[:v.attrs["output_count"]] if product else v.inputs
+        by_block = {state.block: state for state in initial_inputs}
         if target == "system":
             for block in components:
                 index = _required_block_index(
@@ -641,9 +698,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 lines.append(
                     "ctx.require_cartesian_generated_operator(%d, %s);"
                     % (index, json.dumps("solve_coupled_implicit")))
+        from .cpp_symbols import block_scratch_identifiers
+        tokens = block_scratch_identifiers("ci%d_" % v.id,
+                                           (block_name(block) for block in components))
         scratch = {}
         for subslot, block in enumerate(components):
-            scratch[block] = "ci%d_%s" % (v.id, block_name(block))
+            scratch[block] = tokens[block_name(block)]
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, %d, %s);"
                          % (scratch[block], int(v.id), subslot, var[by_block[block].id]))
         status = "ci_status_%d" % v.id
@@ -651,9 +711,29 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         prototype = var[by_block[prototype_block].id]
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 0, %s, 11, 0);"
                      % (status, int(v.id), prototype))
+        environment, fab_setup = None, []
+        if product and v.attrs["product_version"] == 2:
+            from .program_emit_local_product import product_operator_environments
+            from pops.time._evaluation_point import evaluation_stage_fraction
+            environment, fab_setup, preparations = product_operator_environments(
+                v, model, provider_plans, block_idx, var)
+            for operation, qid, physical_block, origin in preparations:
+                stage = evaluation_stage_fraction(operation,
+                    ark_partition="explicit" if operation.op == "source" else None)
+                lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+                lines.append("{")
+                _append_local_auxiliary_preparation(
+                    program, v, lines, provider_plans=provider_plans, consumer_qid=qid,
+                    block=physical_block, state=origin, label="local_product_%d" % operation.id)
+                lines.append("}")
+            stage = evaluation_stage_fraction(v, ark_partition="implicit")
+            lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
         lines += _emit_solve_coupled_implicit_kernel(
             components, by_block, var, scratch, status,
-            controls=v.attrs, coefficient=v.attrs["coefficient"])
+            controls=v.attrs, coefficient=v.attrs.get("coefficient", 1),
+            original_residual=product_residual_lines(v, var, environment) if product else None,
+            all_inputs=tuple(item for item in v.inputs if item.vtype == "state"),
+            fab_setup=fab_setup)
         report = "ci_report_%d" % v.id
         outcome = _append_local_nonlinear_report(program, v, status, report, lines)
         _append_solve_report_guard(
@@ -695,8 +775,21 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # the first store happens System-side). store_history is a State-typed node but carries no
         # readable value -- nothing combines it. Its var maps to the stored value (a harmless alias).
         (value_in,) = v.inputs
+        storage_descriptor = None
+        if "global_field_storage" in v.attrs:
+            from pops.time._program.global_history_storage import descriptor, validate_storage_node
+            storage_authority = validate_storage_node(program, v)
+            storage_descriptor = descriptor(program, v.attrs["history"])
         if _child_history_store_is_delegated(program, v, target=target):
             pass
+        elif target == "amr_system" and storage_descriptor is not None:
+            from pops.time.references import canonical_handle
+            if bidx is None:
+                raise ValueError("global field history storage requires an exact AMR owner index")
+            lines.append("ctx.store_global_field_history(%s, %s, %d, %s, %s, ctx.boundary_evaluation_point(%d));"
+                         % (json.dumps(v.attrs["history"]), var[value_in.id], bidx,
+                            json.dumps(storage_descriptor),
+                            json.dumps(canonical_handle(storage_authority["storage_state_witness"]).qualified_id), v.id))
         elif target == "amr_system" and bidx is not None:
             lines.append("ctx.store_history(%s, %s, %d);"
                          % (json.dumps(v.attrs["history"]), var[value_in.id], bidx))
@@ -737,10 +830,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         if step_projection is not None:
             lines.append("ctx.note_step_projection(%s);" % json.dumps(step_projection))
         var[v.id] = var[state_in.id]
-    elif v.op == "local_transform":
+    elif v.op in {"local_transform", "affine_moment_update"}:
+        bidx = _required_block_index(block_idx, v.block, "emit op %r" % v.name)
         if prelude is None:
             raise NotImplementedError(
-                "local_transform requires an install-time resource scope")
+                "%s requires an install-time resource scope" % v.op)
         state_in = v.inputs[0]
         var[v.id] = "u%d" % v.id
         status = "transform_status_field_%d" % v.id
@@ -750,18 +844,23 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         from pops.codegen._resolution import _spatial_coordinate_transforms
 
         spatial_map = target == "amr_system" and id(v) in _spatial_coordinate_transforms(program)
-        if not spatial_map:
+        # A source-first affine result becomes the prototype for transport RHS
+        # scratch. It therefore needs the same authenticated level/block owner
+        # as a composite coordinate-map result, including after rollback.
+        owned_amr_result = target == "amr_system" and (
+            spatial_map or v.op == "affine_moment_update")
+        if not owned_amr_result:
             prelude.append(
                 "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.scratch_state_like(ctx.state(%d)));"
                 % (state_resource, bidx))
         if target == "amr_system":
             # Rollback retires context scratches without necessarily replacing level closures.
             # Reacquire the exact node/level/block resources before each invocation.
-            if spatial_map:
+            if owned_amr_result:
                 lines.append("pops::MultiFab<pops::kNativeDimension>* %s = nullptr;" % state_resource)
             lines.append("pops::MultiFab<pops::kNativeDimension>* %s = nullptr;" % status_resource)
             lines.append("ctx.prepare_spatial_collectively([&] {")
-            if spatial_map:
+            if owned_amr_result:
                 lines.append("  %s = &ctx.scratch_state(%d, 0, ctx.state(%d));"
                              % (state_resource, int(v.id), bidx))
             lines.append("  %s = &ctx.scalar_scratch(%d, 0, ctx.state(%d), 1, 0);"
@@ -777,12 +876,19 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines.append(
             "const pops::MultiFab<pops::kNativeDimension>* %s = ctx.pointwise_active_mask(%d, %s);"
             % (active_mask, bidx, var[v.id]))
-        lines += _emit_local_transform_kernel(
-            node_model, v.attrs["transform"], var[state_in.id], var[v.id], status,
-            active_mask, bidx,
-            provider_plans=provider_plans,
-            consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
-        )
+        if v.op == "affine_moment_update":
+            from pops.codegen.program_emit_affine_moments import emit_affine_moment_kernel
+            lines += emit_affine_moment_kernel(
+                node_model, v.attrs, var[state_in.id], var[v.inputs[1].id], var[v.id],
+                status, active_mask, bidx, provider_plans=provider_plans,
+                consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block))
+        else:
+            lines += _emit_local_transform_kernel(
+                node_model, v.attrs["transform"], var[state_in.id], var[v.id], status,
+                active_mask, bidx,
+                provider_plans=provider_plans,
+                consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
+            )
         reduced = "transform_failed_%d" % v.id
         # AMR transforms (including after-synchronization and composite Q maps) are
         # produced and checked collectively one level at a time. Sibling statuses
@@ -798,9 +904,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines.append("if (%s != pops::Real(0)) {" % reduced)
         lines.append(
             "  throw pops::runtime::program::StepAttemptRejected("
-            "pops::SolveStatus::kInvalidEvaluation, \"local_transform\", %s);"
-            % json.dumps("transform '%s' rejected a non-finite or out-of-domain state"
-                         % v.attrs["transform"]))
+            "pops::SolveStatus::kInvalidEvaluation, %s, %s);"
+            % (json.dumps(v.op), json.dumps(
+                "transform '%s' rejected a non-finite or out-of-domain state"
+                % v.attrs.get("transform", v.op))))
         lines.append("}")
     elif v.op == "cell_compare":
         # A PER-CELL threshold (spec op 17, ADC-418): mask(i,j,0) = field(i,j,0) <cmp> value ? 1 : 0,
@@ -831,6 +938,14 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                      % (var[v.id], int(v.id), var[a_in.id]))
         output_setup_end = len(lines)
         lines += _emit_where_kernel(var[mask_in.id], var[a_in.id], var[b_in.id], var[v.id])
+    elif v.op == "requested_dt":
+        var[v.id] = "requested_dt_%d" % v.id
+        lines.append("const pops::Real %s = static_cast<pops::Real>(dt);" % var[v.id])
+    elif v.op == "reached_duration":
+        if dict(v.attrs) != {"schema_version": 1, "interval_rule": "no_spatial_exchanges"}:
+            raise ValueError("computed frontier has an unsupported interval contract")
+        var[v.id] = var[v.inputs[0].id]
+        lines.append("ctx.reached_duration(static_cast<double>(%s));" % var[v.id])
     elif v.op == "record_scalar":
         # Store the (already-computed) Scalar into the System diagnostics map under its name. A
         # side-effecting op; its var maps to the recorded scalar (a harmless alias). The scalar input
@@ -863,13 +978,24 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         defer_bound = (has_independent_diffusion_transport(node_model)
                        and any(node is v for node in program._values)
                        and v.attrs.get("schedule") is None)
+        publications = []
         _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
-                            defer_explicit_bound=defer_bound)
+                            defer_explicit_bound=defer_bound,
+                            output_publication=publications.append)
+        if len(publications) != 1:
+            raise ValueError("diffusive delegate lacks one actual output publication boundary")
+        from .program_value_authority import delegated_output_boundaries
+        output_setup_end, delegated_before_write = delegated_output_boundaries(
+            v, var, lines, _profile_start, bidx, publications[0])
         var[("partition_frequency", v.id)] = "diffusion_frequency_%d" % v.id
         if defer_bound:
             key = ("partition_stability_deferred",)
             var[key] = var.get(key, frozenset()) | frozenset((v.id,))
+    elif v.op == "rhs" and v.attrs.get("path_conservative", False):
+        from pops.codegen.program_emit_path import emit_path_rhs
+        emit_path_rhs(v, var, lines, node_model, provider_plans, bidx, target)
     elif v.op == "rhs":
+        bidx = _required_block_index(block_idx, v.block, "emit op %r" % v.name)
         state_in = v.inputs[0]  # rhs inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id
         named_fluxes = _named_fluxes(v)
@@ -894,6 +1020,15 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         from pops.time._evaluation_point import evaluation_stage_fraction
         stage = evaluation_stage_fraction(v, ark_partition="explicit")
         lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+        from pops.codegen.program_emit_kernels import prepare_default_rhs_providers
+        lines += prepare_default_rhs_providers(
+            node_model, v, bidx, var[state_in.id], provider_plans, target=target,
+            flux=want_flux and named_fluxes is None, source=want_default_source)
+        from pops.codegen.program_rhs_input_trace import emit_rhs_input_trace
+        input_trace = (emit_rhs_input_trace(v, bidx, var[state_in.id], lines, target)
+                       if want_flux else None)
+        var[("rhs_input_trace", v.id)] = input_trace
+        trace_suffix = ", " + input_trace if input_trace is not None else ""
         if not want_flux:
             # SOURCE-ONLY (ADC-430): flux=False -- NO -div F base (the rhs_scratch starts at zero).
             # The default/composite source is added iff requested (the same want_default_source
@@ -912,29 +1047,51 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             family_suffix = ", " + json.dumps(family) if target == "amr_system" else ""
             from pops.codegen.program_transport_quadrature import declare_transport_faces
             faces = declare_transport_faces(v, node_model, var, lines)
+            authored_face = (getattr(_model_impl(node_model), "_user_face", None)
+                             if node_model is not None else None)
+            user_face_frequency = None
+            if authored_face is not None:
+                from pops.numerics.riemann.user import authenticated_user_face
+                authenticated_user_face(authored_face)
+                user_face_frequency = "user_face_frequency_%d" % v.id
+                lines.append("pops::Real %s=0;" % user_face_frequency)
+                if faces is None:
+                    faces = "user_face_faces_%d" % v.id
+                    lines.append("std::vector<pops::nd::FaceField<pops::kNativeDimension>> %s;" % faces)
             if faces is not None:
-                lines.append("ctx.neg_div_flux_default_with_faces_into(%d, %s, %s, %d, %s%s);"
-                             % (bidx, var[state_in.id], var[v.id], int(v.id), faces, family_suffix))
+                frequency_suffix = (",&" + user_face_frequency) if user_face_frequency else ""
+                if target == "amr_system" and user_face_frequency:
+                    # The final AMR argument follows temporal family and input trace.
+                    frequency_suffix = (",nullptr,&" + user_face_frequency
+                                        if input_trace is None else ",&" + user_face_frequency)
+                lines.append("ctx.neg_div_flux_default_with_faces_into(%d, %s, %s, %d, %s%s%s);"
+                             % (bidx, var[state_in.id], var[v.id], int(v.id), faces,
+                                family_suffix + trace_suffix, frequency_suffix))
+                if user_face_frequency:
+                    var[("user_face_frequency", v.id)] = user_face_frequency
+                    var[("partition_frequency", v.id)] = user_face_frequency
                 if want_default_source:
                     source = "transport_source_%d" % v.id
                     lines.append("auto& %s = ctx.rhs_scratch(%d, 2, %s);"
                                  % (source, int(v.id), var[state_in.id]))
-                    lines.append("ctx.source_default_into(%d, %s, %s);"
-                                 % (bidx, var[state_in.id], source))
+                    lines.append("ctx.source_default_into(%d, %s, %s%s);"
+                                 % (bidx, var[state_in.id], source, trace_suffix))
                     lines.append("ctx.axpy(%s, static_cast<pops::Real>(1), %s);"
                                  % (var[v.id], source))
             elif want_default_source:
                 # R <- -div F + default/composite source (ctx.rhs_into) for THIS op's block (ADC-426
                 # bidx), the historical path: sources is None (legacy) or "default" is requested.
                 lines.append("ctx.rhs_into(%d, %s, %s, %d%s);"
-                             % (bidx, var[state_in.id], var[v.id], int(v.id), family_suffix))
+                             % (bidx, var[state_in.id], var[v.id], int(v.id),
+                                family_suffix + trace_suffix))
             else:
                 # FLUX-ONLY (ADC-425): "default" is NOT among the requested sources (the empty list
                 # [] or a named-only list) -> R <- -div F(U) WITHOUT the model's default source
                 # (ctx.neg_div_flux_default_into), for THIS op's block (bidx). The named source_terms
                 # below are then axpy'd on top -- sources=[] is flux only, ["a","b"] is flux + a + b.
                 lines.append("ctx.neg_div_flux_default_into(%d, %s, %s, %d%s);"
-                             % (bidx, var[state_in.id], var[v.id], int(v.id), family_suffix))
+                             % (bidx, var[state_in.id], var[v.id], int(v.id),
+                                family_suffix + trace_suffix))
         else:
             # NAMED fluxes (ADC-419): R <- -div(sum of selected named fluxes). Evaluate the SUM of
             # the flux expressions into one exact-ranked scratch field per authored x[/y[/z] axis.
@@ -943,8 +1100,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             impl = _model_impl(node_model)
             axes = tuple(impl._flux_terms[named_fluxes[0]])
             flux_vars = {axis: "%s_f%s" % (var[v.id], axis) for axis in axes}
-            lines.append("ctx.prepare_generated_state(%d, %s, %d);"
-                         % (bidx, var[state_in.id], int(v.id)))
+            lines.append("ctx.prepare_generated_state(%d, %s, %d%s);"
+                         % (bidx, var[state_in.id], int(v.id), trace_suffix))
             for axis_index, axis in enumerate(axes):
                 lines.append(
                     "pops::MultiFab<pops::kNativeDimension>& %s = "
@@ -1007,7 +1164,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append("ctx.axpy(%s, static_cast<pops::Real>(1), %s);" % (var[v.id], ssrc))
         if want_flux:
             from pops.codegen.program_partition_stability import emit_transport_frequency
-            emit_transport_frequency(v, var, lines, model=node_model, block_index=bidx)
+            emit_transport_frequency(v, var, lines, model=node_model, block_index=bidx,
+                                     target=target)
     elif v.op == "implicit_source":
         state_in = v.inputs[0]
         var[v.id] = "r%d" % v.id
@@ -1051,6 +1209,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             node_model, v.attrs["source"], var[state_in.id], var[v.id], bidx,
             provider_plans=provider_plans,
             consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
+            evaluation=v, variables=var,
         )
     elif v.op == "apply":
         state_in = v.inputs[0]  # apply inputs = (state[, fields]); the state is first
@@ -1109,6 +1268,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         consumer_qid = program_provider_consumer_qid(node_model, v.id, v.block)
         kernel = _emit_solve_local_nonlinear_kernel(
             node_model, v, var[guess_in.id], var[v.id], status, active_mask, bidx,
+            capture_vars=tuple(var[item.id] for item in v.inputs[1:]),
             provider_plans=provider_plans,
             consumer_qid=consumer_qid,
         )
@@ -1120,6 +1280,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         outcome = _append_local_nonlinear_report(program, v, status, report, lines)
         _append_solve_report_guard(
             program, v, outcome, lines, label="local_nonlinear")
+    elif v.op == "spatial_interaction":
+        from pops.codegen.program_emit_spatial_interaction import emit_spatial_interaction
+        emit_spatial_interaction(v, var, lines, block_indices=block_idx, target=target)
+    elif v.op == "field_map_pack":
+        from pops.codegen.program_emit_mapped_field import emit_mapped_field_pack
+        emit_mapped_field_pack(v, var, lines, target=target)
     elif v.op == "field_gradient":
         from pops.codegen.program_emit_field_gradient import emit_field_gradient
         emit_field_gradient(v, var, lines, prelude, target=target)
@@ -1131,6 +1297,16 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         from pops.codegen.program_emit_field_problem import emit_field_problem_value
 
         emit_field_problem_value(v, var, lines, prelude, target=target)
+    elif v.op == "field_evolved_state":
+        from pops.codegen.program_emit_evolved_field import emit_evolved_state
+        emit_evolved_state(v, var, lines, prelude, target=target, block_indices=block_idx)
+    elif v.op == "field_state_cell_mean":
+        from pops.fields._observation_contract import validate_field_state_cell_mean
+
+        source = validate_field_state_cell_mean(v)
+        if target != "system":
+            raise NotImplementedError("field cell-mean State projection requires the qualified Uniform System route")
+        var[v.id] = var[source.id]
     elif v.op == "scalar_field":
         # Qualified AMR scalars bind current-attempt storage; uniform and unqualified scalars
         # retain their layout-bound install lifetime. Matrix-free apply sub-blocks manage their
@@ -1144,15 +1320,21 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         var[v.id] = "(*%s)" % sp
         ncomp = int(v.attrs.get("ncomp", 1))
         owner = None
+        original = None
         if target == "amr_system":
+            from pops.codegen.program_emit_amr_original_field import original_field_consumer
+            original = original_field_consumer(v)
             # Scalar storage has no intrinsic block. Its exact authored consumers
             # qualify it; an unrelated same-shaped block is never a prototype.
-            owner = _unique_dataflow_owner_block(
+            owner = None if original is not None else _unique_dataflow_owner_block(
                 v, where="AMR scalar field %r" % v.name,
                 additional_values=(value for value in program._values
                                    if any(item is v for item in value.inputs)),
                 allow_unqualified=True)
-        if owner is not None:
+        if original is not None:
+            lines.append("auto* %s = &ctx.hierarchy_field_scratch(%d, %d, 0, %d, 1);"
+                         % (sp, original.id, v.id, ncomp))
+        elif owner is not None:
             owner_index = _required_block_index(block_idx, owner, "AMR scalar field")
             rebound = v.id in var.get(("hierarchy_retained_bindings",), ())
             produce = "false" if rebound else "true"
@@ -1250,6 +1432,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         raise NotImplementedError(
             "emit_cpp_program: op '%s' (value '%s') is only lowerable inside a matrix_free_operator "
             "apply sub-block" % (v.op, v.name))
+    elif v.op == "solve_spatial_field":
+        from pops.codegen.program_emit_nonlinear_field import emit_nonlinear_field
+        emit_nonlinear_field(program, v, var, lines, prelude, target=target, block_indices=block_idx)
     elif v.op == "solve_spatial_nonlinear":
         from pops.codegen.program_emit_spatial_solve import emit_spatial_solve
 
@@ -1283,8 +1468,17 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         var[v.id] = "s%d" % v.id
         kind = v.attrs["kind"]
         if v.block is None:
-            from pops.codegen.program_emit_field_problem import field_observation_reduction
-            reduction = field_observation_reduction(v, var, target=target)
+            source = v.inputs[0]
+            if source.op == "spatial_interaction" and source.attrs.get("contract") == "pops.spatial-interaction@3":
+                from pops.time._program.spatial_interaction import interaction_contract
+                interaction_contract(source)
+                component = v.attrs.get("comp", 0)
+                if target != "amr_system" or kind not in ("sum", "abs_sum", "max", "min") or type(component) is not int or component != 0:
+                    raise NotImplementedError("closed original interaction reduction requires the realized scalar composite sum/abs_sum/min/max port")
+                reduction = 'ctx.reduce_closed_original_interaction(%d, 0, "%s")' % (source.id, kind)
+            else:
+                from pops.codegen.program_emit_field_problem import field_observation_reduction
+                reduction = field_observation_reduction(v, var, target=target)
             lines.append("const pops::Real %s = %s;" % (var[v.id], reduction))
             return
         owner = _required_block_index(block_idx, v.block, "reduce value %r" % v.name)
@@ -1309,13 +1503,18 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 var[u.id],
                 comp,
             )
-        else:  # dot
+        elif kind in ("dot", "dot_all"):
+            if kind == "dot_all" and v.attrs.get("component_contract") != "pops.program.dot-all@1":
+                raise ValueError("dot_all lost its exact vector pairing contract")
             a, b = v.inputs
-            reduction = "ctx.dot(%d, %s, %s)" % (
+            reduction = "ctx.%s(%d, %s, %s)" % (
+                kind,
                 owner,
                 var[a.id],
                 var[b.id],
             )
+        else:
+            raise ValueError("unsupported Program reduction kind %r" % kind)
         from pops.codegen.program_balance_due import balance_value_due_expression
 
         due = balance_value_due_expression(var, v.id)
@@ -1344,9 +1543,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # local. Used by the dt_bound expression cfl * hmin / max_wave_speed (spec s18).
         var[v.id] = "s%d" % v.id
         toks = []
+        from pops.codegen.program_emit_expressions import prepared_scalar_input
         for kind, val in v.attrs["operands"]:
             if kind == "v":
-                toks.append(var[v.inputs[val].id])
+                toks.append(prepared_scalar_input(v.inputs[val], var))
             else:  # a literal constant
                 toks.append(scalar_cpp(val))
         cppop = {"add": "+", "sub": "-", "mul": "*", "div": "/"}[v.attrs["fn"]]
@@ -1361,11 +1561,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # A predicate over scalars -> an inline boolean C++ expression (no statement of its own; the
         # while op embeds it directly in `if (!(<expr>)) break;`).
         lhs = v.inputs[0]
+        from pops.codegen.program_emit_expressions import prepared_scalar_input
         if len(v.inputs) == 2:  # scalar vs scalar
-            rhs_tok = var[v.inputs[1].id]
+            rhs_tok = prepared_scalar_input(v.inputs[1], var)
         else:  # scalar vs float tolerance
             rhs_tok = scalar_cpp(v.attrs["rhs"])
-        var[v.id] = "(%s %s %s)" % (var[lhs.id], v.attrs["cmp"], rhs_tok)
+        var[v.id] = "(%s %s %s)" % (prepared_scalar_input(lhs, var), v.attrs["cmp"], rhs_tok)
         var[("when_predicate", v.id)] = var[v.id]  # emission-local schedule predicate token
     elif v.op == "acceptance_guard":
         value, condition = v.inputs
@@ -1399,6 +1600,52 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         _emit_branch(
             program, v, base, var, model, lines, prelude, block_idx, field_plans,
             target=target)
+    elif v.op == "pointwise_expression":
+        from pops.codegen.program_emit_expressions import emit_pointwise_kernel, pointwise_output_template
+        if "global_template_index" in v.attrs:
+            from pops.time._evaluation_point import evaluation_stage_fraction
+            template = pointwise_output_template(v)
+            stage = evaluation_stage_fraction(template)
+            evaluation_prelude.append("ctx.set_stage_time(%d, %d);" %
+                                      (stage.numerator,stage.denominator))
+        template_var = var[pointwise_output_template(v).id]
+        var[v.id] = "u%d" % v.id
+        if "field_product_seed" in v.attrs:
+            lines += ["pops::MultiFab<pops::kNativeDimension>* seed_output_%d = nullptr;" % v.id,
+                      "pops::MultiFab<pops::kNativeDimension>* seed_status_%d = nullptr;" % v.id,
+                      "std::exception_ptr seed_allocation_error_%d;" % v.id,
+                      "const auto* seed_lane_%d = &ctx.prepared_execution_lane();" % v.id,
+                      "try { seed_output_%d = &ctx.scalar_scratch(%d, 0, %s, %d, 0);" % (v.id, v.id, template_var, v.attrs["ncomp"]),
+                      "  seed_status_%d = &ctx.scalar_scratch(%d, 1, %s, 1, 0); }" % (v.id, v.id, template_var),
+                      "catch (...) { seed_allocation_error_%d = std::current_exception(); }" % v.id,
+                      "try { Kokkos::fence(); } catch (...) { if (!seed_allocation_error_%d) seed_allocation_error_%d = std::current_exception(); }" % (v.id, v.id),
+                      'pops::collectively_rethrow_exception(seed_allocation_error_%d, *seed_lane_%d, "typed field seed allocation");' % (v.id, v.id),
+                      "pops::MultiFab<pops::kNativeDimension>& %s = *seed_output_%d;" % (var[v.id], v.id)]
+        else:
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
+                         % (var[v.id], v.id, template_var))
+        output_setup_end = len(lines)
+        status = "expression_status_%d" % v.id
+        if "field_product_seed" in v.attrs:
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *seed_status_%d;" % (status, v.id))
+            kernel = emit_pointwise_kernel(v, var, var[v.id], block_index=bidx, status=status)
+            lines += ["const pops::MultiFab<pops::kNativeDimension>* expression_active_%d = nullptr;" % v.id,
+                      "std::exception_ptr seed_kernel_error_%d;" % v.id, "try {"]
+            lines += [kernel[0].replace("const auto* ", "", 1), *kernel[1:]]
+            lines += ["} catch (...) { seed_kernel_error_%d = std::current_exception(); }" % v.id,
+                      "try { Kokkos::fence(); } catch (...) { if (!seed_kernel_error_%d) seed_kernel_error_%d = std::current_exception(); }" % (v.id, v.id),
+                      'pops::collectively_rethrow_exception(seed_kernel_error_%d, *seed_lane_%d, "typed field seed evaluation");' % (v.id, v.id)]
+        else:
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 1, %s, 1, 0);"
+                         % (status, v.id, template_var))
+            lines += emit_pointwise_kernel(v, var, var[v.id], block_index=bidx, status=status)
+        reduction = "pointwise_level_status_max" if target == "amr_system" else "pointwise_status_max"
+        lines.append("if (ctx.%s(%d, %s, expression_active_%d, ctx.prepared_execution_lane()) != pops::Real(0)) {"
+                     % (reduction, bidx, status, v.id))
+        lines.append("  throw pops::runtime::program::StepAttemptRejected("
+                     "pops::SolveStatus::kInvalidEvaluation, \"pointwise_expression\", "
+                     "\"non-finite scientific expression input or intermediate\");")
+        lines.append("}")
     elif v.op == "linear_combine":
         from pops.codegen.program_partition_stability import (
             emit_partition_stability, has_independent_diffusion_transport,
@@ -1409,6 +1656,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 and has_independent_diffusion_transport(node_model)):
             emit_partition_stability(v, var, lines, block_index=bidx, include_transport=True)
         terms = list(zip(v.inputs, v.attrs["coeffs"], strict=True))
+        if (not implicit_spatial_residual
+                and v.id in var.get(("explicit_state_updates",), frozenset())):
+            from pops.codegen.program_partition_stability import emit_user_face_stability
+            emit_user_face_stability(v, var, lines, block_index=bidx)
         if v.id in committed_ids:
             # Commit: block state <- c_base * base + sum(non-base coeff * term), in place.
             c_base = {0: 0}
@@ -1446,8 +1697,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     # source, linear_combine, where, ...) reuses the one general mechanism -- no per-op special
     # case. The wrap nests INSIDE the per-node profiling pair below (the profiler times the guarded
     # block as the node's cost). An always() schedule (or no schedule) leaves the lines untouched.
-    evaluation_start = output_setup_end if output_setup_end is not None else _profile_start
+    evaluation_start = (delegated_before_write if delegated_before_write is not None else
+                        output_setup_end if output_setup_end is not None else _profile_start)
     lines[evaluation_start:evaluation_start] = evaluation_prelude
+    from .program_value_authority import instrument_value_cpp
+    instrument_value_cpp(v, var, lines, evaluation_start + len(evaluation_prelude))
     _emit_schedule_wrap(program, v, var, lines, _profile_start,
                         output_setup_end=output_setup_end)
     # PER-NODE PROFILING (ADC-459): if this op emitted at least one statement, bracket those

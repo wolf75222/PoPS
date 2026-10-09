@@ -1,0 +1,88 @@
+{
+  "overlay": "/Users/romaindespoulain/dev/tmp/sol61-uniform-aux-capacity-authority-29e9143c-20261008/production-v3-overlay",
+  "files": [
+    {
+      "path": "docs/development/api_040/auxiliary_checkpoint_lazy_invalidation.md",
+      "sha256": "aef77b46de55474845f2ca3e39237ecf9cfdbaad5c45347c4899d6ef64d37529"
+    },
+    {
+      "path": "include/pops/runtime/nd_proof/field_rhs_aux_incidence_program_fixture.hpp",
+      "sha256": "c25f24868e1f9d558d282a5944efdd0ec586f6923d5c485641ad1cb51587839f"
+    },
+    {
+      "path": "include/pops/runtime/program/module_metadata.hpp",
+      "sha256": "bd82b018ced016e715591645b38db800a5f2f04191f9e1b8e5b2358b85c2b8f3"
+    },
+    {
+      "path": "include/pops/runtime/program/program_context.hpp",
+      "sha256": "7d4d860b0da9d0eba17a7107be0ca745fed85bfc9c1113f32dc22537055c34c8"
+    },
+    {
+      "path": "include/pops/runtime/system/auxiliary_checkpoint_capacity.hpp",
+      "sha256": "58c4a96d1ab8eacad7e5fc4a779e011c48988198f2c69d90bc59bba68d073339"
+    },
+    {
+      "path": "include/pops/runtime/system.hpp",
+      "sha256": "a3e57178b6aaa8992c95f28560cf39b07e10efc3519ae137e9fb27bf6cc546be"
+    },
+    {
+      "path": "include/pops_headers.manifest",
+      "sha256": "31b8f1b3efba602f1d195d58cac8795f38cdb9bab69ebe12b311ac5dc3b23b9d"
+    },
+    {
+      "path": "python/bindings/core/init/init_system.cpp",
+      "sha256": "53596c2c4c30e0a952ec855dbe9fcdffd9fc299693c1a9114d5aaa615e7ee4ee"
+    },
+    {
+      "path": "python/pops/codegen/cpp_strings.py",
+      "sha256": "6a082b1be64fc15e6a546ebee6ed9853f58889c8abbd029c4e40d6b1766829c4"
+    },
+    {
+      "path": "python/pops/codegen/program_codegen.py",
+      "sha256": "276b489a300df63174f951b81ba1ba3a94b174a1f27d9ebf288b7ff2c370dd78"
+    },
+    {
+      "path": "python/pops/output/_checkpoint_contract.py",
+      "sha256": "a9f9262cf77e35baeceb8eb324aafc2d099a85b9d542517e6c929b84e1542bb6"
+    },
+    {
+      "path": "python/pops/runtime/_checkpoint_resource_budget.py",
+      "sha256": "6b6d6cf62b8399441acdd4c28be0ea1d13f322d4e446c67bdd7b8f0664bc0b10"
+    },
+    {
+      "path": "src/runtime/system/system_aux.cpp",
+      "sha256": "3c41907d4013ac3a7c6706e1a8550bc63af36779690731b1f591f36fe4fe7794"
+    },
+    {
+      "path": "src/runtime/system/system_io.cpp",
+      "sha256": "024d6cd21029478033623db0ad6e998076d82d06ddbc00a2af228182e626669c"
+    },
+    {
+      "path": "tests/cpp/integration/native_loader/test_program_abi_symbols.cpp",
+      "sha256": "7c19a6e3a2e73923389c75f6ef4f416d059591d65f984bcd33db556e9feeb007"
+    },
+    {
+      "path": "tests/cpp/integration/native_loader/test_program_loader.cpp",
+      "sha256": "c5f4b56d0355779c8874387a3e438f2847a09b2f5c06e21f784cfd1cf5f5befd"
+    },
+    {
+      "path": "tests/cpp/support/field_rhs_value_program_fixture.hpp",
+      "sha256": "6a6849055763e61add9f561148723a61c8d536049b8fa447f48980d8d3a53c56"
+    },
+    {
+      "path": "tests/cpp/unit/runtime/test_exact_aux_registry_nd.cpp",
+      "sha256": "4203da5ffcb438ab8d22fea0808fac5cd41f966ec145b327e981184cbf4f70ea"
+    },
+    {
+      "path": "tests/python/support/explicit_program.py",
+      "sha256": "4b99fe88dd537b071546f0793902848b3896c12b190d52e25201f332337b5fc8"
+    },
+    {
+      "path": "tests/python/unit/codegen/test_uniform_clock_manifest_contract.py",
+      "sha256": "af1d32346a212fa8a2e3694af274edae18a441f37aaeb8bc8bdce0cf189a928f"
+    }
+  ],
+  "overlay_sources_digest": "611ed7b58c120fe33a170e0f6a2ef83933356abe45203f8d708be5c00424f00c",
+  "helper_test_sha256": "b1c899c85e1c38260ac94fdcf8f385aa9dd6b80434077b8f44eaecb7ad06fd2d",
+  "checks_sha256": "0b24e212a9a4365741bdfb3999a995a4f7ab59f6c3ca1eefb408d8bde3ba31ed"
+}

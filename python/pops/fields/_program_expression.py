@@ -43,11 +43,12 @@ def decode_field_literal(data: Any) -> ScalarLiteral:
     return literal
 
 
-def encode_field_expression(expression: Any, states: Any) -> tuple:
+def encode_field_expression(expression: Any, states: Any, *, unknowns: tuple = ()) -> tuple:
     """Encode only explicit qualified component reads and bounded scalar arithmetic."""
     from pops._ir.expr import Abs, Add, Const, Div, Mul, Neg, Pow, Sqrt, Sub, _wrap
     from pops._ir.handle_expr import ValueExpr
     from pops._ir.quantity import QuantityRef
+    from pops.time.evolved_field_stage import TemporalTau
 
     rows = field_input_contract(states)
     binary = {Add: "add", Sub: "sub", Mul: "mul", Div: "div", Pow: "pow"}
@@ -55,11 +56,17 @@ def encode_field_expression(expression: Any, states: Any) -> tuple:
 
     def encode(value: Any) -> tuple:
         value = _wrap(value)
+        if type(value) is TemporalTau:
+            if states:
+                value.require_program(states[0].prog)
+            return ("temporal_tau", value.to_data())
         if type(value) is Const:
             return ("literal", decode_field_literal(value.literal.to_data()).to_data())
         if type(value) in (QuantityRef, ValueExpr):
             if not value.handle.is_resolved:
                 raise ValueError("field expression must resolve its scientific input handles")
+            if type(value) is ValueExpr and value.handle in unknowns:
+                return ("unknown", unknowns.index(value.handle), value.handle.canonical_identity())
             matches = [(index, handle, components) for index, (handle, components) in enumerate(rows)
                        if handle == value.handle]
             if len(matches) != 1:
@@ -83,7 +90,9 @@ def encode_field_expression(expression: Any, states: Any) -> tuple:
     return encode(expression)
 
 
-def field_expression_cpp(expression: Any, states: Any, *, views: tuple[str, ...]) -> tuple[str, tuple[Any, ...]]:
+def field_expression_cpp(expression: Any, states: Any, *, views: tuple[str, ...],
+                         unknowns: tuple = (), unknown_view: str = "candidate",
+                         duration_name: str | None = None) -> tuple[str, tuple[Any, ...]]:
     """Re-authenticate the closed AST and return native code plus its actual declaration reads."""
     rows = field_input_contract(states)
     if len(views) != len(rows):
@@ -95,8 +104,20 @@ def field_expression_cpp(expression: Any, states: Any, *, views: tuple[str, ...]
         if not isinstance(node, (tuple, list)) or not node or not isinstance(node[0], str):
             raise TypeError("field expression requires a closed scalar AST")
         op = node[0]
+        if op == "temporal_tau" and len(node) == 2:
+            from ._evolved_stage_contract import validate_tau_data
+            data = validate_tau_data(node[1])
+            if duration_name is None:
+                raise ValueError("original field duration has no issued frame authority")
+            return "(%s * static_cast<pops::Real>(%s))" % (duration_name, decode_field_literal(data["factor"]).to_cpp())
         if op == "literal" and len(node) == 2:
             return "static_cast<pops::Real>(%s)" % decode_field_literal(node[1]).to_cpp()
+        if op == "unknown" and len(node) == 3:
+            component, identity = node[1:]
+            if type(component) is not int or not 0 <= component < len(unknowns) or \
+                    canonical_bytes(_json_ready(identity)) != canonical_bytes(unknowns[component].canonical_identity()):
+                raise ValueError("field residual unknown identity changed after encoding")
+            return "%s(index, %d)" % (unknown_view, component)
         if op == "input" and len(node) == 4:
             index, component, data = node[1:]
             if type(index) is not int or index < 0 or index >= len(rows):
@@ -122,13 +143,13 @@ def field_expression_cpp(expression: Any, states: Any, *, views: tuple[str, ...]
     return result, tuple(reads[key] for key in sorted(reads))
 
 
-def field_expression_dependencies(expressions: Any, states: Any) -> tuple[Any, ...]:
+def field_expression_dependencies(expressions: Any, states: Any, *, unknowns: Any = ()) -> tuple[Any, ...]:
     """Return actual encoded reads in their exact State input order."""
     rows = field_input_contract(states)
     views = tuple("input%d" % index for index in range(len(rows)))
     read_ids = set()
     for expression in expressions:
-        _, reads = field_expression_cpp(expression, states, views=views)
+        _, reads = field_expression_cpp(expression, states, views=views, unknowns=unknowns, duration_name="issued_frame_duration")
         read_ids.update(handle.qualified_id for handle in reads)
     return tuple(handle.canonical_identity() for handle, _ in rows if handle.qualified_id in read_ids)
 

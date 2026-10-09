@@ -1,0 +1,46 @@
+{
+  "schema": "sol61.capacity-native-qualification-preparation@1",
+  "scope": "Source-only external test patch; no Native import/build/run, no Main edit",
+  "base_main_head": "a20adf3f3b71055018a88510fd5c2ba0e029b208",
+  "test_module": "tests/python/integration/runtime/test_field_publication_instances_runtime.py",
+  "base_test_sha256": "0be3af7a9edf91caa76f8868a5752c741801353808f1cfc45266ca878a1c7613",
+  "candidate_test_sha256": "36ce98aea397325ffddb4337e3b5a80c85777d75feea11847cd68e1121af11a0",
+  "patch": "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/native-capacity-reception-test.patch",
+  "patch_sha256": "d0dc2f0035734127355683437380c2a9b8c9325ab32699b48b54419fd31aab52",
+  "physical_parser": "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/receive_capacity_checkpoint.py",
+  "physical_parser_sha256": "426b3f0e51bf6f9bae0a0a3ee9ea585ff44b069bc57324825bbc2302c5078e21",
+  "syntax_and_apply_check": "PASS; AST parsed without importing test or PoPS; git apply --check only",
+  "first_exact_selector": "tests/python/integration/runtime/test_field_publication_instances_runtime.py::test_installed_three_instance_solved_provider_reads[cells0-False-False]",
+  "selector_id_confirmation": "Installed pytest9.1 pure IdMaker returned cells0-False-False and cells1-True-True; no test-module collection/Native import",
+  "preserved": [
+    "existing test count and parameter matrix",
+    "existing initial public capture before first run",
+    "accepted1 and accepted2 public states/checkpoints",
+    "all mathematical formulas, constants, lattice, guards and oracle",
+    "all Native transactions; instrumentation reads only"
+  ],
+  "instrumentation": [
+    "Before first run read installed per-layout Program DSO exact owned-clock-manifest@1 discriminator/count/identities/primary/hash; compare hash to actual System installed_program_hash",
+    "Freeze actual cold future metadata/component reserve on each Native System; no guessed caller clocks",
+    "For initial/accepted1/accepted2 verify unchanged future reserve; actual public nested CP9 POPSAUX bytes equal current metadata + actual finite-grid scalar payload and fit frozen future reserve",
+    "Pin actual Native, DSO, checkpoints, raw POPSAUX bytes",
+    "Read-only independent standalone parser reopens physical CP9 bytes, derives metadata by subtracting actual decoded group payload scalar bytes, validates exact metadata reserve/point clocks/invalidation ownership and source/file SHA"
+  ],
+  "known_preexisting_failure_evidence": {
+    "owner_disclosure": "Candidate author knows only preserved Source helper first-negative receipts, no actual public Native failure receipt supplied",
+    "inference_limit": "This preparation does not establish any initial Native bug reproduction or patched runtime success"
+  },
+  "boundaries": [
+    "Pending task snapshot cache exactness remains source-reviewed; not claimed by these accepted checkpoints",
+    "Public Clock qualified_ids are canonical SHA256 strings, so no variable-length emitted clock or child-clock execution claim",
+    "Finite first representative 7x3 Uniform only; no generic universe, MPI/GPU/AMR or scientific qualification",
+    "Actual run forbidden until Root fresh official matching Native gate and installed DSO is generated against exact integrated headers"
+  ],
+  "receipt_paths": [
+    "cold-capacity-rank0.json",
+    "initial-capacity-rank0.json",
+    "accepted1-capacity-rank0.json",
+    "accepted2-capacity-rank0.json"
+  ],
+  "reception_usage": "env -u PYTHONPATH /Users/romaindespoulain/miniforge3/envs/pops/bin/python /Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/receive_capacity_checkpoint.py /absolute/actual/initial-capacity-rank0.json"
+}

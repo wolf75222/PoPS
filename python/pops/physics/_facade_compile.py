@@ -128,6 +128,7 @@ class _FacadeCompileMixin(_FacadeModel):
         _native_field_roles: Any = None,
         consumer_owner_qid: Any = None,
         declare_auxiliary_providers: bool = True,
+        model_source_policy: str = "allow_missing",
     ) -> Any:
         """Compiles the model into a CompiledModel (Phase A). Delegates the GENERATION + compilation to
         the native package compiler, then
@@ -158,6 +159,8 @@ class _FacadeCompileMixin(_FacadeModel):
         Returns a CompiledModel carrying so_path, backend, target, names/roles/gamma/n_aux/params,
         caps, abi_key, model_hash, cxx, std."""
         import os
+        from pops.codegen.model_compile_evidence import policy, read, paths, guard_recompile
+        policy(model_source_policy)
 
         # Lazy codegen import (keeps pops.physics codegen-free at module load; Spec-4 rule):
         from pops.codegen.toolchain import (
@@ -168,14 +171,19 @@ class _FacadeCompileMixin(_FacadeModel):
             pops_include,
         )
         from pops.codegen.cache import (
+            _artifact_cache_lock,
+            _artifact_cache_staging_path,
             _dsl_optflags,
             _identity_cache_so_path,
             _platform_cache_key,
             _precision_cache_key,
+            _record_artifact_identity,
             _registry_cache_key,
         )
         from pops.codegen.compile_link_flags import deterministic_component_link_flags
         from pops.codegen.compile_provenance import (
+            artifact_sidecar_path,
+            publish_staged_artifact,
             verify_cached_artifact,
             write_artifact_sidecar,
         )
@@ -240,7 +248,9 @@ class _FacadeCompileMixin(_FacadeModel):
 
         semantic_identity = semantic_identity_of(model=self)
         feature_key = _native_feature_key()
+        from pops.codegen.model_compile_evidence import codegen_source_authority
         spec_components = {
+            "codegen_source_authority": codegen_source_authority(),
             "model_hash": str(model_hash),
             "emitted_name": str(name or ""),
             "wave_speed_provider": (
@@ -287,23 +297,10 @@ class _FacadeCompileMixin(_FacadeModel):
             libraries=(),
         )
 
-        # OUT-OF-SOURCE cache when so_path is omitted: we RESOLVE the keyed path here (with the
-        # params-included hash) and pass it explicitly to the engine -- the cache of HyperbolicModel.compile
-        # would otherwise use the hash WITHOUT params (the Model facade adds the Param). HIT -> we skip the
-        # compilation. Explicit so_path -> forced path, always recompiles (strict backward-compat).
-        cache_requested = so_path is None
-        if cache_requested:
-            so_path = _identity_cache_so_path(spec_identity)
-
-        if cache_requested and os.path.isfile(so_path):
-            binary_identity, final_artifact_identity = verify_cached_artifact(
-                so_path, semantic_identity=semantic_identity, spec_identity=spec_identity
-            )
-            out_path = so_path
-        else:
+        def _compile_to(path: Any) -> Any:
             # The loader emits the target-specific fixed ABI entry point.
-            out_path = m.compile(
-                so_path,
+            return m.compile(
+                path,
                 include,
                 backend=backend,
                 name=name,
@@ -318,9 +315,49 @@ class _FacadeCompileMixin(_FacadeModel):
                 consumer_owner_qid=consumer_owner_qid,
                 declare_auxiliary_providers=declare_auxiliary_providers,
             )
-            binary_identity, final_artifact_identity = write_artifact_sidecar(
-                out_path, semantic_identity=semantic_identity, spec_identity=spec_identity
-            )
+
+        # The facade owns the params-included identity, so its cache cannot delegate the
+        # destination choice to HyperbolicModel. Passing that destination explicitly also
+        # bypasses the engine's cache lock: hold the same publication protocol here instead.
+        # A waiting MPI rank must never authenticate or load another compiler's partial output.
+        if so_path is None:
+            so_path = _identity_cache_so_path(spec_identity)
+            with _artifact_cache_lock(so_path):
+                if model_source_policy == "recompile": guard_recompile(so_path)
+                if os.path.exists(so_path) and model_source_policy != "recompile":
+                    binary_identity, final_artifact_identity = verify_cached_artifact(
+                        so_path, semantic_identity=semantic_identity, spec_identity=spec_identity
+                    )
+                    read(so_path, require=model_source_policy == "require")
+                else:
+                    staging = _artifact_cache_staging_path(so_path)
+                    staged_output = staging
+                    try:
+                        staged_output = _compile_to(staging)
+                        read(staged_output, require=model_source_policy != "allow_missing")
+                        binary_identity, final_artifact_identity = publish_staged_artifact(
+                            staged_output, so_path,
+                            semantic_identity=semantic_identity, spec_identity=spec_identity,
+                        )
+                    finally:
+                        for path in {staging, staged_output}:
+                            for leftover in (path, artifact_sidecar_path(path), *paths(path)):
+                                try:
+                                    os.remove(leftover)
+                                except FileNotFoundError:
+                                    pass
+                _record_artifact_identity(so_path, spec_identity)
+            out_path = so_path
+        else:
+            # An explicit user destination still forces compilation on every call.
+            with _artifact_cache_lock(so_path):
+                if model_source_policy == "recompile": guard_recompile(so_path)
+                out_path = _compile_to(so_path)
+                read(out_path, require=model_source_policy != "allow_missing")
+                binary_identity, final_artifact_identity = write_artifact_sidecar(
+                    out_path, semantic_identity=semantic_identity, spec_identity=spec_identity
+                )
+        read(out_path, require=model_source_policy != "allow_missing")
         cons_roles = roles_for(m.cons_names, m.cons_roles)
         cm: Any = CompiledModel(
             so_path=out_path,

@@ -1,0 +1,13 @@
+Traceback (most recent call last):
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/joint_reconstruction_resource_probe_v1_2.py", line 341, in <module>
+    main()
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/joint_reconstruction_resource_probe_v1_2.py", line 337, in main
+    _driver(args)
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/joint_reconstruction_resource_probe_v1_2.py", line 293, in _driver
+    rows = {lane: _invoke(args, lane, roots[lane], output) for lane in
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/joint_reconstruction_resource_probe_v1_2.py", line 203, in _invoke
+    cache.mkdir(parents=True)
+  File "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/pathlib.py", line 1311, in mkdir
+    os.mkdir(self, mode)
+FileExistsError: [Errno 17] File exists: '/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/resource-t2-v1-2-run/cache/baseline'

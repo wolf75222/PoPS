@@ -1,0 +1,487 @@
+{
+  "actual_independent_reader_replayed": true,
+  "build_source_and_installed_inventories_joined": [
+    1192,
+    1157
+  ],
+  "ci_qualified": false,
+  "diagnostics_scope": "CPU1 and one-node MPI2: seven logical cases each, three Source plus four Native Uniform/AMR; 24 saved bitexact NPZ pairs total and capacity/refusal guards",
+  "gpu_qualified": false,
+  "header_signature": "8ee6d09b428cfe172d08008253c2ea490eb733f9b1458f6f2ed8da1584effbf5",
+  "history_bit_identical_claim": false,
+  "history_scope": "CPU1 one successful process item invokes eight authenticated Source functions, five Source plus three Native; AB2 <=1e-12 and cold discriminator >1e-9, variable-stride np.array_equal",
+  "history_successful_child_stdout_retained": false,
+  "independent_pins_sha256": "8ecbb4f16a00b33255d31ddbd0d4a2a0e180b39cb6abb1a92fd6296a876edb86",
+  "independent_receipt_sha256": "4c659334d940f426546f0245a7b041c32fa29acd94cfd5ee28ddc2364bb34419",
+  "inter_node_mpi_qualified": false,
+  "jobs": [
+    {
+      "all_checks_passed": true,
+      "bitexact_saved_pairs": 8,
+      "files": 120,
+      "job": "732340",
+      "links": 2,
+      "logical_tests": 7,
+      "nodes": [
+        "test_diagnostic_fixture_source_admission[False]",
+        "test_diagnostic_fixture_source_admission[True]",
+        "test_diagnostic_geometry_routes_match_real_native_provider_bindings",
+        "test_native_diagnostic_bits_checkpoint_restart_replay[False]",
+        "test_native_diagnostic_bits_checkpoint_restart_replay[True]",
+        "test_native_diagnostic_capacity_faults_and_joined_restore[False]",
+        "test_native_diagnostic_capacity_faults_and_joined_restore[True]"
+      ],
+      "phase_receipts": 24,
+      "rank_test_reports": 7,
+      "rank_xmls": 1,
+      "refusals": [
+        {
+          "keys": [
+            "reserved-name",
+            "invalid-value-on-rank-zero",
+            "capacity-overflow",
+            "active-attempt",
+            "capture-one-byte-over-reserve",
+            "offset",
+            "rank-authority",
+            "native-body",
+            "post-apply"
+          ],
+          "path": "output/pytest-tmp/test_native_diagnostic_capacit1/diagnostics-amr/rank0/refusals.json"
+        },
+        {
+          "keys": [
+            "reserved-name",
+            "invalid-value-on-rank-zero",
+            "capacity-overflow",
+            "active-attempt",
+            "capture-one-byte-over-reserve",
+            "offset",
+            "rank-authority",
+            "native-body",
+            "post-apply"
+          ],
+          "path": "output/pytest-tmp/test_native_diagnostic_capacit0/diagnostics-uniform/rank0/refusals.json"
+        }
+      ],
+      "root_pin": "e451e8172ca326e4ac1992c4371061d8dce349695d5dcc29d324ca81453f3048",
+      "scope": "diagnostics"
+    },
+    {
+      "all_checks_passed": true,
+      "bitexact_saved_pairs": 16,
+      "files": 188,
+      "job": "732341",
+      "links": 4,
+      "logical_tests": 7,
+      "nodes": [
+        "test_diagnostic_fixture_source_admission[False]",
+        "test_diagnostic_fixture_source_admission[True]",
+        "test_diagnostic_geometry_routes_match_real_native_provider_bindings",
+        "test_native_diagnostic_bits_checkpoint_restart_replay[False]",
+        "test_native_diagnostic_bits_checkpoint_restart_replay[True]",
+        "test_native_diagnostic_capacity_faults_and_joined_restore[False]",
+        "test_native_diagnostic_capacity_faults_and_joined_restore[True]"
+      ],
+      "phase_receipts": 48,
+      "rank_test_reports": 14,
+      "rank_xmls": 2,
+      "refusals": [
+        {
+          "keys": [
+            "reserved-name",
+            "invalid-value-on-rank-zero",
+            "capacity-overflow",
+            "proposal-mismatch",
+            "active-attempt",
+            "capture-one-byte-over-reserve",
+            "offset",
+            "rank-authority",
+            "native-body",
+            "rank-order",
+            "post-apply"
+          ],
+          "path": "output/rank0-tmp/test_native_diagnostic_capacit1/diagnostics-amr/rank1/refusals.json"
+        },
+        {
+          "keys": [
+            "reserved-name",
+            "invalid-value-on-rank-zero",
+            "capacity-overflow",
+            "proposal-mismatch",
+            "active-attempt",
+            "capture-one-byte-over-reserve",
+            "offset",
+            "rank-authority",
+            "native-body",
+            "rank-order",
+            "post-apply"
+          ],
+          "path": "output/rank0-tmp/test_native_diagnostic_capacit1/diagnostics-amr/rank0/refusals.json"
+        },
+        {
+          "keys": [
+            "reserved-name",
+            "invalid-value-on-rank-zero",
+            "capacity-overflow",
+            "proposal-mismatch",
+            "active-attempt",
+            "capture-one-byte-over-reserve",
+            "offset",
+            "rank-authority",
+            "native-body",
+            "rank-order",
+            "post-apply"
+          ],
+          "path": "output/rank0-tmp/test_native_diagnostic_capacit0/diagnostics-uniform/rank1/refusals.json"
+        },
+        {
+          "keys": [
+            "reserved-name",
+            "invalid-value-on-rank-zero",
+            "capacity-overflow",
+            "proposal-mismatch",
+            "active-attempt",
+            "capture-one-byte-over-reserve",
+            "offset",
+            "rank-authority",
+            "native-body",
+            "rank-order",
+            "post-apply"
+          ],
+          "path": "output/rank0-tmp/test_native_diagnostic_capacit0/diagnostics-uniform/rank0/refusals.json"
+        }
+      ],
+      "root_pin": "109d1f41b31d87bbd401ed90b0a1346fecbb90d26b46fcc2de1f34ff0a13761e",
+      "scope": "diagnostics"
+    },
+    {
+      "all_checks_passed": true,
+      "bitexact_saved_pairs": 0,
+      "files": 41,
+      "job": "732343",
+      "links": 2,
+      "logical_tests": 2,
+      "nodes": [
+        "test_native_retry_matches_successful_attempt_without_rejected_history",
+        "test_native_finite_retry_exhaustion_restores_accepted_envelope"
+      ],
+      "phase_receipts": 0,
+      "rank_test_reports": 2,
+      "rank_xmls": 1,
+      "refusals": [],
+      "root_pin": "1be6fbcf729437d091e7686be8cf1198198be6afbb6ad2a011e222c80e47d9b1",
+      "scope": "retry"
+    },
+    {
+      "all_checks_passed": true,
+      "bitexact_saved_pairs": 0,
+      "files": 35,
+      "job": "732345",
+      "links": 0,
+      "logical_tests": 1,
+      "nodes": [
+        "test_time_history_checkpoint.py"
+      ],
+      "phase_receipts": 0,
+      "rank_test_reports": 1,
+      "rank_xmls": 1,
+      "refusals": [],
+      "root_pin": "607789b19594f713ea5b7981ba7a6c261508c2e5aa40faa6112db59b312b866f",
+      "scope": "history"
+    }
+  ],
+  "native_sha256": "a661f3b1a7440850985d44f4b3936a94edd7059e570a20633bbe3f96bc64b97e",
+  "negative_zero_test_732342_preserved": true,
+  "performance_at_comparable_calculation_qualified": false,
+  "reports_identical_on_replay": true,
+  "retry_scope": "CPU1 two native tests; actual acceptance/rejection and exhausted transaction properties; no added offline full-state comparison",
+  "root_approval": true,
+  "schema": "root.sdk25-nonreg-native-reception@1",
+  "scope_complement": {
+    "diagnostic_case_split_per_launch": {
+      "Native": 4,
+      "Source": 3,
+      "logical_MPI2": 7,
+      "rank_reports_MPI2": 14,
+      "routes": [
+        "Uniform",
+        "AMR partial fine"
+      ]
+    },
+    "history_internal_authority": {
+      "checks": [
+        "test_checkpoint_payload_version_requires_an_exact_integer_scalar",
+        "test_collective_failure_preserves_one_scientific_error_family",
+        "test_current_checkpoint_envelope_roundtrips",
+        "test_history_persistence_key_scheme",
+        "test_restore_histories_installs_every_ring_before_replay",
+        "test_uniform_ab2_history_checkpoint_restart_is_bit_identical",
+        "test_uniform_restart_refuses_a_different_compiled_program",
+        "test_uniform_variable_dt_stride_checkpoint_closes_like_continuous_run"
+      ],
+      "confirmation": "one successful PythonProcessFile child runs all sorted eight functions via _run; no skip/exceptions allowed",
+      "guards": {
+        "AB2_cold_discriminator_gt": 1e-09,
+        "AB2_max_error": 1e-12,
+        "fullgrown_history_qualification": false,
+        "time_difference": 1e-12,
+        "variable_stride_state": "np.array_equal"
+      },
+      "raw_stdout_limitation": "collector discards successful child stdout; no invented per-check timings/output",
+      "source_sha256": "f29952fe38d31b587a90755c658fdec655199e8b5b0eb371d3ee642fbaf3abe9",
+      "split": {
+        "Native": 3,
+        "Source": 5
+      }
+    },
+    "jobs": [
+      {
+        "all_checks_passed": true,
+        "bitexact_saved_pairs": 8,
+        "files": 120,
+        "job": "732340",
+        "links": 2,
+        "logical_tests": 7,
+        "nodes": [
+          "test_diagnostic_fixture_source_admission[False]",
+          "test_diagnostic_fixture_source_admission[True]",
+          "test_diagnostic_geometry_routes_match_real_native_provider_bindings",
+          "test_native_diagnostic_bits_checkpoint_restart_replay[False]",
+          "test_native_diagnostic_bits_checkpoint_restart_replay[True]",
+          "test_native_diagnostic_capacity_faults_and_joined_restore[False]",
+          "test_native_diagnostic_capacity_faults_and_joined_restore[True]"
+        ],
+        "phase_receipts": 24,
+        "rank_test_reports": 7,
+        "rank_xmls": 1,
+        "refusals": [
+          {
+            "keys": [
+              "reserved-name",
+              "invalid-value-on-rank-zero",
+              "capacity-overflow",
+              "active-attempt",
+              "capture-one-byte-over-reserve",
+              "offset",
+              "rank-authority",
+              "native-body",
+              "post-apply"
+            ],
+            "path": "output/pytest-tmp/test_native_diagnostic_capacit1/diagnostics-amr/rank0/refusals.json"
+          },
+          {
+            "keys": [
+              "reserved-name",
+              "invalid-value-on-rank-zero",
+              "capacity-overflow",
+              "active-attempt",
+              "capture-one-byte-over-reserve",
+              "offset",
+              "rank-authority",
+              "native-body",
+              "post-apply"
+            ],
+            "path": "output/pytest-tmp/test_native_diagnostic_capacit0/diagnostics-uniform/rank0/refusals.json"
+          }
+        ],
+        "root_pin": "e451e8172ca326e4ac1992c4371061d8dce349695d5dcc29d324ca81453f3048",
+        "scope": "diagnostics"
+      },
+      {
+        "all_checks_passed": true,
+        "bitexact_saved_pairs": 16,
+        "files": 188,
+        "job": "732341",
+        "links": 4,
+        "logical_tests": 7,
+        "nodes": [
+          "test_diagnostic_fixture_source_admission[False]",
+          "test_diagnostic_fixture_source_admission[True]",
+          "test_diagnostic_geometry_routes_match_real_native_provider_bindings",
+          "test_native_diagnostic_bits_checkpoint_restart_replay[False]",
+          "test_native_diagnostic_bits_checkpoint_restart_replay[True]",
+          "test_native_diagnostic_capacity_faults_and_joined_restore[False]",
+          "test_native_diagnostic_capacity_faults_and_joined_restore[True]"
+        ],
+        "phase_receipts": 48,
+        "rank_test_reports": 14,
+        "rank_xmls": 2,
+        "refusals": [
+          {
+            "keys": [
+              "reserved-name",
+              "invalid-value-on-rank-zero",
+              "capacity-overflow",
+              "proposal-mismatch",
+              "active-attempt",
+              "capture-one-byte-over-reserve",
+              "offset",
+              "rank-authority",
+              "native-body",
+              "rank-order",
+              "post-apply"
+            ],
+            "path": "output/rank0-tmp/test_native_diagnostic_capacit1/diagnostics-amr/rank1/refusals.json"
+          },
+          {
+            "keys": [
+              "reserved-name",
+              "invalid-value-on-rank-zero",
+              "capacity-overflow",
+              "proposal-mismatch",
+              "active-attempt",
+              "capture-one-byte-over-reserve",
+              "offset",
+              "rank-authority",
+              "native-body",
+              "rank-order",
+              "post-apply"
+            ],
+            "path": "output/rank0-tmp/test_native_diagnostic_capacit1/diagnostics-amr/rank0/refusals.json"
+          },
+          {
+            "keys": [
+              "reserved-name",
+              "invalid-value-on-rank-zero",
+              "capacity-overflow",
+              "proposal-mismatch",
+              "active-attempt",
+              "capture-one-byte-over-reserve",
+              "offset",
+              "rank-authority",
+              "native-body",
+              "rank-order",
+              "post-apply"
+            ],
+            "path": "output/rank0-tmp/test_native_diagnostic_capacit0/diagnostics-uniform/rank1/refusals.json"
+          },
+          {
+            "keys": [
+              "reserved-name",
+              "invalid-value-on-rank-zero",
+              "capacity-overflow",
+              "proposal-mismatch",
+              "active-attempt",
+              "capture-one-byte-over-reserve",
+              "offset",
+              "rank-authority",
+              "native-body",
+              "rank-order",
+              "post-apply"
+            ],
+            "path": "output/rank0-tmp/test_native_diagnostic_capacit0/diagnostics-uniform/rank0/refusals.json"
+          }
+        ],
+        "root_pin": "109d1f41b31d87bbd401ed90b0a1346fecbb90d26b46fcc2de1f34ff0a13761e",
+        "scope": "diagnostics"
+      },
+      {
+        "all_checks_passed": true,
+        "bitexact_saved_pairs": 0,
+        "files": 41,
+        "job": "732343",
+        "links": 2,
+        "logical_tests": 2,
+        "nodes": [
+          "test_native_retry_matches_successful_attempt_without_rejected_history",
+          "test_native_finite_retry_exhaustion_restores_accepted_envelope"
+        ],
+        "phase_receipts": 0,
+        "rank_test_reports": 2,
+        "rank_xmls": 1,
+        "refusals": [],
+        "root_pin": "1be6fbcf729437d091e7686be8cf1198198be6afbb6ad2a011e222c80e47d9b1",
+        "scope": "retry"
+      },
+      {
+        "all_checks_passed": true,
+        "bitexact_saved_pairs": 0,
+        "files": 35,
+        "job": "732345",
+        "links": 0,
+        "logical_tests": 1,
+        "nodes": [
+          "test_time_history_checkpoint.py"
+        ],
+        "phase_receipts": 0,
+        "rank_test_reports": 1,
+        "rank_xmls": 1,
+        "refusals": [],
+        "root_pin": "607789b19594f713ea5b7981ba7a6c261508c2e5aa40faa6112db59b312b866f",
+        "scope": "history"
+      }
+    ],
+    "limits": [
+      "No rerun or PoPS import",
+      "diagnostics raw bit/state/history replay pairs only where actual snapshots saved",
+      "retry guarantees authenticated JUnit properties/assertions; no saved fullstate independent comparison added",
+      "history main eight checks counted as one process item; finalstate<=1e-12 not byte equality",
+      "No physics/GPU/inter-node or full-ghost formula qualification"
+    ],
+    "native": "a661f3b1a7440850985d44f4b3936a94edd7059e570a20633bbe3f96bc64b97e",
+    "negative_732342_preserved": "zero-collected selector error; not Native history defect",
+    "retry_properties": {
+      "control_run": {
+        "accepted_steps": 2,
+        "final_macro_step": 2,
+        "final_time": 0.125,
+        "rejected_steps": 0,
+        "run_identity": "pops.run.v1:sha256:7e2f62a5f9f93ecfed9835329d10b32f831a268b22f6f0e89a12701acc3602ed"
+      },
+      "retry_run": {
+        "accepted_steps": 2,
+        "final_macro_step": 2,
+        "final_time": 0.125,
+        "rejected_steps": 1,
+        "run_identity": "pops.run.v1:sha256:deecceb6ba90a0166d22cc3d2097233d210ccd35e174caae4a65619a4b426011"
+      },
+      "transaction": {
+        "action": "reject_attempt",
+        "attempts": 2,
+        "committed_effects": [],
+        "diagnostics": [
+          "step attempt rejected during guard: solve status=invalid_evaluation (attempt_action=reject, reason_code=0, acceptance guard 'dt_error_estimate' failed)",
+          "retry stopped: finite retry budget exhausted after 2 attempt(s), budget=1"
+        ],
+        "phase": "guard",
+        "projections": [],
+        "rolled_back_effects": [
+          "states",
+          "fields",
+          "topology",
+          "flux_ledgers",
+          "caches",
+          "solver_warm_starts",
+          "histories",
+          "clocks",
+          "schedules",
+          "consumers",
+          "diagnostics",
+          "external_effects"
+        ],
+        "staged_effects": [
+          "states",
+          "fields",
+          "topology",
+          "flux_ledgers",
+          "caches",
+          "solver_warm_starts",
+          "histories",
+          "clocks",
+          "schedules",
+          "consumers",
+          "diagnostics",
+          "external_effects"
+        ],
+        "status": "rejected"
+      }
+    },
+    "schema": "sol61.sdk25-nonreg-offline@1",
+    "source": "717936347672aeb4bc9146e2b3065bfd42cf1ef5"
+  },
+  "scope_complement_sha256": "93b8ff962b740faaf24ae90a5a518741f4f4c5782cb8487185c730acae6710f3",
+  "source_freeze": "717936347672aeb4bc9146e2b3065bfd42cf1ef5",
+  "verified_independent_pins": 6,
+  "whole_mission_complete": false
+}

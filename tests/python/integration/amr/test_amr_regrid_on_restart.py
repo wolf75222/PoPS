@@ -332,11 +332,14 @@ def _accepted_tagging_hysteresis(payload):
         cursor += size
         assert cursor <= len(encoded), "accepted-state string is truncated"
 
-    assert encoded[:8] in (b"POPSAND4", b"POPSAND5", b"POPSAND6", b"POPSAND7")
+    version = encoded[:8]
+    assert version in (b"POPSAND4", b"POPSAND5", b"POPSAND6", b"POPSAND7", b"POPSAND8", b"POPSAND9")
     cursor = 8
     cursor += 8  # native dimension
     skip_string()  # exact spatial contract
     cursor += 2 * 8  # topology epoch, materialization generation
+    if version in (b"POPSAND8", b"POPSAND9"):
+        read_size()  # committed attempt; legacy inspection does not synthesize authority
     level_count = read_size()
     cursor += level_count * 40
     assert cursor <= len(encoded), "accepted-state level clocks are truncated"
@@ -356,12 +359,15 @@ def _accepted_tagging_hysteresis(payload):
     for _ in range(history_slot_count):
         skip_string()
         cursor += 5 * 8  # level, slot, outgoing dt, initialized, fill count
-        if encoded[:8] == b"POPSAND7":
+        if version in (b"POPSAND7", b"POPSAND8", b"POPSAND9"):
             cursor += 4 * 8  # exact typed publication identity
     pending_count = read_size()
     for _ in range(pending_count):
         skip_string()
         cursor += 12 * 8  # two encoded i32, four u64, three i64, two real, consumed
+        if version == b"POPSAND9":
+            cursor += 6 * 8  # qualification and source sample
+            skip_string()
     assert cursor <= len(encoded), "accepted-state pending history remaps are truncated"
     history_flux_size = read_size()
     cursor += history_flux_size

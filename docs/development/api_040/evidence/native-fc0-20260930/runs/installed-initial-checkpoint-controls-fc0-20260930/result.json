@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='a280d9ef8d95c261be61b61f6d0b1f8da0be7a24515380eaaa03cfd9489f3943'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-initial-checkpoint-controls-fc0-20260930/pytest.xml",
+    "--basetemp=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-initial-checkpoint-controls-fc0-20260930/pytest-tmp",
+    "tests/python/unit/runtime/test_initial_checkpoint_strategy.py",
+    "tests/python/unit/runtime/test_temporal_restart_state.py",
+    "tests/python/unit/runtime/test_step_strategy.py"
+  ],
+  "returncode": 1,
+  "pytest_base_temp": "pytest-tmp",
+  "duration_seconds": 183.5879590420518,
+  "counts": {
+    "tests": 122,
+    "failures": 6,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "failed",
+  "identity_sha256": "15c47606959c47fabb1ad6ca692937c3b2949cf6eb8e7f2d11ed5b92aec3ade7",
+  "log_sha256": "cf149e1c8c2758900b940698a428e6e04fc03f287c59c73a86a812ee15482175"
+}

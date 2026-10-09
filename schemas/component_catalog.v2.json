@@ -207,6 +207,22 @@
       "hot_path": true,
       "facets": ["provider", "lowering", "fallible_evaluation"],
       "operations": ["transform_faces"]
+    },
+    {
+      "id": 11,
+      "name": "accepted_initial_ghost",
+      "uri": "pops://interfaces/accepted-initial-ghost",
+      "version": 1,
+      "cpp_table": "PopsAcceptedInitialGhostApiV1",
+      "hot_path": false,
+      "facets": [
+        "provider",
+        "lowering",
+        "fallible_evaluation"
+      ],
+      "operations": [
+        "apply_initial_region_batch"
+      ]
     }
   ],
   "boundary_handle_native_routes": {

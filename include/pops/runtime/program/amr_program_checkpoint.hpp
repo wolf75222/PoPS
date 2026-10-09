@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <map>
 #include <optional>
@@ -85,6 +86,12 @@ struct AmrProgramPendingHistoryRemap {
   double source_dt = 0.0;
   double target_dt = 0.0;
   bool consumed = false;
+  /// Current hierarchy qualification, separate from the immutable creation edge above.
+  std::uint64_t qualified_topology_epoch = 0;
+  std::uint64_t qualified_materialization_generation = 0;
+  HistorySampleIdentity source_sample;
+  /// Exact logical ring/slot/clock identity captured at creation; excludes topology generations.
+  std::string retained_ring_contract;
 
   friend bool operator==(const AmrProgramPendingHistoryRemap&,
                          const AmrProgramPendingHistoryRemap&) = default;
@@ -123,6 +130,10 @@ struct AmrProgramAcceptedState {
   std::uint64_t topology_epoch = 0;
   std::uint64_t materialization_generation = 0;
   std::vector<::pops::amr::ClockStamp> level_clocks;
+  /// Actual committed engine attempt, including accepted steps with no face ledger. Zero is
+  /// the explicitly fresh authority; legacy wire images decode to nullopt and are inspectable
+  /// but cannot be installed or rewritten as an authoritative continuation.
+  std::optional<std::uint64_t> accepted_attempt = std::uint64_t{0};
   std::map<std::string, std::int64_t> logical_clock_ticks;
   std::vector<AmrProgramHistoryDescriptor> histories;
   std::vector<AmrProgramHistorySlotProvenance> history_slots;
@@ -240,7 +251,8 @@ HistoryMetadata history_metadata(const Manager& manager, const BlockMap& block_m
   return result;
 }
 
-inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '7'};
+inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '9'};
+inline constexpr std::array<std::uint8_t, 8> kLegacyMagic7{'P', 'O', 'P', 'S', 'A', 'N', 'D', '7'};
 inline constexpr std::array<std::uint8_t, 8> kLegacyMagic6{'P', 'O', 'P', 'S', 'A', 'N', 'D', '6'};
 inline constexpr std::array<std::uint8_t, 8> kLegacyMagic5{'P', 'O', 'P', 'S', 'A', 'N', 'D', '5'};
 inline constexpr std::array<std::uint8_t, 8> kLegacyMagic4{'P', 'O', 'P', 'S', 'A', 'N', 'D', '4'};
@@ -430,7 +442,9 @@ inline constexpr std::size_t kMinInterfaceFragmentBytes = 32 * kEncodedScalarByt
 inline constexpr std::size_t kMinSynchronizationEventBytes = 9 * kEncodedScalarBytes;
 // Pending remap: key length plus two i32 words (encoded as i64), four u64 words, three i64
 // words, two reals, and its consumed tag.  Keep this in wire units, not sizeof(int).
-inline constexpr std::size_t kMinPendingHistoryRemapBytes = 13 * kEncodedScalarBytes;
+inline constexpr std::size_t kLegacyMinPendingHistoryRemapBytes = 13 * kEncodedScalarBytes;
+// AND9 adds two qualification words, four source-sample words and a framed ring contract.
+inline constexpr std::size_t kMinPendingHistoryRemapBytes = 20 * kEncodedScalarBytes;
 
 template <int Dim>
 inline constexpr std::size_t kMinFaceFragmentBytes =
@@ -459,6 +473,95 @@ inline void write_clock(Output& out, const ::pops::amr::ClockStamp& value) {
 
 inline ::pops::amr::ClockStamp read_clock(Reader& in) {
   return {in.i32(), in.i64(), read_rational(in), in.real()};
+}
+
+template <class Output>
+inline void write_pending_ring_contract(
+    Output& out, const AmrProgramHistoryDescriptor& history,
+    const std::array<AmrProgramHistorySlotProvenance, 2>& slots,
+    const ::pops::amr::ClockStamp& clock) {
+  out.string("pops.amr.pending-ring.v1");
+  out.string(history.name);
+  out.i32(history.program_owner);
+  out.string(history.state_identity);
+  out.string(history.space_identity);
+  out.string(history.clock_identity);
+  out.string(history.interpolation_identity);
+  out.i32(history.depth);
+  out.i32(history.components);
+  for (const auto& slot : slots) {
+    out.i32(slot.level);
+    out.i32(slot.slot);
+    out.real(slot.outgoing_dt);
+    out.u64(slot.initialized);
+    out.i32(slot.fill_count);
+    out.u64(static_cast<std::uint64_t>(slot.sample.kind));
+    out.u64(slot.sample.start_bits);
+    out.u64(slot.sample.interval_bits);
+    out.u64(slot.sample.ordinal);
+  }
+  write_clock(out, clock);
+}
+
+inline std::string pending_ring_contract(
+    std::span<const AmrProgramHistoryDescriptor> histories,
+    std::span<const AmrProgramHistorySlotProvenance> slots,
+    std::string_view name, int level, const ::pops::amr::ClockStamp& clock) {
+  const auto descriptor = std::find_if(histories.begin(), histories.end(),
+                                     [&](const auto& row) { return row.name == name; });
+  if (descriptor == histories.end() || descriptor->depth != 2 || clock.level != level)
+    throw std::invalid_argument("pending history remap lacks its exact ring descriptor");
+  std::array<AmrProgramHistorySlotProvenance, 2> selected;
+  for (int index = 0; index < 2; ++index) {
+    const auto found = std::find_if(slots.begin(), slots.end(), [&](const auto& row) {
+      return row.name == name && row.level == level && row.slot == index;
+    });
+    if (found == slots.end())
+      throw std::invalid_argument("pending history remap lacks its exact ring slot");
+    selected[index] = *found;
+  }
+  Writer out;
+  write_pending_ring_contract(out, *descriptor, selected, clock);
+  const auto bytes = std::move(out).take();
+  return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
+}
+
+inline bool pending_qualification_valid(const AmrProgramPendingHistoryRemap& pending,
+                                        std::uint64_t epoch, std::uint64_t generation) {
+  return pending.qualified_topology_epoch == epoch &&
+         pending.qualified_materialization_generation == generation &&
+         pending.prior_topology_epoch != std::numeric_limits<std::uint64_t>::max() &&
+         pending.prior_materialization_generation != std::numeric_limits<std::uint64_t>::max() &&
+         pending.prior_topology_epoch + 1 == pending.published_topology_epoch &&
+         pending.prior_materialization_generation + 1 == pending.published_materialization_generation &&
+         pending.published_topology_epoch <= epoch &&
+         pending.published_materialization_generation <= generation &&
+         epoch - pending.published_topology_epoch ==
+             generation - pending.published_materialization_generation;
+}
+
+inline void requalify_retained_pending_history(
+    AmrProgramPendingHistoryRemap& marker, std::string_view key,
+    const AmrProgramHistoryRemapDescriptor& descriptor, std::string_view live_ring_contract,
+    const HistorySampleIdentity& live_source_sample, bool store_pending) {
+  const auto decoded = decode_history_key(key);
+  const bool affected = std::any_of(descriptor.history_plan.begin(), descriptor.history_plan.end(),
+                                   [&](const auto& entry) { return entry.key == key; });
+  if (key != marker.key || !decoded || decoded->first != marker.child_level ||
+      marker.child_level > descriptor.parent_level || affected || marker.consumed ||
+      descriptor.prior_topology_epoch == std::numeric_limits<std::uint64_t>::max() ||
+      descriptor.prior_materialization_generation == std::numeric_limits<std::uint64_t>::max() ||
+      descriptor.prior_topology_epoch + 1 != descriptor.published_topology_epoch ||
+      descriptor.prior_materialization_generation + 1 != descriptor.published_materialization_generation ||
+      !pending_qualification_valid(marker, descriptor.prior_topology_epoch,
+                                   descriptor.prior_materialization_generation) || store_pending ||
+      marker.source_sample.kind != HistorySampleKind::Publication ||
+      live_source_sample != marker.source_sample ||
+      marker.retained_ring_contract.empty() || marker.retained_ring_contract != live_ring_contract)
+    throw std::runtime_error("AMR Program history remap cannot requalify a changed or superseded pending lag");
+  // No allocation or throwing work follows validation; creation/source authority is immutable.
+  marker.qualified_topology_epoch = descriptor.published_topology_epoch;
+  marker.qualified_materialization_generation = descriptor.published_materialization_generation;
 }
 
 template <class Output>
@@ -809,8 +912,7 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
         pending.prior_topology_epoch + 1 != pending.published_topology_epoch ||
         pending.prior_materialization_generation + 1 !=
             pending.published_materialization_generation ||
-        pending.published_topology_epoch != state.topology_epoch ||
-        pending.published_materialization_generation != state.materialization_generation ||
+        !pending_qualification_valid(pending, state.topology_epoch, state.materialization_generation) ||
         pending.accepted_macro_step < 0 || pending.temporal_denominator != 1 ||
         (pending.temporal_numerator != 1 && pending.temporal_numerator != 2) ||
         !std::isfinite(pending.source_dt) || !std::isfinite(pending.target_dt) ||
@@ -818,6 +920,12 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
         pending.target_dt != pending.source_dt / static_cast<double>(pending.temporal_numerator))
       throw std::invalid_argument(
           "exact AMR Program checkpoint has an invalid pending history remap");
+    if (pending.source_sample.kind != HistorySampleKind::Publication ||
+        pending.source_sample != lag_slot->sample ||
+        pending.retained_ring_contract != pending_ring_contract(
+            state.histories, state.history_slots, key_name, pending.child_level,
+            state.level_clocks[static_cast<std::size_t>(pending.child_level)]))
+      throw std::invalid_argument("exact AMR Program checkpoint pending history remap changed its source");
     previous_pending = pending.key;
   }
   if (!state.history_flux_payload.empty() &&
@@ -848,6 +956,10 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
           throw std::invalid_argument("exact AMR Program checkpoint stores a " +
                                       std::string(family) + " face under another axis");
         amr_reflux::validate_face_flux_fragment(fragment.key, fragment.measure);
+        if (state.accepted_attempt &&
+            (fragment.key.attempt == 0 || fragment.key.attempt > *state.accepted_attempt))
+          throw std::invalid_argument(
+              "exact AMR Program face fragment has invalid committed attempt authority");
         if (static_cast<std::size_t>(fragment.key.levels.fine) >=
             state.face_evidence_provenance->level_count)
           throw std::invalid_argument(
@@ -895,11 +1007,15 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
 
 template <int Dim, class Output>
 void write_state(Output& out, const AmrProgramAcceptedState<Dim>& state) {
+  if (!state.accepted_attempt)
+    throw std::invalid_argument(
+        "legacy AMR Program checkpoint lacks committed attempt authority for continuation");
   out.raw(kMagic);
   out.i32(Dim);
   out.string(state.spatial_contract);
   out.u64(state.topology_epoch);
   out.u64(state.materialization_generation);
+  out.u64(*state.accepted_attempt);
   out.size(state.level_clocks.size());
   for (const auto& clock : state.level_clocks)
     write_clock(out, clock);
@@ -947,6 +1063,13 @@ void write_state(Output& out, const AmrProgramAcceptedState<Dim>& state) {
     out.real(pending.source_dt);
     out.real(pending.target_dt);
     out.u64(pending.consumed ? 1U : 0U);
+    out.u64(pending.qualified_topology_epoch);
+    out.u64(pending.qualified_materialization_generation);
+    out.u64(static_cast<std::uint64_t>(pending.source_sample.kind));
+    out.u64(pending.source_sample.start_bits);
+    out.u64(pending.source_sample.interval_bits);
+    out.u64(pending.source_sample.ordinal);
+    out.string(pending.retained_ring_contract);
   }
   out.bytes(state.history_flux_payload);
   write_temporal_partition(out, state.temporal_partition);
@@ -987,7 +1110,8 @@ AmrProgramAcceptedState<Dim> accepted_amr_program_state(
     std::string spatial_contract, std::uint64_t topology_epoch,
     std::uint64_t materialization_generation, std::vector<::pops::amr::ClockStamp> level_clocks,
     CellTemporalPartitionAcceptedState temporal_partition,
-    const amr_reflux::TransactionalFaceFluxLedger<Dim, AmrProgramFacePayload>& ledger) {
+    const amr_reflux::TransactionalFaceFluxLedger<Dim, AmrProgramFacePayload>& ledger,
+    std::uint64_t accepted_attempt) {
   if (ledger.in_transaction())
     throw std::logic_error(
         "exact AMR Program checkpoint cannot observe an active face-flux transaction");
@@ -995,6 +1119,7 @@ AmrProgramAcceptedState<Dim> accepted_amr_program_state(
   state.spatial_contract = std::move(spatial_contract);
   state.topology_epoch = topology_epoch;
   state.materialization_generation = materialization_generation;
+  state.accepted_attempt = accepted_attempt;
   state.level_clocks = std::move(level_clocks);
   state.temporal_partition = std::move(temporal_partition);
   for (int axis = 0; axis < Dim; ++axis) {
@@ -1029,7 +1154,7 @@ std::size_t serialized_amr_program_accepted_state_size(const AmrProgramAcceptedS
   return out.count();
 }
 
-/// Artifact-derived maximum POPSAND6 shape.  It carries character and term counts only: computing a
+/// Artifact-derived maximum POPSAND9 shape. It carries character and term counts only: computing a
 /// resource ceiling must never first allocate the potentially large scientific vectors it is meant
 /// to bound.
 template <int Dim>
@@ -1074,6 +1199,7 @@ std::size_t serialized_amr_program_accepted_state_capacity(
   out.string_size(capacity.spatial_contract_characters);
   out.u64(0);
   out.u64(0);
+  out.u64(0);  // Committed attempt authority; the live allocation high-water mark is not accepted.
   out.size(capacity.level_count);
   out.repeated_bytes(capacity.level_count, checkpoint_detail::kEncodedClockBytes);
   out.size(capacity.logical_clock_identities.size());
@@ -1116,12 +1242,19 @@ std::size_t serialized_amr_program_accepted_state_capacity(
   if (capacity.pending_history_remap_count != 0) {
     if (capacity.pending_history_remap_key_characters == 0)
       throw std::invalid_argument("AMR Program checkpoint capacity has empty pending-remap keys");
-    constexpr std::size_t fixed = 2 * checkpoint_detail::kEncodedScalarBytes +
-                                  4 * sizeof(std::uint64_t) + 3 * sizeof(std::int64_t) +
-                                  2 * sizeof(double) + sizeof(std::uint64_t);
+    std::size_t largest_ring_contract = 0;
+    for (const auto& history : capacity.histories) {
+      checkpoint_detail::CountingWriter ring;
+      checkpoint_detail::write_pending_ring_contract(
+          ring, history, std::array<AmrProgramHistorySlotProvenance, 2>{}, ::pops::amr::ClockStamp{});
+      largest_ring_contract = std::max(largest_ring_contract, ring.count());
+    }
+    if (largest_ring_contract == 0)
+      throw std::invalid_argument("pending remap capacity lacks its source history contract");
     out.repeated_bytes(capacity.pending_history_remap_count,
-                       checkpoint_detail::kEncodedScalarBytes +
-                           capacity.pending_history_remap_key_characters + fixed);
+                       checkpoint_detail::kMinPendingHistoryRemapBytes);
+    out.repeated_bytes(capacity.pending_history_remap_count, capacity.pending_history_remap_key_characters);
+    out.repeated_bytes(capacity.pending_history_remap_count, largest_ring_contract);
   }
   out.bytes_size(capacity.history_flux_payload_bytes);
   out.u64(0);
@@ -1161,12 +1294,14 @@ std::size_t serialized_amr_program_accepted_state_capacity(
   out.repeated_bytes(capacity.interface_fragment_count,
                      checkpoint_detail::kMinInterfaceFragmentBytes);
   std::size_t interface_characters = capacity.interface_identity_characters;
-  for (const std::size_t additional :
-       {capacity.interface_program_identity_characters, capacity.interface_stage_characters}) {
-    if (additional > std::numeric_limits<std::size_t>::max() - interface_characters)
-      throw std::length_error("AMR Program interface identity capacity exceeds size_t");
-    interface_characters += additional;
-  }
+  if (capacity.interface_program_identity_characters >
+      std::numeric_limits<std::size_t>::max() - interface_characters)
+    throw std::length_error("AMR Program interface identity capacity exceeds size_t");
+  interface_characters += capacity.interface_program_identity_characters;
+  if (capacity.interface_stage_characters >
+      std::numeric_limits<std::size_t>::max() - interface_characters)
+    throw std::length_error("AMR Program interface identity capacity exceeds size_t");
+  interface_characters += capacity.interface_stage_characters;
   out.repeated_bytes(capacity.interface_fragment_count, interface_characters);
   out.repeated_bytes(capacity.interface_payload_terms, sizeof(double));
 
@@ -1194,9 +1329,11 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
   const bool legacy4 = has_magic(checkpoint_detail::kLegacyMagic4);
   const bool legacy5 = has_magic(checkpoint_detail::kLegacyMagic5);
   const bool legacy6 = has_magic(checkpoint_detail::kLegacyMagic6);
+  const bool legacy7 = has_magic(checkpoint_detail::kLegacyMagic7);
   in.expect_raw(legacy4   ? checkpoint_detail::kLegacyMagic4
                 : legacy5 ? checkpoint_detail::kLegacyMagic5
                 : legacy6 ? checkpoint_detail::kLegacyMagic6
+                : legacy7 ? checkpoint_detail::kLegacyMagic7
                           : checkpoint_detail::kMagic);
   if (in.i32() != Dim)
     throw std::runtime_error(
@@ -1205,6 +1342,9 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
   state.spatial_contract = in.string();
   state.topology_epoch = in.u64();
   state.materialization_generation = in.u64();
+  state.accepted_attempt = legacy4 || legacy5 || legacy6 || legacy7
+                               ? std::nullopt
+                               : std::optional<std::uint64_t>{in.u64()};
   state.level_clocks.resize(in.size(checkpoint_detail::kEncodedClockBytes));
   for (auto& clock : state.level_clocks)
     clock = checkpoint_detail::read_clock(in);
@@ -1251,7 +1391,12 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
       slot.sample.ordinal = in.u64();
     }
   }
-  state.pending_history_remaps.resize(in.size(checkpoint_detail::kMinPendingHistoryRemapBytes));
+  const bool legacy_pending = legacy4 || legacy5 || legacy6 || legacy7;
+  const auto pending_count = in.size(legacy_pending ? checkpoint_detail::kLegacyMinPendingHistoryRemapBytes
+                                                  : checkpoint_detail::kMinPendingHistoryRemapBytes);
+  if (legacy_pending && pending_count != 0)
+    throw std::runtime_error("legacy pending history remap has no captured source/qualification authority");
+  state.pending_history_remaps.resize(pending_count);
   for (auto& pending : state.pending_history_remaps) {
     pending.key = in.string();
     pending.parent_level = in.i32();
@@ -1269,6 +1414,17 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
     if (consumed > 1U)
       throw std::runtime_error("invalid exact AMR Program checkpoint: invalid pending history tag");
     pending.consumed = consumed != 0;
+    pending.qualified_topology_epoch = in.u64();
+    pending.qualified_materialization_generation = in.u64();
+    const auto source_kind = in.u64();
+    if (source_kind != static_cast<std::uint64_t>(HistorySampleKind::Publication))
+      throw std::runtime_error("pending history remap source lacks exact publication identity");
+    pending.source_sample.kind = static_cast<HistorySampleKind>(source_kind);
+    pending.source_sample.start_bits = in.u64();
+    pending.source_sample.interval_bits = in.u64();
+    pending.source_sample.ordinal = in.u64();
+    pending.source_sample.validate();
+    pending.retained_ring_contract = in.string();
   }
   state.history_flux_payload = in.bytes();
   state.temporal_partition = checkpoint_detail::read_temporal_partition(in);
@@ -1332,6 +1488,9 @@ template <int Dim>
 amr_reflux::TransactionalFaceFluxLedger<Dim, AmrProgramFacePayload>
 restore_amr_program_face_flux_ledger(const AmrProgramAcceptedState<Dim>& state,
                                      amr_reflux::FaceFluxLedgerBudget budget) {
+  if (!state.accepted_attempt)
+    throw std::invalid_argument(
+        "legacy AMR Program checkpoint lacks committed attempt authority for continuation");
   checkpoint_detail::validate_state(state);
   using Fragment = amr_reflux::FaceFluxFragment<Dim, AmrProgramFacePayload>;
   std::map<std::uint64_t, std::vector<Fragment>> attempts;
@@ -1359,6 +1518,9 @@ template <int Dim>
 ::pops::amr::TransactionalInterfaceFluxLedger<AmrProgramFacePayload>
 restore_amr_program_interface_flux_ledger(const AmrProgramAcceptedState<Dim>& state,
                                           ::pops::amr::InterfaceFluxLedgerBudget budget) {
+  if (!state.accepted_attempt)
+    throw std::invalid_argument(
+        "legacy AMR Program checkpoint lacks committed attempt authority for continuation");
   checkpoint_detail::validate_state(state);
   ::pops::amr::TransactionalInterfaceFluxLedger<AmrProgramFacePayload> ledger(state.topology_epoch,
                                                                               std::move(budget));
@@ -1381,6 +1543,9 @@ template <int Dim, class MemorySpace>
 void require_live_amr_program_checkpoint(
     const AmrProgramAcceptedState<Dim>& state,
     const ::pops::runtime::amr::AmrRuntime<Dim, MemorySpace>& runtime) {
+  if (!state.accepted_attempt)
+    throw std::invalid_argument(
+        "legacy AMR Program checkpoint lacks committed attempt authority for continuation");
   checkpoint_detail::validate_state(state);
   if (state.spatial_contract != runtime.spatial_contract() ||
       state.topology_epoch != runtime.topology_epoch() ||
@@ -1394,7 +1559,18 @@ void require_live_amr_program_checkpoint(
 template <int Dim>
 void require_collective_amr_program_checkpoint_consensus(
     const AmrProgramAcceptedState<Dim>& state, const ExecutionLane& lane = ExecutionLane::world()) {
-  const std::vector<std::uint8_t> bytes = serialize_amr_program_accepted_state(state);
+  std::vector<std::uint8_t> bytes;
+  std::exception_ptr error;
+  try {
+    bytes = serialize_amr_program_accepted_state(state);
+  } catch (...) {
+    error = std::current_exception();
+  }
+  if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
+    throw std::runtime_error("AMR Program checkpoint authority preparation failed collectively");
+  }
   const std::string_view payload(reinterpret_cast<const char*>(bytes.data()), bytes.size());
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{std::string_view("pops.amr-program-checkpoint"), payload}}, lane))

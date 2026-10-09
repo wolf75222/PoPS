@@ -100,9 +100,13 @@ inline std::string native_shared_space_identity() {
 
 inline std::string native_field_memory_space_identity() {
 #ifdef POPS_HAS_KOKKOS
-  if constexpr (std::is_same_v<Kokkos::SharedSpace, Kokkos::HostSpace>)
+  using FieldMemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space;
+  if constexpr (std::is_same_v<FieldMemorySpace, Kokkos::HostSpace>)
     return "host";
-  return "managed";
+  if constexpr (Kokkos::SpaceAccessibility<Kokkos::DefaultHostExecutionSpace,
+                                         FieldMemorySpace>::accessible)
+    return "managed";
+  return "device";
 #else
   return "host";
 #endif

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from pops.blockage import Blockage, BlockageClass, BlockageNotImplementedError
 from pops.identity.scalar import scalar_cpp
 
 from .dsl import build_solver_ir, _as_descriptor, _SOLVER_MAX_ITERS
@@ -154,10 +155,15 @@ class _SolverCppLowering:
         elif op == "while":
             self._emit_while(v, lines, result_id)
         else:
-            raise NotImplementedError(
+            raise BlockageNotImplementedError(
                 "generate_solver_cpp: solver-IR op %r (value %r) is not lowerable yet; the custom "
                 "solver DSL supports zeros_like / norm2 / dot / apply / residual / combine / "
-                "scalar_int / logical_and / while_ (Spec 3 section 20)" % (op, v.name))
+                "scalar_int / logical_and / while_ (Spec 3 section 20)" % (op, v.name),
+                blockage=Blockage(
+                    BlockageClass.IMPL, "lower", "solver_ir:%s" % v.name,
+                    "lowering_unavailable", op,
+                ),
+            )
 
     # --- per-op lowering ---------------------------------------------------
     def _emit_reduce(self, v: Any, lines: Any) -> None:
@@ -175,9 +181,14 @@ class _SolverCppLowering:
             lines.append("const pops::Real %s = pops::dot(%s, %s);"
                          % (tok, self._var[a.id], self._var[b.id]))
         else:
-            raise NotImplementedError(
+            raise BlockageNotImplementedError(
                 "generate_solver_cpp: reduction kind %r is not lowerable in a custom solver "
-                "(use norm2 / dot)" % (kind,))
+                "(use norm2 / dot)" % (kind,),
+                blockage=Blockage(
+                    BlockageClass.IMPL, "lower", "solver_ir:%s" % v.name,
+                    "lowering_unavailable", "reduction:%s" % kind,
+                ),
+            )
 
     def _emit_apply(self, v: Any, lines: Any) -> None:
         """``A(x)`` -> the matrix-free matvec: call the template-parameter operator into an

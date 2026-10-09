@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -1801,6 +1802,1360 @@ TEST(test_krylov_workspace_reentrancy, noncongruent_split_communicator_is_reject
               std::string::npos);
   }
 #endif
+}
+
+TEST(test_krylov_workspace_reentrancy,
+     gmres_confirms_true_residual_before_classifying_the_iteration_cap) {
+  comm_init();
+  // A=I and b=(1,1), but left P=diag(1,1e-14) makes the first Arnoldi residual tiny
+  // while the scientific residual remains approximately one. An estimate may request a true
+  // check; it cannot make the iteration cap turn that unconverged value into Solved.
+  const TestLayout boxes(std::vector<TestBox>{
+      TestBox{Index<kDim>{0, 0}, Index<kDim>{0, 0}},
+      TestBox{Index<kDim>{1, 0}, Index<kDim>{1, 0}}});
+  const TestDistribution mapping = round_robin_distribution(boxes);
+  TestField iterate = make_field(boxes, mapping, 1, 0);
+  TestField rhs = make_field(boxes, mapping, 1, 0);
+  iterate.set_val(Real(0));
+  rhs.set_val(Real(1));
+  const OperatorEvaluationSnapshot snapshot = test_snapshot(iterate);
+  const TestKrylovMethod method = gmres_krylov_method<kDim>(2);
+  const TestKrylovFootprint footprint{1, extent(0), true};
+  TestLinearPreconditioner preconditioner(
+      iterate, TestLinearPreconditionerProvider::trusted_extension(
+          {"pops.test.krylov.cap-anisotropic-preconditioner", 1}, {},
+          [](const ExecutionLane&) {
+            return TestLinearPreconditionerCallbacks{
+                [] {},
+                [](TestField& out, const TestField& in) {
+                  for (std::size_t local = 0; local < out.local_size(); ++local) {
+                    const auto output = out.fab(local).view();
+                    const auto values = in.fab(local).view();
+                    for_each_cell(out.box(local), [=] POPS_HD(const Index<kDim>& index) {
+                      output(index, 0) =
+                          (index[0] == 0 ? Real(1) : Real(1e-14)) * values(index, 0);
+                    });
+                  }
+                  Kokkos::fence();
+                },
+                [] { return std::size_t{0}; }};
+          }));
+  TestAffineProblem problem(
+      iterate,
+      TestAffineOperatorProvider::trusted_reentrant(
+          [](TestField& out, const TestField& in) { detail::PreparedFieldAlgebra::copy(out, in); },
+          [] { return std::size_t{0}; }),
+      std::move(preconditioner), LinearOperatorProperties::general(), footprint,
+      TestNullspacePolicy::nonsingular(), [&snapshot] { return snapshot; });
+  TestKrylovWorkspace workspace(iterate, method, footprint);
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+
+  for (const auto norm : {KrylovPhysicalNorm::metric_l2, KrylovPhysicalNorm::component_linf}) {
+    SCOPED_TRACE(static_cast<int>(norm));
+    TestKrylovControls controls{method, Real(0), Real(1e-12), 1};
+    controls.physical_norm = norm;
+    iterate.set_val(Real(0));
+    const auto capped =
+        detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+    EXPECT_EQ(capped.status, SolveStatus::kIterationLimit) << capped.reason;
+    EXPECT_EQ(capped.action, SolveAction::kFailRun);
+    EXPECT_EQ(capped.iters, 1);
+    EXPECT_GT(capped.residual_norm, Real(0.9));
+
+    // A second recurrence starts from the measured physical residual and reaches the solution
+    // exactly at its second iteration. The cap must not downgrade that verified convergence.
+    controls.max_iterations = 2;
+    iterate.set_val(Real(0));
+    const auto converged =
+        detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+    EXPECT_TRUE(converged.solved()) << converged.reason;
+    EXPECT_EQ(converged.iters, 2);
+    EXPECT_LE(converged.residual_norm, Real(1e-12));
+    EXPECT_LT(max_abs_diff(iterate, rhs), Real(1e-12));
+  }
+}
+
+TEST(test_krylov_workspace_reentrancy, gmres_infinity_stopping_keeps_euclidean_arnoldi) {
+  comm_init();
+  // This three-eigenvalue system needs a genuine Arnoldi recurrence. In infinity mode the
+  // initial recurrence scale is 10, whereas its Euclidean beta is sqrt(200)/10, not one.
+  // The same scientific vector is replicated, so neither norm may multiply by the MPI size.
+  const TestLayout boxes(std::vector<TestBox>{
+      TestBox{Index<kDim>{0, 0}, Index<kDim>{0, 0}}});
+  const TestDistribution mapping = TestDistribution::replicated(boxes, world_rank_space());
+  const auto vectors = TestVectorDistribution::replicated();
+  TestField iterate = make_field(boxes, mapping, 3, 0);
+  TestField rhs = make_field(boxes, mapping, 3, 0);
+  iterate.set_val(Real(0));
+  for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+    const auto values = rhs.fab(local).view();
+    for_each_cell(rhs.box(local), [=] POPS_HD(const Index<kDim>& index) {
+      values(index, 0) = Real(6);
+      values(index, 1) = Real(10);
+      values(index, 2) = Real(8);
+    });
+  }
+  Kokkos::fence();
+  const OperatorEvaluationSnapshot snapshot = test_snapshot(iterate);
+  const TestKrylovMethod method = gmres_krylov_method<kDim>(3);
+  const TestKrylovFootprint footprint{3, extent(0), false};
+  int applications = 0;
+  TestAffineProblem problem(
+      iterate,
+      TestAffineOperatorProvider::trusted_reentrant(
+          [&applications](TestField& out, const TestField& in) {
+            ++applications;
+            for (std::size_t local = 0; local < out.local_size(); ++local) {
+              const auto output = out.fab(local).view();
+              const auto input = in.fab(local).view();
+              for_each_cell(out.box(local), [=] POPS_HD(const Index<kDim>& index) {
+                output(index, 0) = Real(4) * input(index, 0) + input(index, 1);
+                output(index, 1) = input(index, 0) + Real(3) * input(index, 1) + input(index, 2);
+                output(index, 2) = input(index, 1) + Real(2) * input(index, 2);
+              });
+            }
+            Kokkos::fence();
+          },
+          [] { return std::size_t{0}; }),
+      TestLinearPreconditioner::identity(), LinearOperatorProperties::symmetric_positive_definite(),
+      footprint, TestNullspacePolicy::nonsingular(), [&snapshot] { return snapshot; }, {}, vectors);
+  TestKrylovWorkspace workspace(iterate, method, footprint, vectors);
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+  const auto candidate_bits = [](const TestField& field) {
+    std::vector<RealBits> result;
+    for (std::size_t local = 0; local < field.local_size(); ++local) {
+      auto host = field.fab(local).create_host_mirror();
+      field.fab(local).copy_to_host(host);
+      for (std::size_t index = 0; index < host.size(); ++index)
+        result.push_back(std::bit_cast<RealBits>(host(index)));
+    }
+    return result;
+  };
+  for (const auto norm : {KrylovPhysicalNorm::metric_l2, KrylovPhysicalNorm::component_linf}) {
+    SCOPED_TRACE(static_cast<int>(norm));
+    iterate.set_val(Real(0));
+    TestKrylovControls controls{method, Real(0), Real(1e-11), 3};
+    controls.physical_norm = norm;
+    applications = 0;
+    const auto report =
+        detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+    const int original_applications = applications;
+    const auto original_candidate = candidate_bits(iterate);
+    EXPECT_TRUE(report.solved()) << report.reason;
+    EXPECT_EQ(report.iters, 3);
+    EXPECT_DOUBLE_EQ(report.reference_residual_norm,
+                     norm == KrylovPhysicalNorm::component_linf ? Real(10) : std::sqrt(Real(200)));
+    Real error = Real(0);
+    Real residual = Real(0);
+    for (std::size_t local = 0; local < iterate.local_size(); ++local) {
+      const auto values = iterate.fab(local).view();
+      error = std::max(error, for_each_cell_reduce_max(
+          iterate.box(local), [=] POPS_HD(const Index<kDim>& index) {
+            Real result = Real(0);
+            for (int component = 0; component < 3; ++component) {
+              const Real difference = values(index, component) - Real(component + 1);
+              result = Kokkos::fmax(result, Kokkos::fabs(difference));
+            }
+            return result;
+          }));
+      residual = std::max(residual, for_each_cell_reduce_max(
+          iterate.box(local), [=] POPS_HD(const Index<kDim>& index) {
+            const Real r0 = Real(6) - Real(4) * values(index, 0) - values(index, 1);
+            const Real r1 = Real(10) - values(index, 0) - Real(3) * values(index, 1) - values(index, 2);
+            const Real r2 = Real(8) - values(index, 1) - Real(2) * values(index, 2);
+            return Kokkos::fmax(Kokkos::fabs(r0), Kokkos::fmax(Kokkos::fabs(r1), Kokkos::fabs(r2)));
+          }));
+    }
+    EXPECT_LT(all_reduce_max(static_cast<double>(error)), 1e-10);
+    EXPECT_LE(all_reduce_max(static_cast<double>(residual)), 1e-11);
+    EXPECT_LE(report.residual_norm, Real(1e-11));
+
+    GmresDiagnosticTrace trace;
+    controls.diagnostic_trace = &trace;
+    iterate.set_val(Real(0));
+    applications = 0;
+    const auto observed =
+        detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+    EXPECT_EQ(candidate_bits(iterate), original_candidate);
+    EXPECT_EQ(applications, original_applications);
+    EXPECT_EQ(observed.status, report.status);
+    EXPECT_EQ(observed.action, report.action);
+    EXPECT_EQ(observed.iters, report.iters);
+    EXPECT_EQ(observed.reason, report.reason);
+    EXPECT_DOUBLE_EQ(observed.residual_norm, report.residual_norm);
+    EXPECT_DOUBLE_EQ(observed.reference_residual_norm, report.reference_residual_norm);
+    EXPECT_DOUBLE_EQ(observed.rel_residual, report.rel_residual);
+    ASSERT_EQ(trace.size, 1u);
+    EXPECT_FALSE(trace.overflow);
+    EXPECT_EQ(trace.cycles[0].begin_iteration, 0);
+    EXPECT_EQ(trace.cycles[0].end_iteration, 3);
+    EXPECT_EQ(trace.cycles[0].dimension, 3);
+    EXPECT_DOUBLE_EQ(trace.cycles[0].final_residual, report.residual_norm);
+  }
+  // The first exact GMRES candidate has residual (-265,8,333)/157. Its infinity norm is
+  // 2.121... and its Euclidean norm is 2.711.... At tau=2.25 only the explicitly requested
+  // infinity solve is converged. This exercises the recurrence and independent final verifier,
+  // not merely the early initial-residual return.
+  for (const auto norm : {KrylovPhysicalNorm::metric_l2, KrylovPhysicalNorm::component_linf}) {
+    SCOPED_TRACE(static_cast<int>(norm));
+    iterate.set_val(Real(0));
+    TestKrylovControls controls{method, Real(0), Real(2.25), 1};
+    controls.physical_norm = norm;
+    const auto report =
+        detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+    EXPECT_EQ(report.iters, 1);
+    if (norm == KrylovPhysicalNorm::component_linf) {
+      EXPECT_TRUE(report.solved()) << report.reason;
+      EXPECT_NEAR(report.residual_norm, Real(333) / Real(157), Real(1e-13));
+    } else {
+      EXPECT_EQ(report.status, SolveStatus::kIterationLimit) << report.reason;
+      EXPECT_NEAR(report.residual_norm, std::sqrt(Real(181178)) / Real(157), Real(1e-13));
+    }
+  }
+  // The same exact first-column residual has Linf 333/157 > 2, whereas its
+  // Euclidean estimate meets the mapped threshold. The observer must preserve that refused
+  // estimate and the following true-residual restart without altering numerical authority.
+  GmresDiagnosticTrace trace;
+  TestKrylovControls controls{method, Real(0), Real(2), 512};
+  controls.physical_norm = KrylovPhysicalNorm::component_linf;
+  controls.diagnostic_trace = &trace;
+  iterate.set_val(Real(0));
+  const auto short_cycle =
+      detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+  EXPECT_TRUE(short_cycle.solved()) << short_cycle.reason;
+  ASSERT_GT(trace.size, 1u);
+  EXPECT_EQ(trace.cycles[0].dimension, 1);
+  EXPECT_NE(trace.cycles[0].end_flags & 1u, 0u);
+  EXPECT_GT(trace.cycles[0].final_residual, controls.abs_tol);
+
+  controls.max_iterations = 513;
+  applications = 0;
+  EXPECT_THROW((void)detail::solve_prepared_affine_in_place(
+                   problem, workspace, iterate, rhs, controls), std::invalid_argument);
+  EXPECT_EQ(applications, 0);
+  controls.max_iterations = 3;
+  controls.abs_tol = Real(1e-11);
+  if (n_ranks() > 1) {
+    controls.diagnostic_trace = my_rank() == 0 ? &trace : nullptr;
+    EXPECT_THROW((void)detail::solve_prepared_affine_in_place(
+                     problem, workspace, iterate, rhs, controls), std::logic_error);
+    EXPECT_EQ(applications, 0);
+  }
+  controls.diagnostic_trace = &trace;
+  iterate.set_val(Real(0));
+  EXPECT_TRUE(detail::solve_prepared_affine_in_place(
+                  problem, workspace, iterate, rhs, controls).solved());
+  EXPECT_EQ(trace.size, 1u);  // Reset, not append to the previous invocation.
+}
+
+TEST(test_krylov_workspace_reentrancy, gmres_infinity_relative_reference_is_independent_of_warm_start) {
+  const TestLayout boxes(std::vector<TestBox>{
+      TestBox{Index<kDim>{0, 0}, Index<kDim>{0, 0}},
+      TestBox{Index<kDim>{1, 0}, Index<kDim>{1, 0}},
+      TestBox{Index<kDim>{2, 0}, Index<kDim>{2, 0}},
+      TestBox{Index<kDim>{3, 0}, Index<kDim>{3, 0}}});
+  const TestDistribution mapping = round_robin_distribution(boxes);
+  TestField iterate = make_field(boxes, mapping, 1, 0);
+  TestField rhs = make_field(boxes, mapping, 1, 0);
+  iterate.set_val(Real(0));
+  rhs.set_val(Real(0));
+  const OperatorEvaluationSnapshot snapshot = test_snapshot(iterate);
+  const TestKrylovMethod method = gmres_krylov_method<kDim>(2);
+  const TestKrylovFootprint footprint{1, extent(0), false};
+  TestAffineProblem problem(
+      iterate,
+      TestAffineOperatorProvider::trusted_reentrant(
+          [](TestField& out, const TestField& in) { detail::PreparedFieldAlgebra::copy(out, in); },
+          [] { return std::size_t{0}; }),
+      TestLinearPreconditioner::identity(), LinearOperatorProperties::general(), footprint,
+      TestNullspacePolicy::nonsingular(), [&snapshot] { return snapshot; });
+  TestKrylovWorkspace workspace(iterate, method, footprint);
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+  const Real tolerance = std::ldexp(Real(1), -20);
+  for (int mode = 0; mode < 3; ++mode) {
+    SCOPED_TRACE(mode);
+    for (std::size_t local = 0; local < iterate.local_size(); ++local) {
+      const auto values = iterate.fab(local).view();
+      const auto load = rhs.fab(local).view();
+      for_each_cell(iterate.box(local), [=] POPS_HD(const Index<kDim>& index) {
+        load(index, 0) = Real(1) + Real(0.25) * Real(index[0]);
+        values(index, 0) = load(index, 0) - Real(0.75) * tolerance;
+      });
+    }
+    Kokkos::fence();
+    TestKrylovControls controls{method, Real(0), tolerance, 2};
+    controls.physical_norm = mode == 0 ? KrylovPhysicalNorm::metric_l2
+                                       : KrylovPhysicalNorm::component_linf;
+    if (mode == 2) {
+      controls.rel_tol = tolerance / Real(1.75);
+      controls.abs_tol = Real(0);
+    }
+    const auto report =
+        detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+    EXPECT_TRUE(report.solved()) << report.reason;
+    if (mode == 0) {
+      EXPECT_EQ(report.iters, 1);
+      EXPECT_DOUBLE_EQ(report.reference_residual_norm, std::sqrt(Real(7.875)));
+    } else {
+      EXPECT_EQ(report.iters, 0);
+      EXPECT_DOUBLE_EQ(report.reference_residual_norm, Real(1.75));
+      EXPECT_DOUBLE_EQ(report.residual_norm, Real(0.75) * tolerance);
+      EXPECT_DOUBLE_EQ(report.rel_residual, Real(0.75) * tolerance / Real(1.75));
+    }
+  }
+}
+
+TEST(test_krylov_workspace_reentrancy, gmres_infinity_affine_reference_precedes_normalization) {
+  const TestLayout boxes(std::vector<TestBox>{
+      TestBox{Index<kDim>{0, 0}, Index<kDim>{0, 0}},
+      TestBox{Index<kDim>{1, 0}, Index<kDim>{1, 0}}});
+  const TestDistribution mapping = round_robin_distribution(boxes);
+  for (const int exponent : {-900, 900}) {
+    SCOPED_TRACE(exponent);
+    // Four ulps separate b from A(0); the warm-start residual is one ulp. Squaring these
+    // physical values underflows/overflows, and ||b|| would give the wrong relative reference.
+    const Real offset = std::ldexp(Real(1), exponent);
+    const Real load = std::ldexp(Real(1), exponent - 50);
+    TestField iterate = make_field(boxes, mapping, 1, 0);
+    TestField rhs = make_field(boxes, mapping, 1, 0);
+    iterate.set_val(Real(0.75) * load);
+    rhs.set_val(offset + load);
+    const OperatorEvaluationSnapshot snapshot = test_snapshot(iterate);
+    const TestKrylovMethod method = gmres_krylov_method<kDim>(2);
+    const TestKrylovFootprint footprint{1, extent(0), false};
+    TestAffineProblem problem(
+        iterate,
+        TestAffineOperatorProvider::trusted_reentrant(
+            [offset](TestField& out, const TestField& in) {
+              for (std::size_t local = 0; local < out.local_size(); ++local) {
+                const auto output = out.fab(local).view();
+                const auto input = in.fab(local).view();
+                for_each_cell(out.box(local), [=] POPS_HD(const Index<kDim>& index) {
+                  output(index, 0) = input(index, 0) + offset;
+                });
+              }
+              Kokkos::fence();
+            },
+            [] { return std::size_t{0}; }),
+        TestLinearPreconditioner::identity(), LinearOperatorProperties::general(), footprint,
+        TestNullspacePolicy::nonsingular(), [&snapshot] { return snapshot; });
+    TestKrylovWorkspace workspace(iterate, method, footprint);
+    problem.prepare(snapshot);
+    workspace.bind(problem);
+    TestKrylovControls controls{method, Real(0.3), Real(0), 2};
+    controls.physical_norm = KrylovPhysicalNorm::component_linf;
+    const auto report =
+        detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+    EXPECT_TRUE(report.solved()) << report.reason;
+    EXPECT_EQ(report.iters, 0);
+    EXPECT_DOUBLE_EQ(report.reference_residual_norm, load);
+    EXPECT_DOUBLE_EQ(report.residual_norm, Real(0.25) * load);
+    EXPECT_DOUBLE_EQ(report.rel_residual, Real(0.25));
+  }
+}
+
+TEST(test_krylov_workspace_reentrancy, physical_stopping_norm_is_authenticated_before_callbacks) {
+  const TestLayout boxes(std::vector<TestBox>{
+      TestBox{Index<kDim>{0, 0}, Index<kDim>{0, 0}},
+      TestBox{Index<kDim>{1, 0}, Index<kDim>{1, 0}}});
+  const TestDistribution mapping = round_robin_distribution(boxes);
+  TestField iterate = make_field(boxes, mapping, 1, 0);
+  TestField rhs = make_field(boxes, mapping, 1, 0);
+  iterate.set_val(Real(0));
+  rhs.set_val(Real(1));
+  const OperatorEvaluationSnapshot snapshot = test_snapshot(iterate);
+  const TestKrylovFootprint footprint{1, extent(0), false};
+  std::atomic<int> applications{0};
+  TestAffineProblem problem(
+      iterate,
+      TestAffineOperatorProvider::trusted_reentrant(
+          [&applications](TestField& out, const TestField& in) {
+            ++applications;
+            detail::PreparedFieldAlgebra::copy(out, in);
+          },
+          [] { return std::size_t{0}; }),
+      TestLinearPreconditioner::identity(), LinearOperatorProperties::symmetric_positive_definite(),
+      footprint, TestNullspacePolicy::nonsingular(), [&snapshot] { return snapshot; });
+  problem.prepare(snapshot);
+  const TestKrylovMethod gmres = gmres_krylov_method<kDim>(2);
+  TestKrylovWorkspace workspace(iterate, gmres, footprint);
+  workspace.bind(problem);
+  const int prepared_applications = applications.load();
+  TestKrylovControls unknown{gmres, Real(1e-12), Real(0), 2};
+  unknown.physical_norm = static_cast<KrylovPhysicalNorm>(19);
+  EXPECT_THROW((void)detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, unknown),
+               std::invalid_argument);
+  EXPECT_EQ(applications.load(), prepared_applications);
+  if (n_ranks() > 1) {
+    TestKrylovControls asymmetric{gmres, Real(1e-12), Real(0), 2};
+    asymmetric.physical_norm = my_rank() == 0 ? KrylovPhysicalNorm::component_linf
+                                             : KrylovPhysicalNorm::metric_l2;
+    EXPECT_THROW((void)detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs,
+                                                            asymmetric), std::logic_error);
+    EXPECT_THROW(workspace.require_bound(problem, asymmetric), std::logic_error);
+    EXPECT_EQ(applications.load(), prepared_applications);
+    // A rank-local unknown value must also reach the collective rejection before a callback.
+    if (my_rank() != 0)
+      unknown.physical_norm = KrylovPhysicalNorm::component_linf;
+    EXPECT_THROW((void)detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs,
+                                                            unknown), std::logic_error);
+    EXPECT_EQ(applications.load(), prepared_applications);
+  }
+  for (const auto method : {cg_krylov_method<kDim>(), bicgstab_krylov_method<kDim>(),
+                            richardson_krylov_method<kDim>(Real(1))}) {
+    SCOPED_TRACE(std::string(method.identity()));
+    TestKrylovWorkspace other_workspace(iterate, method, footprint);
+    other_workspace.bind(problem);
+    const int before = applications.load();
+    TestKrylovControls unsupported{method, Real(1e-12), Real(0), 2};
+    unsupported.physical_norm = KrylovPhysicalNorm::component_linf;
+    EXPECT_THROW((void)detail::solve_prepared_affine_in_place(problem, other_workspace, iterate, rhs,
+                                                            unsupported), std::invalid_argument);
+    EXPECT_EQ(applications.load(), before);
+  }
+  TestKrylovProblemFacts facts{problem.properties(), footprint, problem.vector_distribution(),
+                              problem.metric().robust_payload_width(), true, false};
+  EXPECT_TRUE(gmres.validate_problem(facts).accepted());
+  facts.physical_norm = KrylovPhysicalNorm::component_linf;
+  EXPECT_FALSE(gmres.validate_problem(facts).accepted());
+}
+
+TEST(test_krylov_workspace_reentrancy, gmres_infinity_refuses_nonfinite_physical_input) {
+  // The second owner holds the only NaN in MPI2. The infinity reduction must not hide it.
+  const TestLayout boxes(std::vector<TestBox>{
+      TestBox{Index<kDim>{0, 0}, Index<kDim>{0, 0}},
+      TestBox{Index<kDim>{1, 0}, Index<kDim>{1, 0}}});
+  const TestDistribution mapping = round_robin_distribution(boxes);
+  TestField iterate = make_field(boxes, mapping, 1, 0);
+  TestField rhs = make_field(boxes, mapping, 1, 0);
+  iterate.set_val(Real(0));
+  rhs.set_val(Real(1));
+  const OperatorEvaluationSnapshot snapshot = test_snapshot(iterate);
+  const TestKrylovMethod method = gmres_krylov_method<kDim>(2);
+  const TestKrylovFootprint footprint{1, extent(0), false};
+  TestAffineProblem problem(
+      iterate,
+      TestAffineOperatorProvider::trusted_reentrant(
+          [](TestField& out, const TestField& in) { detail::PreparedFieldAlgebra::copy(out, in); },
+          [] { return std::size_t{0}; }),
+      TestLinearPreconditioner::identity(), LinearOperatorProperties::general(), footprint,
+      TestNullspacePolicy::nonsingular(), [&snapshot] { return snapshot; });
+  TestKrylovWorkspace workspace(iterate, method, footprint);
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+  const Real invalid = std::numeric_limits<Real>::quiet_NaN();
+  for (std::size_t local = 0; local < iterate.local_size(); ++local) {
+    const auto values = iterate.fab(local).view();
+    for_each_cell(iterate.box(local), [=] POPS_HD(const Index<kDim>& index) {
+      values(index, 0) = index[0] == 1 ? invalid : Real(0);
+    });
+  }
+  Kokkos::fence();
+  TestKrylovControls controls{method, Real(1e-12), Real(0), 2};
+  controls.physical_norm = KrylovPhysicalNorm::component_linf;
+  const auto report =
+      detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+  EXPECT_EQ(report.status, SolveStatus::kInvalidEvaluation);
+  EXPECT_EQ(report.action, SolveAction::kFailRun);
+  EXPECT_EQ(report.iters, 0);
+}
+
+TEST(test_krylov_workspace_reentrancy, gmres_infinity_refuses_prepared_nullspace_before_callbacks) {
+  // The complete two-cell matrix [[1,-1],[-1,1]] has precisely the constant nullspace.
+  // One rank owns the box; extra MPI ranks still participate in the same refusal boundary.
+  const TestLayout boxes(std::vector<TestBox>{
+      TestBox{Index<kDim>{0, 0}, Index<kDim>{1, 0}}});
+  const TestDistribution mapping = round_robin_distribution(boxes);
+  TestField iterate = make_field(boxes, mapping, 1, 0);
+  TestField rhs = make_field(boxes, mapping, 1, 0);
+  iterate.set_val(Real(0));
+  rhs.set_val(Real(0));
+  const OperatorEvaluationSnapshot snapshot = test_snapshot(iterate);
+  const TestKrylovMethod method = gmres_krylov_method<kDim>(2);
+  const TestKrylovFootprint footprint{1, extent(0), false};
+  std::atomic<int> applications{0};
+  auto nullspace = constant_mean_zero_nullspace<kDim>(
+      "test://krylov/infinity-unsupported-nullspace@1", "two-cell constant nullspace");
+  TestAffineProblem problem(
+      iterate,
+      TestAffineOperatorProvider::trusted_reentrant(
+          [&applications](TestField& out, const TestField& in) {
+            ++applications;
+            for (std::size_t local = 0; local < out.local_size(); ++local) {
+              const auto output = out.fab(local).view();
+              const auto input = in.fab(local).view();
+              for_each_cell(out.box(local), [=] POPS_HD(const Index<kDim>& index) {
+                const Index<kDim> other{1 - index[0], 0};
+                output(index, 0) = input(index, 0) - input(other, 0);
+              });
+            }
+            Kokkos::fence();
+          },
+          [] { return std::size_t{0}; }),
+      TestLinearPreconditioner::identity(),
+      LinearOperatorProperties::symmetric_positive_definite_on_nullspace_complement(), footprint,
+      TestNullspacePolicy::preserving(std::move(nullspace)), [&snapshot] { return snapshot; });
+  TestKrylovWorkspace workspace(iterate, method, footprint);
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+  TestKrylovControls controls{method, Real(1e-12), Real(0), 2};
+  controls.physical_norm = KrylovPhysicalNorm::component_linf;
+  const int before = applications.load();
+  EXPECT_THROW((void)detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls),
+               std::invalid_argument);
+  EXPECT_EQ(applications.load(), before);
+  controls.physical_norm = KrylovPhysicalNorm::metric_l2;
+  const auto report =
+      detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+  EXPECT_TRUE(report.solved()) << report.reason;
+  EXPECT_EQ(report.iters, 0);
+}
+
+TEST(test_krylov_workspace_reentrancy,
+     gmres_single_column_recovers_masked_representable_stagnation) {
+  comm_init();
+  const TestLayout boxes(std::vector<TestBox>{TestBox{Index<kDim>{0, 0}, Index<kDim>{0, 0}}});
+  const TestDistribution mapping = TestDistribution::replicated(boxes, world_rank_space());
+  const auto vectors = TestVectorDistribution::replicated();
+  const Real base = Real(1.5);
+  const Real ulp = std::nextafter(base, std::numeric_limits<Real>::infinity()) - base;
+  const Real tolerance = Real(0.75) * ulp;
+  const Real high_scale = std::ldexp(Real(1), 2 * std::numeric_limits<Real>::max_exponent / 3);
+  const Real low_scale = Real(1) / high_scale;
+  // All entries are binary fractions. For the first matrix, the exact inverse proposes
+  // (+15/32,-15/32) ulp: both ordinary additions stagnate. Only equation 0 exceeds tau.
+  // Moving x_0 by one ulp passes; moving both components would fail the true residual.
+  // The second matrix is a counterexample to assuming that the mask promises descent:
+  // the proposed x_0 step creates a residual of two ulps in equation 1 and must be rejected.
+  for (const bool coupled_refusal : {false, true}) {
+    for (const int restart : {1, 3}) {
+      for (const Real preconditioner_scale : {Real(1), high_scale, low_scale}) {
+        SCOPED_TRACE(coupled_refusal);
+        SCOPED_TRACE(restart);
+        SCOPED_TRACE(preconditioner_scale);
+        TestField iterate = make_field(boxes, mapping, 2, 0);
+        TestField rhs = make_field(boxes, mapping, 2, 0);
+        const Real initial_first = coupled_refusal ? std::nextafter(base, Real(2)) : base;
+        const Real row_factor = coupled_refusal ? Real(1) : Real(0.25);
+        const Real inverse_factor = coupled_refusal ? Real(0.5) : Real(2);
+        const Real first_rhs = (coupled_refusal ? Real(1.875) : Real(0.9375)) * ulp;
+        const Real second_rhs = coupled_refusal ? Real(3) : Real(0.75);
+        const auto reset = [&] {
+          for (std::size_t local = 0; local < iterate.local_size(); ++local) {
+            const auto x = iterate.fab(local).view();
+            const auto right = rhs.fab(local).view();
+            for_each_cell(iterate.box(local), [=] POPS_HD(const Index<kDim>& index) {
+              x(index, 0) = initial_first;
+              x(index, 1) = base;
+              right(index, 0) = first_rhs;
+              right(index, 1) = second_rhs;
+            });
+          }
+          Kokkos::fence();
+        };
+        reset();
+        const OperatorEvaluationSnapshot snapshot = test_snapshot(iterate);
+        const TestKrylovMethod method = gmres_krylov_method<kDim>(restart);
+        const TestKrylovFootprint footprint{2, extent(0), true};
+        auto preconditioner = TestLinearPreconditionerProvider::trusted_extension(
+            {"pops.test.krylov.masked-stagnation-inverse", 1}, {}, [=](const ExecutionLane&) {
+              return TestLinearPreconditionerCallbacks{
+                  [] {},
+                  [=](TestField& out, const TestField& in) {
+                    for (std::size_t local = 0; local < out.local_size(); ++local) {
+                      const auto output = out.fab(local).view();
+                      const auto input = in.fab(local).view();
+                      for_each_cell(out.box(local), [=] POPS_HD(const Index<kDim>& index) {
+                        output(index, 0) =
+                            preconditioner_scale *
+                            (Real(0.5) * input(index, 0) + inverse_factor * input(index, 1));
+                        output(index, 1) =
+                            preconditioner_scale *
+                            (-Real(0.5) * input(index, 0) + inverse_factor * input(index, 1));
+                      });
+                    }
+                    Kokkos::fence();
+                  },
+                  [] { return std::size_t{0}; }};
+            });
+        TestAffineProblem problem(
+            iterate,
+            TestAffineOperatorProvider::trusted_reentrant(
+                [=](TestField& out, const TestField& in) {
+                  for (std::size_t local = 0; local < out.local_size(); ++local) {
+                    const auto output = out.fab(local).view();
+                    const auto input = in.fab(local).view();
+                    for_each_cell(out.box(local), [=] POPS_HD(const Index<kDim>& index) {
+                      output(index, 0) = input(index, 0) - input(index, 1);
+                      output(index, 1) = row_factor * (input(index, 0) + input(index, 1));
+                    });
+                  }
+                  Kokkos::fence();
+                },
+                [] { return std::size_t{0}; }),
+            TestLinearPreconditioner(iterate, std::move(preconditioner), vectors),
+            LinearOperatorProperties::general(), footprint, TestNullspacePolicy::nonsingular(),
+            [&snapshot] { return snapshot; }, {}, vectors);
+        TestKrylovWorkspace workspace(iterate, method, footprint, vectors);
+        problem.prepare(snapshot);
+        workspace.bind(problem);
+        const auto allocated = workspace.allocation_count();
+        for (const auto norm :
+             {KrylovPhysicalNorm::metric_l2, KrylovPhysicalNorm::component_linf}) {
+          for (const int maximum : {1, 2, 1}) {
+            reset();
+            TestKrylovControls controls{method, Real(0), tolerance, maximum};
+            controls.physical_norm = norm;
+            GmresDiagnosticTrace trace;
+            controls.diagnostic_trace = &trace;
+            const auto report =
+                detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+            const bool recover = norm == KrylovPhysicalNorm::component_linf && maximum == 2;
+            // A longer restart may accept a nearby representable iterate after a true-residual
+            // check.  Keep the exact single-column witness; permit only verified early success
+            // when the independent physical residual below confirms it.
+            if (restart == 1)
+              EXPECT_EQ(report.solved(), recover && !coupled_refusal) << report.reason;
+            EXPECT_GE(report.iters, 1);
+            EXPECT_LE(report.iters, maximum);
+            if (!report.solved())
+              EXPECT_EQ(report.iters, maximum);
+            EXPECT_EQ(workspace.allocation_count(), allocated);
+            if (restart == 1)
+              ASSERT_EQ(trace.size, static_cast<std::size_t>(maximum));
+            else
+              ASSERT_LE(trace.size, static_cast<std::size_t>(report.iters));
+            for (std::size_t cycle = 0; cycle < trace.size; ++cycle)
+              EXPECT_EQ(trace.cycles[cycle].dimension, 1);
+            Real residual = 0;
+            for (std::size_t local = 0; local < iterate.local_size(); ++local) {
+              auto host = iterate.fab(local).create_host_mirror();
+              iterate.fab(local).copy_to_host(host);
+              if (restart == 1) {
+                const Real expected_first =
+                    recover ? std::nextafter(initial_first, Real(2)) : initial_first;
+                EXPECT_EQ(host(0), expected_first);
+                EXPECT_EQ(host(1), base);
+              }
+              const Real r0 = first_rhs - (host(0) - host(1));
+              const Real r1 = second_rhs - row_factor * (host(0) + host(1));
+              residual = std::max(residual, std::max(std::abs(r0), std::abs(r1)));
+            }
+            residual = all_reduce_max(residual);
+            if (norm == KrylovPhysicalNorm::component_linf) {
+              EXPECT_EQ(report.residual_norm, residual);
+              EXPECT_EQ(report.solved(), residual <= tolerance) << report.reason;
+            } else if (restart == 1) {
+              EXPECT_GT(residual, tolerance);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(test_krylov_workspace_reentrancy,
+     gmres_damps_a_rejected_single_column_rounding_cycle) {
+  comm_init();
+  const TestLayout boxes(
+      std::vector<TestBox>{TestBox{Index<kDim>{0, 0}, Index<kDim>{0, 0}}});
+  const TestDistribution mapping =
+      TestDistribution::replicated(boxes, world_rank_space());
+  const auto vectors = TestVectorDistribution::replicated();
+  const Real base = Real(1.5);
+  const Real ulp = std::nextafter(base, Real(2)) - base;
+  const Real second_base = Real(0.375);
+  const Real second_ulp = std::nextafter(second_base, Real(1)) - second_base;
+  const Real first_rhs = -Real(31) / Real(16) * ulp;
+  const Real second_rhs = second_base - Real(3) * second_ulp;
+  const Real tolerance = ulp / Real(4);
+  const Real high_scale =
+      std::ldexp(Real(1), 2 * std::numeric_limits<Real>::max_exponent / 3);
+  const Real low_scale = Real(1) / high_scale;
+  // A=[[1,-1],[1/8,1/8]], with its exact inverse. Ordinary corrections
+  // alternate between offsets (-4,-3) and (-3,-2) ulp from (1.5,1.5), both
+  // above tau. After true non-descent, half a correction plus the existing
+  // lost-update recovery reaches (-4,-2): its actual residual is (1/16,0) ulp.
+  // No estimate may accept early.
+  for (const int restart : {1, 3}) {
+    for (const Real preconditioner_scale : {Real(1), high_scale, low_scale}) {
+      SCOPED_TRACE(restart);
+      SCOPED_TRACE(preconditioner_scale);
+      TestField iterate = make_field(boxes, mapping, 2, 0);
+      TestField rhs = make_field(boxes, mapping, 2, 0);
+      const auto reset = [&] {
+        for (std::size_t local = 0; local < iterate.local_size(); ++local) {
+          const auto x = iterate.fab(local).view();
+          const auto right = rhs.fab(local).view();
+          for_each_cell(iterate.box(local),
+                        [=] POPS_HD(const Index<kDim> &index) {
+                          x(index, 0) = base - ulp;
+                          x(index, 1) = base;
+                          right(index, 0) = first_rhs;
+                          right(index, 1) = second_rhs;
+                        });
+        }
+        Kokkos::fence();
+      };
+      reset();
+      const OperatorEvaluationSnapshot snapshot = test_snapshot(iterate);
+      const TestKrylovMethod method = gmres_krylov_method<kDim>(restart);
+      const TestKrylovFootprint footprint{2, extent(0), true};
+      auto preconditioner = TestLinearPreconditionerProvider::trusted_extension(
+          {"pops.test.krylov.rounding-cycle-inverse", 1}, {},
+          [=](const ExecutionLane &) {
+            return TestLinearPreconditionerCallbacks{
+                [] {},
+                [=](TestField &out, const TestField &in) {
+                  for (std::size_t local = 0; local < out.local_size();
+                       ++local) {
+                    const auto output = out.fab(local).view();
+                    const auto input = in.fab(local).view();
+                    for_each_cell(
+                        out.box(local), [=] POPS_HD(const Index<kDim> &index) {
+                          output(index, 0) = preconditioner_scale *
+                                             (Real(0.5) * input(index, 0) +
+                                              Real(4) * input(index, 1));
+                          output(index, 1) = preconditioner_scale *
+                                             (-Real(0.5) * input(index, 0) +
+                                              Real(4) * input(index, 1));
+                        });
+                  }
+                  Kokkos::fence();
+                },
+                [] { return std::size_t{0}; }};
+          });
+      TestAffineProblem problem(
+          iterate,
+          TestAffineOperatorProvider::trusted_reentrant(
+              [=](TestField &out, const TestField &in) {
+                for (std::size_t local = 0; local < out.local_size(); ++local) {
+                  const auto output = out.fab(local).view();
+                  const auto input = in.fab(local).view();
+                  for_each_cell(
+                      out.box(local), [=] POPS_HD(const Index<kDim> &index) {
+                        output(index, 0) = input(index, 0) - input(index, 1);
+                        output(index, 1) =
+                            Real(0.125) * (input(index, 0) + input(index, 1));
+                      });
+                }
+                Kokkos::fence();
+              },
+              [] { return std::size_t{0}; }),
+          TestLinearPreconditioner(iterate, std::move(preconditioner), vectors),
+          LinearOperatorProperties::general(), footprint,
+          TestNullspacePolicy::nonsingular(), [&snapshot] { return snapshot; },
+          {}, vectors);
+      TestKrylovWorkspace workspace(iterate, method, footprint, vectors);
+      problem.prepare(snapshot);
+      workspace.bind(problem);
+      const auto allocated = workspace.allocation_count();
+      for (const auto norm : {KrylovPhysicalNorm::metric_l2,
+                              KrylovPhysicalNorm::component_linf}) {
+        for (const int maximum : {2, 3, 2}) {
+          SCOPED_TRACE(maximum);
+          reset();
+          TestKrylovControls controls{method, Real(0), tolerance, maximum};
+          controls.physical_norm = norm;
+          GmresDiagnosticTrace trace;
+          controls.diagnostic_trace = &trace;
+          const auto report = detail::solve_prepared_affine_in_place(
+              problem, workspace, iterate, rhs, controls);
+          const bool solved =
+              norm == KrylovPhysicalNorm::component_linf && maximum == 3;
+          if (restart == 1)
+            EXPECT_EQ(report.solved(), solved) << report.reason;
+          EXPECT_GE(report.iters, 1);
+          EXPECT_LE(report.iters, maximum);
+          if (!report.solved())
+            EXPECT_EQ(report.iters, maximum);
+          EXPECT_EQ(workspace.allocation_count(), allocated);
+          if (restart == 1)
+            ASSERT_EQ(trace.size, static_cast<std::size_t>(maximum));
+          else
+            ASSERT_LE(trace.size, static_cast<std::size_t>(report.iters));
+          for (std::size_t cycle = 0; cycle < trace.size; ++cycle)
+            EXPECT_EQ(trace.cycles[cycle].dimension, 1);
+          Real residual = 0;
+          for (std::size_t local = 0; local < iterate.local_size(); ++local) {
+            auto host = iterate.fab(local).create_host_mirror();
+            iterate.fab(local).copy_to_host(host);
+            if (restart == 1) {
+              EXPECT_EQ(host(0), base - Real(maximum == 2 ? 3 : 4) * ulp);
+              EXPECT_EQ(host(1),
+                        base - Real(maximum == 2 || solved ? 2 : 3) * ulp);
+            }
+            const Real r0 = first_rhs - (host(0) - host(1));
+            const Real r1 = second_rhs - Real(0.125) * (host(0) + host(1));
+            residual = std::max(residual, std::max(std::abs(r0), std::abs(r1)));
+          }
+          residual = all_reduce_max(residual);
+          if (norm == KrylovPhysicalNorm::component_linf) {
+            EXPECT_EQ(report.residual_norm, residual);
+            EXPECT_EQ(report.solved(), residual <= tolerance) << report.reason;
+          } else if (restart == 1) {
+            EXPECT_GT(residual, tolerance);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(test_krylov_workspace_reentrancy,
+     scaled_stagnation_update_preserves_masks_and_exponent_guards) {
+  comm_init();
+  const TestLayout boxes(std::vector<TestBox>{TestBox{Index<kDim>{0, 0}, Index<kDim>{0, 0}}});
+  const TestDistribution mapping = TestDistribution::replicated(boxes, world_rank_space());
+  TestField destination = make_field(boxes, mapping, 1, 0);
+  TestField reference = make_field(boxes, mapping, 1, 0);
+  TestField source = make_field(boxes, mapping, 1, 0);
+  TestField mask = make_field(boxes, mapping, 1, 0);
+  const Real base = Real(1.5);
+  const Real ulp = std::nextafter(base, Real(2)) - base;
+  using detail::ScaledScalar;
+  const auto run = [&](Real value, const ScaledScalar& coefficient, Real input, bool enabled,
+                       bool expect_adjacent, bool negative, bool restrict_to_mask = false) {
+    destination.set_val(value);
+    reference.set_val(value);
+    source.set_val(input);
+    mask.set_val(enabled ? Real(1) : Real(0));
+    detail::ScaledFieldAlgebra::axpy(reference, coefficient, source);
+    const bool promoted = detail::ScaledFieldAlgebra::axpy_adjacent_if_stagnant(
+        destination, coefficient, source, mask, restrict_to_mask);
+    EXPECT_EQ(promoted, destination.local_size() != 0 && expect_adjacent);
+    for (std::size_t local = 0; local < destination.local_size(); ++local) {
+      auto actual = destination.fab(local).create_host_mirror();
+      destination.fab(local).copy_to_host(actual);
+      auto ordinary = reference.fab(local).create_host_mirror();
+      reference.fab(local).copy_to_host(ordinary);
+      const Real expected =
+          restrict_to_mask && !enabled ? value
+          : expect_adjacent
+              ? std::nextafter(value, negative ? -std::numeric_limits<Real>::infinity()
+                                               : std::numeric_limits<Real>::infinity())
+              : ordinary(0);
+      if (std::isnan(expected))
+        EXPECT_TRUE(std::isnan(actual(0)));
+      else
+        EXPECT_EQ(std::bit_cast<RealBits>(actual(0)), std::bit_cast<RealBits>(expected));
+    }
+  };
+  run(base, ScaledScalar::from(Real(0.25) * ulp), Real(1), false, false, false);
+  run(base, ScaledScalar::from(Real(0.25) * ulp), Real(1), true, true, false);
+  run(base, ScaledScalar::from(-Real(0.25) * ulp), Real(1), true, true, true);
+  run(base, ScaledScalar::from(ulp), Real(1), false, false, false, true);
+  run(base, ScaledScalar::from(ulp), Real(1), true, false, false, true);
+  run(base, ScaledScalar::from(Real(0.25) * ulp), Real(1), true, true, false, true);
+  run(base, ScaledScalar::zero(), Real(1), true, false, false);
+  run(base, ScaledScalar::from(Real(1)), Real(0), true, false, false);
+  run(std::numeric_limits<Real>::max(), ScaledScalar::from(Real(1)), Real(1), true, false, false);
+  run(base, ScaledScalar::from(Real(1)), std::numeric_limits<Real>::quiet_NaN(), true, false,
+      false);
+  const Real high = std::ldexp(Real(1), 2 * std::numeric_limits<Real>::max_exponent / 3);
+  const Real low = Real(1) / high;
+  const auto huge = ScaledScalar::product(ScaledScalar::from(high), ScaledScalar::from(high));
+  const auto tiny = ScaledScalar::product(ScaledScalar::from(low), ScaledScalar::from(low));
+  Real materialized = Real(0);
+  EXPECT_FALSE(huge.try_materialize(materialized));
+  EXPECT_FALSE(tiny.try_materialize(materialized));
+  ASSERT_TRUE(huge.try_apply(low, materialized));
+  EXPECT_EQ(materialized, high);
+  ASSERT_TRUE(tiny.try_apply(high, materialized));
+  EXPECT_EQ(materialized, low);
+  run(Real(0), huge, low, true, false, false);
+  run(base, tiny, high, true, true, false);
+  run(base, ScaledScalar::negated(tiny), high, true, true, true);
+  run(-high, huge, low, false, false, false);
+}
+
+TEST(test_krylov_workspace_reentrancy, gmres_coordinates_coupled_representable_updates) {
+  comm_init();
+  std::vector<TestBox> block_boxes;
+  for (int block = 0; block < 4; ++block)
+    block_boxes.emplace_back(Index<kDim>{block, 0}, Index<kDim>{block, 0});
+  const TestLayout boxes(std::move(block_boxes));
+  const TestDistribution mapping = round_robin_distribution(boxes);
+  const Real base = Real(1.5);
+  const Real ulp = std::nextafter(base, Real(2)) - base;
+  const Real tolerance = Real(0.75) * ulp;
+  const Real high = std::ldexp(Real(1), 2 * std::numeric_limits<Real>::max_exponent / 3);
+  const Real low = Real(1) / high;
+  // Independent copies of T=tridiag(-1,2,-1) act on x-1.5. The exact
+  // correction (5/16,-3/8,5/16) ulp is initially lost. Promoting every
+  // unconverged component produces a coupled rounding cycle. The native
+  // solution (0,-1,0) ulp has residual (0,5/8,0) ulp, below the same tau.
+  // One active block checks collective activation with empty contributors;
+  // four copies check exact global maxima shared by distinct MPI owners.
+  for (const int active_blocks : {1, 4}) {
+    for (const int restart : {1, 4}) {
+      for (const Real scale : {Real(1), high, low}) {
+        SCOPED_TRACE(active_blocks);
+        SCOPED_TRACE(restart);
+        SCOPED_TRACE(scale);
+        TestField iterate = make_field(boxes, mapping, 3, 0);
+        TestField rhs = make_field(boxes, mapping, 3, 0);
+        const auto reset = [&] {
+          for (std::size_t local = 0; local < iterate.local_size(); ++local) {
+            const auto x = iterate.fab(local).view();
+            const auto right = rhs.fab(local).view();
+            for_each_cell(iterate.box(local), [=] POPS_HD(const Index<kDim>& index) {
+              const Real amplitude = index[0] < active_blocks ? ulp : Real(0);
+              x(index, 0) = base;
+              x(index, 1) = base;
+              x(index, 2) = base;
+              right(index, 0) = amplitude;
+              right(index, 1) = -Real(11) / Real(8) * amplitude;
+              right(index, 2) = amplitude;
+            });
+          }
+          Kokkos::fence();
+        };
+        reset();
+        const auto snapshot = test_snapshot(iterate);
+        const auto method = gmres_krylov_method<kDim>(restart);
+        const TestKrylovFootprint footprint{3, extent(0), true};
+        bool fail_after_coordinated_update = false;
+        int applications_after_second_cycle = 0;
+        GmresDiagnosticTrace* active_trace = nullptr;
+        auto preconditioner = TestLinearPreconditionerProvider::trusted_extension(
+            {"pops.test.krylov.coupled-rounding-inverse", 1}, {}, [=](const ExecutionLane&) {
+              return TestLinearPreconditionerCallbacks{
+                  [] {},
+                  [=](TestField& out, const TestField& in) {
+                    for (std::size_t local = 0; local < out.local_size(); ++local) {
+                      const auto output = out.fab(local).view();
+                      const auto input = in.fab(local).view();
+                      for_each_cell(out.box(local), [=] POPS_HD(const Index<kDim>& index) {
+                        const Real a = input(index, 0), b = input(index, 1), c = input(index, 2);
+                        output(index, 0) = scale * (Real(3) * a + Real(2) * b + c) / Real(4);
+                        output(index, 1) = scale * (a + Real(2) * b + c) / Real(2);
+                        output(index, 2) = scale * (a + Real(2) * b + Real(3) * c) / Real(4);
+                      });
+                    }
+                    Kokkos::fence();
+                  },
+                  [] { return std::size_t{0}; }};
+            });
+        TestAffineProblem problem(
+            iterate,
+            TestAffineOperatorProvider::trusted_reentrant(
+                [=, &fail_after_coordinated_update, &applications_after_second_cycle,
+                 &active_trace](TestField& out, const TestField& in) {
+                  for (std::size_t local = 0; local < out.local_size(); ++local) {
+                    const auto output = out.fab(local).view();
+                    const auto input = in.fab(local).view();
+                    for_each_cell(out.box(local), [=] POPS_HD(const Index<kDim>& index) {
+                      const Real a = input(index, 0) - base;
+                      const Real b = input(index, 1) - base;
+                      const Real c = input(index, 2) - base;
+                      output(index, 0) = Real(2) * a - b;
+                      output(index, 1) = -a + Real(2) * b - c;
+                      output(index, 2) = -b + Real(2) * c;
+                    });
+                  }
+                  Kokkos::fence();
+                  if (fail_after_coordinated_update && active_trace && active_trace->size == 2) {
+                    ++applications_after_second_cycle;
+                    // One linear Arnoldi application precedes the true-residual callback.
+                    // The last MPI owner has no active mask when only block zero is forced.
+                    if (applications_after_second_cycle == 2 && my_rank() == n_ranks() - 1)
+                      throw std::runtime_error("failure after a coordinated update");
+                  }
+                },
+                [] { return std::size_t{0}; }),
+            TestLinearPreconditioner(iterate, std::move(preconditioner)),
+            LinearOperatorProperties::general(), footprint, TestNullspacePolicy::nonsingular(),
+            [&snapshot] { return snapshot; });
+        TestKrylovWorkspace workspace(iterate, method, footprint);
+        problem.prepare(snapshot);
+        workspace.bind(problem);
+        const auto allocations = workspace.allocation_count();
+        for (const auto norm :
+             {KrylovPhysicalNorm::component_linf, KrylovPhysicalNorm::metric_l2}) {
+          for (const int maximum : {4, 5, 4}) {
+            SCOPED_TRACE(maximum);
+            reset();
+            TestKrylovControls controls{method, Real(0), tolerance, maximum};
+            controls.physical_norm = norm;
+            GmresDiagnosticTrace trace;
+            controls.diagnostic_trace = &trace;
+            const auto report =
+                detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+            const bool solved = norm == KrylovPhysicalNorm::component_linf && maximum == 5;
+            if (restart == 1)
+              EXPECT_EQ(report.solved(), solved) << report.reason;
+            if (norm == KrylovPhysicalNorm::component_linf && maximum == 5)
+              EXPECT_TRUE(report.solved()) << report.reason;
+            EXPECT_GE(report.iters, 1);
+            EXPECT_LE(report.iters, maximum);
+            if (!report.solved())
+              EXPECT_EQ(report.iters, maximum);
+            EXPECT_EQ(workspace.allocation_count(), allocations);
+            if (restart == 1)
+              ASSERT_EQ(trace.size, static_cast<std::size_t>(maximum));
+            else
+              ASSERT_LE(trace.size, static_cast<std::size_t>(report.iters));
+            for (std::size_t cycle = 0; cycle < trace.size; ++cycle)
+              EXPECT_EQ(trace.cycles[cycle].dimension, 1);
+            Real residual = Real(0);
+            for (std::size_t local = 0; local < iterate.local_size(); ++local) {
+              auto values = iterate.fab(local).create_host_mirror();
+              iterate.fab(local).copy_to_host(values);
+              const bool active = iterate.box(local).lo[0] < active_blocks;
+              if (restart == 1 && solved) {
+                EXPECT_EQ(values(0), base);
+                EXPECT_EQ(values(1), active ? base - ulp : base);
+                EXPECT_EQ(values(2), base);
+              }
+              const Real a = values(0) - base, b = values(1) - base, c = values(2) - base;
+              const Real amplitude = active ? ulp : Real(0);
+              residual = std::max(residual, std::abs(amplitude - (Real(2) * a - b)));
+              residual = std::max(
+                  residual, std::abs(-Real(11) / Real(8) * amplitude - (-a + Real(2) * b - c)));
+              residual = std::max(residual, std::abs(amplitude - (-b + Real(2) * c)));
+            }
+            residual = all_reduce_max(residual);
+            if (norm == KrylovPhysicalNorm::component_linf) {
+              EXPECT_EQ(report.residual_norm, residual);
+              EXPECT_EQ(report.solved(), residual <= tolerance) << report.reason;
+            } else if (restart == 1) {
+              EXPECT_GT(residual, tolerance);
+            }
+          }
+        }
+        if (active_blocks == 1 && restart == 1 && scale == Real(1)) {
+          reset();
+          GmresDiagnosticTrace fault_trace;
+          active_trace = &fault_trace;
+          fail_after_coordinated_update = true;
+          TestKrylovControls controls{method, Real(0), tolerance, 6};
+          controls.physical_norm = KrylovPhysicalNorm::component_linf;
+          controls.diagnostic_trace = &fault_trace;
+          const auto rejected =
+              detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+          EXPECT_EQ(rejected.status, SolveStatus::kInvalidEvaluation);
+          EXPECT_EQ(rejected.action, SolveAction::kFailRun);
+          EXPECT_EQ(fault_trace.size, std::size_t{3});
+          EXPECT_EQ(workspace.allocation_count(), allocations);
+          fail_after_coordinated_update = false;
+          active_trace = nullptr;
+          reset();
+          controls.max_iterations = 5;
+          controls.diagnostic_trace = nullptr;
+          const auto retry =
+              detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+          EXPECT_TRUE(retry.solved()) << retry.reason;
+          EXPECT_EQ(retry.iters, 5);
+          EXPECT_LE(retry.residual_norm, tolerance);
+          EXPECT_EQ(workspace.allocation_count(), allocations);
+        }
+      }
+    }
+  }
+}
+
+TEST(test_krylov_workspace_reentrancy, gmres_rejects_unrepresentable_permuted_equations) {
+  comm_init();
+  const TestLayout boxes(std::vector<TestBox>{TestBox{Index<kDim>{0, 0}, Index<kDim>{0, 0}}});
+  const auto mapping = TestDistribution::replicated(boxes, world_rank_space());
+  const auto vectors = TestVectorDistribution::replicated();
+  const Real base = Real(1.5);
+  const Real ulp = std::nextafter(base, Real(2)) - base;
+  const Real tolerance = ulp / Real(4);
+  TestField iterate = make_field(boxes, mapping, 2, 0);
+  TestField rhs = make_field(boxes, mapping, 2, 0);
+  const auto reset = [&] {
+    for (std::size_t local = 0; local < iterate.local_size(); ++local) {
+      const auto x = iterate.fab(local).view();
+      const auto right = rhs.fab(local).view();
+      for_each_cell(iterate.box(local), [=] POPS_HD(const Index<kDim>& index) {
+        x(index, 0) = base;
+        x(index, 1) = base;
+        right(index, 0) = Real(3) / Real(8) * ulp;
+        right(index, 1) = ulp / Real(8);
+      });
+    }
+    Kokkos::fence();
+  };
+  reset();
+  const auto snapshot = test_snapshot(iterate);
+  const auto method = gmres_krylov_method<kDim>(3);
+  const TestKrylovFootprint footprint{2, extent(0), true};
+  // A permutes the unknowns: an equation maximum does not identify its own
+  // variable. No representable x_1 can make |3/8 ulp-(x_1-1.5)| <= 1/4 ulp.
+  // A recovery proposal must therefore remain a refusal under every cap.
+  auto preconditioner = TestLinearPreconditionerProvider::trusted_extension(
+      {"pops.test.krylov.permuted-rounding-inverse", 1}, {}, [=](const ExecutionLane&) {
+        return TestLinearPreconditionerCallbacks{
+            [] {},
+            [](TestField& out, const TestField& in) {
+              for (std::size_t local = 0; local < out.local_size(); ++local) {
+                const auto output = out.fab(local).view();
+                const auto input = in.fab(local).view();
+                for_each_cell(out.box(local), [=] POPS_HD(const Index<kDim>& index) {
+                  output(index, 0) = input(index, 1);
+                  output(index, 1) = input(index, 0);
+                });
+              }
+              Kokkos::fence();
+            },
+            [] { return std::size_t{0}; }};
+      });
+  TestAffineProblem problem(
+      iterate,
+      TestAffineOperatorProvider::trusted_reentrant(
+          [=](TestField& out, const TestField& in) {
+            for (std::size_t local = 0; local < out.local_size(); ++local) {
+              const auto output = out.fab(local).view();
+              const auto input = in.fab(local).view();
+              for_each_cell(out.box(local), [=] POPS_HD(const Index<kDim>& index) {
+                output(index, 0) = input(index, 1) - base;
+                output(index, 1) = input(index, 0) - base;
+              });
+            }
+            Kokkos::fence();
+          },
+          [] { return std::size_t{0}; }),
+      TestLinearPreconditioner(iterate, std::move(preconditioner), vectors),
+      LinearOperatorProperties::general(), footprint, TestNullspacePolicy::nonsingular(),
+      [&snapshot] { return snapshot; }, {}, vectors);
+  TestKrylovWorkspace workspace(iterate, method, footprint, vectors);
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+  const auto allocations = workspace.allocation_count();
+  for (const int maximum : {2, 4, 2}) {
+    SCOPED_TRACE(maximum);
+    reset();
+    TestKrylovControls controls{method, Real(0), tolerance, maximum};
+    controls.physical_norm = KrylovPhysicalNorm::component_linf;
+    const auto report =
+        detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+    EXPECT_FALSE(report.solved());
+    EXPECT_EQ(report.status, SolveStatus::kIterationLimit);
+    EXPECT_EQ(report.iters, maximum);
+    EXPECT_EQ(workspace.allocation_count(), allocations);
+    Real residual = Real(0);
+    for (std::size_t local = 0; local < iterate.local_size(); ++local) {
+      auto values = iterate.fab(local).create_host_mirror();
+      iterate.fab(local).copy_to_host(values);
+      residual = std::max(residual, std::abs(Real(3) / Real(8) * ulp - (values(1) - base)));
+      residual = std::max(residual, std::abs(ulp / Real(8) - (values(0) - base)));
+    }
+    residual = all_reduce_max(residual);
+    EXPECT_EQ(report.residual_norm, residual);
+    EXPECT_GE(residual, Real(3) / Real(8) * ulp);
+    EXPECT_GT(residual, tolerance);
+  }
+}
+
+TEST(test_krylov_workspace_reentrancy, gmres_remembers_promotions_across_rejected_single_columns) {
+  comm_init();
+  std::vector<TestBox> component_boxes;
+  for (int component = 0; component < 3; ++component)
+    component_boxes.emplace_back(Index<kDim>{component, 0}, Index<kDim>{component, 0});
+  const TestLayout boxes(std::move(component_boxes));
+  // The last equation belongs to an owner with no promotion in the companion case.
+  const std::vector<Index<kDim>> owners{rank_coordinate(0), rank_coordinate(n_ranks() > 2 ? 1 : 0),
+                                        rank_coordinate(n_ranks() - 1)};
+  const TestDistribution mapping = TestDistribution::partitioned(boxes, world_rank_space(), owners);
+  const Real base = Real(1.5);
+  const Real ulp = std::nextafter(base, Real(2)) - base;
+  const Real high = std::ldexp(Real(1), 2 * std::numeric_limits<Real>::max_exponent / 3);
+  const Real low = Real(1) / high;
+  // Each scalar unknown occupies its own partitioned box. Matrix application exchanges
+  // the three entries, including from MPI ranks that have no locally owned unknown.
+  const auto read_vector = [](const TestField& field, Real offset) {
+    std::array<Real, 3> values{};
+    for (int component = 0; component < 3; ++component) {
+      Real local_value = Real(0);
+      for (std::size_t local = 0; local < field.local_size(); ++local) {
+        const auto input = field.fab(local).view();
+        local_value +=
+            for_each_cell_reduce_sum(field.box(local), [=] POPS_HD(const Index<kDim>& index) {
+              return index[0] == component ? input(index, 0) - offset : Real(0);
+            });
+      }
+      values[component] = all_reduce_sum(local_value);
+    }
+    return values;
+  };
+  // A and its exact inverse are dyadic. The first ordinary correction is
+  // (9/16,-9/16,1/8) ulp. It rounds to (1,-1,0) ulp and increases Linf.
+  // The next half correction promotes the first two components, returning to
+  // zero and decreasing Linf. The following ordinary update increases it again
+  // with no promotion: the two events must not be required in the same cycle.
+  // A coordinated fourth update reaches (0,-1,0), with residual Linf=ulp/8.
+  for (const bool admissible : {true, false}) {
+    SCOPED_TRACE(admissible);
+    const Real tolerance = (admissible ? Real(3) : Real(1)) / Real(16) * ulp;
+    const std::array<Real, 3> forcing =
+        admissible
+            ? std::array<Real, 3>{Real(103) / Real(128), Real(67) / Real(128), Real(1) / Real(8)}
+            : std::array<Real, 3>{-Real(1) / Real(8), Real(3) / Real(64), -Real(5) / Real(64)};
+    const std::array<std::array<Real, 3>, 3> matrix =
+        admissible
+            ? std::array<std::array<Real, 3>, 3>{{{Real(1), -Real(7) / Real(8), -Real(2)},
+                                                  {Real(3) / Real(4), -Real(5) / Real(8), -Real(2)},
+                                                  {Real(0), Real(0), Real(1)}}}
+            : std::array<std::array<Real, 3>, 3>{{{Real(1), Real(1), Real(0)},
+                                                  {Real(1), Real(3) / Real(4), Real(0)},
+                                                  {Real(2), Real(7) / Real(4), Real(1)}}};
+    const std::array<std::array<Real, 3>, 3> inverse =
+        admissible ? std::array<std::array<Real, 3>, 3>{{{-Real(20), Real(28), Real(16)},
+                                                         {-Real(24), Real(32), Real(16)},
+                                                         {Real(0), Real(0), Real(1)}}}
+                   : std::array<std::array<Real, 3>, 3>{{{-Real(3), Real(4), Real(0)},
+                                                         {Real(4), -Real(4), Real(0)},
+                                                         {-Real(1), -Real(1), Real(1)}}};
+    // The companion has the same alternating event ordering. Only unknowns zero and one
+    // are promoted, whereas the third equation owns the later non-descending maximum.
+    // On the local ULP grid visited here, its first residual is at least ulp/8;
+    // the true native guard must refuse every candidate reached under these caps.
+    for (const int restart : {1, 4}) {
+      for (const Real scale : {Real(1), high, low}) {
+        SCOPED_TRACE(restart);
+        SCOPED_TRACE(scale);
+        TestField iterate = make_field(boxes, mapping, 1, 0);
+        TestField rhs = make_field(boxes, mapping, 1, 0);
+        const auto reset = [&] {
+          for (std::size_t local = 0; local < iterate.local_size(); ++local) {
+            const auto x = iterate.fab(local).view();
+            const auto right = rhs.fab(local).view();
+            for_each_cell(iterate.box(local), [=] POPS_HD(const Index<kDim>& index) {
+              x(index, 0) = base;
+              right(index, 0) = forcing[index[0]] * ulp;
+            });
+          }
+          Kokkos::fence();
+        };
+        reset();
+        const auto snapshot = test_snapshot(iterate);
+        const auto method = gmres_krylov_method<kDim>(restart);
+        const TestKrylovFootprint footprint{1, extent(0), true};
+        auto preconditioner = TestLinearPreconditionerProvider::trusted_extension(
+            {"pops.test.krylov.promotion-history-inverse", 1}, {}, [=](const ExecutionLane&) {
+              return TestLinearPreconditionerCallbacks{
+                  [] {},
+                  [=](TestField& out, const TestField& in) {
+                    const auto values = read_vector(in, Real(0));
+                    std::array<Real, 3> result{};
+                    for (int row = 0; row < 3; ++row) {
+                      for (int column = 0; column < 3; ++column)
+                        result[row] += inverse[row][column] * values[column];
+                      result[row] *= scale;
+                    }
+                    for (std::size_t local = 0; local < out.local_size(); ++local) {
+                      const auto output = out.fab(local).view();
+                      for_each_cell(out.box(local), [=] POPS_HD(const Index<kDim>& index) {
+                        output(index, 0) = result[index[0]];
+                      });
+                    }
+                    Kokkos::fence();
+                  },
+                  [] { return std::size_t{0}; }};
+            });
+        TestAffineProblem problem(
+            iterate,
+            TestAffineOperatorProvider::trusted_reentrant(
+                [=](TestField& out, const TestField& in) {
+                  const auto values = read_vector(in, base);
+                  std::array<Real, 3> result{};
+                  for (int row = 0; row < 3; ++row)
+                    for (int column = 0; column < 3; ++column)
+                      result[row] += matrix[row][column] * values[column];
+                  for (std::size_t local = 0; local < out.local_size(); ++local) {
+                    const auto output = out.fab(local).view();
+                    for_each_cell(out.box(local), [=] POPS_HD(const Index<kDim>& index) {
+                      output(index, 0) = result[index[0]];
+                    });
+                  }
+                  Kokkos::fence();
+                },
+                [] { return std::size_t{0}; }),
+            TestLinearPreconditioner(iterate, std::move(preconditioner)),
+            LinearOperatorProperties::general(), footprint, TestNullspacePolicy::nonsingular(),
+            [&snapshot] { return snapshot; });
+        TestKrylovWorkspace workspace(iterate, method, footprint);
+        problem.prepare(snapshot);
+        workspace.bind(problem);
+        const auto allocations = workspace.allocation_count();
+        for (const auto norm :
+             {KrylovPhysicalNorm::component_linf, KrylovPhysicalNorm::metric_l2}) {
+          for (const int maximum : {3, 4, 3}) {
+            SCOPED_TRACE(maximum);
+            reset();
+            TestKrylovControls controls{method, Real(0), tolerance, maximum};
+            controls.physical_norm = norm;
+            GmresDiagnosticTrace trace;
+            controls.diagnostic_trace = &trace;
+            const auto report =
+                detail::solve_prepared_affine_in_place(problem, workspace, iterate, rhs, controls);
+            const bool solved =
+                admissible && norm == KrylovPhysicalNorm::component_linf && maximum == 4;
+            if (restart == 1)
+              EXPECT_EQ(report.solved(), solved) << report.reason;
+            if (!admissible)
+              EXPECT_FALSE(report.solved()) << report.reason;
+            if (admissible && norm == KrylovPhysicalNorm::component_linf && maximum == 4)
+              EXPECT_TRUE(report.solved()) << report.reason;
+            EXPECT_GE(report.iters, 1);
+            EXPECT_LE(report.iters, maximum);
+            if (!report.solved())
+              EXPECT_EQ(report.iters, maximum);
+            EXPECT_EQ(workspace.allocation_count(), allocations);
+            if (restart == 1)
+              ASSERT_EQ(trace.size, static_cast<std::size_t>(maximum));
+            else
+              ASSERT_LE(trace.size, static_cast<std::size_t>(report.iters));
+            for (std::size_t cycle = 0; cycle < trace.size; ++cycle)
+              EXPECT_EQ(trace.cycles[cycle].dimension, 1);
+            if (norm == KrylovPhysicalNorm::component_linf && restart == 1) {
+              const Real upper = (admissible ? Real(137) / Real(128) : Real(21) / Real(64)) * ulp;
+              const Real lower = (admissible ? Real(103) / Real(128) : Real(1) / Real(8)) * ulp;
+              EXPECT_EQ(trace.cycles[0].final_residual, upper);
+              EXPECT_EQ(trace.cycles[1].final_residual, lower);
+              EXPECT_EQ(trace.cycles[2].final_residual, upper);
+              if (!admissible && maximum == 4)
+                EXPECT_EQ(trace.cycles[3].final_residual, upper);
+            }
+            const auto values = read_vector(iterate, base);
+            std::array<Real, 3> applied{};
+            for (int row = 0; row < 3; ++row)
+              for (int column = 0; column < 3; ++column)
+                applied[row] += matrix[row][column] * values[column];
+            Real residual = Real(0);
+            for (int component = 0; component < 3; ++component)
+              residual =
+                  std::max(residual, std::abs(forcing[component] * ulp - applied[component]));
+            if (solved && restart == 1) {
+              EXPECT_EQ(values[0], Real(0));
+              EXPECT_EQ(values[1], -ulp);
+              EXPECT_EQ(values[2], Real(0));
+              EXPECT_EQ(residual, ulp / Real(8));
+              EXPECT_LE(residual, tolerance);
+            } else if (restart == 1) {
+              EXPECT_GT(residual, tolerance);
+            }
+            if (!admissible && norm == KrylovPhysicalNorm::component_linf && maximum == 4 &&
+                restart == 1) {
+              EXPECT_EQ(values[0], ulp);
+              EXPECT_EQ(values[1], -ulp);
+              EXPECT_EQ(values[2], Real(0));
+            }
+            if (norm == KrylovPhysicalNorm::component_linf) {
+              EXPECT_EQ(report.residual_norm, residual);
+              EXPECT_EQ(report.solved(), residual <= tolerance) << report.reason;
+            }
+          }
+        }
+      }
+    }
+  }
 }
 
 }  // namespace

@@ -1,0 +1,600 @@
+{
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "Source_at_execution": "e01eb5b8b39b20762639be1e7dde45d12542b770",
+  "XML_exact_selected_cases": [
+    "tests/python/integration/runtime/test_imex_checkpoint_sealed_retry.py::test_original_imex_checkpoint_retry_replays_one_completed_seal",
+    "tests/python/integration/runtime/test_final_imex_original_reception.py::test_original_manual_state_field_restart",
+    "tests/python/integration/runtime/test_final_imex_original_reception.py::test_original_preset_parity_and_rejected_rollback",
+    "tests/python/integration/runtime/test_imex_checkpoint_publication_rollback.py::test_original_imex_final_checkpoint_failure_restores_science_and_outputs",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_system_direct_step_requires_the_installed_python_program_strategy",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_native_linear_history_uses_bracketing_slots_and_restarts_exactly",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_restart_restores_default_field_onto_fresh_unmaterialized_target"
+  ],
+  "actual_adaptive_history_cache_scope": {
+    "cache_cursor_names": [
+      "1"
+    ],
+    "clock_cursor_names": [
+      "pops.clock.v1::sha256:e367b07e279f455a69984c8100e4b063e31a3523fde1acb9f4531b8b6265c6dd"
+    ],
+    "event_queue": [
+      {
+        "cursor": 4,
+        "kind": "error_controlled_dt.proposal",
+        "payload": {
+          "dt": "0x1.f400000000000p-5"
+        },
+        "time": "0x1.0080000000000p-2"
+      }
+    ],
+    "history_names": [
+      "blk.held_state"
+    ]
+  },
+  "context": {
+    "allocator_lifetime": "process-lifetime ManagedArena; blocks are released by a Kokkos finalize hook, the arena tables are intentionally never destroyed",
+    "allocator_mode": "kokkos_shared_space_managed_arena",
+    "amr_refinement_ratio": null,
+    "amr_refinement_ratio_rank": 2,
+    "amr_refinement_ratio_selection": "hierarchy_exact_rank",
+    "comm_allocator_mode": "kokkos_shared_host_pinned_space",
+    "communicator": "MPI_COMM_WORLD",
+    "dimension": 2,
+    "field_memory_space": "host",
+    "has_kokkos": true,
+    "kokkos_atexit_finalize_registered": true,
+    "kokkos_backend": "OpenMP",
+    "kokkos_concurrency": 2,
+    "kokkos_device": "cpu",
+    "kokkos_finalized": false,
+    "kokkos_initialized": true,
+    "kokkos_initialized_by_pops": true,
+    "kokkos_lifecycle": "PoPS lazily initialized Kokkos and registered an atexit finalize hook",
+    "kokkos_ownership": "pops-owned-lazy",
+    "kokkos_shared_space": "Host",
+    "kokkos_stream": "Kokkos::OpenMP::synchronous",
+    "kokkos_stream_synchronous": true,
+    "mpi_active": true,
+    "mpi_atexit_finalize_registered": true,
+    "mpi_compiled": true,
+    "mpi_initialized_by_pops": true,
+    "mpi_ownership": "pops-owned",
+    "mpi_rank": 0,
+    "mpi_ranks": 1,
+    "mpi_thread_level": 3,
+    "precision": "double",
+    "real_bytes": 8,
+    "supports_custom_communicator": false,
+    "supports_mixed_precision": false,
+    "supports_single_precision": false
+  },
+  "core1198_live_rehashed": true,
+  "core_fingerprint": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "excluded_negative_archives": [
+    {
+      "bytes": 20634,
+      "classification": "deliberately corrupt or semantically invalid archive; excluded from positive checkpoint admission",
+      "path": "pytest-tmp/test_rejection_preserves_nativ0/adaptive-corrupt-cache.npz",
+      "sha256": "56211f5823fcf0f502f4950b9d3f1ee0452f700f83615de2312054beaeec32c4"
+    },
+    {
+      "bytes": 20632,
+      "classification": "deliberately corrupt or semantically invalid archive; excluded from positive checkpoint admission",
+      "path": "pytest-tmp/test_rejection_preserves_nativ0/adaptive-corrupt-history.npz",
+      "sha256": "040895dd4781bcd97caacf77335177249006a202379e85c4c759f60810a481af"
+    },
+    {
+      "bytes": 20634,
+      "classification": "deliberately corrupt or semantically invalid archive; excluded from positive checkpoint admission",
+      "path": "pytest-tmp/test_rejection_preserves_nativ0/adaptive-corrupt-queue.npz",
+      "sha256": "e973ac38036750b764dcb833f9ec718cfa25002af006787ad8b4818baf3eb31d"
+    },
+    {
+      "bytes": 20660,
+      "classification": "deliberately corrupt or semantically invalid archive; excluded from positive checkpoint admission",
+      "path": "pytest-tmp/test_rejection_preserves_nativ0/adaptive-resealed-invalid-cache-accumulated-dt-nan.npz",
+      "sha256": "ce1cdf0185ffb508404b7cd32e0fad210efe9561b6553c68cd3b48a1fc1437c2"
+    },
+    {
+      "bytes": 20634,
+      "classification": "deliberately corrupt or semantically invalid archive; excluded from positive checkpoint admission",
+      "path": "pytest-tmp/test_rejection_preserves_nativ0/adaptive-resealed-invalid-cache-empty-name.npz",
+      "sha256": "96cce6e566a068dda4a1fcf48b526022804f0f315dd2e854327de5be2633ae6f"
+    },
+    {
+      "bytes": 20659,
+      "classification": "deliberately corrupt or semantically invalid archive; excluded from positive checkpoint admission",
+      "path": "pytest-tmp/test_rejection_preserves_nativ0/adaptive-resealed-invalid-cache-future-update.npz",
+      "sha256": "655c3ce5434d5366c329747cce1172350afb078da4f0bc9345bfe43fc7b201eb"
+    },
+    {
+      "bytes": 20638,
+      "classification": "deliberately corrupt or semantically invalid archive; excluded from positive checkpoint admission",
+      "path": "pytest-tmp/test_rejection_preserves_nativ0/adaptive-resealed-invalid-cache-node.npz",
+      "sha256": "091ac8e5ef0ed792093d8fb68eb992e98f0de8455ba7085c91f5f6dfed364dee"
+    },
+    {
+      "bytes": 20683,
+      "classification": "deliberately corrupt or semantically invalid archive; excluded from positive checkpoint admission",
+      "path": "pytest-tmp/test_rejection_preserves_nativ0/adaptive-resealed-invalid-history-fill-count.npz",
+      "sha256": "a8f032f9c14b010df5fd48ae36cd5609fc28065df17b30d70cd28264a7bcd97e"
+    },
+    {
+      "bytes": 20648,
+      "classification": "deliberately corrupt or semantically invalid archive; excluded from positive checkpoint admission",
+      "path": "pytest-tmp/test_rejection_preserves_nativ0/adaptive-resealed-invalid-history-slot-dt-nan.npz",
+      "sha256": "c90322b5157b0a80123983764f53e2e3d73490abb3de7b79a47cade7526ec2f3"
+    }
+  ],
+  "fail_first_scope": "Root dispatch explicitly set PYTEST_ADDOPTS=-x in recorded tool call. Physical result.command and identity.execution_environment omit it; dispatch-declared, not independently instrumented filesystem proof. Allnine nevertheless executed and passed.",
+  "group_counts": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 9
+  },
+  "group_seconds": 627.927761125,
+  "limits": [
+    "Only actual world1 Dim2 CPU/OpenMP recorded; no MPI2/GPU/3D transfer",
+    "2levels actual original AMR scope; regrid/topology counters2\u21923 are events, not level count",
+    "Original Native scientific assertions executed, Source unchanged; offline receiver independently validates finite physical arrays and exact parity/rollback/restart, not a new analytic closed-form oracle for coupled AMR example",
+    "Positive CP IDs/rawbytes verified independently; no independent native semantic decoder/restart run",
+    "Bad/resealed-invalid archives excluded from positive checkpoint admission; hash-pinned as negative test evidence",
+    "Private fault/capture instrumentation; no general public parameter-update/rank0-only/retained-ticket/full94 proof",
+    "Transient shell NoSpace observed during receiver; subsequent df421MiB/read-only worked. No producer test failure or proof deletion inferred."
+  ],
+  "manual_parity_restart_rollback": [
+    {
+      "array_payloads": 4,
+      "full_JSON_and_Program_equal": true,
+      "pair": [
+        "accepted",
+        "restored"
+      ],
+      "stats_projection_only": false,
+      "values_compared": 10240
+    },
+    {
+      "array_payloads": 4,
+      "full_JSON_and_Program_equal": true,
+      "pair": [
+        "accepted",
+        "preset"
+      ],
+      "stats_projection_only": false,
+      "values_compared": 10240
+    },
+    {
+      "array_payloads": 4,
+      "full_JSON_and_Program_equal": true,
+      "pair": [
+        "continuous",
+        "restarted"
+      ],
+      "stats_projection_only": false,
+      "values_compared": 10240
+    },
+    {
+      "array_payloads": 4,
+      "full_JSON_and_Program_equal": true,
+      "pair": [
+        "rejected-before",
+        "rejected-after"
+      ],
+      "stats_projection_only": false,
+      "values_compared": 10240
+    }
+  ],
+  "physical_files_count": 300,
+  "physical_inventory_sha256": "8817bf68dde9a302bfb51d36e2c059fb70a46d819499ce0d12cd9ebaaf6a707b",
+  "positive_checkpoints": [
+    {
+      "history_names": [],
+      "macro_step": 1,
+      "nlevels": 2,
+      "path": "pytest-tmp/imex-original0/manual/accepted/restart.npz",
+      "payloads": 52,
+      "restart_identity": "f5a1cf75bb3adcb04cfaa6f2522211dca62e47a60130ba5b456999ff9ea2ab78",
+      "runtime_kind": "amr",
+      "time": 0.0001
+    },
+    {
+      "history_names": [],
+      "macro_step": 2,
+      "nlevels": 2,
+      "path": "pytest-tmp/imex-original0/manual/continuous/restart.npz",
+      "payloads": 52,
+      "restart_identity": "d18d20bd18e34b7488b0cb58a70f86f747838811812c27a38953034417938159",
+      "runtime_kind": "amr",
+      "time": 0.0002
+    },
+    {
+      "history_names": [],
+      "macro_step": 1,
+      "nlevels": 2,
+      "path": "pytest-tmp/imex-original0/manual/manual_restart.npz",
+      "payloads": 52,
+      "restart_identity": "f5a1cf75bb3adcb04cfaa6f2522211dca62e47a60130ba5b456999ff9ea2ab78",
+      "runtime_kind": "amr",
+      "time": 0.0001
+    },
+    {
+      "history_names": [],
+      "macro_step": 2,
+      "nlevels": 2,
+      "path": "pytest-tmp/imex-original0/manual/restarted/restart.npz",
+      "payloads": 52,
+      "restart_identity": "fc6cb54e808c7d123b7248b68867eac408b7c5b089e83d3f7e889650263ea641",
+      "runtime_kind": "amr",
+      "time": 0.0002
+    },
+    {
+      "history_names": [],
+      "macro_step": 1,
+      "nlevels": 2,
+      "path": "pytest-tmp/imex-original0/preset/restart.npz",
+      "payloads": 52,
+      "restart_identity": "46ec13292a4c0ed01b827f26c6698660459ac84d6f0a7a072de565b48455ac1f",
+      "runtime_kind": "amr",
+      "time": 0.0001
+    },
+    {
+      "history_names": [],
+      "macro_step": 2,
+      "nlevels": 2,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/continuous/restart.npz",
+      "payloads": 52,
+      "restart_identity": "32326d27117cfad6d458b2ebcc6ad40cd71cbc0af7c1267c1181009d6cc8c77e",
+      "runtime_kind": "amr",
+      "time": 0.0002
+    },
+    {
+      "history_names": [],
+      "macro_step": 1,
+      "nlevels": 2,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/published-attempt1.npz",
+      "payloads": 52,
+      "restart_identity": "a06ce14b957d6dc80133ec514d9c378c153c9e3c8bba3de3e26e97f2dbfd8693",
+      "runtime_kind": "amr",
+      "time": 0.0001
+    },
+    {
+      "history_names": [],
+      "macro_step": 1,
+      "nlevels": 2,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/published-attempt2.npz",
+      "payloads": 52,
+      "restart_identity": "a06ce14b957d6dc80133ec514d9c378c153c9e3c8bba3de3e26e97f2dbfd8693",
+      "runtime_kind": "amr",
+      "time": 0.0001
+    },
+    {
+      "history_names": [],
+      "macro_step": 1,
+      "nlevels": 2,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/reference-output/restart.npz",
+      "payloads": 52,
+      "restart_identity": "a06ce14b957d6dc80133ec514d9c378c153c9e3c8bba3de3e26e97f2dbfd8693",
+      "runtime_kind": "amr",
+      "time": 0.0001
+    },
+    {
+      "history_names": [],
+      "macro_step": 2,
+      "nlevels": 2,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/restarted/restart.npz",
+      "payloads": 52,
+      "restart_identity": "ff4bc03efcbe574fdd2d9c0eadccdf7039b8d508b87c00de504185a494ff3efb",
+      "runtime_kind": "amr",
+      "time": 0.0002
+    },
+    {
+      "history_names": [],
+      "macro_step": 1,
+      "nlevels": 2,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/retry-output/restart.npz",
+      "payloads": 52,
+      "restart_identity": "a06ce14b957d6dc80133ec514d9c378c153c9e3c8bba3de3e26e97f2dbfd8693",
+      "runtime_kind": "amr",
+      "time": 0.0001
+    },
+    {
+      "history_names": [],
+      "macro_step": 0,
+      "nlevels": 2,
+      "path": "pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-public.npz",
+      "payloads": 52,
+      "restart_identity": "0cd8a90528c23c1c30cfe509e40f7d339ad0e0d7287609cc2ff3cc3e4b434301",
+      "runtime_kind": "amr",
+      "time": 0.0
+    },
+    {
+      "history_names": [],
+      "macro_step": 0,
+      "nlevels": 2,
+      "path": "pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-public.npz",
+      "payloads": 52,
+      "restart_identity": "d7a5b8ffa373a9eb24d192a2b0918afa56d295ef38b8a9553756a2430e14d2b1",
+      "runtime_kind": "amr",
+      "time": 0.0
+    },
+    {
+      "history_names": [],
+      "macro_step": 1,
+      "nlevels": 2,
+      "path": "pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/real-committed-checkpoint-before-fault.npz",
+      "payloads": 52,
+      "restart_identity": "413ba8974ea7c3355ebdf152d138191f8f8902b249a7497ee4f7b2a8fc5dced9",
+      "runtime_kind": "amr",
+      "time": 0.0001
+    },
+    {
+      "history_names": [
+        "blk.held_state"
+      ],
+      "macro_step": 3,
+      "nlevels": null,
+      "path": "pytest-tmp/test_rejection_preserves_nativ0/adaptive-current.npz",
+      "payloads": 50,
+      "restart_identity": "6e4bf252e4aaa939c5562b42b5f78c9eaecf452f4b9823e9efa00ab80107e056",
+      "runtime_kind": "uniform",
+      "time": 0.189453125
+    },
+    {
+      "history_names": [
+        "blk.U"
+      ],
+      "macro_step": 3,
+      "nlevels": null,
+      "path": "pytest-tmp/test_uniform_child_clock_histo0/child-linear-final-reference.npz",
+      "payloads": 46,
+      "restart_identity": "a8fc91bdaf66756e7a6733ee4d97a884c2c7deddd64268ca8d37b3c40ff81178",
+      "runtime_kind": "uniform",
+      "time": 0.3
+    },
+    {
+      "history_names": [
+        "blk.U"
+      ],
+      "macro_step": 3,
+      "nlevels": null,
+      "path": "pytest-tmp/test_uniform_child_clock_histo0/child-linear-final-resumed.npz",
+      "payloads": 46,
+      "restart_identity": "1d3fe7bae07ccb3d9627bbe965c5ab614767fd142f469e15e2cd8b2245eb44b9",
+      "runtime_kind": "uniform",
+      "time": 0.3
+    },
+    {
+      "history_names": [
+        "blk.U"
+      ],
+      "macro_step": 3,
+      "nlevels": null,
+      "path": "pytest-tmp/test_uniform_child_clock_histo0/child-linear-final-split.npz",
+      "payloads": 46,
+      "restart_identity": "bddce518ff56a16e7d540ce01e1e36b17fe0af5b13565c56e8295fe9cf698d11",
+      "runtime_kind": "uniform",
+      "time": 0.3
+    },
+    {
+      "history_names": [
+        "blk.U"
+      ],
+      "macro_step": 2,
+      "nlevels": null,
+      "path": "pytest-tmp/test_uniform_child_clock_histo0/child-linear-history.npz",
+      "payloads": 46,
+      "restart_identity": "cf82bcb4018c4174c1d4c41e4aa3dfd1709b0f55fcab0ed3da73128e05e3fbbd",
+      "runtime_kind": "uniform",
+      "time": 0.2
+    },
+    {
+      "history_names": [
+        "blk.U"
+      ],
+      "macro_step": 2,
+      "nlevels": null,
+      "path": "pytest-tmp/test_uniform_child_clock_histo0/child-linear-restored.npz",
+      "payloads": 46,
+      "restart_identity": "cf82bcb4018c4174c1d4c41e4aa3dfd1709b0f55fcab0ed3da73128e05e3fbbd",
+      "runtime_kind": "uniform",
+      "time": 0.2
+    },
+    {
+      "history_names": [
+        "blk.U"
+      ],
+      "macro_step": 2,
+      "nlevels": null,
+      "path": "pytest-tmp/test_uniform_native_linear_his0/linear-history.npz",
+      "payloads": 46,
+      "restart_identity": "db631dd8d55e413bc6d0c7c49ebdd5eea5f79586397ec6b3175e6519a4b7bfe9",
+      "runtime_kind": "uniform",
+      "time": 0.2
+    },
+    {
+      "history_names": [],
+      "macro_step": 0,
+      "nlevels": null,
+      "path": "pytest-tmp/test_uniform_restart_restores_0/default-field-source.npz",
+      "payloads": 34,
+      "restart_identity": "9f4281e1053805d9e67d856b27b353ac6e976628a9ec504dde8be9047cb603b4",
+      "runtime_kind": "uniform",
+      "time": 0.0
+    },
+    {
+      "history_names": [],
+      "macro_step": 0,
+      "nlevels": null,
+      "path": "pytest-tmp/test_uniform_restart_restores_0/field-free-source.npz",
+      "payloads": 33,
+      "restart_identity": "c0079bb57dc26aeccf5eba6faeb9e02c114bf594a907bd95db2b156b55cf2383",
+      "runtime_kind": "uniform",
+      "time": 0.0
+    }
+  ],
+  "positive_payloads_checked": 1121,
+  "publication_checkpoint_raw_exact_except_reseal_and_failed_stats": true,
+  "publication_failure": {
+    "depth_zero_passed": [
+      "/Users/romaindespoulain/dev/tmp/PoPS-current-core-OwnRetry-Native8-e01-ed2-20261008/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-public.npz",
+      "/Users/romaindespoulain/dev/tmp/PoPS-current-core-OwnRetry-Native8-e01-ed2-20261008/pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-public.npz"
+    ],
+    "events": [
+      "committed-capture-real-publication-then-fault"
+    ],
+    "failures": [
+      [
+        "ConsumerPublicationError",
+        "consumer pops.handle.v1::case:scalar_advection_imex_amr/consumer:graph::consumer::checkpoint-checkpoints-restart-e0e0f1df05fb2b36 failed under FailRun: RuntimeError: IMEX deterministic publication failure after committed final checkpoint",
+        true
+      ]
+    ]
+  },
+  "publication_rollback": {
+    "array_payloads": 4,
+    "full_JSON_and_Program_equal": true,
+    "pair": [
+      "before-rank0",
+      "after-rank0"
+    ],
+    "stats_projection_only": true,
+    "values_compared": 10240
+  },
+  "science_archives": [
+    {
+      "arrays": 4,
+      "path": "pytest-tmp/imex-original0/accepted.npz"
+    },
+    {
+      "arrays": 4,
+      "path": "pytest-tmp/imex-original0/continuous.npz"
+    },
+    {
+      "arrays": 15,
+      "path": "pytest-tmp/imex-original0/manual/accepted/npz/state/scientific-output-npz-st__pops.handle.v1-case-scal__f95efc3497c3b4ff73eac903cf4ef79d91557f4284e8768a88a70621835c57927__s000000001__3cb6f7e77c6d1cda1959e50c6ad0dc76d9adb6a8ffc30c37fb3ae4c32bdce5cc.npz"
+    },
+    {
+      "arrays": 13,
+      "path": "pytest-tmp/imex-original0/manual/continuous/npz/state/scientific-output-npz-st__pops.handle.v1-case-scal__f59aa790379ac105201265a495e26d5c744a2c0a00fb7a67fcec2810e36b014bc__s000000002__5e55e26393fcf8f471f87ae8380ddef885daa7dabd3d685700a69bbc6cbb8ecc.npz"
+    },
+    {
+      "arrays": 13,
+      "path": "pytest-tmp/imex-original0/manual/restarted/npz/state/scientific-output-npz-st__pops.handle.v1-case-scal__f5033ec0245db0e3204e8658cc2dccac19b8c2866cc8fbdc565bc10e4b7239117__s000000002__859acaaacd4dc84c3f57f5f4057a1cf0af85f38298ee77bed3b179e3b20b1069.npz"
+    },
+    {
+      "arrays": 15,
+      "path": "pytest-tmp/imex-original0/preset/npz/state/scientific-output-npz-st__pops.handle.v1-case-scal__ffedf9528e1140a5a3fa0bedd947e99fbd13ab110a912bb9481f4064ad9f00885__s000000001__8c60f522bf9b303f03b79e5ea8950f35a395b38f3f44e1bd95ff3a756b7487e2.npz"
+    },
+    {
+      "arrays": 4,
+      "path": "pytest-tmp/imex-original0/preset.npz"
+    },
+    {
+      "arrays": 4,
+      "path": "pytest-tmp/imex-original0/rejected-after.npz"
+    },
+    {
+      "arrays": 4,
+      "path": "pytest-tmp/imex-original0/rejected-before.npz"
+    },
+    {
+      "arrays": 4,
+      "path": "pytest-tmp/imex-original0/restarted.npz"
+    },
+    {
+      "arrays": 4,
+      "path": "pytest-tmp/imex-original0/restored.npz"
+    },
+    {
+      "arrays": 4,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/accepted-rank0.npz"
+    },
+    {
+      "arrays": 13,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/continuous/npz/state/scientific-output-npz-st__pops.handle.v1-case-scal__f3a1daccdb5d11932bb20ebb578210fb67f0fee9cc47f886f7ab461b0d058df79__s000000002__d13670b580a9047824f6c12a1073c0982a63645fe08ad6589d57eb642ced1ed0.npz"
+    },
+    {
+      "arrays": 4,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/continuous-rank0.npz"
+    },
+    {
+      "arrays": 15,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/reference-output/npz/state/scientific-output-npz-st__pops.handle.v1-case-scal__f195410d40557f6087836b4584b0511f154df01774c987f8df04eea9f11b6dada__s000000001__8b278fba1c3ede7b4a20f72b6f9543ecd03f3aeb62e06b9b268b1681418ef893.npz"
+    },
+    {
+      "arrays": 4,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/reference-rank0.npz"
+    },
+    {
+      "arrays": 13,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/restarted/npz/state/scientific-output-npz-st__pops.handle.v1-case-scal__f2cbdcd2fda6b1feaaa21e237086a65eec3f936a946c88c3eac5a3a4ebada273f__s000000002__53fe0b7191fbdd4cf0f653efc830ca18311e2aecaa1808e82015889a15ae084d.npz"
+    },
+    {
+      "arrays": 4,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/restarted-rank0.npz"
+    },
+    {
+      "arrays": 4,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/restored-rank0.npz"
+    },
+    {
+      "arrays": 15,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/retry-output/npz/state/scientific-output-npz-st__pops.handle.v1-case-scal__f195410d40557f6087836b4584b0511f154df01774c987f8df04eea9f11b6dada__s000000001__8b278fba1c3ede7b4a20f72b6f9543ecd03f3aeb62e06b9b268b1681418ef893.npz"
+    },
+    {
+      "arrays": 4,
+      "path": "pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/after-rank0.npz"
+    },
+    {
+      "arrays": 4,
+      "path": "pytest-tmp/test_original_imex_final_check0/imex-checkpoint-publication/before-rank0.npz"
+    }
+  ],
+  "selected_test_and_original_example_Source_equal_6d": {
+    "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py": {
+      "current_sha256": "c29a64e96300d2c9ce3bf07d7cafc771a707f0e7e9d0c54127d44daea6a95098",
+      "exact_bytes_equal_historical_6d": true
+    },
+    "tests/python/integration/runtime/test_final_imex_original_reception.py": {
+      "current_sha256": "a2fef33e7daec55a4d730b66fa674ccaa2d93628426730f1307d18c767205146",
+      "exact_bytes_equal_historical_6d": true
+    },
+    "tests/python/integration/runtime/test_imex_checkpoint_publication_rollback.py": {
+      "current_sha256": "66bac795f92f84f2539f47492d0fe9200dc1c0adad5557efdb0cf0ea4c16fd14",
+      "exact_bytes_equal_historical_6d": true
+    },
+    "tests/python/integration/runtime/test_imex_checkpoint_sealed_retry.py": {
+      "current_sha256": "dfb3d8329ad90c5dd04de7c093016814861e9427a6330c0ff457113e4a61762b",
+      "exact_bytes_equal_historical_6d": true
+    },
+    "tests/python/unit/runtime/test_temporal_restart_state.py": {
+      "current_sha256": "bf1ec40c6b316fa2b7e9aaef065960e86b9af8d4e8d69db9fe8baff0394f18c0",
+      "exact_bytes_equal_historical_6d": true
+    }
+  },
+  "status": "PASS_CURRENT_CORE_NATIVE8_SCOPE",
+  "uniform_child_exact_sample_rows": [
+    [
+      2,
+      4587366580439587226,
+      4587366580439587226,
+      1
+    ],
+    [
+      2,
+      4594572339843380020,
+      4587366580439587226,
+      1
+    ],
+    [
+      2,
+      4591870180066957722,
+      4587366580439587226,
+      1
+    ]
+  ]
+}

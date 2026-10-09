@@ -18,6 +18,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Make the named region-transfer pack/unpack functor types accessible to NVCC host stubs,
+  retaining private transport storage and unchanged kernels, offsets, guards and fences.
+- Distinguish imposed auxiliary requirements from solved Field operands when authoring
+  local-linear operators, and refuse hidden transitive Field dependencies at resolution.
+- Derive AMR local-storage authority from exact resolved pointwise StateStorage methods,
+  retaining qualified subjects, halo requirements and the separate spatial transfer contracts.
+- Version the built-in checkpoint provider to v6 with `pops.checkpoint.sealed-replay@1`,
+  replaying one completed archive for publication Retry without recapturing a committed step.
+- Include potential ConsumerGraph diagnostics in the checkpoint capacity derived from verified
+  Program records, preserving the exact record names and explicit collective capacity overrides.
+- Prepare Native diagnostic projections before sealing a candidate checkpoint, then publish
+  Python registries after commit; scientific-output retries reuse the same immutable projection.
+  Candidate-diagnostics contract@1 retains collective staging failure and strict checkpoint guards.
+- Prepare AMR checkpoint-consumer images under an opaque outer-transaction lease,
+  publish their sealed candidate proof after commit, and invalidate it on mutation or rollback.
+  Public accepted-checkpoint guards and archive formats remain strict; the new native interface
+  is versioned ABI12.
+- IMEX fields and explicit rates read the same copied stage at the explicit tableau
+  coordinate while implicit rates retain their own coordinate and authored coefficients.
+- Carry accepted FV trace quadratures through logical child-clock regions with exact local
+  duration and parent weights; bind their versioned IR25 contract to semantic identity.
+  Scalar consumers read prepared global captures through the existing ownership checks.
+- AMR physical transfers use the actual Kokkos field memory and borrowed native stream,
+  retain buffers through failure fences, and budget backend staging before publication.
+  The existing integral, MPI authority and transactional acceptance contracts are preserved.
+- Name the System physical-transfer copy kernel outside its private implementation class,
+  preserving its calculation while allowing NVCC to compile the device functor.
 - Consolidate CI documentation/watchdog plumbing and extend native formatting coverage.
   Move runnable teaching scripts to `docs/tutorials`, update build commands and thread controls,
   refresh the project/architecture/algorithm guides, and remove obsolete headers and prose.

@@ -1,0 +1,183 @@
+# Hoffart diocotron in PoPS finite volumes
+
+`01_mpi_kokkos_hoffart_euler.py` builds the full barotropic Euler–Poisson case.
+`02_mpi_kokkos_hoffart_hyqmom15.py` builds the exact HYQMOM15 case, whose
+characteristic obstruction is documented below.
+`04_mpi_kokkos_hoffart_fan_li15.py` builds the separately named full Fan–Li15
+system described in [FAN_LI15_METHOD.md](FAN_LI15_METHOD.md).
+All three are deliberately linear tutorials: all authoring, compilation, execution,
+diagnostics, and checkpointing occur in numbered stages at module scope.
+`03_render_results.py` plots genuine native snapshots and generates a GIF.
+
+See [CAMPAIGN_STATUS.md](CAMPAIGN_STATUS.md) for implemented repairs, actual
+validation results, unresolved failures and the remaining campaign. The current
+low-resolution outputs do not complete the paper's figures.
+
+## Reference and parameters
+
+The reference is [Hoffart et al., arXiv:2510.11808v1](https://arxiv.org/html/2510.11808v1).
+The main reproduction uses the [authors' released mode-5 benchmark](https://github.com/conservation-laws/ryujin/blob/7e8177dfe35ae5f6a1ae8477f55b1781a1c01c43/prm/benchmarks/euler_poisson_barotropic-diocotron_instability-mode_5.prm),
+as selected for this task: disk radius 16, annulus radii 6 and 8, background
+density `1e-6`, annulus density `0.9 + 0.1*sin(mode*theta)`,
+`alpha=39.4784176e12`, `Omega=-6.28318531e12`, temperature `1e-24`, and
+final physical time 10. Modes 3, 4, and 5 are supported. The initial drift is
+computed from the authors' magnetic-drift initialization, then integrated over
+each finite volume by the native conservative quadrature.
+
+These constants differ from the printed paper's scaling. The paper also omits
+the benchmark temperature. Results must identify which constants they use;
+neither the time axis nor the density is rescaled afterward to fit a figure.
+
+## Equations and discretization
+
+The computational rectangle is `(r,theta) in [0,16] x [0,2*pi]`. It parametrizes
+the entire physical disk, including the pole; no central hole is removed.
+Velocity and moment components remain Cartesian. Stored conservative unknowns
+are `q_ij = r*M_ij`. Their polar fluxes are
+
+```
+F_r     = cos(theta)*F_x(q) + sin(theta)*F_y(q)
+F_theta = (-sin(theta)*F_x(q) + cos(theta)*F_y(q))/r.
+```
+
+Geometry auxiliaries are native Kokkos kernels evaluated on the actual level
+geometry, including after restart or regrid. The trigonometric cell factors use
+the radial-face angular average and the two-sided angular-face correction.
+Rusanov's central flux then preserves a constant Cartesian state in the interior
+of a uniform level. First-order radial dissipation leaves an origin truncation
+error whose integrated magnitude vanishes linearly under refinement; exact
+pointwise free-stream preservation at the pole is not claimed. The outer
+transport condition follows the authors' open/do-nothing wall, while the pole
+has zero flux and the angular direction is periodic.
+
+Electrostatics uses the mapped gradient
+`C=[[cos(theta),-sin(theta)/r],[sin(theta),cos(theta)/r]]` and tensor
+`K=diag(r,1/r)`. For `s=dt/2`, `J(vx,vy)=(vy,-vx)`, and `B=I-s*Omega*J`,
+the full-Gauss-restart condensed tensor is
+
+```
+A   = K + s*s*alpha*q00*C.T*inverse(B)*C
+rhs = q00 - s*div(C.T*inverse(B)*q_momentum).
+```
+
+The solved potential is `psi=phi/alpha`. Composite tensor FAC couples the AMR
+levels, with a zero conducting potential at the outer wall and zero conormal
+flux at the pole. The source update uses the reconstructed midpoint mean.
+Each solve starts from zero with the stated convergence tolerance. Its diagnostic
+potential history is stored without a lagged warm-start read, allowing newly
+refined cells to receive the current hierarchy solution before history rotation.
+At an equal-clock regrid, authenticated scalar output histories retain existing
+fine-cell values and obtain only new coverage from the matching parent sample.
+The two history-contract markers embedded in every snapshot identify this
+implementation; old archives without them are excluded from Fourier analysis.
+Run the tutorials with the native library rebuilt from the same source revision.
+For HYQMOM15, one common affine Cayley velocity map updates all fifteen moments;
+the higher moments are not frozen during the Lorentz/electric update.
+
+The authored method is source-first Lie composition with Crank–Nicolson source
+and SSPRK2 finite-volume transport. Its splitting order is one. Euler uses
+MUSCL with Minmod; HYQMOM15 uses first-order reconstruction and its full
+directional 15-by-15 closure Jacobian. The latter spectral bound alone is not a
+proof of moment realizability. Actual admissibility, time refinement, and spatial
+refinement must be checked before scientific interpretation. There is no moment
+floor, artificial temperature, or projection onto admissible moments.
+
+The centered mapped gradient/divergence and the finite-volume tensor operator
+do not reproduce Hoffart's exact discrete energy identity. The selected
+full-Gauss restart also differs from the no-restart caption of the reference
+image. These are explicit method differences, not claims of identical output.
+
+## Execution and figures
+
+Use a native two-dimensional PoPS build with MPI, Kokkos OpenMP, and parallel
+HDF5. Set `POPS_THREADS` before process startup; launch at least two MPI ranks
+and two OpenMP threads per rank for the parallel qualification. The main controls
+are `POPS_NR`, `POPS_NTHETA`, `POPS_MAX_LEVELS`, `POPS_MODE`, `POPS_CFL`,
+`POPS_MAX_DT`, `POPS_T_END`, and `POPS_OUTPUT_INTERVAL`. The tutorials use
+synchronous AMR steps, conservative transfer, accepted-state checkpoints, and
+the public PoPS compile/bind/run interfaces.
+The FAC coarse correction uses prepared GMRES with an explicitly selected fixed
+polar-Poisson preconditioner. The provider's general default remains diagonal.
+The polar option inverts the finite-volume metric operator `-div(K grad)` using
+a periodic discrete Fourier transform and radial tridiagonal factors. It includes
+the zero-conormal pole and conducting wall; the zero Fourier mode is nonsingular.
+The coarse inverse uses bounded replicated buffers with authenticated ownership
+and persistent Kokkos storage. Its resource limits and geometric requirements are
+checked during native preparation. No convergence or speedup follows from merely
+selecting this option; the recorded native and scientific qualification is required.
+Every matrix application retains the complete finite-Omega tensor and the conducting-disk
+boundary law. GMRES uses Euclidean Arnoldi products and an explicitly authenticated
+physical infinity norm for stopping. Its reference, initial and final residual checks
+use that cellwise norm. The Euler tutorial explicitly sets the inner coarse relative
+tolerance to `1e-11`, one decade tighter than its unchanged outer `1e-10` target:
+the default `1e-12` stopped real L5 modes 3 and 4 after 512 iterations with
+true inner residuals only 1.19 and 1.38 times their requested thresholds. A
+local MPI4 L5 simulation reached `t=.001`/C3 with this policy and no rejected
+steps; ROMEO and long-time qualification remain separate. FAC independently checks
+the original tensor residual, and the outer solve keeps its original composite residual
+tolerances, fine smoothing and correction damping. This
+is a solver change; it does not replace the equation by its drift limit. The first real
+coefficient snapshot prepares the persistent GMRES sessions before iteration. Runtime
+and numerical qualification of a new solver revision are recorded separately from its
+implementation; no speedup is assumed from selecting GMRES.
+Coarse patches and the full tensor action are explicitly distributed across MPI ranks.
+Only the selected approximate coarse inverse uses replicated buffers. `POPS_COARSE_MAX_GRID`
+bounds coarse patches; `POPS_CLUSTER_MAX_GRID` bounds clusters in parent tagging
+cells before factor-two refinement. The latter is not a bound in child-cell units.
+
+Output targets are formed from exact decimal cadences, then converted once to
+native binary64. Each global output interval is divided into comparable absolute
+subintervals whose represented widths do not exceed `0.95 × POPS_MAX_DT`; an
+extra subinterval is used when floating-point rounding requires it. The 5%
+scheduling headroom avoids repeated tiny remainder steps when the native CFL
+bound is slightly below `POPS_MAX_DT`, without changing that physical cap.
+The same global endpoints are regenerated after restart. AdaptiveCFL may still
+select smaller physical steps. `chunks.jsonl` records the actual returned time,
+step count, latest accepted dt and cost of every public invocation.
+
+Snapshots are saved at intervals of at most `0.01` through `t=1.5`, covering all
+three fixed growth-fit windows; later output uses `POPS_OUTPUT_INTERVAL` and the
+exact paper times. Include this early sampling cadence when estimating storage.
+
+`POPS_RUN_OUTPUT`, `POPS_RUN_CHECKPOINT`, `POPS_RUN_RESTART`, and
+`POPS_RUN_WALLTIME_SECONDS` support bounded scheduler segments. The first accepted
+step, a positive `POPS_CHECKPOINT_WALL_INTERVAL` (default 300 seconds), and the
+terminal accepted state produce restart checkpoints; each diagnostic snapshot
+does not also create a full-state checkpoint. The calling launcher must reserve
+time for compilation, checkpoint archival, and MPI shutdown. On ROMEO, native
+transactions run on node-local storage and their completed immutable bytes are
+archived to GPFS with checksum verification.
+
+The attached nine-panel reference is a schlieren plot of `|grad(rho)|`.
+The renderer uses the corresponding times `0.1, 1.25, 2.5, ..., 10` and records
+missing times instead of synthesizing panels. Potential Fourier amplitudes at
+`r=6` use each source solve's actual midpoint timestamp. The first native solve
+at `5e-11` provides the near-zero normalization; it is not labeled as an exact
+time-zero field solve. See [SNAPSHOTS.md](SNAPSHOTS.md) for the data contract.
+
+Implementation checks, native manufactured solutions, short case integration,
+and paper-scale scientific qualification are separate evidence. The presence of
+these scripts does not establish that a long run or a figure reproduction passed.
+
+Earlier Euler revisions passed short native MPI/AMR integration and one
+checkpoint continuation across a regrid. A subsequent Fan–Li15 run exposed
+missing attempt-counter restoration in the shared AMR runtime: restarting
+between regrids reproduced numerical fields but changed native checkpoint
+authority. That defect requires a native repair and fresh restart qualification;
+the earlier regrid-aligned comparison did not cover it.
+
+Fan–Li15 has completed an actual mode-5 MPI2/OpenMP2 run on a 16×64 two-level
+hierarchy through `t=0.002`. Its saved raw moments pass the strict finite/H1
+checks. This is a short integration result; sustained admissibility, expanded
+AMR, full restart parity and paper-scale figures remain separate gates.
+
+The exact HYQMOM15 implementation has a documented mathematical obstruction:
+the attached notes' fifth-moment formulas correspond to Appendix
+B.1 of [Bryngelson, Fox and Laurent (2026)](https://comp-physics.group/papers/bryngelson-JCP-26.pdf),
+and its actual cold initial data produce complex characteristic pairs. The
+native speed check therefore refuses the first step. The complete published
+Cartesian corrections also fail oblique checks. An exact rational Gaussian
+counterexample and the distinction from alternative fifteen-moment models are
+documented in [HYQMOM15_LIMITATION.md](HYQMOM15_LIMITATION.md). Neither suppressing
+imaginary parts nor increasing the imaginary tolerance is an accepted fix. This
+implementation milestone does not claim an evolved HYQMOM15 result.

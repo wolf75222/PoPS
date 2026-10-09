@@ -1,0 +1,51 @@
+{
+  "schema": "sol61.amr-right-preconditioner-host-review@1",
+  "scope": "source phase plus host storage/transport, no native AMR/MPI/Kokkos",
+  "profiles": {
+    "c7cdd2c38cc7145abb5981b90f38e9b6035b6e5e": {
+      "checks": 36,
+      "foreign_lane_refused": false,
+      "foreign_validation_lane": 2,
+      "source_headers": {
+        "include/pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp": "247ad7800bf367e3d6303ac0559d2bc954b796341e0d35171e6e8d6505fbada6",
+        "include/pops/runtime/program/prepared_amr_field_residual.hpp": "b1ed30e3c99df7b06dcb6a6b4b48c1a25e34bde48c96b84b749c04e9858d6cec"
+      },
+      "scaffold_sha256": "ce943e4dd1c73a8b5a6a5d5c6e3516159556338ed13c468bff4c147bb41c64ba",
+      "source_phase_sha256": {
+        "workspace": "247ad7800bf367e3d6303ac0559d2bc954b796341e0d35171e6e8d6505fbada6",
+        "prepared": "b1ed30e3c99df7b06dcb6a6b4b48c1a25e34bde48c96b84b749c04e9858d6cec"
+      },
+      "scope": "actual phases; host storage/transport; no Kokkos/MPI/AMR native reception"
+    },
+    "ec2571305db245e6040d40189226215d812dee60": {
+      "checks": 36,
+      "foreign_lane_refused": true,
+      "foreign_validation_lane": 2,
+      "source_headers": {
+        "include/pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp": "247ad7800bf367e3d6303ac0559d2bc954b796341e0d35171e6e8d6505fbada6",
+        "include/pops/runtime/program/prepared_amr_field_residual.hpp": "76cc059bb18edcbfb0a0580befccd937bb7e570567a3d48cdd56944f947eb8e8"
+      },
+      "scaffold_sha256": "21c16b412075c769be35b15915d252bffd75bef4ebbd8204368006500500daef",
+      "source_phase_sha256": {
+        "workspace": "247ad7800bf367e3d6303ac0559d2bc954b796341e0d35171e6e8d6505fbada6",
+        "prepared": "76cc059bb18edcbfb0a0580befccd937bb7e570567a3d48cdd56944f947eb8e8"
+      },
+      "scope": "actual phases; host storage/transport; no Kokkos/MPI/AMR native reception"
+    },
+    "3a03a2ef49d37c6fe779db85672fd2b1a89cf86f": {
+      "checks": 36,
+      "foreign_lane_refused": true,
+      "foreign_validation_lane": 1,
+      "source_headers": {
+        "include/pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp": "247ad7800bf367e3d6303ac0559d2bc954b796341e0d35171e6e8d6505fbada6",
+        "include/pops/runtime/program/prepared_amr_field_residual.hpp": "412e17b1542fb27cf8a899a32fa7afecb891d82f51ae1dc4688abda6cd297f23"
+      },
+      "scaffold_sha256": "f47d45a5dcbfc49bb6b3e4b2a168b814a47d2b1c6bc966a68930251ed7fbc13b",
+      "source_phase_sha256": {
+        "workspace": "247ad7800bf367e3d6303ac0559d2bc954b796341e0d35171e6e8d6505fbada6",
+        "prepared": "412e17b1542fb27cf8a899a32fa7afecb891d82f51ae1dc4688abda6cd297f23"
+      },
+      "scope": "actual phases; host storage/transport; no Kokkos/MPI/AMR native reception"
+    }
+  }
+}

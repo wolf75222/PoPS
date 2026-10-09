@@ -33,6 +33,7 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -206,8 +207,8 @@ std::shared_ptr<ProgramEvidence> install_program(pops::AmrSystem<Dim>& system) {
   auto evidence = std::make_shared<ProgramEvidence>();
   context->configure_primary_clock("test.amr.positivity.clock");
   context->install([context, evidence](double macro_dt) {
-    context->begin_step(macro_dt);
-    context->for_each_program_resource_level([context, evidence, macro_dt](int selected) {
+    context->advance_hierarchy(macro_dt, [context, evidence](double level_dt) {
+      const int selected = context->level();
       context->set_stage_time(0, 1);
       std::vector<pops::MultiFab<Dim>*> states;
       std::vector<pops::MultiFab<Dim>*> residuals;
@@ -222,7 +223,7 @@ std::shared_ptr<ProgramEvidence> install_program(pops::AmrSystem<Dim>& system) {
           if (block != 0)
             ++evidence->nonzero_block_provider_binds;
           pops::SolveOutcome source = pops::backward_euler_source(
-              DensityAdvection<Dim>{}, provider_at, state, pops::Real(macro_dt),
+              DensityAdvection<Dim>{}, provider_at, state, pops::Real(level_dt),
               pops::NewtonOptions{}, context->prepared_execution_lane());
           const pops::SolveReport accepted = source.consume(pops::SolveConsumption::kAccept);
           if (!accepted.solved())
@@ -236,10 +237,13 @@ std::shared_ptr<ProgramEvidence> install_program(pops::AmrSystem<Dim>& system) {
         residuals.push_back(&residual);
       }
       for (std::size_t block = 0; block < states.size(); ++block)
-        context->axpy(*states[block], pops::Real(macro_dt), *residuals[block]);
+        context->axpy(*states[block], pops::Real(level_dt), *residuals[block]);
     });
   });
   system.set_program_block_map({0, 1});
+  using Budget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      "test.amr.positivity/actual-flux-budget@1", std::vector<Budget>{{1, 1}, {1, 1}}, 0, 0);
   return evidence;
 }
 
@@ -280,6 +284,7 @@ RunResult advance_with_floor(double positivity_floor) {
   const pops::AmrSystemConfig<Dim> system_config = config<Dim>();
   pops::AmrSystem<Dim> system(system_config);
   pops::test::install_amr_runtime_authority(system, "test.amr.positivity/runtime@1");
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
   const auto speed_key = install_transport_speed(system);
   system.install_block_state_route("density", "test.amr.positivity/state/density");
   system.install_block_state_route("density_peer", "test.amr.positivity/state/density-peer");
@@ -418,10 +423,11 @@ void verify_exact_ranked_trajectory() {
   EXPECT_EQ(floored.fine_rolled_back, floored.fine_before);
   EXPECT_EQ(unfloored.fine_after, unfloored.fine_trial);
   EXPECT_EQ(floored.fine_after, floored.fine_trial);
-  EXPECT_EQ(unfloored.accepted_source_solves, 4);
-  EXPECT_EQ(floored.accepted_source_solves, 4);
-  EXPECT_EQ(unfloored.nonzero_block_provider_binds, 2);
-  EXPECT_EQ(floored.nonzero_block_provider_binds, 2);
+  // Two executions (trial plus replay), two fine substeps, and two blocks.
+  EXPECT_EQ(unfloored.accepted_source_solves, 8);
+  EXPECT_EQ(floored.accepted_source_solves, 8);
+  EXPECT_EQ(unfloored.nonzero_block_provider_binds, 4);
+  EXPECT_EQ(floored.nonzero_block_provider_binds, 4);
 
   EXPECT_TRUE(all_finite(unfloored.fine_after));
   EXPECT_TRUE(all_finite(floored.fine_after));
@@ -430,6 +436,15 @@ void verify_exact_ranked_trajectory() {
   EXPECT_GT(max_difference(floored.fine_interior_after, unfloored.fine_interior_after), 0.0)
       << "the density floor must alter fine cells beyond coarse/fine halo influence";
 
+  const auto exact_real = [](double value) {
+    std::ostringstream encoded;
+    encoded << std::hexfloat << value;
+    return encoded.str();
+  };
+  ::testing::Test::RecordProperty("unfloored_mass_change", exact_real(unfloored.mass_after - unfloored.mass_before));
+  ::testing::Test::RecordProperty("floored_mass_change", exact_real(floored.mass_after - floored.mass_before));
+  ::testing::Test::RecordProperty("fine_interior_floor_effect", exact_real(
+      max_difference(floored.fine_interior_after, unfloored.fine_interior_after)));
   constexpr double tolerance = 2e-10;
   EXPECT_NEAR(unfloored.mass_rolled_back, unfloored.mass_before, tolerance);
   EXPECT_NEAR(floored.mass_rolled_back, floored.mass_before, tolerance);

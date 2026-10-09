@@ -8,9 +8,13 @@
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/system/exact_field_marshaling.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <limits>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -54,7 +58,7 @@ struct ExactFixture {
  private:
   static Box<Dim> make_domain_(int processes) {
     Index<Dim> upper{};
-    upper[0] = 3 * processes - 1;
+    upper[0] = 6 * processes - 1;
     for (int axis = 1; axis < Dim; ++axis)
       upper[axis] = axis + 2;
     return Box<Dim>{Index<Dim>{}, upper};
@@ -62,13 +66,14 @@ struct ExactFixture {
 
   static BoxArray<Dim> make_layout_(const Box<Dim>& domain, int processes) {
     std::vector<Box<Dim>> patches;
-    patches.reserve(static_cast<std::size_t>(processes));
-    for (int rank = 0; rank < processes; ++rank) {
-      Box<Dim> patch = domain;
-      patch.lo[0] = 3 * rank;
-      patch.hi[0] = patch.lo[0] + 2;
-      patches.push_back(patch);
-    }
+    patches.reserve(2 * static_cast<std::size_t>(processes));
+    for (int rank = 0; rank < processes; ++rank)
+      for (int local_patch = 0; local_patch < 2; ++local_patch) {
+        Box<Dim> patch = domain;
+        patch.lo[0] = 6 * rank + 3 * local_patch;
+        patch.hi[0] = patch.lo[0] + 2;
+        patches.push_back(patch);
+      }
     return BoxArray<Dim>{std::move(patches)};
   }
 
@@ -80,9 +85,10 @@ struct ExactFixture {
 
   static std::vector<Index<Dim>> make_owners_(const RankSpace<Dim>& ranks) {
     std::vector<Index<Dim>> owners;
-    owners.reserve(ranks.size());
+    owners.reserve(2 * ranks.size());
     for (std::size_t rank = 0; rank < ranks.size(); ++rank)
-      owners.push_back(ranks.coordinate(rank));
+      for (int local_patch = 0; local_patch < 2; ++local_patch)
+        owners.push_back(ranks.coordinate(rank));
     return owners;
   }
 };
@@ -96,14 +102,63 @@ void prove_exact_marshaling(int rank, int processes, Check&& check) {
 
   const std::size_t cells = runtime::system::marshaling::checked_cell_count(fixture.domain);
   std::vector<double> payload(2 * cells);
-  for (std::size_t cell = 0; cell < cells; ++cell) {
-    payload[cell] = static_cast<double>(cell) + 0.25;
-    payload[cells + cell] = -static_cast<double>(cell) - 2.5;
+  static_assert(std::is_same_v<Real, float> || std::is_same_v<Real, double>);
+  static_assert(std::numeric_limits<Real>::is_iec559 && std::numeric_limits<double>::is_iec559);
+  const double negative_zero = std::copysign(0.0, -1.0);
+  bool exactly_representable = std::signbit(negative_zero) && !std::signbit(0.0);
+  runtime::system::marshaling::for_each_host_index(
+      fixture.domain, [&](const Index<Dim>& index, std::size_t cell) {
+        payload[cell] = static_cast<double>(cell) + 0.25;
+        payload[cells + cell] = -static_cast<double>(cell) - 2.5;
+        // Every owned patch contains both zero signs in both components, plus finite nonzero data.
+        if (index[0] % 3 == 0) {
+          payload[cell] = negative_zero;
+          payload[cells + cell] = 0.0;
+        } else if (index[0] % 3 == 1) {
+          payload[cell] = 0.0;
+          payload[cells + cell] = negative_zero;
+        }
+      });
+  for (double value : payload) {
+    const double round_trip = static_cast<double>(static_cast<Real>(value));
+    exactly_representable = exactly_representable && std::isfinite(value) &&
+                            std::memcmp(&value, &round_trip, sizeof(double)) == 0;
   }
+  check(exactly_representable, "signed-zero witness is not exactly representable by native Real");
+  if (all_reduce_min(exactly_representable ? 1L : 0L) == 0)
+    return;
+  check(field.local_size() == 2, "signed-zero witness must own multiple patches on every rank");
+  const auto same_bytes = [](const std::vector<double>& left, const std::vector<double>& right) {
+    return left.size() == right.size() &&
+           (left.empty() || std::memcmp(left.data(), right.data(), left.size() * sizeof(double)) == 0);
+  };
+  const auto resident_bits_match = [&](const MultiFab<Dim>& resident) {
+    bool matches = true;
+    for (std::size_t local = 0; local < resident.local_size(); ++local) {
+      const auto& fab = resident.fab(local);
+      auto host = fab.create_host_mirror();
+      fab.copy_to_host(host);
+      runtime::system::marshaling::for_each_host_index(
+          fab.box(), [&](const Index<Dim>& index, std::size_t) {
+            const std::size_t global =
+                runtime::system::marshaling::domain_ordinal(fixture.domain, index);
+            for (int component = 0; component < 2; ++component) {
+              const Real expected =
+                  static_cast<Real>(payload[static_cast<std::size_t>(component) * cells + global]);
+              const Real actual =
+                  host(runtime::system::marshaling::storage_ordinal(fab, index, component));
+              matches = matches && std::memcmp(&actual, &expected, sizeof(Real)) == 0;
+            }
+          });
+    }
+    return matches;
+  };
 
   runtime::system::marshaling::write_global(field, fixture.domain, payload, 2);
-  check(runtime::system::marshaling::gather_global(field, fixture.domain, 2) == payload,
-        "partitioned round-trip differs");
+  check(resident_bits_match(field), "partitioned restore changed resident value bits");
+  const auto partitioned = runtime::system::marshaling::gather_global(field, fixture.domain, 2);
+  check(partitioned == payload, "partitioned round-trip differs");
+  check(same_bytes(partitioned, payload), "partitioned round-trip changed value bits");
 
   if (processes > 1) {
     // A different checkpoint image on one rank must be rejected by every rank before resident data
@@ -118,8 +173,10 @@ void prove_exact_marshaling(int rank, int processes, Check&& check) {
       rejected = true;
     }
     check(rejected, "rank-divergent restore payload was accepted");
-    check(runtime::system::marshaling::gather_global(field, fixture.domain, 2) == payload,
-          "rejected restore mutated resident data");
+    check(resident_bits_match(field), "rejected restore mutated resident value bits");
+    const auto after_rejection = runtime::system::marshaling::gather_global(field, fixture.domain, 2);
+    check(after_rejection == payload, "rejected restore mutated resident data");
+    check(same_bytes(after_rejection, payload), "rejected restore round-trip changed value bits");
   }
 
   // A replicated decomposition has one canonical collective contributor but every resident replica
@@ -128,8 +185,17 @@ void prove_exact_marshaling(int rank, int processes, Check&& check) {
   MultiFab<Dim> replica(fixture.layout, replicated, fixture.local_rank, 2, uniform_extent<Dim>(1));
   replica.set_val(Real{-23});
   runtime::system::marshaling::write_global(replica, fixture.domain, payload, 2);
-  check(runtime::system::marshaling::gather_global(replica, fixture.domain, 2) == payload,
-        "replicated round-trip double-counted the payload");
+  check(resident_bits_match(replica), "replicated restore changed resident value bits");
+  const auto replica_result = runtime::system::marshaling::gather_global(replica, fixture.domain, 2);
+  check(replica_result == payload, "replicated round-trip double-counted the payload");
+  check(same_bytes(replica_result, payload), "replicated round-trip changed value bits");
+  if (processes > 1) {
+    // OR would hide duplicate equal replicas: make noncanonical replicas visibly different.
+    if (fixture.local_rank != fixture.ranks.origin())
+      replica.set_val(Real{-31});
+    const auto canonical = runtime::system::marshaling::gather_global(replica, fixture.domain, 2);
+    check(same_bytes(canonical, payload), "a noncanonical replica contributed to the exact gather");
+  }
 
   if (processes > 1) {
     bool component_request_rejected = false;

@@ -1,0 +1,87 @@
+{
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "Source": "4fbd42ec55c6f2eb9948a410d7633f2594ec2ca3",
+  "actual_reached": "context/package admission, authored validate/resolve, model+Program compile/publish completed, collective evidence directory created",
+  "cause": "verify_installed_native returns pathlib.Path; context stores it unchanged in native_origin; dict serialization is strict",
+  "limitations": [
+    "No scientific/rollback failure conclusion",
+    "No attempt execution telemetry",
+    "No Native import/run or Main/package mutation by reviewer",
+    "Model temporary staging binary hash differs from finalized published artifact hash; retain both values without conflating them"
+  ],
+  "physical_pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/scripts/verify_installed_native.py": {
+      "bytes": 8932,
+      "sha256": "a8026696beb13a56e449088250098fa0bccba5369d82fe8cf743aa1b0f8f351a"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py": {
+      "bytes": 14922,
+      "sha256": "94f3642d53d5f5e0dc677c76bb9fae81fa9581b8ba77e568486d5322cd957537"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-Euler-first-4fbd42ec-ed2-20261008/identity.json": {
+      "bytes": 2850,
+      "sha256": "11640017bcd17eb035314c2bc8d8ccb5c878cb671ab1c9b80579f7485e91c8d4"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-Euler-first-4fbd42ec-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/pops-native-cache/1d7160ec8a40eb7b06bae02c6231956175df55c2f21117a8b8c8d18afa993689.so": {
+      "bytes": 2024928,
+      "sha256": "6eb3c41afed7ae3f963c43bf6b6c961ba2b85f7e827069832cbd7deb040141c4"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-Euler-first-4fbd42ec-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/pops-native-cache/1d7160ec8a40eb7b06bae02c6231956175df55c2f21117a8b8c8d18afa993689.so.pops-artifact.json": {
+      "bytes": 490,
+      "sha256": "bf64eafda3c8cc318f01588eb1d6815e64a324dfd6513002c7419f5018916bee"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-Euler-first-4fbd42ec-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/pops-native-cache/8b9d84c1863b18a5bc3e11e48071faf8d2dbab43a9d789b3612bc80a8d18e0c6.so": {
+      "bytes": 556200,
+      "sha256": "9c5f3c5d3f2ac5b0f17c6936b531f085e17556924c0cc111507bc03179ed95f3"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-Euler-first-4fbd42ec-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/pops-native-cache/8b9d84c1863b18a5bc3e11e48071faf8d2dbab43a9d789b3612bc80a8d18e0c6.so.pops-artifact.json": {
+      "bytes": 591,
+      "sha256": "d9bf69c48d8c3f3b1f2bf4b0e036d462152a64687ca0fa18bf7296e2a7aa5794"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-Euler-first-4fbd42ec-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/pops-native-cache/8b9d84c1863b18a5bc3e11e48071faf8d2dbab43a9d789b3612bc80a8d18e0c6.so.pops-model-compile.json": {
+      "bytes": 2288,
+      "sha256": "deb978ea63b4f1cac166987674cd30af7cb80846f6f8d48f365fd74d7693055f"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-Euler-first-4fbd42ec-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/pops-native-cache/8b9d84c1863b18a5bc3e11e48071faf8d2dbab43a9d789b3612bc80a8d18e0c6.so.pops-model.cpp": {
+      "bytes": 27175,
+      "sha256": "81bf4291652085692c1d475d52ae6285a56a4a3a5eb529d8faca40547c18da25"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-Euler-first-4fbd42ec-ed2-20261008/pytest.log": {
+      "bytes": 2211,
+      "sha256": "e5637946e78c8f91b0ec4becf6a15c92f8738ce78cef2adb8dbf46e714e02883"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-Euler-first-4fbd42ec-ed2-20261008/pytest.xml": {
+      "bytes": 938,
+      "sha256": "6e986f60463c9c441a997779df1f436305a40c2540c5fb988c47919a6cc7da80"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-Euler-first-4fbd42ec-ed2-20261008/result.json": {
+      "bytes": 1585,
+      "sha256": "f867d712cf1ab63fe82b6c6556218643b33095d9f4bef0aeae171a614dddd667"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-Euler-first-4fbd42ec-ed2-20261008/source-files.json": {
+      "bytes": 136555,
+      "sha256": "c3c4ebffbf50cf56cc7943b6af90b0e2ed5a8414889b930b35a88e94db7ba8b7"
+    }
+  },
+  "previous_Source_admission_limit": "Source emitter review established authoring/lowering and scalar oracle but missed fixture JSON boundary. This observed failure supersedes any assumption of fixture operational completeness.",
+  "producer_counts": {
+    "errors": 0,
+    "failures": 1,
+    "skipped": 0,
+    "tests": 1
+  },
+  "producer_wall_seconds": 41.911033833002875,
+  "status": "NEGATIVE_RECEIVED_FIXTURE_JSON_PREBIND_FAILURE",
+  "stop": "line312 collective declared-inputs JSON write raises TypeError Object of type PosixPath is not JSON serializable; save_artifact at318 and bind at319 are after stop",
+  "targeted_correction": "native_origin=str(origin) in fixture identity construction; no blanket default=str",
+  "unexecuted": [
+    "bind",
+    "before accepted-envelope snapshot",
+    "pops.run",
+    "late guard/refusal",
+    "rollback comparison",
+    "positive control",
+    "oracle arrays"
+  ]
+}

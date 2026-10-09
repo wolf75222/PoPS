@@ -14,8 +14,10 @@
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp>
+#include <pops/numerics/spatial/nd/face_frequency.hpp>
 #include <pops/numerics/time/amr/levels/amr_subcycling.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
+#include <pops/runtime/amr/amr_tensor_elliptic.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/generated_amr_system_block.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
@@ -23,11 +25,16 @@
 #include <pops/runtime/program/amr_history_flux_snapshot_execution.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/prepared_amr_spatial_residual.hpp>
+#include <pops/runtime/program/prepared_amr_field_residual.hpp>
 #include <pops/runtime/program/prepared_condensed_sampling.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/program/prepared_resource_cache.hpp>
+#include <pops/runtime/program/prepared_integral_capture.hpp>
+#include <pops/runtime/program/program_value_authority.hpp>
+#include <pops/runtime/program/spatial_direct_interaction.hpp>
 #include <pops/runtime/program/prepared_tensor_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
+#include <pops/runtime/program/spatial_interaction_history_source.hpp>
 #include <pops/runtime/program/program_owner_field_identity.hpp>
 #include <pops/runtime/program/source_mask.hpp>
 #include <pops/runtime/program/same_level_cell_temporal_provider.hpp>
@@ -43,6 +50,8 @@
 #include <exception>
 #include <functional>
 #include <initializer_list>
+#include <iomanip>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <memory>
@@ -50,6 +59,7 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -95,6 +105,59 @@ class AmrProgramContext {
 
   void stage_exchange(ExchangeRecord record) const {
     stage_exchange_batch([&](auto&& stage) { stage(std::move(record)); });
+  }
+
+  void declare_integral_state(const std::string& identity, Real initial) const {
+    facade_->declare_program_integral(identity, initial);
+  }
+  Real integral_state(const std::string& identity) const {
+    return static_cast<Real>(facade_->program_integral(identity));
+  }
+  PreparedIntegralCapture capture_integral_candidate(const std::string& identity,
+                                                     const std::string& units) const {
+    return PreparedIntegralCapture::prepare_(this, [&] { return resource_attempt(); },
+        [&] { return boundary_evaluation_point(0); },
+        identity, units, [&] {
+          const auto& ledger = facade_->program_runtime_state_().accepted_exchanges_;
+          return PreparedIntegralCapture::ReadImage{ledger.integral(identity),ledger.checkpoint(true)};
+        }, prepared_execution_lane());
+  }
+  Real integral_candidate_value(const PreparedIntegralCapture& capture,
+      const std::string& identity, const std::string& units) const {
+    return static_cast<Real>(capture.consume_(this, [&] { return resource_attempt(); },
+        [&] { return boundary_evaluation_point(0); },
+        identity, units, [&] {
+          const auto& ledger = facade_->program_runtime_state_().accepted_exchanges_;
+          return PreparedIntegralCapture::ReadImage{ledger.integral(identity),ledger.checkpoint(true)};
+        }, prepared_execution_lane()));
+  }
+  Real consume_external_trace(const std::string& integral_identity,
+                              const AcceptedExchangeLedger::TraceSelection& selection,
+                              Real scale) const {
+    return static_cast<Real>(facade_->consume_program_external_trace(
+        integral_identity, selection, scale));
+  }
+  bool is_external_trace_face(int axis, int side, const Index<Dim>& cell) const {
+    if (axis < 0 || axis >= Dim || (side != 0 && side != 1))
+      throw std::invalid_argument("external trace face has invalid axis or side");
+    const auto boundary = side == 0 ? BoundarySide::lower : BoundarySide::upper;
+    return !facade_->prepared_amr_boundary_topology().is_periodic(Face<Dim>{axis, boundary}) &&
+           cell[axis] == (side == 0 ? geometry().domain().lo[axis]
+                                   : geometry().domain().hi[axis]);
+  }
+
+  /// Geometry acquisition can enter the prepared hierarchy collective phase.
+  /// Snapshot it before the producer, whose local face count may differ by rank.
+  auto prepare_external_trace_face_predicate() const {
+    const auto domain = geometry().domain();
+    const auto topology = facade_->prepared_amr_boundary_topology();
+    return [domain, topology](int axis, int side, const Index<Dim>& cell) {
+      if (axis < 0 || axis >= Dim || (side != 0 && side != 1))
+        throw std::invalid_argument("external trace face has invalid axis or side");
+      const auto boundary = side == 0 ? BoundarySide::lower : BoundarySide::upper;
+      return !topology.is_periodic(Face<Dim>{axis, boundary}) &&
+             cell[axis] == (side == 0 ? domain.lo[axis] : domain.hi[axis]);
+    };
   }
 
   template <class Producer>
@@ -172,18 +235,39 @@ class AmrProgramContext {
     const field_type* state = nullptr;
   };
 
+private:
+  struct RhsInputTraceRecord;
+
+public:
+  /// Invocation-owned input authority for a generated synchronous RHS evaluation.
+  class RhsInputTrace {
+  public:
+    RhsInputTrace(const RhsInputTrace&) = default;
+    RhsInputTrace(RhsInputTrace&&) = default;
+
+  private:
+    friend class AmrProgramContext;
+    RhsInputTrace() = default;
+    const AmrProgramContext* owner_ = nullptr;
+    const field_type* input_ = nullptr;
+    std::shared_ptr<const RhsInputTraceRecord> current_;
+    std::shared_ptr<const RhsInputTraceRecord> parent_;
+  };
+
   struct RhsGroupRequest {
     RhsGroupRequest(int block_value, field_type* state_value, field_type* rhs_value,
                     int rate_id_value, int flux_only_value,
                     std::string_view temporal_family_value = {},
-                    std::vector<nd::FaceField<Dim>>* retained_faces_value = nullptr)
+                    std::vector<nd::FaceField<Dim>>* retained_faces_value = nullptr,
+                    const RhsInputTrace* input_trace_value = nullptr)
         : block(block_value),
           state(state_value),
           rhs(rhs_value),
           rate_id(rate_id_value),
           flux_only(flux_only_value),
           temporal_family(temporal_family_value),
-          retained_faces(retained_faces_value) {}
+          retained_faces(retained_faces_value),
+          input_trace(input_trace_value) {}
 
     int block = -1;
     field_type* state = nullptr;
@@ -192,6 +276,7 @@ class AmrProgramContext {
     int flux_only = 0;
     std::string_view temporal_family;
     std::vector<nd::FaceField<Dim>>* retained_faces = nullptr;
+    const RhsInputTrace* input_trace = nullptr;
   };
 
   struct CouplingStateOverride {
@@ -221,14 +306,57 @@ class AmrProgramContext {
     std::vector<HierarchyTensorLevelBoundary> boundaries;
   };
 
+  struct ClosedOriginalFieldSource {
+    std::shared_ptr<hierarchy_tensor_solver_type> provider;
+    std::function<const std::vector<field_type>&()> candidate;
+    std::uint64_t accepted_generation = 0;
+    std::string identity;
+    std::vector<field_type> image;
+    std::vector<field_type> active_image;
+    std::vector<Geometry<Dim>> geometries;
+    std::size_t retained_bytes = 0;
+    std::map<std::int64_t, std::tuple<std::int64_t, int, int, std::string>> bindings;
+  };
+  struct ClosedInteractionTower {
+    std::shared_ptr<const ClosedOriginalFieldSource> source;
+    std::vector<field_type> output;
+    int storage_owner = -1;
+    std::string identity;
+  };
+
   struct HierarchyFieldResource {
     HierarchyTensorSelection selection;
     std::string field_identity;
-    std::unique_ptr<hierarchy_tensor_solver_type> solver;
+    std::shared_ptr<hierarchy_tensor_solver_type> solver;
     std::uint64_t topology_epoch = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t generation = std::numeric_limits<std::uint64_t>::max();
     std::map<std::tuple<int, std::int64_t, int>, field_type> scratches{};
   };
+
+  class StageEvaluationScope {
+   public:
+    StageEvaluationScope(const AmrProgramContext& owner, std::int64_t numerator,
+                         std::int64_t denominator) : owner_(&owner), prior_(owner.stage_time_) {
+      owner.set_stage_time(numerator, denominator);
+    }
+    StageEvaluationScope(const StageEvaluationScope&) = delete;
+    StageEvaluationScope& operator=(const StageEvaluationScope&) = delete;
+    StageEvaluationScope(StageEvaluationScope&& other) noexcept
+        : owner_(std::exchange(other.owner_, nullptr)), prior_(other.prior_) {}
+    ~StageEvaluationScope() {
+      if (owner_) {
+        owner_->stage_time_ = prior_;
+        owner_->active_operator_snapshot_.reset();
+      }
+    }
+   private:
+    const AmrProgramContext* owner_;
+    ::pops::amr::Rational prior_;
+  };
+  [[nodiscard]] StageEvaluationScope stage_evaluation_scope(
+      std::int64_t numerator, std::int64_t denominator) const {
+    return StageEvaluationScope(*this, numerator, denominator);
+  }
 
   class LogicalEvaluationScope {
    public:
@@ -308,15 +436,40 @@ class AmrProgramContext {
         std::forward<Args>(args)...);
   }
 
+  template <class Resource, class Matches, class... Args>
+  PreparedResourceLease<Resource> prepared_resource_lease(std::int64_t node, int block,
+                                                          Matches&& matches, Args&&... args) const {
+    refresh_resources_();
+    return prepared_resources_.template acquire_lease<Resource>(
+        node, block, active_level_, prepared_execution_lane(), std::forward<Matches>(matches),
+        std::forward<Args>(args)...);
+  }
+
+  PreparedResourceAttempt resource_attempt() const { return prepared_resources_.current_attempt(); }
+
+  template <class Executor, class Functor, class... Resources>
+  PreparedResourceTask submit_prepared_for(
+      const PreparedResourceLease<Executor>& executor, std::size_t lane, const char* label,
+      std::int64_t count, Functor functor,
+      const PreparedResourceLease<Resources>&... resources) const {
+    return executor.get().submit_for(prepared_resources_, resource_attempt(), executor, lane, label,
+                                     count, std::move(functor), resources...);
+  }
+
   // Class-scope responsibility fragments preserve the public nested-type identities and member
   // layout of AmrProgramContext while making each semantic authority independently auditable.
 #include <pops/runtime/program/amr_program_context_spatial.inc>
+#include <pops/runtime/program/program_context_value_authority.inc>
+#include <pops/runtime/program/amr_program_context_value_authority.inc>
+#include <pops/runtime/program/amr_program_context_rhs_input_trace.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_public.inc>
 #include <pops/runtime/program/amr_program_context_diffusion.inc>
+#include <pops/runtime/program/amr_program_context_principal.inc>
 #include <pops/runtime/program/amr_program_context_spatial_implicit.inc>
 #include <pops/runtime/program/amr_program_context_spatial_imex.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_public.inc>
 #include <pops/runtime/program/amr_program_context_spatial_operations.inc>
+#include <pops/runtime/program/amr_program_context_spatial_interaction.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_public.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_solver.inc>
 #include <pops/runtime/program/amr_program_context_general_field_public.inc>
@@ -336,11 +489,16 @@ class AmrProgramContext {
 #include <pops/runtime/program/amr_program_context_flux_basis.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_runtime.inc>
 #include <pops/runtime/program/amr_program_context_shared_flux.inc>
+#include <pops/runtime/program/amr_program_context_path_rhs.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_runtime.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_services.inc>
 #include <pops/runtime/program/amr_program_context_general_field_services.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_services.inc>
 #include <pops/runtime/program/amr_program_context_spatial_operations_services.inc>
+
+  void reached_duration(double) const {
+    throw std::logic_error("computed Program frontier version 1 cannot remap AMR interval exchanges");
+  }
 
   template <int TestDim>
   friend struct detail::AmrProgramHistoryRemapCollectiveTestAccess;
@@ -364,10 +522,12 @@ class AmrProgramContext {
   mutable std::uint64_t history_epoch_ = std::numeric_limits<std::uint64_t>::max();
   mutable std::uint64_t history_generation_ = std::numeric_limits<std::uint64_t>::max();
   mutable std::uint64_t operator_snapshot_revision_ = 0;
+  mutable int auxiliary_evaluation_sequence_ = 0;
   mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;
   mutable std::map<std::string, int> history_levels_;
   mutable std::map<ScratchKey, field_type> scratches_;
   mutable PreparedResourceCache prepared_resources_;
+  mutable ProgramValueAuthority<Dim> program_values_;
   struct SpatialHierarchyResource {
     std::uint64_t epoch, generation;
     int block;
@@ -383,6 +543,8 @@ class AmrProgramContext {
   std::shared_ptr<const hierarchy_tensor_registry_type> hierarchy_tensor_solver_registry_;
   mutable std::optional<HierarchyTensorSelection> hierarchy_tensor_selection_;
   mutable std::map<std::int64_t, HierarchyFieldResource> hierarchy_field_resources_;
+  mutable std::map<std::int64_t, std::shared_ptr<const ClosedOriginalFieldSource>> closed_original_sources_;
+  mutable std::map<std::int64_t, std::shared_ptr<const ClosedInteractionTower>> closed_interactions_;
   mutable std::map<std::string, std::vector<ProgramFieldLevel>> staged_field_publications_;
   mutable std::unique_ptr<hierarchy_tensor_solver_type> hierarchy_tensor_solver_;
   mutable std::vector<HierarchyTensorLevelBoundary> hierarchy_tensor_boundaries_;
@@ -405,10 +567,18 @@ class AmrProgramContext {
   // Bases are immutable samples; a lag read clones and rebases them into the current attempt
   // rather than retaining a pointer to a prior attempt's live registry.
   mutable std::map<std::string, std::vector<FluxExpression>> history_flux_expressions_;
+  // Frozen at the first accepted remap of a native coarse-to-fine sequence.  The numeric
+  // transfer retains its pre-sequence child images even while an earlier parent replacement
+  // removes deeper live rings; their flux provenance must follow the same source generation.
+  mutable std::map<std::string, std::vector<FluxExpression>> history_flux_regrid_sources_;
+  mutable std::uint64_t history_flux_regrid_source_epoch_ =
+      std::numeric_limits<std::uint64_t>::max();
+  mutable std::uint64_t history_flux_regrid_source_generation_ =
+      std::numeric_limits<std::uint64_t>::max();
   mutable std::map<std::tuple<std::size_t, int, FluxBasisProvider>, std::string>
       declared_flux_temporal_families_;
   mutable std::map<std::string, AmrProgramPendingHistoryRemap> pending_history_remaps_;
-  mutable std::map<std::string, field_type> deferred_history_lag_scratches_;
+  mutable DeferredHistoryLagScratches deferred_history_lag_scratches_;
   mutable std::vector<std::size_t> active_flux_basis_counts_;
   mutable std::uint64_t next_active_flux_basis_identity_ = 0;
   mutable std::vector<std::size_t> prepared_rhs_basis_bounds_;
@@ -416,6 +586,10 @@ class AmrProgramContext {
   mutable ::pops::amr::ClockWindow active_subcycling_window_{};
   mutable std::uint64_t active_subcycling_attempt_ = 0;
   mutable std::unique_ptr<multiblock_subcycling_type> multiblock_subcycling_;
+  // Only the committed cursor is accepted/checkpointed. Rejected allocations remain burned in
+  // this live context, including across engine reconstruction and accepted-snapshot rollback.
+  mutable std::uint64_t allocated_subcycling_attempt_ = 0;
+  mutable std::uint64_t accepted_subcycling_attempt_ = 0;
   mutable bool multiblock_subcycling_has_accepted_step_ = false;
   mutable std::uint64_t multiblock_subcycling_epoch_ = std::numeric_limits<std::uint64_t>::max();
   mutable std::uint64_t multiblock_subcycling_generation_ =

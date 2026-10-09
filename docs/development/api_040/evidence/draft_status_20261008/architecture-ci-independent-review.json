@@ -1,0 +1,97 @@
+{
+  "HEAD": "65861f43124ebd70987af66908afe97f3f5286f3",
+  "Main_edits": false,
+  "admitted_for_checkpoint_integration": true,
+  "findings": [],
+  "independent_tests_campaign_executed": false,
+  "mechanical_read_checks": {
+    "all_251_prior_manifest_entries_exact": true,
+    "build_durations.json": {
+      "current_rows": 202,
+      "new_target_is_explicit_estimate": true,
+      "new_target_seconds": 2.0,
+      "old_exact_rows": 201
+    },
+    "manifest_total_suites": 252,
+    "old_responsibility_caps_AST_preserved": 18,
+    "old_scaffolding_budget_AST_preserved": true,
+    "precise_existing_fragment_extensions": {
+      "diffusion": {
+        "counted_lines": 92,
+        "extension_cap": 128,
+        "unique_disjoint_regions": 1
+      },
+      "history_checkpoint": {
+        "counted_lines": 369,
+        "extension_cap": 416,
+        "unique_disjoint_regions": 4
+      },
+      "joint_field_publication": {
+        "counted_lines": 62,
+        "extension_cap": 64,
+        "unique_disjoint_regions": 1
+      },
+      "spatial_operations": {
+        "counted_lines": 50,
+        "extension_cap": 64,
+        "unique_disjoint_regions": 1
+      },
+      "subcycling_runtime": {
+        "counted_lines": 39,
+        "extension_cap": 64,
+        "unique_disjoint_regions": 1
+      }
+    },
+    "serial_catalog_targets": 202,
+    "test_durations.json": {
+      "current_rows": 202,
+      "new_target_is_explicit_estimate": true,
+      "new_target_seconds": 0.2,
+      "old_exact_rows": 201
+    }
+  },
+  "native_build_or_run": false,
+  "remaining_outside_this_review": "Python duration catalog gap reported by Root; overall exact-SHA CI still unfinished, no CI-green or native/science claim",
+  "remote_actions": false,
+  "review_conclusions": {
+    "MPI_expected_projection": "updated expectation matches existing history_ring_np2 and prepared_field_rhs_inputs_np2 registration; total123",
+    "new_upstream_contracts_six_exact_names_and_independent_bounds": true,
+    "original_per_file_responsibility_scaffolding_and_shallow_numeric_caps_preserved_with_bounded_new_regions": true,
+    "runtime_discovery": "two backend-conditional suites changed to POST_BUILD actual runtime discovery, seven explicit targets total; old cases retained as names, four new device cases tracked",
+    "scheduler_exact_partition_deterministic_capped_refinement": "accepted exchanges strictly improve tolerance-qualified sorted descending loads; target costs unchanged, tied maxima can improve, caller verifies exact partition",
+    "unknown_direct_context_includes_fail_closed": true
+  },
+  "reviewed_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "reviewed_paths_sha256": {
+    "scripts/ci_select_tests.py": "f6840d651a2dc50be5a5a338855f2f2a4d920b850874acec050ab0fc730e69ca",
+    "tests/CMakeLists.txt": "cbd9613ec6ab923a58604d2a9d28502d6acea8b87a53b599718b02dc979fd1f9",
+    "tests/cpp/build_durations.json": "bcd55e343dff07ea267a6f21e1531a1672b7a89fb55b983a39ab690ce154c2e5",
+    "tests/cpp/test_durations.json": "d131ca771f504fc5b35b1c623244b3a47fc30bda8134d91cf6451537d9d2d5ce",
+    "tests/cpp/test_sources.cmake": "81af565f51d373ca7e7821fe4334ceca11eb2b1b105ec97cc0b1694ea370d43d",
+    "tests/python/architecture/test_amr_program_support_parity.py": "925a73d763ef470a0f71d43dc818177099cf90cb6a3e3a84c2f59cd86bbcd737",
+    "tests/python/architecture/test_ci_cpp_include_impact.py": "4c2d3f879706a6e2a6187b9f8fecbfe956ae6af2dd3e34ef622a9cc4cf3a34e2",
+    "tests/python/architecture/test_ci_impacted_selection.py": "88fc16b48729d1b706e513de5c170aa0ad35fca17e556fdfcb2024114ffebca4",
+    "tests/python/architecture/test_final_nd_amr_consumers.py": "5c08ba12d26769a72770c296922589d49ec9e58c75cffd0d9b2d43196c6ee269",
+    "tests/test_manifest.toml": "be3f1a439f1c3d93d4e36c6bfe60b8aa3e70b47f5f7cdbc3bde011627c70d5d3"
+  },
+  "schema": "sol61.independent-architecture-ci-support-read-review@1",
+  "worker_prior_XML_receipts_authenticated_without_reexecution": [
+    {
+      "errors": 0,
+      "failures": 0,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-architecture-ci-support-repair-20261008/owned-cohort-v2.xml",
+      "sha256": "158f5ef9dd037fa6d3ac3657be0dcea8a4630e699d1835720c8aac0a2cc5cefd",
+      "skipped": 0,
+      "tests": 158
+    },
+    {
+      "errors": 0,
+      "failures": 0,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-architecture-ci-support-repair-20261008/dependent-cohort.xml",
+      "sha256": "8f3e9f8442300dffba3d62b23a24b1e910b050e05986dafbbc8a1349cf8730a7",
+      "skipped": 0,
+      "tests": 53
+    }
+  ],
+  "worker_receipt_sha256": "7daea22ddbd84fc91ad4d8190067a3208a316f8d8f1d60f9487e8d9e85d6ca77"
+}

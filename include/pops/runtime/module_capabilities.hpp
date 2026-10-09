@@ -32,12 +32,14 @@
 
 namespace pops {
 
-/// Discrete, monotonic ABI revision of the module capability contract. Bump when the SHAPE of
-/// ModuleCapabilities (its fields / their meaning) changes, so a per-artifact manifest baked into an
-/// older .so (pops_compiled_manifest) can be told apart from a newer module at load time. Distinct from
-/// the textual pops::abi_key() (compiler / std / header signature): that detects a toolchain ABI break,
-/// this versions the capability *vocabulary*.
-inline constexpr int kAbiVersion = 3;
+/// Discrete, monotonic native ABI revision. Bump when a public native layout or capability meaning
+/// changes, so an older per-artifact manifest can be distinguished from the rebuilt module.
+/// ABI11 includes the auxiliary accepted-state DTO and physical evaluation point layout changes.
+/// ABI12 adds the opaque, transaction-owned prepared AMR checkpoint capture interface.
+/// ABI13 adds Field RHS prepared State/Aux inputs and invocation-scoped value authorities.
+/// The complete textual abi_key() also authenticates compiler, standard and header bytes; the
+/// release capability vocabulary has its own independent version.
+inline constexpr int kAbiVersion = 13;
 static_assert(kAbiVersion == release_contract::kReleaseNativeAbiVersion,
               "native ABI and generated release contract drifted");
 
@@ -62,6 +64,8 @@ struct ModuleCapabilities {
   bool supports_named_fields;  ///< named aux-field transport (named_aux, aux_field; always built).
   bool
       supports_partial_imex_mask;  ///< partial IMEX mask -- TRUE: Program implicit_source runs it.
+  bool mapped_consumed_field_output_amr;
+  bool mapped_consumed_field_output;  ///< Versioned consumed Field mapping and candidate transfer.
 };
 
 /// One native route/capability row in the structured report. ``status`` is one of
@@ -132,6 +136,8 @@ inline constexpr bool kHasMpi =
 inline ModuleCapabilities module_capabilities(CapabilityTarget target = CapabilityTarget::kModule) {
   ModuleCapabilities caps{};
   caps.abi_version = kAbiVersion;
+  caps.mapped_consumed_field_output = true;
+  caps.mapped_consumed_field_output_amr = true;
   caps.supports_uniform = true;
   caps.supports_amr = true;
   caps.supports_mpi = detail::kHasMpi;
@@ -210,6 +216,11 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "production ABI stores stride; Explicit(stride=M) lowers to Program hold-then-catch-up",
                        kLayoutRouteTokensCsv, "production", "host", mpi, gpu, "strided cell access",
                        "backend='production'", "compile with backend='production'"),
+      capability_route("mapped_consumed_field_output_amr", status_from_bool(caps.mapped_consumed_field_output_amr),
+                       "pops.amr.scalar-field-endpoint@1", "amr", "production", "host", mpi, false),
+      capability_route("mapped_consumed_field_output", status_from_bool(caps.mapped_consumed_field_output),
+                       "mapped-consumed-output@1 scalar Field candidate transfer; released Native ABI since 9",
+                       "uniform", "production", "host", mpi, gpu),
       capability_route("supports_named_fields", status_from_bool(caps.supports_named_fields),
                        "named aux-field transport", kLayoutRouteTokensCsv, "production", "host",
                        mpi, gpu, "named aux fields", "native named-field transport"),
@@ -394,9 +405,10 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "single-file strict accepted-state checkpoint", "uniform", "runtime",
                        "host|mpi", mpi, gpu),
       capability_route(
-          "checkpoint:amr_accepted_state_v7", "available",
-          "strict accepted-state checkpoint includes the runtime-owned AMR tagging "
-          "payload and accepted shared-interface flux audit; MPI_COMM_WORLD uses one rank-0 "
+          "checkpoint:amr_accepted_state_v8", "available",
+          "strict accepted-state checkpoint includes committed attempt authority, runtime-owned "
+          "AMR tagging payload and accepted shared-interface flux audit; legacy accepted-state "
+          "v4-v7 images are inspection-only; MPI_COMM_WORLD uses one rank-0 "
           "publication with collective capture and consensus",
           "amr", "runtime", "host|mpi", mpi, gpu),
       capability_route("checkpoint:parallel_hdf5", "unavailable",

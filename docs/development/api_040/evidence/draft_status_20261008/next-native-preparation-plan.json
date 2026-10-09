@@ -1,0 +1,69 @@
+{
+  "schema": "pops.private-CPP-af8-native-science-PREPARE_ONLY@1",
+  "status": "PREPARED_NOT_EXECUTED",
+  "final_Source_SHA": null,
+  "new_Native_SHA": null,
+  "observed_Source_context": "65861f43124ebd70987af66908afe97f3f5286f3",
+  "changed_CPP": {
+    "src/runtime/amr/amr_system.cpp": "59e3fd9fe42cc8c31d2999840d16b1e2ac5ca399a828986126c98265add0a185",
+    "src/runtime/amr/amr_layout_transfer.cpp": "c4f84bbac8c16fa55a502e8d9a849f2c20788c25ad1e8caef5c45b2a45a1e457"
+  },
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "raw_manifest_SHA": "3abe493f65ea3c9025e95fe22f1afac91df8dacccf1b891d454f5c66aa420406",
+  "ABI": 13,
+  "package": 8,
+  "read": 2,
+  "prior_independent_Native_receipt": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-Native-af8-reception2-20261008/reception.json",
+    "sha256": "997a281b7cd4d6123eb84dc892c5108c254f981d6e3927fb5c7f8673ce2eebaf"
+  },
+  "baseline_installed_Native": "a9367a4af3c9989ea03ebcaf66b76b8e20f5dd5bcd5bdf16b6b1172e942b5ca2",
+  "baseline_cached_Native": "3afebcd5667da5ad8a2b84dcb3839ce83b2825c006e9a0e6afd0365c097ddce2",
+  "Root_GO_prerequisites": [
+    "Finish/commit architecture and CI metadata changes; full final SHA with tracked-clean Main.",
+    "Preserve actual original a936 installed SO once in Root-owned external archive BEFORE official replacement; no seven-object/archive/Source clones.",
+    "Set ROOT_GO to final SHA, EXPECTED_SDK to exact af8, PRESERVED_A936_NATIVE to retained SO path."
+  ],
+  "official_incremental_flow": {
+    "command": "rtk proxy env -u PYTHONPATH -u PYTHONOPTIMIZE bash scripts/build_python.sh --dim 2 --mpi --wheel-dir /Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/wheel",
+    "environment": "real conda pops; conda activation nounset-compatible; PYTHONDONTWRITEBYTECODE=1; Kokkos/HDF5/FFTW roots at pops prefix",
+    "heavy_module_pool": 1,
+    "parallel": 2,
+    "local_memory_scope": "16 GiB host; future checkpoint records actual hw.memsize/hw.ncpu",
+    "setup_clean_fresh": false
+  },
+  "producer_classification": {
+    "seven_bindings": "New action allowed but not required. Reuse only if old admitted af8 producer receipt/source flags, whole binding source map, compiler dependencies and exact object metadata authenticate. No claimed seven new compilations.",
+    "changed_runtime": "Both AMR59 and transferc4 require NEW completed Ninja rows; exact CPP input hashes and source flags pinned.",
+    "link": "New completed shared extension link required; cached hash and wheel/installed hash authenticated separately.",
+    "compiler_internal_execution": "Not measured by Ninja action/aggregate cache counters; no attribution fabricated."
+  },
+  "postbuild_first_admission": [
+    "Source/binding/dependency maps before/after immutable; package2793 both snapshots.",
+    "Actual exact wheel/install payload and raw manifest; package/native origin, Dim2 MPI/parallel-HDF5/Kokkos, module header and doctor.",
+    "Separate independent offline Root Native reception then Root science GO; build receipt alone starts no scientific case."
+  ],
+  "science_sequence": [
+    "first original PDE1",
+    "independent math reception bound to new Source/Native",
+    "OwnRetry original sealed publication/regrid/restart1",
+    "independent OwnRetry reception bound to new Source/Native",
+    "Native8 exact original selectors, explicit recorded PYTEST_ADDOPTS=-x"
+  ],
+  "scientific_execution_template": "run_stage.py --stage first|own_retry|native8 --run-id NEW_ID; admission.json defaults disabled; each stage fresh namespace/cache; stop on nonzero/result-count/identity/guard failure; no automatic next-stage loop",
+  "template_validation": {
+    "Python_AST_parse": true,
+    "bash_n": true,
+    "Native_import": false,
+    "Native_build": false,
+    "simulation": false,
+    "Source_edit": false,
+    "remote": false
+  },
+  "limits": [
+    "Historical PDE1/Own1/Native8/C++72 remain bound to6d/a936.",
+    "Actual GNU13.3 final-SHA CI repair remains distinct from this AppleClang local Native plan.",
+    "No MPI2 science/GPU/3D/convergence/Full94/CI qualification inherited.",
+    "Global94=86+8 and principles1.1-1.8 remains unfinished."
+  ]
+}

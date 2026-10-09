@@ -1,0 +1,24 @@
+{
+  "Native_attempts_blocked": [
+    "_pops",
+    "pops._pops",
+    "_pops",
+    "pops._pops"
+  ],
+  "Native_loaded": [],
+  "cohort_split": {
+    "SSP_static": 25,
+    "architecture": 869,
+    "owner": 6
+  },
+  "counts": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 900
+  },
+  "equivalent_order_preserving_proposal": "inventory-integration-order-preserved.patch",
+  "metadata_patch": "ssp-static-source-metadata.patch",
+  "scope": "Author integration validation, not independent sixpatchreview; no CXX/Native/runtime/GPU/CI qualification",
+  "semantic_inventory_audit": "inventory-audit.json"
+}

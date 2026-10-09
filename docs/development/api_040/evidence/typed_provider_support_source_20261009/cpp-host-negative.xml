@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="1" failures="1" disabled="0" errors="0" time="0.058" timestamp="2026-10-08T23:46:34.924" name="AllTests">
+  <testsuite name="PreparedDiffusion" tests="1" failures="1" disabled="0" skipped="0" errors="0" time="0.058" timestamp="2026-10-08T23:46:34.924">
+    <testcase name="DiagonalLawDoesNotReadBeyondItsOneCellNativeProviderSupport" file="/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/cpp-stencil-overlay/tests/cpp/unit/runtime/test_prepared_diffusion.cpp" line="822" status="run" result="completed" time="0.058" timestamp="2026-10-08T23:46:34.924" classname="PreparedDiffusion">
+      <failure message="/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/cpp-stencil-overlay/tests/cpp/unit/runtime/test_prepared_diffusion.cpp:861&#x0A;Expected: wide.apply(wide_state, wide_rhs, law(wide_state)) doesn&apos;t throw an exception.&#x0A;  Actual: it throws pops::runtime::program::DiffusiveEvaluationError with description &quot;diffusive constitutive evaluation failed&quot;.&#x0A;" type=""><![CDATA[/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/cpp-stencil-overlay/tests/cpp/unit/runtime/test_prepared_diffusion.cpp:861
+Expected: wide.apply(wide_state, wide_rhs, law(wide_state)) doesn't throw an exception.
+  Actual: it throws pops::runtime::program::DiffusiveEvaluationError with description "diffusive constitutive evaluation failed".
+]]></failure>
+    </testcase>
+  </testsuite>
+</testsuites>

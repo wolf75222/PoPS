@@ -1,0 +1,18 @@
+"""Document the exact missing D_y=0 two-point realization on installed Dim=2."""
+import pytest
+
+import pops
+from pops.domain import Rectangle
+from pops.frames import Cartesian2D
+from pops.math import CoeffGradient
+from pops.numerics import Diffusion
+
+
+def test_2d_two_point_method_rejects_the_exact_x_only_constitutive_tensor():
+    frame = Rectangle("anisotropic_reception", lower=(0., 0.), upper=(1., 1.)).frame(Cartesian2D())
+    model = pops.Model("x_only_diffusion", frame=frame)
+    state = model.state("U", components=("u",))
+    flux = model.diffusive_flux("x_only", state=state,
+                                value=CoeffGradient(state[0], ((.01, 0.), (0., 0.))))
+    with pytest.raises(ValueError, match="strictly positive"):
+        Diffusion(flux=flux)

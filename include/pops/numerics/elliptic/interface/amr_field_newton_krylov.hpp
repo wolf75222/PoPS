@@ -5,7 +5,9 @@
 
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/parallel/execution_lane.hpp>
+#include <pops/parallel/collective_exception.hpp>
 #include <pops/numerics/elliptic/interface/field_nonlinear.hpp>
+#include <pops/numerics/elliptic/interface/field_newton_convergence_consensus.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 
 #include <algorithm>
@@ -13,12 +15,32 @@
 #include <cstddef>
 #include <limits>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace pops {
+
+namespace amr_newton_detail {
+
+// Named at namespace scope so strict NVCC does not enclose a device lambda in
+// the workspace's private projection method. Views remain non-owning captures.
+template <int Dim>
+struct ProjectUnknownsKernel {
+  FieldView<Real, Dim> values{};
+  FieldView<const Real, Dim> active{};
+  int components = 0;
+
+  POPS_HD void operator()(const Index<Dim>& cell) const {
+    if (!(active(cell, 0) >= Real(0.5)))
+      for (int component = 0; component < components; ++component)
+        values(cell, component) = Real(0);
+  }
+};
+
+}  // namespace amr_newton_detail
 
 /// Persistent nonlinear/Krylov storage for one ordered field vector carried by an exact AMR hierarchy.
 ///
@@ -91,9 +113,46 @@ class AmrFieldNewtonKrylovWorkspace final {
 
   template <class ResidualProvider, class JvpProvider, class GaugeProvider>
   SolveReport solve(std::span<field_type* const> destination, ResidualProvider&& evaluate_residual,
-                    JvpProvider&& apply_jvp, GaugeProvider&& apply_gauge,
-                    const ExecutionLane& lane) {
-    authenticate_(destination, "destination");
+                    JvpProvider&& apply_jvp, GaugeProvider&& apply_gauge, const ExecutionLane& lane,
+                    bool collective_local_phases = false) {
+    auto identity = [&](const hierarchy_type& input, hierarchy_type& output) { copy_(input, output); };
+    return solve_preconditioned(destination, std::forward<ResidualProvider>(evaluate_residual),
+                                std::forward<JvpProvider>(apply_jvp),
+                                std::forward<GaugeProvider>(apply_gauge), identity, lane,
+                                collective_local_phases);
+  }
+
+  /// Stationary linear right-preconditioner realization. The callback owns any
+  /// collective preparation/authority protocol; it must produce one full tower.
+  template <class ResidualProvider, class JvpProvider, class GaugeProvider,
+            class RightPreconditioner>
+  SolveReport solve_preconditioned(std::span<field_type* const> destination,
+                                  ResidualProvider&& evaluate_residual, JvpProvider&& apply_jvp,
+                                  GaugeProvider&& apply_gauge, RightPreconditioner&& apply_right,
+                                  const ExecutionLane& lane, bool collective_local_phases = false) {
+    return solve_rebuilt_preconditioned(destination, std::forward<ResidualProvider>(evaluate_residual),
+        std::forward<JvpProvider>(apply_jvp), std::forward<GaugeProvider>(apply_gauge),
+        std::forward<RightPreconditioner>(apply_right), [](const auto&, auto&, int) {},
+        lane, collective_local_phases);
+  }
+
+  /// Rebuild once at each nonlinear iterate, then keep the right factor stationary
+  /// throughout that GMRES solve. Preparation owns its collective protocol.
+  template <class ResidualProvider, class JvpProvider, class GaugeProvider,
+            class RightPreconditioner, class PrepareRight>
+  SolveReport solve_rebuilt_preconditioned(std::span<field_type* const> destination,
+      ResidualProvider&& evaluate_residual, JvpProvider&& apply_jvp,
+      GaugeProvider&& apply_gauge, RightPreconditioner&& apply_right,
+      PrepareRight&& prepare_right, const ExecutionLane& lane,
+      bool collective_local_phases = false) {
+    const auto* previous_lane = local_lane_;
+    local_lane_ = collective_local_phases ? &lane : nullptr;
+    struct ResetLane {
+      const ExecutionLane*& target;
+      const ExecutionLane* previous;
+      ~ResetLane() { target = previous; }
+    } reset{local_lane_, previous_lane};
+    local_phase_([&] { authenticate_(destination, "destination"); });
     copy_from_external_(destination, iterate_);
     auto&& residual_provider = evaluate_residual;
     auto&& jvp_provider = apply_jvp;
@@ -101,7 +160,7 @@ class AmrFieldNewtonKrylovWorkspace final {
     gauge_provider(iterate_);
     residual_provider(iterate_, residual_, 0);
     project_unknowns_(residual_);
-    Kokkos::fence();
+    local_phase_([] { Kokkos::fence(); });
 
     SolveReport report;
     report.evaluations = 1;
@@ -116,7 +175,7 @@ class AmrFieldNewtonKrylovWorkspace final {
       return report;
     }
     const Real nonlinear_stop =
-        options_.tolerance * std::max(Real(1), report.reference_residual_norm);
+        collective_field_newton_stop_tolerance(options_, report.reference_residual_norm, lane);
     if (initial_norm <= nonlinear_stop) {
       report.rel_residual = Real(0);
       copy_to_external_(iterate_, destination);
@@ -125,15 +184,22 @@ class AmrFieldNewtonKrylovWorkspace final {
     }
 
     for (int iteration = 0; iteration < options_.max_iterations; ++iteration) {
+      prepare_right(iterate_, jvp_provider, iteration);
       set_zero_(correction_);
       const Real linear_stop = options_.linear_tolerance * report.residual_norm;
       const LinearResult linear =
-          solve_linear_(iterate_, residual_, linear_stop, jvp_provider, iteration, lane);
+          solve_linear_(iterate_, residual_, linear_stop, jvp_provider, iteration, lane, apply_right);
       report.evaluations += linear.evaluations;
       if (!linear.converged) {
         report.iters = iteration;
+        std::ostringstream diagnostic;
+        diagnostic << "amr_field_newton_gmres_breakdown:" << linear_failure_name_(linear.failure)
+                   << ":newton=" << iteration << ":columns=" << linear.columns
+                   << ":evaluations=" << linear.evaluations << std::hexfloat
+                   << ":stop=" << linear_stop << ":beta=" << linear.residual_norm
+                   << ":projected=" << linear.projected_norm << ":pivot=" << linear.pivot;
         report.mark_failed(SolveStatus::kBreakdown, SolveAction::kRejectAttempt,
-                           "amr_field_newton_gmres_breakdown");
+                           diagnostic.str());
         return report;
       }
 
@@ -155,7 +221,7 @@ class AmrFieldNewtonKrylovWorkspace final {
         gauge_provider(trial_);
         residual_provider(trial_, trial_residual_, iteration + 1);
         project_unknowns_(trial_residual_);
-        Kokkos::fence();
+        local_phase_([] { Kokkos::fence(); });
         ++report.evaluations;
         const Real trial_norm = norm_(trial_residual_, lane);
         if (finite_(trial_norm) &&
@@ -192,20 +258,46 @@ class AmrFieldNewtonKrylovWorkspace final {
   }
 
  private:
+  enum class LinearFailure {
+    kIterationLimit, kNonfiniteInitialNorm, kZeroArnoldiColumn, kNonfiniteArnoldiColumn,
+    kZeroTriangularPivot, kNonfiniteTriangularPivot, kNonfiniteTriangularCoefficient,
+    kNonfiniteRecomputedNorm
+  };
+  static const char* linear_failure_name_(LinearFailure failure) noexcept {
+    switch (failure) {
+      case LinearFailure::kIterationLimit: return "iteration_limit";
+      case LinearFailure::kNonfiniteInitialNorm: return "nonfinite_initial_norm";
+      case LinearFailure::kZeroArnoldiColumn: return "zero_arnoldi_column";
+      case LinearFailure::kNonfiniteArnoldiColumn: return "nonfinite_arnoldi_column";
+      case LinearFailure::kZeroTriangularPivot: return "zero_triangular_pivot";
+      case LinearFailure::kNonfiniteTriangularPivot: return "nonfinite_triangular_pivot";
+      case LinearFailure::kNonfiniteTriangularCoefficient: return "nonfinite_triangular_coefficient";
+      case LinearFailure::kNonfiniteRecomputedNorm: return "nonfinite_recomputed_norm";
+    }
+    return "invalid_failure";
+  }
   struct LinearResult {
     bool converged = false;
     int evaluations = 0;
+    int columns = 0;
+    Real residual_norm = 0;
+    Real projected_norm = 0;
+    Real pivot = 0;
+    LinearFailure failure = LinearFailure::kIterationLimit;
   };
 
-  template <class JvpProvider>
+  template <class JvpProvider, class RightPreconditioner>
   LinearResult solve_linear_(const hierarchy_type& iterate, const hierarchy_type& rhs, Real stop,
                              JvpProvider& apply_jvp, int nonlinear_iteration,
-                             const ExecutionLane& lane) {
+                             const ExecutionLane& lane, RightPreconditioner& apply_right) {
     copy_(rhs, linear_residual_);
     Real beta = norm_(linear_residual_, lane);
     LinearResult result;
-    if (!finite_(beta))
+    result.residual_norm = beta;
+    if (!finite_(beta)) {
+      result.failure = LinearFailure::kNonfiniteInitialNorm;
       return result;
+    }
     if (beta <= stop) {
       result.converged = true;
       return result;
@@ -223,15 +315,23 @@ class AmrFieldNewtonKrylovWorkspace final {
       rotated_rhs_[0] = beta;
 
       int used = 0;
-      bool cycle_converged = false;
       for (int column = 0; column < cycle; ++column) {
-        apply_jvp(iterate, basis_[static_cast<std::size_t>(column)], work_, nonlinear_iteration);
+        apply_right(basis_[static_cast<std::size_t>(column)], image_);
+        project_unknowns_(image_);
+        apply_jvp(iterate, image_, work_, nonlinear_iteration);
         project_unknowns_(work_);
-        Kokkos::fence();
+        local_phase_([] { Kokkos::fence(); });
         ++result.evaluations;
         for (int row = 0; row <= column; ++row) {
           h_(row, column) = dot_(work_, basis_[static_cast<std::size_t>(row)], lane);
           saxpy_(work_, -h_(row, column), basis_[static_cast<std::size_t>(row)]);
+        }
+        // A second MGS pass restores orthogonality after cancellation without
+        // changing the Krylov column, restart or iteration budgets.
+        for (int row = 0; row <= column; ++row) {
+          const Real correction = dot_(work_, basis_[static_cast<std::size_t>(row)], lane);
+          h_(row, column) += correction;
+          saxpy_(work_, -correction, basis_[static_cast<std::size_t>(row)]);
         }
         h_(column + 1, column) = norm_(work_, lane);
         if (h_(column + 1, column) > Real(0)) {
@@ -250,6 +350,7 @@ class AmrFieldNewtonKrylovWorkspace final {
         const Real diagonal = h_(column, column);
         const Real subdiagonal = h_(column + 1, column);
         const Real magnitude = std::hypot(diagonal, subdiagonal);
+        result.pivot = magnitude;
         if (!finite_(magnitude) || magnitude == Real(0)) {
           used = column;
           break;
@@ -265,25 +366,33 @@ class AmrFieldNewtonKrylovWorkspace final {
             -sine_[static_cast<std::size_t>(column)] * value;
         used = column + 1;
         ++completed;
+        result.columns = completed;
+        result.projected_norm = std::abs(rotated_rhs_[static_cast<std::size_t>(column + 1)]);
         if (std::abs(rotated_rhs_[static_cast<std::size_t>(column + 1)]) <= stop) {
-          cycle_converged = true;
           break;
         }
       }
-      if (used == 0 || !update_correction_(used))
-        return result;
-      if (cycle_converged) {
-        result.converged = true;
+      if (used == 0) {
+        result.failure = finite_(result.pivot) ? LinearFailure::kZeroArnoldiColumn
+                                             : LinearFailure::kNonfiniteArnoldiColumn;
         return result;
       }
+      if (!update_correction_(used, result, apply_right))
+        return result;
+      // A small rotated RHS only ends Arnoldi. The requested linear tolerance
+      // is authenticated by the actual JVP on the complete correction, also
+      // for a happy breakdown or a direction-dependent approximate JVP.
       apply_jvp(iterate, correction_, image_, nonlinear_iteration);
       project_unknowns_(image_);
-      Kokkos::fence();
+      local_phase_([] { Kokkos::fence(); });
       ++result.evaluations;
       lincomb_(linear_residual_, Real(1), rhs, Real(-1), image_);
       beta = norm_(linear_residual_, lane);
-      if (!finite_(beta))
+      result.residual_norm = beta;
+      if (!finite_(beta)) {
+        result.failure = LinearFailure::kNonfiniteRecomputedNorm;
         return result;
+      }
       if (beta <= stop) {
         result.converged = true;
         return result;
@@ -292,39 +401,49 @@ class AmrFieldNewtonKrylovWorkspace final {
     return result;
   }
 
-  bool update_correction_(int used) {
+  template <class RightPreconditioner>
+  bool update_correction_(int used, LinearResult& result, RightPreconditioner& apply_right) {
     for (int reverse = used; reverse != 0; --reverse) {
       const int row = reverse - 1;
       Real value = rotated_rhs_[static_cast<std::size_t>(row)];
       for (int column = row + 1; column < used; ++column)
         value -= h_(row, column) * coefficients_[static_cast<std::size_t>(column)];
       const Real diagonal = h_(row, row);
-      if (!finite_(diagonal) || diagonal == Real(0))
+      if (!finite_(diagonal) || diagonal == Real(0)) {
+        result.pivot = diagonal;
+        result.failure = finite_(diagonal) ? LinearFailure::kZeroTriangularPivot
+                                         : LinearFailure::kNonfiniteTriangularPivot;
         return false;
+      }
       coefficients_[static_cast<std::size_t>(row)] = value / diagonal;
-      if (!finite_(coefficients_[static_cast<std::size_t>(row)]))
+      if (!finite_(coefficients_[static_cast<std::size_t>(row)])) {
+        result.pivot = diagonal;
+        result.failure = LinearFailure::kNonfiniteTriangularCoefficient;
         return false;
+      }
     }
-    for (int index = 0; index < used; ++index)
-      saxpy_(correction_, coefficients_[static_cast<std::size_t>(index)],
-             basis_[static_cast<std::size_t>(index)]);
+    for (int index = 0; index < used; ++index) {
+      apply_right(basis_[static_cast<std::size_t>(index)], image_);
+      project_unknowns_(image_);
+      saxpy_(correction_, coefficients_[static_cast<std::size_t>(index)], image_);
+    }
     return true;
   }
 
   // Covered/EB-inactive cells remain available to the operator but are not Krylov DOFs.
   // Project both defects and JVP images so corrections cannot evolve those stored values.
   void project_unknowns_(hierarchy_type& fields) const {
-    for (std::size_t level = 0; level < fields.size(); ++level)
-      for (std::size_t local = 0; local < fields[level].local_size(); ++local) {
-        const auto values = fields[level].fab(local).view();
-        const auto active = std::as_const(*active_cells_[level]).fab(local).view();
-        const int components = fields[level].ncomp();
-        for_each_cell(fields[level].box(local), [=] POPS_HD(const Index<Dim>& cell) {
-          if (!(active(cell, 0) >= Real(0.5)))
-            for (int component = 0; component < components; ++component)
-              values(cell, component) = Real(0);
-        });
-      }
+    local_phase_([&] {
+      authenticate_owned_(fields, "projection");
+      for (std::size_t level = 0; level < fields.size(); ++level)
+        for (std::size_t local = 0; local < fields[level].local_size(); ++local) {
+          const auto values = fields[level].fab(local).view();
+          const auto active = std::as_const(*active_cells_[level]).fab(local).view();
+          const int components = fields[level].ncomp();
+          for_each_cell(fields[level].box(local),
+                        amr_newton_detail::ProjectUnknownsKernel<Dim>{values, active, components});
+        }
+    });
   }
 
   static hierarchy_type make_hierarchy_(std::span<const field_type* const> layouts) {
@@ -352,76 +471,105 @@ class AmrFieldNewtonKrylovWorkspace final {
                                     " differs from its prepared exact-ranked hierarchy");
   }
 
-  static void copy_field_(const field_type& source, field_type& destination) {
-    if (!same_layout_(source, destination) || source.ncomp() != destination.ncomp())
-      throw std::invalid_argument("AMR field Newton vector layouts differ");
-    lincomb(destination, Real(1), source, Real(0), source);
+  void authenticate_owned_(const hierarchy_type& fields, const char* role) const {
+    if (fields.size() != iterate_.size())
+      throw std::invalid_argument(std::string("AMR field Newton ") + role +
+                                  " has the wrong level count");
+    for (std::size_t level = 0; level < fields.size(); ++level)
+      if (fields[level].ncomp() != iterate_[level].ncomp() ||
+          !same_layout_(fields[level], iterate_[level]))
+        throw std::invalid_argument(std::string("AMR field Newton ") + role +
+                                    " differs from its prepared exact-ranked hierarchy");
   }
 
-  static void copy_(const hierarchy_type& source, hierarchy_type& destination) {
-    if (source.size() != destination.size())
-      throw std::invalid_argument("AMR field Newton hierarchy sizes differ");
+  void copy_field_(const field_type& source, field_type& destination) {
+    local_phase_([&] {
+      if (!same_layout_(source, destination) || source.ncomp() != destination.ncomp())
+        throw std::invalid_argument("AMR field Newton vector layouts differ");
+      lincomb(destination, Real(1), source, Real(0), source);
+    });
+  }
+
+  void copy_(const hierarchy_type& source, hierarchy_type& destination) {
+    local_phase_([&] {
+      authenticate_owned_(source, "copy source");
+      authenticate_owned_(destination, "copy destination");
+    });
     for (std::size_t level = 0; level < source.size(); ++level)
       copy_field_(source[level], destination[level]);
   }
 
-  static void copy_from_external_(std::span<field_type* const> source,
-                                  hierarchy_type& destination) {
-    if (source.size() != destination.size())
-      throw std::invalid_argument("AMR field Newton external hierarchy size differs");
+  void copy_from_external_(std::span<field_type* const> source, hierarchy_type& destination) {
+    local_phase_([&] {
+      authenticate_(source, "copy source");
+      authenticate_owned_(destination, "copy destination");
+    });
     for (std::size_t level = 0; level < source.size(); ++level)
       copy_field_(*source[level], destination[level]);
   }
 
-  static void copy_to_external_(const hierarchy_type& source,
-                                std::span<field_type* const> destination) {
-    if (source.size() != destination.size())
-      throw std::invalid_argument("AMR field Newton external hierarchy size differs");
+  void copy_to_external_(const hierarchy_type& source, std::span<field_type* const> destination) {
+    local_phase_([&] {
+      authenticate_owned_(source, "copy source");
+      authenticate_(destination, "copy destination");
+    });
     for (std::size_t level = 0; level < source.size(); ++level)
       copy_field_(source[level], *destination[level]);
-    Kokkos::fence();
+    local_phase_([] { Kokkos::fence(); });
   }
 
-  static void set_zero_(hierarchy_type& fields) {
-    for (field_type& field : fields)
-      field.set_val(Real(0));
+  void set_zero_(hierarchy_type& fields) {
+    local_phase_([&] {
+      for (field_type& field : fields)
+        field.set_val(Real(0));
+    });
   }
 
-  static void scale_(hierarchy_type& fields, Real factor) {
-    for (field_type& field : fields)
-      scale(field, factor);
+  void scale_(hierarchy_type& fields, Real factor) {
+    local_phase_([&] {
+      for (field_type& field : fields)
+        scale(field, factor);
+    });
   }
 
-  static void saxpy_(hierarchy_type& destination, Real factor, const hierarchy_type& source) {
-    if (destination.size() != source.size())
-      throw std::invalid_argument("AMR field Newton hierarchy sizes differ");
-    for (std::size_t level = 0; level < destination.size(); ++level)
-      saxpy(destination[level], factor, source[level]);
+  void saxpy_(hierarchy_type& destination, Real factor, const hierarchy_type& source) {
+    local_phase_([&] {
+      if (destination.size() != source.size())
+        throw std::invalid_argument("AMR field Newton hierarchy sizes differ");
+      for (std::size_t level = 0; level < destination.size(); ++level)
+        saxpy(destination[level], factor, source[level]);
+    });
   }
 
-  static void lincomb_(hierarchy_type& destination, Real left_factor, const hierarchy_type& left,
-                       Real right_factor, const hierarchy_type& right) {
-    if (destination.size() != left.size() || destination.size() != right.size())
-      throw std::invalid_argument("AMR field Newton hierarchy sizes differ");
-    for (std::size_t level = 0; level < destination.size(); ++level)
-      lincomb(destination[level], left_factor, left[level], right_factor, right[level]);
+  void lincomb_(hierarchy_type& destination, Real left_factor, const hierarchy_type& left,
+                Real right_factor, const hierarchy_type& right) {
+    local_phase_([&] {
+      if (destination.size() != left.size() || destination.size() != right.size())
+        throw std::invalid_argument("AMR field Newton hierarchy sizes differ");
+      for (std::size_t level = 0; level < destination.size(); ++level)
+        lincomb(destination[level], left_factor, left[level], right_factor, right[level]);
+    });
   }
 
   Real dot_(const hierarchy_type& left, const hierarchy_type& right,
             const ExecutionLane& lane) const {
-    if (left.size() != active_cells_.size() || right.size() != active_cells_.size())
-      throw std::invalid_argument("AMR field Newton dot hierarchy size differs");
     Real local_result = Real(0);
-    for (std::size_t level = 0; level < left.size(); ++level) {
-      // A replicated level has one physical owner. Counting every replica weights
-      // mixed replicated/distributed hierarchies differently across MPI sizes.
-      if (left[level].distribution().replicated() &&
-          left[level].local_rank() != left[level].rank_space().coordinate(0))
-        continue;
-      for (int component = 0; component < left[level].ncomp(); ++component)
-        local_result += cell_measures_[level] * dot_active_local(left[level], right[level],
-                                                                 component, active_cells_[level]);
-    }
+    local_phase_([&] {
+      if (left.size() != active_cells_.size() || right.size() != active_cells_.size())
+        throw std::invalid_argument("AMR field Newton dot hierarchy size differs");
+      authenticate_owned_(left, "dot left");
+      authenticate_owned_(right, "dot right");
+      for (std::size_t level = 0; level < left.size(); ++level) {
+        // A replicated level has one physical owner. Counting every replica weights
+        // mixed replicated/distributed hierarchies differently across MPI sizes.
+        if (left[level].distribution().replicated() &&
+            left[level].local_rank() != left[level].rank_space().coordinate(0))
+          continue;
+        for (int component = 0; component < left[level].ncomp(); ++component)
+          local_result += cell_measures_[level] * dot_active_local(left[level], right[level],
+                                                                   component, active_cells_[level]);
+      }
+    });
     return static_cast<Real>(all_reduce_sum(local_result, lane));
   }
 
@@ -442,7 +590,24 @@ class AmrFieldNewtonKrylovWorkspace final {
 
   static bool finite_(Real value) noexcept { return std::isfinite(static_cast<double>(value)); }
 
+  template <class Operation>
+  void local_phase_(Operation&& operation) const {
+    if (!local_lane_) {
+      operation();
+      return;
+    }
+    std::exception_ptr error;
+    try {
+      operation();
+      Kokkos::fence();
+    } catch (...) {
+      error = std::current_exception();
+    }
+    collectively_rethrow_exception(error, *local_lane_, "AMR field Newton local algebra");
+  }
+
   FieldNewtonOptions options_;
+  const ExecutionLane* local_lane_ = nullptr;
   std::vector<const field_type*> active_cells_;
   std::vector<Real> cell_measures_;
   hierarchy_type iterate_;

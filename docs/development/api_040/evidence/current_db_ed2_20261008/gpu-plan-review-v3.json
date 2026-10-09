@@ -1,0 +1,66 @@
+{
+  "Source_context": "db206100d81de834482c8a3b093ce30065aa1b43",
+  "admitted_for_Root_stage_and_single_dispatch": true,
+  "blocking_findings": [],
+  "closed_revision2_findings": {
+    "CUDA_cache_placement": "CUDA_CACHE_PATH exported/created under owned Scratch and guard checked",
+    "Hopper_hardware": "no literal H100 gate; raw CSV name/UUID/CC/driver retained, all rows CC9.0, visible driver device0 CC9.0, aarch64 fixed",
+    "MPI_receipts": "exact serial rankset{0}, MPI{0,1}, unique integer ranks and filename association, rank native path/hash/ABI linked to its installed identity, all sources expected db206 clean with doctor pass"
+  },
+  "exact_six_changed_files_from_preserved_revision2": [
+    "campaign.sbatch",
+    "guard.py",
+    "hardware.py",
+    "scientific_gate.py",
+    "plan.json",
+    "payload-files.json"
+  ],
+  "nonblocking_metadata_notes": [
+    "plan overall preparation_revision still2 while hardware_gate_revision3; reviewed content identified by exact new hashes",
+    "gpu_identity.scope retains ARM H100 literal; raw recorded name/UUID/CC and actual runtime report must govern hardware identification at reception"
+  ],
+  "payload_files_sha256": "9a43b9628effe7856ba96ee7c37f0980201a12cd38f4348e6ef9f7f9476c2713",
+  "preserved_full_design": {
+    "Kokkos_private_HOPPER90_prefix_and_exported_SM90_graph_flags_unchanged": true,
+    "no_TU_to_full_Native_or_full_science_inference": true,
+    "official_setup_build_exact_retained_wheel_install_and_origin_doctor_unchanged": true,
+    "original_PDE1_reference_units_bounds_fixtures_unchanged": true,
+    "original_exit_and_preservation_fail_closed_terminal_behavior_unchanged": true,
+    "seven_binding_and_seventeen_runtime_full_build_receipt_unchanged": true,
+    "strict_wrapper_fp_and_sm90_unchanged": true
+  },
+  "prior_review_receipt_sha256": "66f8f10589e356e80ebfa66d6b68605fab9d92a4f9c1127cef631ce298fe5c0e",
+  "receipt_shape_compatibility": {
+    "ABI_token": "include/pops/runtime/dynamic/abi_key.hpp includes headers= token",
+    "original_PDE_native_receipt_fields": "native=pin(native.__file__), abi=native.abi_key(), rank/worldsize/clock/ref fields unchanged",
+    "original_pin_function": "tests/python/support/evolved_stage_v_capture.py:8 returns resolved path and sha256",
+    "shared_receipt_directory": "collective_directory broadcasts rank0 path, exact rank0/rank1 files expected there; labels[rank] joins correct installed rank directory"
+  },
+  "remaining_before_actual_dispatch": "Root refreshes remote staged16 hashes and controlled write paths; one actual sbatch only; review is plan admission, not executed GPU/Native/science proof",
+  "reviewed_correction_revision": 3,
+  "reviewed_payload_count": 16,
+  "reviewed_pins": {
+    "build_receipt.py": "709fa698803d0839f8123a9191a14f01e224edfb9b8ba59fc9673499fe00ae91",
+    "campaign.sbatch": "8bf638fad0dab6849346d52dc60eab19281cf277b85a29654481269a4e3fce73",
+    "check_installer.py": "86e8f43b9449047328ed93cfb9fb0ae476d6822609f99a8ef709f55cb9f2031b",
+    "extract_kokkos.py": "464f97d5f70e5f9b2b447b08cbe0543c55b4732c509b0f4b0893b3af995d6a28",
+    "gpu_identity.py": "75f22bd83f20e1d30420c93f324d85e25cc8cc4001b897335277eb7a5c970e3a",
+    "guard.py": "576522a101a200a24138749f66e77d60b61d17a72a731a3656d38f0eeffc828f",
+    "hardware.py": "d40de6a6f0a856b956392678118c7f02bad89041357a4f3f3c9e1d86e3248c91",
+    "kokkos-5.2.1-SHA-256.txt": "22968f1e7dc143261a40d333c4fe02c9414c761447cb28192549812eb3488c4d",
+    "kokkos-5.2.1.tar.gz": "3f754c99aa6130b1dd6520d904db7b2fd44ed618cd91e0dfd921956f23f6812d",
+    "mpi_rank.py": "e276eae3276533d1f1e828502cc98c1b2c42646e2f210e108654beba570ffd75",
+    "plan.json": "548fe1146df298416d458abf4134614b3c1c6226407e92c78d16b0842fb0459b",
+    "scientific_gate.py": "420a6a7575a6a5d2fc87f965c944334c702f70cd6759feb54a74eabe8c9ee307",
+    "source-files.json": "ccd407f00a3c287bf737d9527c9ee822bd3ff670c35ace053adcb10233b36b1f",
+    "source.bundle": "fa18be413e7c7f15aa68bf097c31d4757b60924e3bbfa44a51753ffa1c2ee3a4",
+    "source.tar": "f7397b179a98698d3c90b188a1cfa6bb79e48f4cbb5a08fb1d9a738916a01a1e",
+    "strict_nvcc_wrapper.sh": "f56aff1069c2146271a71868c499e16a199436a3bee55214a5f2b73205f2f5c0"
+  },
+  "reviewer_Main_edits": false,
+  "reviewer_preparation_edits": false,
+  "reviewer_remote_actions": false,
+  "reviewer_tests_or_compilation": false,
+  "schema": "sol61.independent-full-native-gpu-private-plan-review@1",
+  "unchanged_other_11_payload_rows": true
+}

@@ -1,0 +1,75 @@
+{
+  "CMakeCache.txt": {
+    "bytes": 32716,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-amr-v12-carriers-dim2-bb668797/CMakeCache.txt",
+    "sha256": "98210472af9df85f9e1893dbf879310d20ea805a6ab0b68f37ff1f7f4a07ef1f"
+  },
+  "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=a37c25c95add0cd1e3a3968309fda11de7dd032229f988f6501a1bfefa3f2923;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=4f0ddfff213bbc8f41ec9b7c80af3672d966f0527a55a041ed2b7e91e90198ab;dim=2",
+  "build.ninja": {
+    "bytes": 97822,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-amr-v12-carriers-dim2-bb668797/build.ninja",
+    "sha256": "ddcd9d6892ebe6377b765f28651fb17e388b84340c56bd8d0fc2c8fd9d372389"
+  },
+  "build_log": {
+    "bytes": 66480,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-amr-v12-carriers-dim2-bb668797/build.log",
+    "sha256": "19aab4a4fb7a7c3cb51f597d2aedb37a38b71ff7df97390f1dd349f01b207f3d"
+  },
+  "build_returncode": 0,
+  "closed_at": "2026-10-01T20:35:38.833790+00:00",
+  "command": {
+    "bytes": 1415,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-amr-v12-carriers-dim2-bb668797/command.json",
+    "sha256": "b73cacdd7a6c04f7d2f40cc1563d3df7bcca6ebd435abc73499776b47bb91023"
+  },
+  "compile_commands.json": {
+    "bytes": 51436,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-amr-v12-carriers-dim2-bb668797/compile_commands.json",
+    "sha256": "c3c508300d71f3a62067e50e701ce18fdc45c645c1b5d68119c26bcf0979d425"
+  },
+  "cpp_to_dso_cryptographic_graph_proof": false,
+  "dimension": 2,
+  "environment": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17",
+  "installed_identity": {
+    "bytes": 2917,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-amr-v12-carriers-dim2-bb668797/installed-identity/identity.json",
+    "sha256": "f0b06724ed2543cb6d06c4107f559a130b45a4a033cd6749693b2783f88ca6c6"
+  },
+  "installed_identity_returncode": 0,
+  "native": {
+    "bytes": 13672632,
+    "path": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "sha256": "13b3d024eed5f2776e96dbee6f674fe2e7f48ccf3ff31382b13749444cfe18f7"
+  },
+  "native_scientific_acceptance": false,
+  "ninja_commands": {
+    "bytes": 50600,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-amr-v12-carriers-dim2-bb668797/ninja-commands.txt",
+    "sha256": "bea682c0ab40a84903cd8579a79632ae7c0a9256dad3c86ac6068aaeed6fa6ff"
+  },
+  "preserved_copy_receipt": {
+    "bytes": 1585,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/next-sdk-environment-clone-reception.json",
+    "sha256": "02cdf62b13bd97eadcfc3bc8dc9867c880642843d660a605c404b4473e1775ae"
+  },
+  "preserved_sdk2e4_unchanged": true,
+  "production_bytes_unchanged": true,
+  "schema": "root.api040.repository-native-build@3",
+  "sdk_manifest_file": {
+    "bytes": 21592,
+    "path": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/lib/python3.12/site-packages/pops/include/pops_headers.manifest",
+    "sha256": "48a6475ca7d3e658f0f66533e2d200b281f2a7717b16dfc3fcaf3f8f7435168d"
+  },
+  "source_commit": "bb668797c2bc15b9fcfc744e94d9bde874ec5e7d",
+  "source_file_count": 1227,
+  "source_head_unchanged": true,
+  "verified_installed_source_files": 1132,
+  "wheel": {
+    "bytes": 8949148,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-amr-v12-carriers-dim2-bb668797/retained-wheel/pops-1.1.0-cp312-cp312-macosx_26_0_arm64.whl",
+    "sha256": "95c020847e6da3f52f5f7933386be6bbcb4c985a04ea4fd9b14fc5db47de8a4e"
+  },
+  "wheel_and_installed_native_bytes_equal": true,
+  "wheel_native_member": "pops/_native/dim2/_pops.cpython-312-darwin.so",
+  "wheel_native_member_sha256": "13b3d024eed5f2776e96dbee6f674fe2e7f48ccf3ff31382b13749444cfe18f7"
+}

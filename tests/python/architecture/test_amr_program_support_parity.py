@@ -28,6 +28,10 @@ PRODUCTION_CODEGEN = (
 CONTEXT_ROOT = "pops/runtime/program/amr_program_context.hpp"
 CONTEXT_FRAGMENT_PATHS = frozenset(
     {
+        "pops/runtime/program/program_context_value_authority.inc",
+        "pops/runtime/program/amr_program_context_value_authority.inc",
+        "pops/runtime/program/amr_program_context_principal.inc",
+        "pops/runtime/program/amr_program_context_spatial_interaction.inc",
         "pops/runtime/program/amr_program_context_spatial.inc",
         "pops/runtime/program/amr_program_context_field_runtime_public.inc",
         "pops/runtime/program/amr_program_context_general_field_public.inc",
@@ -51,6 +55,8 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/amr_program_context_flux_expression_services.inc",
         "pops/runtime/program/amr_program_context_cell_temporal_runtime.inc",
         "pops/runtime/program/amr_program_context_hierarchy_barriers.inc",
+        "pops/runtime/program/amr_program_context_path_rhs.inc",
+        "pops/runtime/program/amr_program_context_rhs_input_trace.inc",
         "pops/runtime/program/amr_program_context_mapping_continuation.inc",
         "pops/runtime/program/amr_program_context_subcycling_runtime.inc",
         "pops/runtime/program/amr_program_context_flux_family.inc",
@@ -73,7 +79,10 @@ def _local_includes(source: str) -> tuple[str, ...]:
 
 
 def _require_classified_context_include(include: str, known: frozenset[str]) -> None:
-    if include not in known and include.startswith("pops/runtime/program/amr_program_context_"):
+    if include not in known and include.startswith((
+        "pops/runtime/program/amr_program_context_",
+        "pops/runtime/program/program_context_",
+    )):
         raise AssertionError(f"unclassified AmrProgramContext definition authority: {include}")
 
 
@@ -120,6 +129,9 @@ def test_context_include_parser_authenticates_both_delimiters_and_hidden_fragmen
         assert "unclassified AmrProgramContext definition authority" in str(error)
     else:
         raise AssertionError("quoted hidden fragment bypassed AMR Program classification")
+    shared_hidden = "pops/runtime/program/program_context_hidden.inc"
+    with pytest.raises(AssertionError, match="unclassified AmrProgramContext definition authority"):
+        _require_classified_context_include(shared_hidden, CONTEXT_FRAGMENT_PATHS)
 
 
 def test_generated_amr_field_map_continuations_import_exported_facade_seams():

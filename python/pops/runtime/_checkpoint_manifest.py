@@ -13,6 +13,87 @@ from pops._generated_release_contract import (
 )
 from pops.output._checkpoint_contract import IDENTITY_KEY, MANIFEST_KEY
 
+from pops.identity.checkpoint_origin import (
+    BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION, RUN_ORIGIN_CHECKPOINT_SCHEMA_VERSION,
+    _BOUND_INITIAL_ORIGIN, _is_bound_initial_origin,
+)
+
+def _require_initial_temporal(state: Any) -> None:
+    """Authenticate the existing accepted controller/cursors, without starting a run."""
+    if hasattr(state, "states"):
+        state.to_data()  # Authenticates shared composite authority before inspecting leaves.
+    states = getattr(state, "states", (state,))
+    if not states:
+        raise RuntimeError("bound_initial checkpoint has no accepted temporal state")
+    for leaf in states:
+        checkpoint = getattr(leaf, "checkpoint_json", None)
+        if not callable(checkpoint):
+            raise RuntimeError("bound_initial checkpoint requires accepted temporal authority")
+        data = _strict_json(checkpoint(time=0., macro_step=0))
+        if data["transaction_stats"] != {"accepted": 0, "failed": 0, "rejected": 0} \
+                or data["controller_state"]["last_accepted_dt"] is not None:
+            raise RuntimeError("bound_initial checkpoint requires zero attempted transactions")
+
+
+def checkpoint_lifecycle_evidence(owner: Any) -> dict[str, Any]:
+    """Exact capture-plan origin: either a real run or the authenticated initial bind."""
+    run = getattr(owner, "last_run_identity", None)
+    if run is not None:
+        if type(run) is not Identity or run.domain != "run":
+            raise RuntimeError("checkpoint has an invalid execution run identity")
+        return {"run_identity": run.to_data()}
+    _runtime_identities(owner)
+    if getattr(owner, "last_run_manifest", None) is not None:
+        raise RuntimeError("checkpoint execution manifest lacks its run identity")
+    # Native constructors currently establish +0/q0. A future nonzero initial
+    # origin needs explicit bind authority; last_run=None alone is insufficient.
+    from pops.runtime._temporal_restart import _clock
+    if _clock(owner.time(), owner.macro_step()) != ((0.).hex(), 0):
+        raise RuntimeError("bound_initial checkpoint requires the native initial accepted clock")
+    provider = getattr(owner, "_checkpoint_initial_temporal_state", None)
+    if provider is None:
+        temporal = getattr(owner, "_temporal_restart_state", None)
+    else:
+        if not callable(provider):
+            raise TypeError("initial checkpoint temporal authority provider must be callable")
+        temporal = provider()
+    _require_initial_temporal(temporal)
+    return {"run_identity": None, "origin": dict(_BOUND_INITIAL_ORIGIN)}
+
+
+def _require_initial_payload(payload: Any, *, runtime_kind: str) -> None:
+    """Initial envelopes must carry the authenticated initial temporal image."""
+    import numpy as np
+    step = np.asarray(payload["macro_step"])
+    if step.shape != () or step.dtype.kind not in "iu" \
+            or float(payload["t"]).hex() != (0.).hex() or int(step) != 0:
+        raise ValueError("bound_initial envelope has a noninitial accepted clock")
+    if runtime_kind in {"uniform", "amr"}:
+        from pops.runtime._temporal_restart import TemporalRestartState
+        state = TemporalRestartState.from_json(payload["temporal_restart_state"], time=0., macro_step=0)
+        _require_initial_temporal(state)
+    elif runtime_kind in {"multi_layout_uniform", "multi_layout_amr"}:
+        layouts = np.asarray(payload["layout_ids"])
+        if layouts.ndim != 1 or not len(layouts):
+            raise ValueError("bound_initial composite requires exact child layouts")
+        for index in range(len(layouts)):
+            image = np.asarray(payload["layout_checkpoint_%d" % index])
+            if image.dtype != np.dtype(np.uint8) or image.ndim != 1:
+                raise ValueError("bound_initial child checkpoint must be an exact byte image")
+        # Child arrays are decoded only by their native preflight after its
+        # resolved resource budget admits them. Never inflate nested archives here.
+    else:
+        raise ValueError("bound_initial checkpoint runtime kind is unsupported")
+
+
+def require_bound_initial_children(children: Any, temporal: Any) -> None:
+    """Authenticate already-admitted child envelopes before composite publication."""
+    _require_initial_temporal(temporal)
+    for child in children:
+        payload = child.payload if hasattr(child, "payload") else child.codec.payload
+        if checkpoint_run_identity(payload) is not None:
+            raise ValueError("bound_initial composite contains a noninitial child")
+
 
 def _payload_files(payload: Any) -> set[str]:
     stored_files = getattr(payload, "files", None)
@@ -143,7 +224,8 @@ def _seal_checkpoint_payload_with_identities(
     semantic: Identity,
     artifact: Identity,
     bind: Identity,
-    run: Identity,
+    run: Identity | None,
+    origin: dict[str, Any] | None = None,
 ) -> Identity:
     """Seal an offline payload with explicit, already-authenticated lifecycle identities."""
     if MANIFEST_KEY in payload or IDENTITY_KEY in payload:
@@ -152,26 +234,34 @@ def _seal_checkpoint_payload_with_identities(
         (semantic, "semantic"),
         (artifact, "artifact"),
         (bind, "bind"),
-        (run, "run"),
     ):
         if type(value) is not Identity or value.domain != domain:
             raise TypeError("checkpoint requires an exact domain-%r identity" % domain)
+    if origin is None:
+        if type(run) is not Identity or run.domain != "run":
+            raise TypeError("checkpoint requires an exact domain-'run' identity")
+    elif not _is_bound_initial_origin(origin) or run is not None:
+        raise ValueError("checkpoint initial origin must be exact and carry no run identity")
     if not isinstance(runtime_kind, str) or not runtime_kind:
         raise TypeError("checkpoint runtime kind must be non-empty text")
     arrays = {name: _array_evidence(value) for name, value in sorted(payload.items())}
     base = {
-        "schema_version": CHECKPOINT_SCHEMA_VERSION,
+        "schema_version": (RUN_ORIGIN_CHECKPOINT_SCHEMA_VERSION if origin is None
+                           else BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION),
         "runtime_kind": runtime_kind,
         "semantic_identity": _identity_json(semantic),
         "artifact_identity": _identity_json(artifact),
         "bind_identity": _identity_json(bind),
-        "run_identity": _identity_json(run),
+        "run_identity": None if run is None else _identity_json(run),
         "clock": {
             "time": float(payload["t"]).hex(),
             "macro_step": int(payload["macro_step"]),
         },
         "arrays": arrays,
     }
+    if origin is not None:
+        _require_initial_payload(payload, runtime_kind=runtime_kind)
+        base["origin"] = dict(origin)
     restart = make_identity("restart", base)
     manifest = dict(base, restart_identity=_identity_json(restart))
     payload[MANIFEST_KEY] = json.dumps(
@@ -183,11 +273,8 @@ def _seal_checkpoint_payload_with_identities(
 def seal_checkpoint_payload(owner: Any, payload: dict[str, Any], *, runtime_kind: str) -> Identity:
     """Add the canonical manifest and restart token to an in-memory NPZ payload."""
     semantic, artifact, bind = _runtime_identities(owner)
+    evidence = checkpoint_lifecycle_evidence(owner)
     run = getattr(owner, "last_run_identity", None)
-    if type(run) is not Identity or run.domain != "run":
-        raise RuntimeError(
-            "checkpoint requires a prior pops.run(sim, **controls) so its execution controls "
-            "have a run identity")
     return _seal_checkpoint_payload_with_identities(
         payload,
         runtime_kind=runtime_kind,
@@ -195,6 +282,7 @@ def seal_checkpoint_payload(owner: Any, payload: dict[str, Any], *, runtime_kind
         artifact=artifact,
         bind=bind,
         run=run,
+        origin=evidence.get("origin"),
     )
 
 
@@ -223,11 +311,14 @@ def inspect_checkpoint_payload_integrity(
         "schema_version", "runtime_kind", "semantic_identity", "artifact_identity",
         "bind_identity", "run_identity", "clock", "arrays", "restart_identity",
     }
+    initial = manifest.get("schema_version") == BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION
+    if initial:
+        expected_keys.add("origin")
     if set(manifest) != expected_keys:
         raise ValueError("checkpoint manifest keys must be exactly %s" % sorted(expected_keys))
     version = manifest["schema_version"]
     if (isinstance(version, bool) or not isinstance(version, int)
-            or version != CHECKPOINT_SCHEMA_VERSION):
+            or version not in {RUN_ORIGIN_CHECKPOINT_SCHEMA_VERSION, BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION}):
         raise ValueError("unsupported checkpoint manifest schema_version %r" % manifest["schema_version"])
     if manifest["runtime_kind"] != runtime_kind:
         raise ValueError("checkpoint runtime kind %r cannot restart %r" % (
@@ -246,9 +337,13 @@ def inspect_checkpoint_payload_integrity(
         recorded = _identity_from_json(manifest[field])
         if recorded.domain != domain:
             raise ValueError("checkpoint %s has wrong domain" % field)
-    run = _identity_from_json(manifest["run_identity"])
-    if run.domain != "run":
-        raise ValueError("checkpoint run_identity has wrong domain")
+    if initial:
+        if not _is_bound_initial_origin(manifest["origin"]) or manifest["run_identity"] is not None:
+            raise ValueError("bound_initial checkpoint has invalid origin/run authority")
+    else:
+        run = _identity_from_json(manifest["run_identity"])
+        if run.domain != "run":
+            raise ValueError("checkpoint run_identity has wrong domain")
     for name, evidence in manifest["arrays"].items():
         if evidence != _array_evidence(payload[name]):
             raise ValueError("checkpoint payload digest mismatch for %r" % name)
@@ -264,6 +359,10 @@ def inspect_checkpoint_payload_integrity(
             or float(payload["t"]) != float.fromhex(clock["time"]) \
             or int(payload["macro_step"]) != int(clock["macro_step"]):
         raise ValueError("checkpoint clock does not match its canonical manifest")
+    if initial:
+        if clock != {"time": (0.).hex(), "macro_step": 0} or type(clock["macro_step"]) is not int:
+            raise ValueError("bound_initial checkpoint has invalid accepted clock authority")
+        _require_initial_payload(payload, runtime_kind=runtime_kind)
     return manifest, restart
 
 
@@ -289,7 +388,7 @@ def authenticate_checkpoint_payload(owner: Any, payload: Any, *, runtime_kind: s
     return restart
 
 
-def checkpoint_run_identity(payload: Any) -> Identity:
+def checkpoint_run_identity(payload: Any) -> Identity | None:
     """Return the exact run identity carried by an authenticated checkpoint envelope."""
     files = set(
         getattr(
@@ -301,6 +400,10 @@ def checkpoint_run_identity(payload: Any) -> Identity:
     if MANIFEST_KEY not in files:
         raise ValueError("checkpoint has no canonical manifest")
     manifest = _strict_json(payload[MANIFEST_KEY])
+    if manifest.get("schema_version") == BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION:
+        if not _is_bound_initial_origin(manifest.get("origin")) or manifest.get("run_identity") is not None:
+            raise ValueError("bound_initial checkpoint has invalid origin/run authority")
+        return None
     run = _identity_from_json(manifest.get("run_identity"))
     if run.domain != "run":
         raise ValueError("checkpoint run_identity has wrong domain")
@@ -308,9 +411,12 @@ def checkpoint_run_identity(payload: Any) -> Identity:
 
 
 __all__ = [
-    "CHECKPOINT_SCHEMA_VERSION", "IDENTITY_KEY", "MANIFEST_KEY",
+    "CHECKPOINT_SCHEMA_VERSION", "BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION", "RUN_ORIGIN_CHECKPOINT_SCHEMA_VERSION",
+    "IDENTITY_KEY", "MANIFEST_KEY",
     "authenticate_checkpoint_payload", "inspect_checkpoint_payload_integrity",
     "checkpoint_run_identity",
+    "checkpoint_lifecycle_evidence",
+    "require_bound_initial_children",
     "require_exact_payload_version",
     "seal_checkpoint_payload",
 ]

@@ -1,0 +1,239 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 19 items
+
+tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[False-False] FAILED [  5%]
+tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[False-True] FAILED [ 10%]
+tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[True-False] FAILED [ 15%]
+tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[True-True] FAILED [ 21%]
+tests/python/integration/runtime/test_api040_m22_h05_runtime.py::test_h05_original_residual_rebind_and_domain_rollback[False] FAILED [ 26%]
+tests/python/integration/runtime/test_api040_m22_h05_runtime.py::test_h05_original_residual_rebind_and_domain_rollback[True] FAILED [ 31%]
+tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py::test_h05_nonuniform_cells_rebind_and_collective_negative_rate[False] FAILED [ 36%]
+tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py::test_h05_nonuniform_cells_rebind_and_collective_negative_rate[True] FAILED [ 42%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_adaptive_cfl_without_max_dt_matches_two_step_oracle PASSED [ 47%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_refusal_preserves_accepted_state_and_clock[fixed_dt] PASSED [ 52%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_refusal_preserves_accepted_state_and_clock[actual_stage_cfl] PASSED [ 57%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_fixed_dt_uses_unit_numerical_budget PASSED [ 63%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_state[fractional] PASSED [ 68%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_state[diagnostic] PASSED [ 73%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_state[guarded] PASSED [ 78%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_checkpoint_restart_does_not_request_an_absent_poisson_field PASSED [ 84%]
+tests/python/integration/runtime/test_api040_c17_stagnation_runtime.py::test_original_residual_is_required_before_publication_and_history_rotation[1.0-False] PASSED [ 89%]
+tests/python/integration/runtime/test_api040_c17_stagnation_runtime.py::test_original_residual_is_required_before_publication_and_history_rotation[0.0-True] PASSED [ 94%]
+tests/python/integration/runtime/test_external_grid_frontier_runtime.py::test_native_external_grid_frontier_and_rank_local_landing_rollback PASSED [100%]
+
+=================================== FAILURES ===================================
+___________ test_joint_product_rebind_or_atomic_failure[False-False] ___________
+tests/python/integration/runtime/test_local_residual_product_runtime.py:21: in test_joint_product_rebind_or_atomic_failure
+    artifact, world = _compile(case, layout, "local-product-%s-%s" % (reverse, invalid))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).
+E   Command: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG="02723ae9a5d36640fb5ad31d3e89c9b7b3a4a097c92059aac57d2857a3b4020e" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI="f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpvaay70ef/problem.d -MT /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_joint_product_rebind_or_a0/pops-native-cache/.54ec8bca1bb6d9c08366ec3862f70b689136ea6da8206901e5c4a1f3d54f8012.pops-stage-pa8ased2.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpvaay70ef/problem.cpp -o /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_joint_product_rebind_or_a0/pops-native-cache/.54ec8bca1bb6d9c08366ec3862f70b689136ea6da8206901e5c4a1f3d54f8012.pops-stage-pa8ased2.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so
+E   Compiler output:
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpvaay70ef/problem.cpp:223:9: error: call to 'all_reduce_max' is ambiguous
+E     223 |     if (pops::all_reduce_max(product_layout_error_, ctx.prepared_execution_lane()))
+E         |         ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/parallel/execution_lane.hpp:872:13: note: candidate function
+E     872 | inline Real all_reduce_max(Real value, const ExecutionLane& lane) {
+E         |             ^
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/parallel/execution_lane.hpp:893:13: note: candidate function
+E     893 | inline long all_reduce_max(long value, const ExecutionLane& lane) {
+E         |             ^
+E   1 error generated.
+E   Hints: `python -c "import pops; pops.doctor()"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.
+E   This is GENERATED code emitted by pops.time.Program 'local_product_step'; the failing source was written to /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_joint_product_rebind_or_a0/pops-native-cache/54ec8bca1bb6d9c08366ec3862f70b689136ea6da8206901e5c4a1f3d54f8012.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).
+----------------------------- Captured stdout call -----------------------------
+[rank 0] local-product-False-False: compile and publish start
+___________ test_joint_product_rebind_or_atomic_failure[False-True] ____________
+tests/python/integration/runtime/test_local_residual_product_runtime.py:21: in test_joint_product_rebind_or_atomic_failure
+    artifact, world = _compile(case, layout, "local-product-%s-%s" % (reverse, invalid))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).
+E   Command: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG="02723ae9a5d36640fb5ad31d3e89c9b7b3a4a097c92059aac57d2857a3b4020e" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI="f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_5nuiefy/problem.d -MT /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_joint_product_rebind_or_a1/pops-native-cache/.54ec8bca1bb6d9c08366ec3862f70b689136ea6da8206901e5c4a1f3d54f8012.pops-stage-s24pt9xu.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_5nuiefy/problem.cpp -o /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_joint_product_rebind_or_a1/pops-native-cache/.54ec8bca1bb6d9c08366ec3862f70b689136ea6da8206901e5c4a1f3d54f8012.pops-stage-s24pt9xu.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so
+E   Compiler output:
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_5nuiefy/problem.cpp:223:9: error: call to 'all_reduce_max' is ambiguous
+E     223 |     if (pops::all_reduce_max(product_layout_error_, ctx.prepared_execution_lane()))
+E         |         ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/parallel/execution_lane.hpp:872:13: note: candidate function
+E     872 | inline Real all_reduce_max(Real value, const ExecutionLane& lane) {
+E         |             ^
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/parallel/execution_lane.hpp:893:13: note: candidate function
+E     893 | inline long all_reduce_max(long value, const ExecutionLane& lane) {
+E         |             ^
+E   1 error generated.
+E   Hints: `python -c "import pops; pops.doctor()"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.
+E   This is GENERATED code emitted by pops.time.Program 'local_product_step'; the failing source was written to /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_joint_product_rebind_or_a1/pops-native-cache/54ec8bca1bb6d9c08366ec3862f70b689136ea6da8206901e5c4a1f3d54f8012.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).
+----------------------------- Captured stdout call -----------------------------
+[rank 0] local-product-True-False: compile and publish start
+___________ test_joint_product_rebind_or_atomic_failure[True-False] ____________
+tests/python/integration/runtime/test_local_residual_product_runtime.py:21: in test_joint_product_rebind_or_atomic_failure
+    artifact, world = _compile(case, layout, "local-product-%s-%s" % (reverse, invalid))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).
+E   Command: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG="02723ae9a5d36640fb5ad31d3e89c9b7b3a4a097c92059aac57d2857a3b4020e" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI="f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpq421juy2/problem.d -MT /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_joint_product_rebind_or_a2/pops-native-cache/.a3515c6064a9e436dd37816afa4a10df05ab4c8b99e637d2a4731468f61a6e84.pops-stage-e0ft505e.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpq421juy2/problem.cpp -o /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_joint_product_rebind_or_a2/pops-native-cache/.a3515c6064a9e436dd37816afa4a10df05ab4c8b99e637d2a4731468f61a6e84.pops-stage-e0ft505e.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so
+E   Compiler output:
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpq421juy2/problem.cpp:223:9: error: call to 'all_reduce_max' is ambiguous
+E     223 |     if (pops::all_reduce_max(product_layout_error_, ctx.prepared_execution_lane()))
+E         |         ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/parallel/execution_lane.hpp:872:13: note: candidate function
+E     872 | inline Real all_reduce_max(Real value, const ExecutionLane& lane) {
+E         |             ^
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/parallel/execution_lane.hpp:893:13: note: candidate function
+E     893 | inline long all_reduce_max(long value, const ExecutionLane& lane) {
+E         |             ^
+E   1 error generated.
+E   Hints: `python -c "import pops; pops.doctor()"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.
+E   This is GENERATED code emitted by pops.time.Program 'local_product_step'; the failing source was written to /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_joint_product_rebind_or_a2/pops-native-cache/a3515c6064a9e436dd37816afa4a10df05ab4c8b99e637d2a4731468f61a6e84.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).
+----------------------------- Captured stdout call -----------------------------
+[rank 0] local-product-False-True: compile and publish start
+____________ test_joint_product_rebind_or_atomic_failure[True-True] ____________
+tests/python/integration/runtime/test_local_residual_product_runtime.py:21: in test_joint_product_rebind_or_atomic_failure
+    artifact, world = _compile(case, layout, "local-product-%s-%s" % (reverse, invalid))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).
+E   Command: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG="02723ae9a5d36640fb5ad31d3e89c9b7b3a4a097c92059aac57d2857a3b4020e" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI="f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpy1_j8vg3/problem.d -MT /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_joint_product_rebind_or_a3/pops-native-cache/.a3515c6064a9e436dd37816afa4a10df05ab4c8b99e637d2a4731468f61a6e84.pops-stage-tj7udvwl.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpy1_j8vg3/problem.cpp -o /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_joint_product_rebind_or_a3/pops-native-cache/.a3515c6064a9e436dd37816afa4a10df05ab4c8b99e637d2a4731468f61a6e84.pops-stage-tj7udvwl.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so
+E   Compiler output:
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpy1_j8vg3/problem.cpp:223:9: error: call to 'all_reduce_max' is ambiguous
+E     223 |     if (pops::all_reduce_max(product_layout_error_, ctx.prepared_execution_lane()))
+E         |         ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/parallel/execution_lane.hpp:872:13: note: candidate function
+E     872 | inline Real all_reduce_max(Real value, const ExecutionLane& lane) {
+E         |             ^
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/parallel/execution_lane.hpp:893:13: note: candidate function
+E     893 | inline long all_reduce_max(long value, const ExecutionLane& lane) {
+E         |             ^
+E   1 error generated.
+E   Hints: `python -c "import pops; pops.doctor()"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.
+E   This is GENERATED code emitted by pops.time.Program 'local_product_step'; the failing source was written to /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_joint_product_rebind_or_a3/pops-native-cache/a3515c6064a9e436dd37816afa4a10df05ab4c8b99e637d2a4731468f61a6e84.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).
+----------------------------- Captured stdout call -----------------------------
+[rank 0] local-product-True-True: compile and publish start
+_________ test_h05_original_residual_rebind_and_domain_rollback[False] _________
+tests/python/integration/runtime/test_api040_m22_h05_runtime.py:35: in test_h05_original_residual_rebind_and_domain_rollback
+    artifact,world=_compile(case,layout,"M22-H05-%s" % reverse)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).
+E   Command: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG="02723ae9a5d36640fb5ad31d3e89c9b7b3a4a097c92059aac57d2857a3b4020e" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI="f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp3wxgox7x/problem.d -MT /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_h05_original_residual_reb0/pops-native-cache/.9d3328df71f70a80303974683e1a7b0b451b50164779261eebb411d2f69a6c61.pops-stage-rr9sddn0.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp3wxgox7x/problem.cpp -o /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_h05_original_residual_reb0/pops-native-cache/.9d3328df71f70a80303974683e1a7b0b451b50164779261eebb411d2f69a6c61.pops-stage-rr9sddn0.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so
+E   Compiler output:
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp3wxgox7x/problem.cpp:260:9: error: call to 'all_reduce_max' is ambiguous
+E     260 |     if (pops::all_reduce_max(product_layout_error_, ctx.prepared_execution_lane()))
+E         |         ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/parallel/execution_lane.hpp:872:13: note: candidate function
+E     872 | inline Real all_reduce_max(Real value, const ExecutionLane& lane) {
+E         |             ^
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/parallel/execution_lane.hpp:893:13: note: candidate function
+E     893 | inline long all_reduce_max(long value, const ExecutionLane& lane) {
+E         |             ^
+E   1 error generated.
+E   Hints: `python -c "import pops; pops.doctor()"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.
+E   This is GENERATED code emitted by pops.time.Program 'H05_backward_euler_original_equations'; the failing source was written to /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_h05_original_residual_reb0/pops-native-cache/9d3328df71f70a80303974683e1a7b0b451b50164779261eebb411d2f69a6c61.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).
+----------------------------- Captured stdout call -----------------------------
+[rank 0] M22-H05-False: compile and publish start
+_________ test_h05_original_residual_rebind_and_domain_rollback[True] __________
+tests/python/integration/runtime/test_api040_m22_h05_runtime.py:35: in test_h05_original_residual_rebind_and_domain_rollback
+    artifact,world=_compile(case,layout,"M22-H05-%s" % reverse)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).
+E   Command: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG="02723ae9a5d36640fb5ad31d3e89c9b7b3a4a097c92059aac57d2857a3b4020e" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI="f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpwwdfs99g/problem.d -MT /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_h05_original_residual_reb1/pops-native-cache/.9d3328df71f70a80303974683e1a7b0b451b50164779261eebb411d2f69a6c61.pops-stage-cn35smxu.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpwwdfs99g/problem.cpp -o /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_h05_original_residual_reb1/pops-native-cache/.9d3328df71f70a80303974683e1a7b0b451b50164779261eebb411d2f69a6c61.pops-stage-cn35smxu.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so
+E   Compiler output:
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpwwdfs99g/problem.cpp:260:9: error: call to 'all_reduce_max' is ambiguous
+E     260 |     if (pops::all_reduce_max(product_layout_error_, ctx.prepared_execution_lane()))
+E         |         ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/parallel/execution_lane.hpp:872:13: note: candidate function
+E     872 | inline Real all_reduce_max(Real value, const ExecutionLane& lane) {
+E         |             ^
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/parallel/execution_lane.hpp:893:13: note: candidate function
+E     893 | inline long all_reduce_max(long value, const ExecutionLane& lane) {
+E         |             ^
+E   1 error generated.
+E   Hints: `python -c "import pops; pops.doctor()"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.
+E   This is GENERATED code emitted by pops.time.Program 'H05_backward_euler_original_equations'; the failing source was written to /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_h05_original_residual_reb1/pops-native-cache/9d3328df71f70a80303974683e1a7b0b451b50164779261eebb411d2f69a6c61.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).
+----------------------------- Captured stdout call -----------------------------
+[rank 0] M22-H05-True: compile and publish start
+_____ test_h05_nonuniform_cells_rebind_and_collective_negative_rate[False] _____
+tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py:51: in test_h05_nonuniform_cells_rebind_and_collective_negative_rate
+    artifact, world = _compile(case, layout, "H05-adversarial-%s" % reverse)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).
+E   Command: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG="02723ae9a5d36640fb5ad31d3e89c9b7b3a4a097c92059aac57d2857a3b4020e" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI="f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp1bhb1_xs/problem.d -MT /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_h05_nonuniform_cells_rebi0/pops-native-cache/.9d3328df71f70a80303974683e1a7b0b451b50164779261eebb411d2f69a6c61.pops-stage-t0pc87d8.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp1bhb1_xs/problem.cpp -o /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_h05_nonuniform_cells_rebi0/pops-native-cache/.9d3328df71f70a80303974683e1a7b0b451b50164779261eebb411d2f69a6c61.pops-stage-t0pc87d8.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so
+E   Compiler output:
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp1bhb1_xs/problem.cpp:260:9: error: call to 'all_reduce_max' is ambiguous
+E     260 |     if (pops::all_reduce_max(product_layout_error_, ctx.prepared_execution_lane()))
+E         |         ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/parallel/execution_lane.hpp:872:13: note: candidate function
+E     872 | inline Real all_reduce_max(Real value, const ExecutionLane& lane) {
+E         |             ^
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/parallel/execution_lane.hpp:893:13: note: candidate function
+E     893 | inline long all_reduce_max(long value, const ExecutionLane& lane) {
+E         |             ^
+E   1 error generated.
+E   Hints: `python -c "import pops; pops.doctor()"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.
+E   This is GENERATED code emitted by pops.time.Program 'H05_backward_euler_original_equations'; the failing source was written to /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_h05_nonuniform_cells_rebi0/pops-native-cache/9d3328df71f70a80303974683e1a7b0b451b50164779261eebb411d2f69a6c61.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).
+----------------------------- Captured stdout call -----------------------------
+[rank 0] H05-adversarial-False: compile and publish start
+_____ test_h05_nonuniform_cells_rebind_and_collective_negative_rate[True] ______
+tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py:51: in test_h05_nonuniform_cells_rebind_and_collective_negative_rate
+    artifact, world = _compile(case, layout, "H05-adversarial-%s" % reverse)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).
+E   Command: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG="02723ae9a5d36640fb5ad31d3e89c9b7b3a4a097c92059aac57d2857a3b4020e" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI="f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmprpksfld8/problem.d -MT /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_h05_nonuniform_cells_rebi1/pops-native-cache/.9d3328df71f70a80303974683e1a7b0b451b50164779261eebb411d2f69a6c61.pops-stage-4zbrwzrk.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmprpksfld8/problem.cpp -o /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_h05_nonuniform_cells_rebi1/pops-native-cache/.9d3328df71f70a80303974683e1a7b0b451b50164779261eebb411d2f69a6c61.pops-stage-4zbrwzrk.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so
+E   Compiler output:
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmprpksfld8/problem.cpp:260:9: error: call to 'all_reduce_max' is ambiguous
+E     260 |     if (pops::all_reduce_max(product_layout_error_, ctx.prepared_execution_lane()))
+E         |         ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/parallel/execution_lane.hpp:872:13: note: candidate function
+E     872 | inline Real all_reduce_max(Real value, const ExecutionLane& lane) {
+E         |             ^
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/parallel/execution_lane.hpp:893:13: note: candidate function
+E     893 | inline long all_reduce_max(long value, const ExecutionLane& lane) {
+E         |             ^
+E   1 error generated.
+E   Hints: `python -c "import pops; pops.doctor()"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.
+E   This is GENERATED code emitted by pops.time.Program 'H05_backward_euler_original_equations'; the failing source was written to /private/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/pytest-of-romaindespoulain/pytest-725/test_h05_nonuniform_cells_rebi1/pops-native-cache/9d3328df71f70a80303974683e1a7b0b451b50164779261eebb411d2f69a6c61.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).
+----------------------------- Captured stdout call -----------------------------
+[rank 0] H05-adversarial-True: compile and publish start
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-cfef849-local-and-frontier/pytest.xml -
+=========================== short test summary info ============================
+FAILED tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[False-False]
+FAILED tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[False-True]
+FAILED tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[True-False]
+FAILED tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[True-True]
+FAILED tests/python/integration/runtime/test_api040_m22_h05_runtime.py::test_h05_original_residual_rebind_and_domain_rollback[False]
+FAILED tests/python/integration/runtime/test_api040_m22_h05_runtime.py::test_h05_original_residual_rebind_and_domain_rollback[True]
+FAILED tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py::test_h05_nonuniform_cells_rebind_and_collective_negative_rate[False]
+FAILED tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py::test_h05_nonuniform_cells_rebind_and_collective_negative_rate[True]
+=================== 8 failed, 11 passed in 260.39s (0:04:20) ===================

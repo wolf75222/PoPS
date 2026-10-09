@@ -1,0 +1,201 @@
+{
+  "Native_compiler_install_runtime_remote_actions": false,
+  "actual_coeff_perturbation_changes_operation_CPP_and_separate_proof_outcome": true,
+  "actual_source_runs": [
+    {
+      "Native_loaded": [],
+      "counts": {
+        "errors": 0,
+        "failures": 6,
+        "skipped": 0,
+        "tests": 21
+      },
+      "exit": 1,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/test-runs/20261008T175658765899Z/receipt.json",
+      "sha256": "b5e58c7a20f9f16637b7ac3c6b14e9a070866706422f5ec6d9f52992d97a40ab",
+      "xml": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/test-runs/20261008T175658765899Z/pytest.xml",
+      "xml_sha256": "7caac657544aff1ac264542e28173b51de4d7349abb814e84a82837d08d92cc6"
+    },
+    {
+      "Native_loaded": [],
+      "counts": {
+        "errors": 0,
+        "failures": 6,
+        "skipped": 0,
+        "tests": 21
+      },
+      "exit": 1,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/test-runs/20261008T180505315460Z/receipt.json",
+      "sha256": "8dd555a0892a6b1840fff95daaa66e1aa73dc62de1ffebaa87c4982a78b06c7c",
+      "xml": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/test-runs/20261008T180505315460Z/pytest.xml",
+      "xml_sha256": "d7a1233bb181e1997f2751b6b7e81edad6beeb20b8ddb0af2289dbd432f5996b"
+    },
+    {
+      "Native_loaded": [],
+      "counts": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 21
+      },
+      "exit": 0,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/test-runs/20261008T181743604238Z/receipt.json",
+      "sha256": "d41c0e6d646d94fabe9a759fe7daa753bc9e83eac49aaa721969f1adee0f5998",
+      "xml": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/test-runs/20261008T181743604238Z/pytest.xml",
+      "xml_sha256": "4fb450981634e61dc4ae3c526b169b5955d8fbfb07fe9f31f43fb08ce21551aa"
+    },
+    {
+      "Native_loaded": [],
+      "counts": {
+        "errors": 0,
+        "failures": 2,
+        "skipped": 0,
+        "tests": 25
+      },
+      "exit": 1,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/test-runs/20261008T182159017937Z/receipt.json",
+      "sha256": "c07efd29e532c65a8e694e5f343b9e9e29e96406207c0aedc866999087d05fc2",
+      "xml": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/test-runs/20261008T182159017937Z/pytest.xml",
+      "xml_sha256": "52ed74e1c21a1c5225c5c8079c7b3da2bfdcf63e3c5ac31e3041e1f4c64818cc"
+    },
+    {
+      "Native_loaded": [],
+      "counts": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 25
+      },
+      "exit": 0,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/test-runs/20261008T182407216999Z/receipt.json",
+      "sha256": "17d320f69f622300589e2c37d1ad669b309578f9a7276c5d34ba6f221ea5f433",
+      "xml": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/test-runs/20261008T182407216999Z/pytest.xml",
+      "xml_sha256": "6e8c683a7c0688b1ecc9cc9fb6ef8f5e8f2522670639798f2f29db96054d4721"
+    },
+    {
+      "Native_loaded": [],
+      "counts": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 30
+      },
+      "exit": 0,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/test-runs/20261008T183231822642Z/receipt.json",
+      "sha256": "08cfb127c32f50d1c900e89b6447a84c58c8f0b991b22c16f546b54ad275dec6",
+      "xml": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/test-runs/20261008T183231822642Z/pytest.xml",
+      "xml_sha256": "55df80ad0c3260879ccd3453b674ffbd546784cceeb99067288771fca76f7b74"
+    }
+  ],
+  "base_Source_context": "db206100d81de834482c8a3b093ce30065aa1b43; Main integration owner Root, no child Main edits",
+  "closed_State_only_primitive_recipe_passed": true,
+  "cycle_detached_binder_integer_ids_boolean_coeff_and_role_qualified_cache_guards_passed": true,
+  "feedback_unproved_acceptance_diagnostic_not_formula_replacement": true,
+  "files": {
+    "docs/development/api_040/accepted_update_ssp_v1.md": {
+      "bytes": 4052,
+      "sha256": "1a0f8e1290a3b7ba4ce10145ef92ec16c10e50cdd90b995a114a4d7251c9784d"
+    },
+    "python/pops/codegen/program_accepted_ssp.py": {
+      "bytes": 17450,
+      "sha256": "7ca6c39125ce893feb874a36aef902b6f50d1d89ffaeb1c6b7751f33c1c6c115"
+    },
+    "python/pops/codegen/program_diffusion_exchanges.py": {
+      "bytes": 5498,
+      "sha256": "6d305eda6a3989a785d3bb89d83051243207f207986a42cef10da536e9a972a2"
+    },
+    "tests/python/unit/codegen/test_diffusion_frozen_input_quadrature.py": {
+      "bytes": 13825,
+      "sha256": "93eee2c5312510185fac632d2ec280498834bc0a78f5d015cc719596d5a622f8"
+    }
+  },
+  "global_order_UnknownOrder_remains_separate": true,
+  "hook28_candidate_unchanged": true,
+  "legacy_frozen_driver_FE_preserved": true,
+  "no_method_model_operator_fingerprint_or_SSA_name_recognition": true,
+  "original_finite_math_spatial_guards_CPP_emission_and_exchange_weight_derivation_unmodified": true,
+  "paired_original_hook_only_SSP_refusal": {
+    "claim": "observed original mixed-graph SSP coefficient-one refusal; prior hook-only Source, not current installed status",
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-witness-v1-db206100-20261008/candidate-public-amr1-ssprk2-static-reception.json",
+    "sha256": "bdf7d02e773ec5b3079a49d7543a013f19ca85a6abbbe134619a8b34c7b368e7"
+  },
+  "patch_sha256": "a41e19d58012ac44f53e3ef9d9501b922c78672993084ebd712deed27db80732",
+  "proof": "exact rational lower-triangular inverse positivity for coefficient-one FE convex images, per independently owned accepted expression",
+  "proof_contract": "accepted-update-ssp@1",
+  "public_same_physics_AMR1_author_resolve_emit": {
+    "euler": {
+      "emitted_sha256": "ec0a24df207dfa8308a65e328e2a1eed45295cfb516145d2e1a5d00eb2f901bc",
+      "local_certificate": {
+        "A": [
+          [
+            "0"
+          ]
+        ],
+        "b": [
+          "1"
+        ],
+        "c": [
+          "0"
+        ],
+        "coefficient": "1"
+      },
+      "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/public-euler-receipt.json",
+      "sha256": "f6e4dd80b7a16ac3c3b21cda31e584f99cbd2d709be7b250fc5bad37666984c2"
+    },
+    "ssprk2-expanded": {
+      "emitted_sha256": "42621fbddb4b16dc1d1e2a6e00e29741d7eca68fa30761da244cab5c573f8968",
+      "local_certificate": {
+        "A": [
+          [
+            "0",
+            "0"
+          ],
+          [
+            "1",
+            "0"
+          ]
+        ],
+        "b": [
+          "1/2",
+          "1/2"
+        ],
+        "c": [
+          "0",
+          "1"
+        ],
+        "coefficient": "1"
+      },
+      "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/public-ssprk2-expanded-receipt.json",
+      "sha256": "ae2725e436bc3d228bcee65442daf8563d1406ca5b717e10c065bc41a9f530b8"
+    },
+    "ssprk2-retained": {
+      "emitted_sha256": "f6dbee18dea9f0adaa64ca30f35970404e8b8e025c85a004417f650fc82dad52",
+      "local_certificate": {
+        "A": [
+          [
+            "0",
+            "0"
+          ],
+          [
+            "1",
+            "0"
+          ]
+        ],
+        "b": [
+          "1/2",
+          "1/2"
+        ],
+        "c": [
+          "0",
+          "1"
+        ],
+        "coefficient": "1"
+      },
+      "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-local-accepted-ssp-candidate-v1-db206100-20261008/public-ssprk2-retained-receipt.json",
+      "sha256": "fa1cbb5e10c69b1b9643f05aa842c7bf8b50514876028c16a0c13482a9b02ca9"
+    }
+  },
+  "remaining": "independent peer Source admission; Root integration/repack/core fingerprint; installed SSPRK2 rates and retained-stage methods and saved-state/rank numerical reception",
+  "schema": "sol61.accepted-update-ssp-source-candidate-reception@1",
+  "two_independent_evolving_owner_certificates_passed": true
+}

@@ -6,6 +6,7 @@ Public surface:
   Closure          -- the closure typing.Protocol.
   gaussian_closure -- the generic Gaussian / Levermore closure (provided).
   HyQMOM15Closure  -- the polynomial order-4 HyQMOM closure for Vlasov-Poisson.
+  hyqmom_b1_axial_flux -- its explicitly selected order-4 one-velocity marginal.
 """
 from __future__ import annotations
 
@@ -13,6 +14,8 @@ from typing import Any
 
 from .protocol import Closure, LocalClosure, apply_local_closure
 from .gaussian import gaussian_closure
+from .discrete_entropy import DiscreteEntropyQuadrature
+from .entropy_domain import DiscreteEntropyCertificate
 
 
 def closure(order: Any) -> Any:
@@ -39,8 +42,10 @@ def closure(order: Any) -> Any:
 
 # Import after the generic closure protocol is bound.
 from .hyqmom15 import HyQMOM15Closure  # noqa: E402
+from .hyqmom_axial_b1 import hyqmom_b1_axial_flux  # noqa: E402
 
 __all__ = [
     "closure", "Closure", "LocalClosure", "apply_local_closure",
-    "gaussian_closure", "HyQMOM15Closure",
+    "gaussian_closure", "HyQMOM15Closure", "hyqmom_b1_axial_flux",
+    "DiscreteEntropyQuadrature", "DiscreteEntropyCertificate",
 ]

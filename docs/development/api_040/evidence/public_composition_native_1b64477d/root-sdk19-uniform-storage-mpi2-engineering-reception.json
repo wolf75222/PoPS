@@ -1,0 +1,74 @@
+{
+  "adversaries_refused": 7,
+  "adversaries_report_sha256": "d999f53bf400febd6ca313b9f3e4ff7867df96c48fb0ee3459899ba7bdd8d39b",
+  "allocation": {
+    "batch_host": "romeo-c022",
+    "job": "732054",
+    "requested_nodes": 1,
+    "requested_tasks": 2,
+    "script_sha256": "ff2f056d2d50619a3c02d40d70b2a3e66cd8547e4fcacb122a42f73ca04977d6",
+    "submission_sha256": "bd4b4efd9426e4c8878754b864258e0e14cb9ee6776eb45dd9e1d693e9f956d4"
+  },
+  "backend_scope": "MPI2 one actual SLURM node, CPU Kokkos OpenMP/Serial Dim2 MPICH; not inter-node/GPU/Dim1/3",
+  "build_receipt_sha256": "5e48488724fc719ad3e4febf394ea3867e34f55fe1975242d16ada1c9e199566",
+  "independent_directory": "/Users/romaindespoulain/dev/tmp/sol61-sdk19-m16-uniform-independent-20261003",
+  "independent_pins_reverified": 77,
+  "independent_pins_sha256": "03a1c6c7153846a85e60e437f5b9e9cbf60d50ad4e33735391e3b6a8f5ee76b3",
+  "independent_report_sha256": "b6e0e967550f54f67b9d8b8dd63d105d9873890170bed98ec6f8bca655b400fe",
+  "job": "732054",
+  "pops_imported_by_reception": false,
+  "rank_authority": {
+    "JUnit_suite_seconds_by_rank": {
+      "0": 47.382,
+      "1": 47.381
+    },
+    "JUnit_testcase_seconds_by_rank": {
+      "0": 46.885,
+      "1": 46.884
+    },
+    "actual_native_ranks": [
+      0,
+      1
+    ],
+    "logical_scenarios": 1,
+    "nodes": [
+      [
+        "tests.python.integration.runtime.test_uniform_accepted_storage_observation",
+        "test_installed_uniform_accepted_storage_observation"
+      ]
+    ],
+    "separate_ranklocal_raw_images_received": true,
+    "world": 2
+  },
+  "reader_actually_replayed": true,
+  "recorded_limits": [
+    "One persisted snapshot only: repeated image equality comes from genuine JUnit assertion, not independent raw pair",
+    "No NPY raw, C25 actual-TU proof, physics/evolution/rollback/Ghost readiness or replicated-storage runtime case, physical transport, performance/GPU/inter-node qualification"
+  ],
+  "replayed_report_byte_identical": true,
+  "schema": "root.sdk19-uniform-storage-mpi2-engineering-reception@1",
+  "science_received": false,
+  "scope": "Uniform MPI2 idle initial full-grown snapshot with actual empty rank1 and same-process readonly assertion passed",
+  "source_freeze": "1b64477d2f1c93e856e996a4c83e506fcc91b386",
+  "storage": {
+    "blocks": [
+      "population"
+    ],
+    "complete_sha256": "07fd2205828477761af1447caef37251e5e492c31099b5abb3499f07df71872d",
+    "grown_words": 360,
+    "patch_count_by_actual_rank": [
+      1,
+      0
+    ],
+    "patches": 1,
+    "rank_local_sha256": [
+      "a5024a22df74e253d419289580657224bc7ed7d7549bb0fbcd57e88e275e09fa",
+      "1dc4d5c18162b4a968234d5f9e2ee1c08260b701498a7e80e8b2bde4ed8d07c4"
+    ],
+    "root_seal": false,
+    "world": 2
+  },
+  "symlink_targets_reverified": 2,
+  "whole_mission_complete": false,
+  "world_size": 2
+}

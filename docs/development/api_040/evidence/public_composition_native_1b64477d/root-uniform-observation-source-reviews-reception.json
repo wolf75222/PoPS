@@ -1,0 +1,134 @@
+{
+  "reviews": [
+    {
+      "checks": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m17-composition/docs/development/api_040/accepted_state_storage_observation.md",
+          "sha256": "7b0c05b217cefa74032b5fcb1df2220cd021ffd58312a812558d150c80705c8d",
+          "verification": "exact historical git blob at reviewed author commit"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m17-composition/include/pops/runtime/system.hpp",
+          "sha256": "00df665b702a215c886a0c3b5c93a06c49c003169a5ab4d45620f709d3b0321f",
+          "verification": "exact historical git blob at reviewed author commit"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m17-composition/include/pops/runtime/checkpoint/state_carriers.hpp",
+          "sha256": "70e3efaeb86847bef6b7e023d0381a8f362451086360c68024d25f155c7772b2",
+          "verification": "exact historical git blob at reviewed author commit"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m17-composition/include/pops/runtime/system/system_lifecycle.hpp",
+          "sha256": "9c96038077d1d981403e750562fbcc2443e416c9f4782f310be053583378d4ca",
+          "verification": "exact historical git blob at reviewed author commit"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m17-composition/src/runtime/system/system.cpp",
+          "sha256": "65802deadf9b55606f03ccb1b38a1326533e13c66cfd11e8c8a61eea711660d9",
+          "verification": "exact historical git blob at reviewed author commit"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m17-composition/src/runtime/system/system_impl.hpp",
+          "sha256": "1acdd6fa9e3372c749eac2cf708aed649f326d9f9a52f99cf4fd8c5f3772f579",
+          "verification": "exact historical git blob at reviewed author commit"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m17-composition/src/runtime/system/system_program.cpp",
+          "sha256": "21c86a0286b54738132110756e13d6b05106adedb773c324975a25e367cd412f",
+          "verification": "exact historical git blob at reviewed author commit"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m17-composition/python/bindings/core/init/init_system.cpp",
+          "sha256": "086049e6634d7f69da1c0bf6e7c9938a98cf6c5c8fc9332d96ae19ef24121e88",
+          "verification": "exact historical git blob at reviewed author commit"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m17-composition/python/pops/runtime/_state_storage_observation.py",
+          "sha256": "b2ce6f1f14e9b998d335ac5c97ba52059c98aba57904d125ecbc32c73849fce2",
+          "verification": "exact historical git blob at reviewed author commit"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m17-composition/python/pops/runtime/_runtime_instance.py",
+          "sha256": "f3dfaf5a4cd6a9ea5b134ef9e6f92223693030c58815b96b2bd93d526b16c29e",
+          "verification": "exact historical git blob at reviewed author commit"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m17-composition/python/pops/runtime/_system.py",
+          "sha256": "53fddffea871144e3b4237a37aab8be66bfa56a9870b5a50f5ea57f7b6e9fcea",
+          "verification": "exact historical git blob at reviewed author commit"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m17-composition/tests/review/test_sol61_uniform_storage_observation.py",
+          "sha256": "d676377d26f8ab59bf1e4e61cc3f3647df3bee489f6be559a30c141b66a83d03",
+          "verification": "exact historical git blob at reviewed author commit"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m17-composition/tests/review/test_sol61_uniform_storage_observation_host.py",
+          "sha256": "4cfb78073b7ba11ab17d77e48a9bb494e5aeab8e3fc173020807711204c0e833",
+          "verification": "exact historical git blob at reviewed author commit"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m17-composition/tests/python/integration/runtime/test_uniform_accepted_storage_observation.py",
+          "sha256": "c8d23ae5f0018e07d36328e25fe903fb399966561342d4c4fbcbeddec77f5126",
+          "verification": "exact historical git blob at reviewed author commit"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/sol61-uniform-observation-independent-20261002/probe.py",
+          "sha256": "be3eff1e3e9d498d72668395f8fb3a70b8b98d585378ed988a16b06330a878d5",
+          "verification": "current pinned independent artifact"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/sol61-uniform-observation-independent-20261002/freeze.py",
+          "sha256": "a6420d43a68ee611a3da667fbe1b64ab31b84e59fc3b9b22e90b730079972f15",
+          "verification": "current pinned independent artifact"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/sol61-uniform-observation-independent-20261002/report.json",
+          "sha256": "31385d1af8105e150bad8682fff878dca68664849fbb4a04934b6788361d8904",
+          "verification": "current pinned independent artifact"
+        }
+      ],
+      "directory": "/Users/romaindespoulain/dev/tmp/sol61-uniform-observation-independent-20261002",
+      "native_received": false,
+      "pins_sha256": "dfd545497ae13c4d3bd5069b12c191897aea61b5628911e838d5dd4f2a312bdb",
+      "report_sha256": "31385d1af8105e150bad8682fff878dca68664849fbb4a04934b6788361d8904",
+      "source_commit": "725dccd2a56d61210436bedc42795defe23ee39c"
+    },
+    {
+      "checks": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m17-composition/python/pops/runtime/_state_storage_observation.py",
+          "sha256": "de5e971d71cb059292c7359beea0cee7f5931f9debbb4889c7d537e6fea3a781",
+          "verification": "exact historical git blob at reviewed author commit"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m17-composition/tests/review/test_sol61_uniform_storage_observation.py",
+          "sha256": "9b52d423dfd2c6729460ba5ace03db1d2e6a36653fa7d48b3c3d56cd3af9aab8",
+          "verification": "exact historical git blob at reviewed author commit"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m17-composition/docs/development/api_040/accepted_state_storage_observation.md",
+          "sha256": "2e298877256958300efd5897df1694f540d7dd395877c65d29dcade65a36ea0e",
+          "verification": "exact historical git blob at reviewed author commit"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/sol61-uniform-observation-dto-delta-independent-20261003/check.py",
+          "sha256": "728e46648e639328fea705a3da3eb6250f129e3a5aa72dc2f99550ff79d4fbf0",
+          "verification": "current pinned independent artifact"
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/sol61-uniform-observation-dto-delta-independent-20261003/report.json",
+          "sha256": "df1312cba5c75131920430ebce1d802893551941312d579f8799cfcad4a9ce43",
+          "verification": "current pinned independent artifact"
+        }
+      ],
+      "directory": "/Users/romaindespoulain/dev/tmp/sol61-uniform-observation-dto-delta-independent-20261003",
+      "native_received": false,
+      "pins_sha256": "df0b7ccac2bf3696df8525cdfdd8e8c5736f7c2c2eefb8a95ee005f320d28ee9",
+      "report_sha256": "df1312cba5c75131920430ebce1d802893551941312d579f8799cfcad4a9ce43",
+      "source_commit": "47d2102bfc956b9f66617db58a8ed58c211ea64e"
+    }
+  ],
+  "schema": "root.uniform-observation-source-reviews-reception@1",
+  "scope": "Source/host only; historical Source pins verified at exact reviewed git commits, current independent artifacts rehashed; no Native/science attribution"
+}

@@ -1,0 +1,127 @@
+{
+  "verdict": "Approved for integration within recorded localCPU Dim2 native/MPI1/2 contract scope; no GitHub or installed-extension qualification",
+  "patch_sha256": "a064bcdedba235a69e6dda263f94d0bb5558571d87ce6656866fedeab4269455",
+  "receipt_sha256": "202e076db4cb4785b8680250cd0e136eac253a7225ee9940ce055a08c632a10e",
+  "base_sha": "98804c6849c9966e05b5397126bab983a5fa0227",
+  "forward_application_exact": true,
+  "existing_body_prefixes_byte_identical": true,
+  "four_exact_gate_selectors": {
+    "^test_amr_history_ring\\.AcceptedFacadeTransactionCommitsTopologyStateHistoryAndClock$": [
+      "test_amr_history_ring.AcceptedFacadeTransactionCommitsTopologyStateHistoryAndClock"
+    ],
+    "^test_amr_history_ring\\.RejectedFacadeAttemptRestoresTopologyStateHistoryAndClock$": [
+      "test_amr_history_ring.RejectedFacadeAttemptRestoresTopologyStateHistoryAndClock"
+    ],
+    "^test_coupled_fieldsolve\\.named_solve_honors_every_qualified_stage_without_live_mutation$": [
+      "test_coupled_fieldsolve.named_solve_honors_every_qualified_stage_without_live_mutation"
+    ],
+    "^test_amr_history_ring\\.FineNonFiniteAfterCoarseSuccessRestoresCompleteAcceptedState$": [
+      "test_amr_history_ring.FineNonFiniteAfterCoarseSuccessRestoresCompleteAcceptedState"
+    ]
+  },
+  "nan_actual_cause_assertions_durable": true,
+  "physical_v2_binary_object_hashes_verified": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m2-real-proofs-98804c68-20261009/test_amr_history_ring-v2": "a4a6ede09752759be13786255653cb7af7b495a567d9bc125544d2cf340c7d25",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m2-real-proofs-98804c68-20261009/test_amr_history_ring-v2.o": "ea25d2685a472b0aa30b48a23463b9d943a9d0c566040d984493997aba3b446b",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m2-real-proofs-98804c68-20261009/test_coupled_fieldsolve": "ead61fb9091809a8155a0875c6580891aa238b2b5ae963b54f322ba48138fcb6",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m2-real-proofs-98804c68-20261009/test_coupled_fieldsolve.o": "b4fab52c4851271f4a31016dc7c4b9f0f1dd8e2faef779d6607386f78c16c5df"
+  },
+  "v2_xmls": {
+    "m2-v2-full.xml": {
+      "sha256": "c0587af4567283b16690f000fbb85f6473f4c38ec944641a2954f27cb432433d",
+      "summary": {
+        "tests": "9",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "0.154",
+        "timestamp": "2026-10-09T01:06:45.717",
+        "name": "AllTests"
+      },
+      "testcases": [
+        "RetainsAndInterpolatesExactRankedState",
+        "FacadeTransactionRestoresAcceptedHistoryImage",
+        "RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction",
+        "FrozenRestartImageRefusesLaterStoreRotationAndRestore",
+        "RegisteredHistoryRejectsTopologyPublicationBeforeMutation",
+        "ThreeLevelProgramFailsClosedWithoutExactFluxExpressionBudget",
+        "AcceptedFacadeTransactionCommitsTopologyStateHistoryAndClock",
+        "RejectedFacadeAttemptRestoresTopologyStateHistoryAndClock",
+        "FineNonFiniteAfterCoarseSuccessRestoresCompleteAcceptedState"
+      ],
+      "properties": [
+        [
+          "nonfinite_refusal",
+          "prepared ND hyperbolic face evaluation refused publication status=1"
+        ],
+        [
+          "nonfinite_refusal",
+          "prepared ND hyperbolic face evaluation refused publication status=1"
+        ]
+      ]
+    },
+    "m2-v2-np2-rank-0.xml": {
+      "sha256": "ed654d2a3cb0dd5695d8b096b0959a284b35987107c7493e9350b782632dab90",
+      "summary": {
+        "tests": "3",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "0.974",
+        "timestamp": "2026-10-09T01:06:45.952",
+        "name": "AllTests"
+      },
+      "testcases": [
+        "AcceptedFacadeTransactionCommitsTopologyStateHistoryAndClock",
+        "RejectedFacadeAttemptRestoresTopologyStateHistoryAndClock",
+        "FineNonFiniteAfterCoarseSuccessRestoresCompleteAcceptedState"
+      ],
+      "properties": [
+        [
+          "nonfinite_refusal",
+          "Program cadence phase failed collectively; rank 0: multi-block AMR level-group callback failed collectively; rank 0: AMR Program level body failed collectively; rank 0: prepared ND hyperbolic face evaluation refused publication status=1"
+        ],
+        [
+          "nonfinite_refusal",
+          "Program cadence phase failed collectively; rank 0: multi-block AMR level-group callback failed collectively; rank 0: AMR Program level body failed collectively; rank 0: prepared ND hyperbolic face evaluation refused publication status=1"
+        ]
+      ]
+    },
+    "m2-v2-np2-rank-1.xml": {
+      "sha256": "ed654d2a3cb0dd5695d8b096b0959a284b35987107c7493e9350b782632dab90",
+      "summary": {
+        "tests": "3",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "0.974",
+        "timestamp": "2026-10-09T01:06:45.952",
+        "name": "AllTests"
+      },
+      "testcases": [
+        "AcceptedFacadeTransactionCommitsTopologyStateHistoryAndClock",
+        "RejectedFacadeAttemptRestoresTopologyStateHistoryAndClock",
+        "FineNonFiniteAfterCoarseSuccessRestoresCompleteAcceptedState"
+      ],
+      "properties": [
+        [
+          "nonfinite_refusal",
+          "Program cadence phase failed collectively; rank 0: multi-block AMR level-group callback failed collectively; rank 0: AMR Program level body failed collectively; rank 0: prepared ND hyperbolic face evaluation refused publication status=1"
+        ],
+        [
+          "nonfinite_refusal",
+          "Program cadence phase failed collectively; rank 0: multi-block AMR level-group callback failed collectively; rank 0: AMR Program level body failed collectively; rank 0: prepared ND hyperbolic face evaluation refused publication status=1"
+        ]
+      ]
+    }
+  },
+  "linked_core_inputs_source_review": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m2-independent-source-review-20261009/independent-review.json",
+  "no_skip_rename_gatewaiver_production_patch": true,
+  "limits": [
+    "No Native rerun by this reviewer",
+    "Original linked-object inventory includes actual officialMain objects and older Gtest harness; current file hashes and link-argv coverage independently verified",
+    "Rank identity is filename/launch/stdout associated; XML lacks explicit pops_mpi_rank property",
+    "coarse_candidate_changed proves nonzero coarse RHS plus completed commit/history; it is not a direct candidate bit comparison",
+    "No separate stage-input buffer immutability assertion; full live valid/grown State bytes protected"
+  ]
+}

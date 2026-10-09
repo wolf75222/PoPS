@@ -1,0 +1,9 @@
+# Evolved-stage replay consumer @2 — tests only
+
+Actual SDK24 V@3 CPU732306 FAILED at the historical @1 assertion equating replay continuation to archived run. The authentic job and its negative reception remain unchanged. This is an obsolete consumer assumption, not a production numerical failure. Its physical CP12/history/state/clock comparisons remain strict.
+
+The new comparator `compare_checkpoint_replay_v2` receives a live owner envelope captured before restart and the actual restored source-run identity captured immediately after restart, before run overwrites last_run_identity. It reconstructs checkpoint_restart_epoch@1 from the archived checkpoint run and every typed prior owner run/lineage, exact string sorted paths, then requires equality to the replay RunManifest continuation. It separately authenticates the restored source and checkpoint seals. Missing capture, forged epoch/source/owners, wrong identity domain and duplicate paths refuse. This test-side reconstruction is not a compiler graph proof.
+
+The original-stage current fixture and V@3 route use equivalence@2. The exact original compare_checkpoint_replay @1 and historical AMR fixture bytes remain intact; old saved-reader profiles are not silently broadened. A future pure reader must explicitly receive equivalence@2 and its restart_authority metadata before claiming new Native reception. The old732306 raw lacks that live pre-restart capture and is not retroqualified.
+
+42 Source cases PASS5.82s, no skips/exclusions: nine new structural positives/refusals and affected V@3 preparation/initial authority checks. Initial coherent run41P1F (historical fixture immutability) is preserved; fix retains that fixture instead of weakening its guard. No equations/constants/OriginalF/State/history/clocks/payload comparison changes; no production changes, Native/JIT/ENV execution or shared checkout modification.

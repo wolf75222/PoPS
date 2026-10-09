@@ -186,13 +186,13 @@ class _LifecycleMixin(_System):
         )
 
     def _restore_checkpoint_run_identity(self, identity: Any) -> None:
-        """Publish the authenticated source run after a successful restart transaction."""
+        """Publish an authenticated source run, or None for restored bound_initial origin."""
         from pops.identity import Identity
 
-        if type(identity) is not Identity or identity.domain != "run":
+        if identity is not None and (type(identity) is not Identity or identity.domain != "run"):
             raise TypeError("restart requires an authenticated domain-'run' identity")
         self._last_run_manifest = None
-        restored = Identity.from_data(identity.to_data())
+        restored = None if identity is None else Identity.from_data(identity.to_data())
         self._last_run_identity = restored
         self._restart_lineage_identity = restored
 

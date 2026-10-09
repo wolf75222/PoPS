@@ -1,0 +1,15 @@
+{
+  "rank": 0,
+  "ranks": 2,
+  "dimension": 2,
+  "package_file": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/__init__.py",
+  "native_file": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+  "native_sha256": "f8d9281232039f3ed3f92b7a14ae6530aa18baf41257a3c99a9629a50af61f64",
+  "execution_environment": {
+    "FI_PROVIDER": "tcp",
+    "FI_TCP_IFACE": null,
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_THREADS": "2"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "exit": 1,
+  "args": [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-x",
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-q",
+    "-p",
+    "no:cacheprovider",
+    "tests/python/unit/codegen/test_diffusion_frozen_input_quadrature.py",
+    "tests/python/unit/codegen/test_uniform_clock_manifest_contract.py",
+    "tests/python/architecture/test_ci_shard_binpack.py",
+    "tests/python/unit/codegen/test_generic_diffusion.py",
+    "tests/python/unit/codegen/test_amr_diffusion_codegen.py",
+    "tests/python/unit/codegen/test_amr_tensor_diffusion_codegen.py",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-source-20261008/tmp",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-source-20261008/pytest.xml"
+  ],
+  "counts": {
+    "tests": 114,
+    "failures": 1,
+    "errors": 0,
+    "skipped": 0
+  },
+  "duration_seconds": 91.30116120800085,
+  "package_origin": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/__init__.py",
+  "files": {
+    "python/pops/codegen/_native_auxiliary_shapes.py": "c5fb7767b1f772fd7f322d1592d6b6ab0a7d1b94c57351ff5a0fd5177eda44fa",
+    "python/pops/codegen/module_lowering.py": "8d50bf8a6e4f9865eb59c3e37f1d85e42b56261aba27b0eecf5d4eb52abc5aa5",
+    "include/pops/numerics/diffusion/prepared_diffusion.hpp": "5f0adf266d50f6b38397179d78a88a1b56f177324ed1031d58b4b9cbfb9a1c39",
+    "tests/python/unit/codegen/test_diffusion_frozen_input_quadrature.py": "20423e8c8a5496400ce32c88295e1b5971f0208e4854347fe61fcdb86f01c52f",
+    "tests/cpp/unit/runtime/test_prepared_diffusion.cpp": "308626cb81f56b09e657557345f74f30e816e6ec2b0904c69e26a322ee5ec99f"
+  },
+  "scope": "Integrated Source only, not installed Native or GitHub CI",
+  "Native_loaded": []
+}

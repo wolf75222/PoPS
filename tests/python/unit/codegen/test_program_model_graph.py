@@ -40,10 +40,11 @@ def _block(name, model):
 def lowered(monkeypatch):
     calls = []
 
-    def lower(model, *, facade, state_space, resolved_operations):
+    def lower(model, *, facade, state_space, resolved_operations, numerics):
         assert facade is model
         assert state_space == model.name
         assert resolved_operations is None
+        assert numerics is None
         calls.append(model)
         return _EmitModel(model), {"module": model.name}
 

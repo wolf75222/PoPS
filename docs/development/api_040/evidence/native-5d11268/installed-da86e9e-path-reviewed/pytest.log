@@ -1,0 +1,13 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 3 items
+
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_refusal_preserves_accepted_state_and_clock[fixed_dt] PASSED [ 33%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_fixed_dt_uses_unit_numerical_budget PASSED [ 66%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_state[guarded] PASSED [100%]
+
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-da86e9e-path-reviewed/pytest.xml -
+============================== 3 passed in 48.25s ==============================

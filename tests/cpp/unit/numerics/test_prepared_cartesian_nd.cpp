@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/numerics/spatial/operators/cartesian_operator.hpp>
 #include <pops/numerics/spatial/operators/masked_operator.hpp>
 #include <pops/numerics/spatial/primitives/state_access.hpp>

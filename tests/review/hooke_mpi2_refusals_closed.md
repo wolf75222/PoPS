@@ -1,0 +1,7 @@
+# Closed MPI2 refusal archive supplement
+
+Independent Hooke GPT-6.1 Sol, continuation of e4e4199, preserving its historical pending status. BASE/installed-sdkbb416-amr12-refusals-mpi2-dim2 now has closed result AND after identity. Actual rc0,262.3595331660472s,1test/rank,zero failure/error/skip. Both rank XML/log SHA pins rehashed and agree with result. All10named refusal consensus rows identical between actual rank0/rank1 receipts, including rank0 archive divergence. Workers authenticated path/DSO488123/rank,count,Dim2; parent before/after identity and1132source inventory raw-byte exact.
+
+Both baseline assembled native carrier blobs agree across ranks. Each rank baseline↔rolledback carrier blob and diagnostic blob byte-exact, metadata/temporal/diagnostic bits exact, every saved NPY member exact; actual coarseQ0 contradiction advances64positive binary64 words by1ULP in global assembled projections. Actual snapshot/fixture file SHA pins validated. No PoPS import/native rerun/build/JIT or environment mutation. Script STD-only rc0; actual stdout preserved hooke_bb416_refusals_mpi2.actual.txt. This validates this recorded contradiction/refusal/rollback sequence and all named cases, not arbitrary field/rank corruption or GPU copy failures. No science seal issued.
+
+Command: `rtk proxy python3 tests/review/hooke_bb416_refusals_archive.py /Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001 mpi2`. Serial same command with serial also passed after added raw result/logpin checks.

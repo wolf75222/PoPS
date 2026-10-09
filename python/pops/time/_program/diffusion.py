@@ -21,9 +21,9 @@ def lower_diffusive_rate(program, op, args, name):
     module = getattr(block_model, "module", block_model)
     roots = []
     for row in view.occurrences:
-        if row.kind in {"diffusion", "drift"}:
+        if row.kind in {"diffusion", "coupled_gradient", "drift"}:
             roots.extend(row.payload.law.expressions)
-            if row.kind == "diffusion" and not fitted:
+            if row.kind in {"diffusion", "coupled_gradient"} and not fitted:
                 for variable in row.payload.law.variables:
                     for component in state.space.components:
                         target = QuantityRef(view.target, component, space=state.space)

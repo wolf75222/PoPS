@@ -19,6 +19,7 @@
 #include <pops/core/foundation/kokkos_env.hpp>
 #include <pops/core/identity/prepared_provider.hpp>
 #include <pops/parallel/execution_lane.hpp>
+#include <pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp>
 
 #include <Kokkos_Complex.hpp>
 #include <Kokkos_Core.hpp>
@@ -245,6 +246,8 @@ class PoissonFFT {
   }
 
  private:
+  using device_kernels = detail::PoissonFFTDeviceKernels<Dim, MemorySpace>;
+
   static std::size_t checked_product_(std::size_t left, std::size_t right) {
     if (left != 0 && right > std::numeric_limits<std::size_t>::max() / left)
       throw std::length_error("PoissonFFT allocation overflow");
@@ -336,23 +339,7 @@ class PoissonFFT {
     const auto input = values_;
     const auto output = scratch_;
     const double sign = inverse ? 1.0 : -1.0;
-    Kokkos::parallel_for(
-        "pops_poisson_fft_local_dft", Kokkos::RangePolicy<>(0, lines),
-        KOKKOS_LAMBDA(std::size_t line) {
-          const std::size_t block = line / stride;
-          const std::size_t offset = line % stride;
-          const std::size_t base = block * stride * static_cast<std::size_t>(extent) + offset;
-          for (int frequency = 0; frequency < extent; ++frequency) {
-            complex_type sum(0.0, 0.0);
-            for (int point = 0; point < extent; ++point) {
-              const double angle = sign * 2.0 * std::numbers::pi * frequency * point / extent;
-              sum += input[base + stride * static_cast<std::size_t>(point)] *
-                     complex_type(Kokkos::cos(angle), Kokkos::sin(angle));
-            }
-            output[base + stride * static_cast<std::size_t>(frequency)] =
-                inverse ? sum / static_cast<double>(extent) : sum;
-          }
-        });
+    device_kernels::local_dft(input, output, stride, extent, inverse, sign, lines);
     Kokkos::deep_copy(values_, scratch_);
   }
 
@@ -365,53 +352,21 @@ class PoissonFFT {
       return;
     const auto bit_reversed_input = values_;
     const auto bit_reversed_output = scratch_;
-    Kokkos::parallel_for(
-        "pops_poisson_fft_bit_reverse", Kokkos::RangePolicy<>(0, local_count_),
-        KOKKOS_LAMBDA(std::size_t ordinal) {
-          const int coordinate = static_cast<int>((ordinal / stride) % extent);
-          int reversed = 0;
-          for (int value = coordinate, bit = extent >> 1; bit != 0; bit >>= 1) {
-            reversed = (reversed << 1) | (value & 1);
-            value >>= 1;
-          }
-          const std::ptrdiff_t delta = static_cast<std::ptrdiff_t>(reversed - coordinate) *
-                                       static_cast<std::ptrdiff_t>(stride);
-          bit_reversed_output[ordinal] = bit_reversed_input[ordinal + delta];
-        });
+    device_kernels::bit_reverse(bit_reversed_input, bit_reversed_output, stride, extent, local_count_);
     std::swap(values_, scratch_);
     for (int length = 2;; length <<= 1) {
       const auto input = values_;
       const auto output = scratch_;
       const int half = length / 2;
       const double sign = inverse ? 1.0 : -1.0;
-      Kokkos::parallel_for(
-          "pops_poisson_fft_radix2_stage", Kokkos::RangePolicy<>(0, local_count_),
-          KOKKOS_LAMBDA(std::size_t ordinal) {
-            const int coordinate = static_cast<int>((ordinal / stride) % extent);
-            const int group_begin = coordinate - coordinate % length;
-            const int position = coordinate - group_begin;
-            const int butterfly = position % half;
-            const std::size_t top =
-                ordinal + static_cast<std::ptrdiff_t>(group_begin + butterfly - coordinate) *
-                              static_cast<std::ptrdiff_t>(stride);
-            const std::size_t bottom = top + static_cast<std::size_t>(half) * stride;
-            const double angle = sign * 2.0 * std::numbers::pi * butterfly / length;
-            const complex_type even = input[top];
-            const complex_type odd =
-                input[bottom] * complex_type(Kokkos::cos(angle), Kokkos::sin(angle));
-            output[ordinal] = position < half ? even + odd : even - odd;
-          });
+      device_kernels::local_radix_stage(input, output, stride, extent, length, half, sign, local_count_);
       std::swap(values_, scratch_);
       if (length == extent)
         break;
     }
     if (inverse) {
       const auto normalized = values_;
-      Kokkos::parallel_for(
-          "pops_poisson_fft_radix2_normalize", Kokkos::RangePolicy<>(0, local_count_),
-          KOKKOS_LAMBDA(std::size_t ordinal) {
-            normalized[ordinal] /= static_cast<double>(extent);
-          });
+      device_kernels::local_radix_normalize(normalized, extent, local_count_);
     }
   }
 
@@ -447,31 +402,14 @@ class PoissonFFT {
       const int source_rank = (rank_ - phase + ranks_) % ranks_;
       execute_local_stage_collectively_(
           [&] {
-            Kokkos::parallel_for(
-                "pops_poisson_fft_peer_dft", Kokkos::RangePolicy<>(0, local_count_),
-                KOKKOS_LAMBDA(std::size_t ordinal) {
-                  const std::size_t transverse_index = ordinal % transverse;
-                  const int output_local = static_cast<int>(ordinal / transverse);
-                  const int output_global = destination * local_last + output_local;
-                  complex_type sum(0.0, 0.0);
-                  for (int input_local = 0; input_local < local_last; ++input_local) {
-                    const int input_global = rank * local_last + input_local;
-                    const double angle =
-                        sign * 2.0 * std::numbers::pi * output_global * input_global / global_last;
-                    sum += source[transverse_index +
-                                  transverse * static_cast<std::size_t>(input_local)] *
-                           complex_type(Kokkos::cos(angle), Kokkos::sin(angle));
-                  }
-                  send[ordinal] = sum;
-                });
+            device_kernels::peer_dft(source, send, transverse, local_last, global_last, rank,
+                                     destination, sign, local_count_);
           },
           "peer-DFT launch", PoissonFFTDiagnosticStage::peer_dft_launch);
       exchange_peer_(destination, source_rank);
       execute_local_stage_collectively_(
           [&] {
-            Kokkos::parallel_for(
-                "pops_poisson_fft_peer_accumulate", Kokkos::RangePolicy<>(0, local_count_),
-                KOKKOS_LAMBDA(std::size_t ordinal) { result[ordinal] += receive[ordinal]; });
+            device_kernels::peer_accumulate(result, receive, local_count_);
           },
           "peer accumulation", PoissonFFTDiagnosticStage::peer_accumulation);
     }
@@ -479,23 +417,10 @@ class PoissonFFT {
         [&] {
           if (inverse) {
             const auto normalized = values_;
-            Kokkos::parallel_for(
-                "pops_poisson_fft_inverse_normalize", Kokkos::RangePolicy<>(0, local_count_),
-                KOKKOS_LAMBDA(std::size_t ordinal) {
-                  normalized[ordinal] /= static_cast<double>(global_last);
-                });
+            device_kernels::inverse_normalize(normalized, global_last, local_count_);
           }
         },
         "direct-DFT completion");
-  }
-
-  static POPS_HD int reverse_bits_(int value, int extent) {
-    int reversed = 0;
-    for (int remaining = extent; remaining > 1; remaining >>= 1) {
-      reversed = (reversed << 1) | (value & 1);
-      value >>= 1;
-    }
-    return reversed;
   }
 
   void distributed_last_radix2_(bool inverse) {
@@ -531,11 +456,7 @@ class PoissonFFT {
     execute_local_stage_collectively_(
         [&] {
           const auto normalized = values_;
-          Kokkos::parallel_for(
-              "pops_poisson_fft_last_inverse_normalize", Kokkos::RangePolicy<>(0, local_count_),
-              KOKKOS_LAMBDA(std::size_t ordinal) {
-                normalized[ordinal] /= static_cast<double>(global_last);
-              });
+          device_kernels::last_inverse_normalize(normalized, global_last, local_count_);
         },
         "inverse distributed radix normalization");
   }
@@ -546,28 +467,8 @@ class PoissonFFT {
     const std::size_t transverse = transverse_;
     const int half = length / 2;
     const double sign = inverse ? 1.0 : -1.0;
-    Kokkos::parallel_for(
-        "pops_poisson_fft_last_local_radix", Kokkos::RangePolicy<>(0, local_count_),
-        KOKKOS_LAMBDA(std::size_t ordinal) {
-          const int coordinate = static_cast<int>(ordinal / transverse);
-          const int group_begin = coordinate - coordinate % length;
-          const int position = coordinate - group_begin;
-          const int butterfly = position % half;
-          const std::size_t top =
-              static_cast<std::size_t>(group_begin + butterfly) * transverse + ordinal % transverse;
-          const std::size_t bottom = top + static_cast<std::size_t>(half) * transverse;
-          const double angle = sign * 2.0 * std::numbers::pi * butterfly / length;
-          const complex_type even = input[top];
-          const complex_type odd =
-              input[bottom] * complex_type(Kokkos::cos(angle), Kokkos::sin(angle));
-          if (inverse)
-            output[ordinal] = position < half ? even + odd : even - odd;
-          else
-            output[ordinal] = position < half
-                                  ? input[top] + input[bottom]
-                                  : (input[top] - input[bottom]) *
-                                        complex_type(Kokkos::cos(angle), Kokkos::sin(angle));
-        });
+    device_kernels::last_local_radix(input, output, transverse, length, half, sign, inverse,
+                                     local_count_);
     std::swap(values_, scratch_);
   }
 
@@ -584,29 +485,9 @@ class PoissonFFT {
     const double sign = inverse ? 1.0 : -1.0;
     execute_local_stage_collectively_(
         [&] {
-          Kokkos::parallel_for(
-              "pops_poisson_fft_last_distributed_radix", Kokkos::RangePolicy<>(0, local_count_),
-              KOKKOS_LAMBDA(std::size_t ordinal) {
-                const int coordinate = static_cast<int>(ordinal / transverse);
-                const int global = rank * local_last + coordinate;
-                const int within_half = global % half;
-                const bool lower = (rank & rank_offset) == 0;
-                const double angle = sign * 2.0 * std::numbers::pi * within_half / length;
-                if (inverse) {
-                  const complex_type lower_value = lower ? local[ordinal] : remote[ordinal];
-                  const complex_type upper_value = lower ? remote[ordinal] : local[ordinal];
-                  const complex_type weighted_upper =
-                      upper_value * complex_type(Kokkos::cos(angle), Kokkos::sin(angle));
-                  local[ordinal] =
-                      lower ? lower_value + weighted_upper : lower_value - weighted_upper;
-                } else {
-                  const complex_type lower_value = lower ? local[ordinal] : remote[ordinal];
-                  const complex_type upper_value = lower ? remote[ordinal] : local[ordinal];
-                  local[ordinal] = lower ? lower_value + upper_value
-                                         : (lower_value - upper_value) *
-                                               complex_type(Kokkos::cos(angle), Kokkos::sin(angle));
-                }
-              });
+          device_kernels::last_distributed_radix(local, remote, transverse, local_last, rank,
+                                                 rank_offset, half, length, sign, inverse,
+                                                 local_count_);
         },
         "distributed radix stage", PoissonFFTDiagnosticStage::distributed_radix);
   }
@@ -667,25 +548,8 @@ class PoissonFFT {
     const int local_last = local_last_;
     const int rank = rank_;
     const bool last_axis_bit_reversed = ranks_ > 1 && is_pow2(cells_[Dim - 1]);
-    Kokkos::parallel_for(
-        "pops_poisson_fft_symbol", Kokkos::RangePolicy<>(0, local_count_),
-        KOKKOS_LAMBDA(std::size_t ordinal) {
-          std::size_t cursor = ordinal % transverse;
-          double lambda = 0.0;
-          for (int axis = 0; axis < Dim - 1; ++axis) {
-            const int frequency = static_cast<int>(cursor % cells[axis]);
-            cursor /= static_cast<std::size_t>(cells[axis]);
-            lambda += (2.0 * Kokkos::cos(2.0 * std::numbers::pi * frequency / cells[axis]) - 2.0) /
-                      (spacing[axis] * spacing[axis]);
-          }
-          const int stored_frequency = rank * local_last + static_cast<int>(ordinal / transverse);
-          const int frequency =
-              last_axis_bit_reversed ? reverse_bits_(stored_frequency, cells[Dim - 1]) : stored_frequency;
-          lambda += (2.0 * Kokkos::cos(2.0 * std::numbers::pi * frequency / cells[Dim - 1]) - 2.0) /
-                    (spacing[Dim - 1] * spacing[Dim - 1]);
-          values[ordinal] =
-              Kokkos::abs(lambda) < 1e-14 ? complex_type(0.0, 0.0) : values[ordinal] / lambda;
-        });
+    device_kernels::inverse_symbol(values, cells, spacing, transverse, local_last, rank,
+                                   last_axis_bit_reversed, local_count_);
   }
 
   int_array cells_{};

@@ -19,6 +19,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -226,9 +227,83 @@ struct ProgramCheckpointHistoryMetadata {
                          const ProgramCheckpointHistoryMetadata&) = default;
 };
 
+/// Frozen installation-owned logical clock data. Identifiers authorize provenance only;
+/// they never choose an arithmetic formula. The loader owns this value through its install snapshot.
+enum class ProgramOwnedClockManifestVersion : std::uint32_t { v1 = 1 };
+inline constexpr std::string_view kProgramOwnedClockManifestContract =
+    "pops.program.owned-clock-manifest@1";
+
+struct ProgramOwnedClockManifest {
+  std::string owner_identity;
+  std::string primary_clock_identity;
+  std::vector<std::string> logical_clock_identities;
+  std::uint64_t installation_generation = 0;
+  ProgramOwnedClockManifestVersion contract_version = ProgramOwnedClockManifestVersion::v1;
+  void validate() const {
+    if (contract_version != ProgramOwnedClockManifestVersion::v1)
+      throw std::invalid_argument("unsupported Program owned clock manifest version");
+    if (owner_identity.empty() || primary_clock_identity.empty() ||
+        logical_clock_identities.empty())
+      throw std::invalid_argument("Program owned clock manifest is incomplete");
+    std::set<std::string> unique;
+    for (const auto& clock : logical_clock_identities)
+      if (clock.empty() || !unique.insert(clock).second)
+        throw std::invalid_argument(
+            "Program owned clock manifest has invalid or duplicate clock data");
+    if (!unique.contains(primary_clock_identity))
+      throw std::invalid_argument("Program primary clock is outside its owned manifest");
+  }
+  void require_owned(std::string_view clock) const {
+    validate();
+    if (std::find(logical_clock_identities.begin(), logical_clock_identities.end(), clock) ==
+        logical_clock_identities.end())
+      throw std::invalid_argument("Program context clock is outside its installed ownership");
+  }
+  friend bool operator==(const ProgramOwnedClockManifest&,
+                         const ProgramOwnedClockManifest&) = default;
+};
+
+inline ProgramOwnedClockManifest read_program_owned_clock_manifest(pops::dynlib::handle handle,
+                                                                   std::string owner_identity) {
+  if (!pops::dynlib::valid(handle))
+    throw std::runtime_error("Program owned clock manifest requires a valid module handle");
+  using StringFn = const char* (*)(int);
+  using PrimaryFn = const char* (*)();
+  const auto contract = detail::require_module_symbol<PrimaryFn>(
+      handle, "pops_program_checkpoint_clock_manifest_contract");
+  const char* contract_value = contract();
+  if (!contract_value || std::string_view(contract_value) != kProgramOwnedClockManifestContract)
+    throw std::runtime_error(
+        "unsupported Program owned clock manifest contract; regenerate artifact");
+  // Authenticate the schema before invoking any count or clock-table callback.
+  ProgramOwnedClockManifest result;
+  result.owner_identity = std::move(owner_identity);
+  const int count =
+      detail::require_module_count(handle, "pops_program_checkpoint_logical_clock_count");
+  if (count < 1)
+    throw std::runtime_error("Program owned clock manifest is empty");
+  const auto clock = detail::require_module_symbol<StringFn>(
+      handle, "pops_program_checkpoint_logical_clock_identity");
+  const auto primary = detail::require_module_symbol<PrimaryFn>(
+      handle, "pops_program_checkpoint_primary_clock_identity");
+  const char* primary_value = primary();
+  if (!primary_value)
+    throw std::runtime_error("Program primary clock identity is null");
+  result.primary_clock_identity = primary_value;
+  result.logical_clock_identities.reserve(static_cast<std::size_t>(count));
+  for (int index = 0; index < count; ++index)
+    result.logical_clock_identities.push_back(detail::require_module_string(
+        clock, "pops_program_checkpoint_logical_clock_identity", index));
+  std::sort(result.logical_clock_identities.begin(), result.logical_clock_identities.end());
+  result.validate();
+  return result;
+}
+
 struct ProgramCheckpointMetadata {
+  ProgramOwnedClockManifest uniform_auxiliary_clocks;
   std::vector<ProgramCheckpointHistoryMetadata> histories;
   std::vector<std::string> logical_clock_identities;
+  std::string primary_clock_identity;
   std::string temporal_provider_identity;
   std::size_t temporal_cell_capacity = 0;
   std::size_t temporal_cells_per_topology_cell = 0;
@@ -311,6 +386,16 @@ inline ProgramCheckpointMetadata read_program_checkpoint_metadata(pops::dynlib::
     metadata.logical_clock_identities.push_back(std::move(identity));
   }
   std::sort(metadata.logical_clock_identities.begin(), metadata.logical_clock_identities.end());
+  // Optional for historical artifacts; an explicit stronger numerical request authenticates it.
+  using PrimaryClockFn = const char* (*)();
+  const auto primary_clock = reinterpret_cast<PrimaryClockFn>(
+      pops::dynlib::sym(dl_handle, "pops_program_checkpoint_primary_clock_identity"));
+  if (primary_clock) {
+    const char* identity = primary_clock();
+    if (identity == nullptr || identity[0] == '\0' || !logical_clocks.contains(identity))
+      throw std::runtime_error("compiled Program primary clock is outside its logical authorities");
+    metadata.primary_clock_identity = identity;
+  }
 
   using TemporalProviderFn = const char* (*)();
   using TemporalCellCapacityFn = std::uint64_t (*)();

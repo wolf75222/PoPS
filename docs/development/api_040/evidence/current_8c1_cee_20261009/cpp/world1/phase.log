@@ -1,0 +1,69 @@
+Test project /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build
+      Start  471: HierarchyTensorExactRank.CoarseGmresNativeOptionsKeepExactWireTypes
+ 1/26 Test  #471: HierarchyTensorExactRank.CoarseGmresNativeOptionsKeepExactWireTypes ........................   Passed    0.66 sec
+      Start  472: HierarchyTensorExactRank.PolarCoarsePreconditionerRequiresExactWireAndArithmeticGMRES
+ 2/26 Test  #472: HierarchyTensorExactRank.PolarCoarsePreconditionerRequiresExactWireAndArithmeticGMRES ......   Passed    0.05 sec
+      Start  473: HierarchyTensorExactRank.FineFluxCouplingKeepsExactWireAndTypedContracts
+ 3/26 Test  #473: HierarchyTensorExactRank.FineFluxCouplingKeepsExactWireAndTypedContracts ...................   Passed    0.05 sec
+      Start  474: HierarchyTensorExactRank.OneTwoAndThreeDimensionalRequestsPrepare
+ 4/26 Test  #474: HierarchyTensorExactRank.OneTwoAndThreeDimensionalRequestsPrepare ..........................   Passed    0.07 sec
+      Start  475: HierarchyTensorExactRank.FacAcceptsRankedAndPartiallyRefinedAxes
+ 5/26 Test  #475: HierarchyTensorExactRank.FacAcceptsRankedAndPartiallyRefinedAxes ...........................   Passed    0.06 sec
+      Start  476: HierarchyTensorExactRank.OneTwoAndThreeDimensionalPublicationIsTransactional
+ 6/26 Test  #476: HierarchyTensorExactRank.OneTwoAndThreeDimensionalPublicationIsTransactional ...............   Passed    0.07 sec
+      Start  477: HierarchyTensorExactRank.DirectFacUsesTheSameOperatorInOneTwoAndThreeDimensions
+ 7/26 Test  #477: HierarchyTensorExactRank.DirectFacUsesTheSameOperatorInOneTwoAndThreeDimensions ............   Passed    0.06 sec
+      Start  478: HierarchyTensorExactRank.ExactRankProvidesTheBuiltinFullTensorFacKernel
+ 8/26 Test  #478: HierarchyTensorExactRank.ExactRankProvidesTheBuiltinFullTensorFacKernel ....................   Passed    0.06 sec
+      Start  479: HierarchyTensorExactRank.ExactRankPublishesOnlyAfterSolveOutcomeAccept
+ 9/26 Test  #479: HierarchyTensorExactRank.ExactRankPublishesOnlyAfterSolveOutcomeAccept .....................   Passed    0.06 sec
+      Start  480: HierarchyTensorExactRank.BuiltinExactRankFacSolvesARealCrossTensorMms
+10/26 Test  #480: HierarchyTensorExactRank.BuiltinExactRankFacSolvesARealCrossTensorMms ......................   Passed    0.52 sec
+      Start  481: HierarchyTensorExactRank.ContractsAuthenticateRankGeometryAndOwnership
+11/26 Test  #481: HierarchyTensorExactRank.ContractsAuthenticateRankGeometryAndOwnership .....................   Passed    0.06 sec
+      Start 1016: test_field_nullspace.canonicalizes_generic_boundary_facts_and_rejects_forged_sequences
+12/26 Test #1016: test_field_nullspace.canonicalizes_generic_boundary_facts_and_rejects_forged_sequences .....   Passed    0.33 sec
+      Start 1017: test_field_nullspace.exact_ranked_boundary_adapter_covers_1d_2d_and_3d
+13/26 Test #1017: test_field_nullspace.exact_ranked_boundary_adapter_covers_1d_2d_and_3d .....................   Passed    0.02 sec
+      Start 1018: test_field_nullspace.exact_ranked_nullspace_execution_covers_1d_2d_and_3d
+14/26 Test #1018: test_field_nullspace.exact_ranked_nullspace_execution_covers_1d_2d_and_3d ..................   Passed    0.03 sec
+      Start 1019: test_field_nullspace.overlapping_independent_bases_cover_1d_2d_and_3d
+15/26 Test #1019: test_field_nullspace.overlapping_independent_bases_cover_1d_2d_and_3d ......................   Passed    0.03 sec
+      Start 1020: test_field_nullspace.exact_ranked_level_local_contract_covers_1d_2d_and_3d
+16/26 Test #1020: test_field_nullspace.exact_ranked_level_local_contract_covers_1d_2d_and_3d .................   Passed    0.03 sec
+      Start 1021: test_field_nullspace.active_mask_projects_only_marked_cells
+17/26 Test #1021: test_field_nullspace.active_mask_projects_only_marked_cells ................................   Passed    0.02 sec
+      Start 1022: test_field_nullspace.labelled_topology_preserves_target_component_and_rejects_bad_labels
+18/26 Test #1022: test_field_nullspace.labelled_topology_preserves_target_component_and_rejects_bad_labels ...   Passed    0.02 sec
+      Start 1023: test_field_nullspace.rejects_a_gauge_that_references_an_unknown_basis
+19/26 Test #1023: test_field_nullspace.rejects_a_gauge_that_references_an_unknown_basis ......................   Passed    0.02 sec
+      Start 1024: test_field_nullspace.validates_native_collective_capacities_before_size_arithmetic
+20/26 Test #1024: test_field_nullspace.validates_native_collective_capacities_before_size_arithmetic .........   Passed    0.02 sec
+      Start 1025: test_field_nullspace.validates_hierarchy_level_capacity_without_materializing_levels
+21/26 Test #1025: test_field_nullspace.validates_hierarchy_level_capacity_without_materializing_levels .......   Passed    0.02 sec
+      Start 1026: test_field_nullspace.shared_constant_mode_preserves_individual_means
+22/26 Test #1026: test_field_nullspace.shared_constant_mode_preserves_individual_means .......................   Passed    0.02 sec
+      Start 1027: test_field_nullspace.general_fields_complete_predeclared_refinement_matrix
+23/26 Test #1027: test_field_nullspace.general_fields_complete_predeclared_refinement_matrix .................   Passed    0.06 sec
+      Start 1028: test_field_nullspace.general_field_preflight_refuses_rank_local_storage_before_exchange
+24/26 Test #1028: test_field_nullspace.general_field_preflight_refuses_rank_local_storage_before_exchange ....   Passed    0.02 sec
+      Start 1029: test_field_nullspace.three_field_cross_diffusion_uses_complete_matrix_and_strict_spd
+25/26 Test #1029: test_field_nullspace.three_field_cross_diffusion_uses_complete_matrix_and_strict_spd .......   Passed    0.02 sec
+      Start 1153: AmrProgramFieldPublication.ThreeFieldsReachPreparedSourcesAtEveryLevelAndRollback
+26/26 Test #1153: AmrProgramFieldPublication.ThreeFieldsReachPreparedSourcesAtEveryLevelAndRollback ..........   Passed    0.56 sec
+
+100% tests passed out of 26
+
+Label Time Summary:
+amr                                              =   0.56 sec*proc (1 test)
+cpp-target:test_amr_program_field_publication    =   0.56 sec*proc (1 test)
+cpp-target:test_amr_tensor_fac_provider          =   1.72 sec*proc (11 tests)
+cpp-target:test_field_nullspace                  =   0.67 sec*proc (14 tests)
+elliptic                                         =   0.67 sec*proc (14 tests)
+fast                                             =   2.38 sec*proc (25 tests)
+integration                                      =   0.56 sec*proc (1 test)
+medium                                           =   0.56 sec*proc (1 test)
+runtime                                          =   1.72 sec*proc (11 tests)
+unit                                             =   2.38 sec*proc (25 tests)
+
+Total Test time (real) =   3.01 sec

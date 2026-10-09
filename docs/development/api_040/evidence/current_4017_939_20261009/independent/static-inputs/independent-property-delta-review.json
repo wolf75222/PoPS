@@ -1,0 +1,13 @@
+{
+  "verdict": "ACCEPT_EXACT_ONE_PROPERTY_DELTA",
+  "old_runner_sha256": "83ec6b31a2afdc4a6b7562b318c8638cd6f340564f3c0d671d495a780abead75",
+  "r2_runner_sha256": "fa0296b91640c368535d92ea1d6d971727d34b1b8a5ed242ad301a35dd33619c",
+  "reference_sha256": "a11c7d3dab64918203f51371d2627ac267b4cd5b86e9bb133ad1f2423454e982",
+  "actual_Source_API": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/codegen/_compiled_artifact.py",
+  "actual_Source_API_sha256": "6f97f5084d3623a21f47d8ba80c6ef2450c82a81345474cad5d2498f07fd7fbe",
+  "AST_property_present": true,
+  "exact_text_delta_only": "artifact.layout_program_paths() -> artifact.layout_program_paths",
+  "original_callable_negative": "'dict' object is not callable",
+  "new_property_dictionary_expansion": "PASS",
+  "scope": "Source+plainPython syntheticArtifactStub only; noPops/Nativeimport oractualexecution"
+}

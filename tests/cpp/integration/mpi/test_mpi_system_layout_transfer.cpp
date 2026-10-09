@@ -62,7 +62,9 @@ constexpr char kBeforeStep[] = "pops://synchronization/before-step@1";
 std::string transfer_component_source(int dimension) {
   std::string source = R"CPP(
 #include <pops/runtime/config/generated_component_abi.hpp>
+#include <pops/runtime/dynamic/physical_support_transfer.hpp>
 
+#include <vector>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -89,37 +91,34 @@ std::string transfer_component_source(int dimension) {
         return fail(status, 12, "transfer field views are incomplete");
       if (request->operation == POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1 ||
           request->operation == POPS_TRANSFER_OPERATION_PHYSICAL_PULLBACK_V1) {
+        // Receive the shipped Kokkos consumer through the real loaded provider, rather than
+        // substituting a scalar CPU loop for physical support operations in this fixture.
         const bool reduction = request->operation == POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1;
-        const auto* input = static_cast<const double*>(request->source.data);
-        auto* output = static_cast<double*>(request->destination.data);
-        std::size_t cells = 1;
-        for (std::size_t axis = 0; axis < kDimension; ++axis)
-          cells *= request->destination.extents[axis];
-        for (std::size_t cell = 0; cell < cells; ++cell) {
-          std::array<std::size_t, kDimension> index{};
-          std::size_t remaining = cell;
-          std::ptrdiff_t target_offset = 0;
-          for (std::size_t axis = 0; axis < kDimension; ++axis) {
-            index[axis] = remaining % request->destination.extents[axis];
-            remaining /= request->destination.extents[axis];
-            target_offset += index[axis] * request->destination.axis_strides[axis];
+        pops::component::PhysicalSupportTransfer descriptor{};
+        descriptor.dimension = static_cast<int>(kDimension);
+        descriptor.operation = request->operation;
+        std::vector<double> weights;
+        if (reduction) {
+          descriptor.source_active[0] = 1;
+          const std::size_t reduced_axis = kDimension == 1 ? 0 : 1;
+          if constexpr (kDimension > 1) {
+            descriptor.source_active[1] = 1;
+            descriptor.target_active[kDimension - 1] = 1;
+            descriptor.source_to_target[0] = static_cast<int>(kDimension - 1);
           }
-          if (reduction) {
-            const std::size_t reduced_axis = kDimension == 1 ? 0 : 1;
-            const std::ptrdiff_t retained_offset =
-                kDimension == 1 ? 0 : index[kDimension - 1] * request->source.axis_strides[0];
-            double sum = 0;
-            for (std::size_t sample = 0; sample < request->source.extents[reduced_axis]; ++sample)
-              sum += input[retained_offset + sample * request->source.axis_strides[reduced_axis]];
-            output[target_offset] = sum;
-          } else {
-            const std::ptrdiff_t retained_offset =
-                kDimension == 1 ? 0 : index[0] * request->source.axis_strides[kDimension - 1];
-            output[target_offset] = input[retained_offset];
+          descriptor.reduction_cells[reduced_axis] = request->source.extents[reduced_axis];
+          weights.assign(descriptor.reduction_cells[reduced_axis], 1.0);
+          descriptor.weights = weights.data();
+          descriptor.weight_count = weights.size();
+        } else {
+          descriptor.target_active[0] = 1;
+          if constexpr (kDimension > 1) {
+            descriptor.target_active[1] = 1;
+            descriptor.source_active[kDimension - 1] = 1;
+            descriptor.source_to_target[kDimension - 1] = 0;
           }
         }
-        *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
-        return 0;
+        return pops::component::apply_physical_support_transfer(descriptor, request, status);
       }
       if (request->source.scalar_type != POPS_SCALAR_FLOAT64_V1 ||
           request->destination.scalar_type != POPS_SCALAR_FLOAT64_V1 ||

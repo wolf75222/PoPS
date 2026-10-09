@@ -229,7 +229,7 @@ void prove_collective_reflux_checkpoint(int ranks, int rank) {
       std::string(runtime.spatial_contract()), runtime.topology_epoch(),
       runtime.materialization_generation(),
       {{0, 4, pops::amr::Rational(0, 1), 4.0}, {1, 4, pops::amr::Rational(0, 1), 4.0}}, temporal,
-      ledger);
+      ledger, 17 + static_cast<std::uint64_t>(Dim - 1));
   accepted.logical_clock_ticks.emplace("clock.macro", 4);
   EXPECT_NO_THROW(program::require_collective_amr_program_checkpoint_consensus(accepted));
   EXPECT_NO_THROW(program::require_live_amr_program_checkpoint(accepted, runtime));

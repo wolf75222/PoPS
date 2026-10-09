@@ -275,6 +275,7 @@ class LayoutPlanBuilder:
         target_representation: LayoutRepresentation,
         reverse_of: LayoutMappingRequirement | None = None,
         physical_map: Any = None,
+        source_observation: Any = None, target_component: str | None = None,
     ) -> tuple[LayoutMappingRequirement, ...]:
         """Require a qualified directional data transfer between two materialized layouts."""
         for handle in (source_layout, target_layout):
@@ -282,8 +283,9 @@ class LayoutPlanBuilder:
                 raise ValueError("mapping endpoints must be layouts declared by this builder")
         if source_layout == target_layout:
             raise ValueError("mapping endpoints must be distinct layouts")
-        source_port = LayoutMappingPort(source, source_representation)
-        target_port = LayoutMappingPort(target, target_representation)
+        source_port = LayoutMappingPort(source, source_representation, source_observation)
+        target_port = LayoutMappingPort(target, target_representation, component=target_component)
+        source, target = source_port.layout_subject(), target_port.layout_subject()
         assignments = {
             (row.subject_kind, row.subject_id): row.layout for row in self._assignments.values()
         }

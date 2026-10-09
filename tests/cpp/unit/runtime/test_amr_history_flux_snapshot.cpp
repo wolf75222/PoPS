@@ -673,4 +673,45 @@ TEST(AmrHistoryFluxSnapshotCodec, ProjectionDescriptorAuthenticatesTargetAndPare
   EXPECT_THROW(round_trip(changed), std::invalid_argument);
 }
 
+TEST(AmrHistoryFluxSnapshotCodec, SharedConsumerRequiresExactEarnedProjectionLineage) {
+  auto source = raw<2>();
+  auto child = project<2>(source, {2, 3}, 7);
+  child->source_identity = source->source_identity;
+  child->identity = hf::projection_identity(*child);
+  const auto geometry_at = [&](int level) {
+    const auto& node = level == 0 ? *source : *child;
+    pops::RealVector<2> lower{}, upper{};
+    for (int axis = 0; axis < 2; ++axis)
+      upper[axis] = static_cast<Real>(source->domain.length(axis) * source->cell_size[axis]);
+    return pops::Geometry<2>::from_bounds(node.domain, lower, upper);
+  };
+  const auto require = [&](std::shared_ptr<const hf::Snapshot<2>> snapshot, int source_level = 0,
+                           int target_level = 1) {
+    return hf::require_projection_lineage<2>(snapshot, source_level, target_level, 2, 2,
+                                             geometry_at);
+  };
+  EXPECT_FALSE(require(child).empty());
+  EXPECT_THROW(require({}), std::invalid_argument);
+  EXPECT_THROW(require(source), std::invalid_argument);
+  EXPECT_THROW(require(child, 1, 0), std::invalid_argument);
+  EXPECT_THROW(require(child, 1, 1), std::invalid_argument);
+  auto changed = std::make_shared<hf::Snapshot<2>>(*child);
+  changed->identity += "/other";
+  EXPECT_THROW(require(changed), std::invalid_argument);
+  changed = std::make_shared<hf::Snapshot<2>>(*child);
+  changed->source_identity += "/other-source";
+  changed->identity = hf::projection_identity(*changed);
+  EXPECT_THROW(require(changed), std::invalid_argument);
+  changed = std::make_shared<hf::Snapshot<2>>(*child);
+  ++changed->domain.lo[0];
+  ++changed->domain.hi[0];
+  changed->patches = {changed->domain};
+  changed->identity = hf::projection_identity(*changed);
+  EXPECT_THROW(require(changed), std::invalid_argument);
+  changed = std::make_shared<hf::Snapshot<2>>(*child);
+  changed->cell_size[0] = std::nextafter(changed->cell_size[0], 1.0);
+  changed->identity = hf::projection_identity(*changed);
+  EXPECT_THROW(require(changed), std::invalid_argument);
+}
+
 }  // namespace

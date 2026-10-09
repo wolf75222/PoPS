@@ -1,0 +1,46 @@
+{
+  "date_utc": "2026-10-08T20:34:51.724538+00:00",
+  "scope": "Fresh originalPDE1 and OwnRetryNative8 independentlyreceived actualcurrentbd291/Nativeed2; world1OpenMP2Dim2 finite originalcohort, no other backend/fullmissiontransfer",
+  "files": {
+    "original-PDE-independent.json": {
+      "bytes": 13193,
+      "sha256": "92ec8b8e647b4231fd39dc9a8af78de6fc924c879276a70df4d4e7ff717fa886",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-original-PDE-e01-ed2-reception-20261008/reception.json"
+    },
+    "original-PDE-result.json": {
+      "bytes": 1510,
+      "sha256": "cc8ec7af0986c0dbe1056e32caee7978eddd0d14b38d6431549e9762a6e59ea8",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/result.json"
+    },
+    "original-PDE-root.json": {
+      "bytes": 506,
+      "sha256": "32979b8745cabbd10412279aaf4701d678467c7702dc8e4db974a73b211844f3",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-current-late-refusal-native-preparation-20261008/root-current-PDE-admission.json"
+    },
+    "OwnRetry-Native8-producer-result.json": {
+      "bytes": 2683,
+      "sha256": "e1b379c2887d927c9e9817b9536cea9a3def7e404410c89c7f0752e7ee49244d",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-current-core-OwnRetry-Native8-e01-ed2-20261008/result.json"
+    },
+    "own-retry-independent.json": {
+      "bytes": 8930,
+      "sha256": "998de13b9909159d4207472f11b96f272dd482b074242ab25808d2edd7725098",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-current-core-OwnRetry-Native8-e01-ed2-reception-20261008/own-retry-reception.json"
+    },
+    "native8-independent.json": {
+      "bytes": 23923,
+      "sha256": "326354c60db90d669f95ac35d3d88c2a508816be3ac3dea7e3339013eb13572c",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-current-core-OwnRetry-Native8-e01-ed2-reception-20261008/native8-reception.json"
+    },
+    "physical-pins.json": {
+      "bytes": 75477,
+      "sha256": "8817bf68dde9a302bfb51d36e2c059fb70a46d819499ce0d12cd9ebaaf6a707b",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-current-core-OwnRetry-Native8-e01-ed2-reception-20261008/physical-pins.json"
+    },
+    "OwnRetry-Native8-root.json": {
+      "bytes": 1032,
+      "sha256": "bd6ae8d0dcb8e9c2d114a93d71acebd5a22d288bb32cba920452a01daf40fb7d",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-current-late-refusal-native-preparation-20261008/root-current-OwnRetry-Native8-admission.json"
+    }
+  }
+}

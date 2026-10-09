@@ -1,0 +1,28 @@
+{
+  "candidate": "a8d6f04b34596d804c72f3a80abbeea4c4f5e319",
+  "candidate_receipt": {
+    "cpp": "e3e9d0ce0ae356493526dd98bcb8888de2b17e12be21181c6c882f907890faa5",
+    "ir": "59ab71d259f6c2be65cfefab4b694dd3d92890b0a8ccc87f7e3ceef7db6db7df",
+    "modules": [
+      "2ba749901077cf26c180c3669ca0f4aab04cf4779128a805c88bfc860344a445",
+      "f81418724a3ae45b3ed7cc03cd9016a3f4f1f4a36e11b6127285ca62a7fd3fe0",
+      "866eb454ff1f9f173099f6824119545dd00aa41a64e05a72ddb353e231c442cf"
+    ],
+    "package": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-sol61-amr-public-review/python/pops/__init__.py",
+    "source": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-sol61-amr-public-review"
+  },
+  "parent": {
+    "cpp": "e3e9d0ce0ae356493526dd98bcb8888de2b17e12be21181c6c882f907890faa5",
+    "ir": "59ab71d259f6c2be65cfefab4b694dd3d92890b0a8ccc87f7e3ceef7db6db7df",
+    "modules": [
+      "2ba749901077cf26c180c3669ca0f4aab04cf4779128a805c88bfc860344a445",
+      "f81418724a3ae45b3ed7cc03cd9016a3f4f1f4a36e11b6127285ca62a7fd3fe0",
+      "866eb454ff1f9f173099f6824119545dd00aa41a64e05a72ddb353e231c442cf"
+    ],
+    "package": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-sol61-amr-nonlinear-review/python/pops/__init__.py",
+    "source": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-sol61-amr-nonlinear-review"
+  },
+  "parent_header_code": "85a79b6f4c346f1a523470d38b14094fdf6226ef",
+  "parent_review_commit": "c8907cd30fbafc27e41d500b09694c6e52281c46",
+  "same_fixture_and_callsite": true
+}

@@ -41,6 +41,34 @@ struct PoissonFftBottomClassification {
 
 namespace fft_multifab_detail {
 
+// Namespace-scope kernels preserve slab/view captures without private-method
+// extended lambdas, which strict NVCC rejects.
+template <int Dim>
+struct PackSlabKernel {
+  typename PoissonFFT<Dim>::device_view destination{};
+  FieldView<const Real, Dim> source{};
+  Box<Dim> slab{};
+  Real sign = Real(1);
+
+  POPS_HD void operator()(const Index<Dim>& cell) const {
+    using complex_type = typename PoissonFFT<Dim>::complex_type;
+    destination[fft_solver_detail::local_slab_ordinal(slab, cell)] =
+        complex_type(static_cast<double>(sign * source(cell, 0)), 0.0);
+  }
+};
+
+template <int Dim>
+struct UnpackSlabKernel {
+  typename PoissonFFT<Dim>::device_view source{};
+  FieldView<Real, Dim> destination{};
+  Box<Dim> slab{};
+
+  POPS_HD void operator()(const Index<Dim>& cell) const {
+    destination(cell, 0) =
+        static_cast<Real>(source[fft_solver_detail::local_slab_ordinal(slab, cell)].real());
+  }
+};
+
 template <int Dim>
 Extent<Dim> unit_ghosts() {
   Extent<Dim> ghosts{};
@@ -295,10 +323,7 @@ class PoissonFftMultiFabAdapter {
       if (overlap.empty())
         continue;
       const auto in = source.fab(local).view();
-      for_each_cell(overlap, [=] POPS_HD(const Index<Dim>& cell) {
-        dest[fft_solver_detail::local_slab_ordinal(slab, cell)] =
-            complex_type(static_cast<double>(sign * in(cell, 0)), 0.0);
-      });
+      for_each_cell(overlap, fft_multifab_detail::PackSlabKernel<Dim>{dest, in, slab, sign});
     }
     Kokkos::fence();
   }
@@ -311,9 +336,7 @@ class PoissonFftMultiFabAdapter {
       if (overlap.empty())
         continue;
       const auto out = destination.fab(local).view();
-      for_each_cell(overlap, [=] POPS_HD(const Index<Dim>& cell) {
-        out(cell, 0) = static_cast<Real>(src[fft_solver_detail::local_slab_ordinal(slab, cell)].real());
-      });
+      for_each_cell(overlap, fft_multifab_detail::UnpackSlabKernel<Dim>{src, out, slab});
     }
     Kokkos::fence();
   }

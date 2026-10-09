@@ -3,8 +3,8 @@ from __future__ import annotations
 
 NATIVE_COMPONENT_ABI_VERSION = 1
 NATIVE_COMPONENT_COMMON_ABI_VERSION = 1
-NATIVE_COMPONENT_CATALOG_SHA256 = '8797c3721e51b181711c0d4d832688b5f32af7d184ce28b81422815010b465c3'
-NATIVE_COMPONENT_CATALOG_SEMANTIC_SHA256 = 'd47b60d2276e0255873cb7573417de84f0d4fcfb7d2adb5b77813420ae8e0d01'
+NATIVE_COMPONENT_CATALOG_SHA256 = '3300f2e69852d0b12cbcb12b2c90c1c1dbdd9cddde375d4633062a64d0857985'
+NATIVE_COMPONENT_CATALOG_SEMANTIC_SHA256 = 'd5b9b39c34236696fee592a902560209576475cf07119e33bd7e0a8d3519352d'
 NATIVE_TAGGING_PROGRAM_ABI = {'version': 1,
  'execution_modes': {'native_backend': 1, 'host': 2},
  'collective_scopes': {'none': 0},
@@ -111,7 +111,15 @@ NATIVE_COMPONENT_INTERFACES = ({'id': 0,
   'cpp_table': 'PopsBoundaryFluxApiV1',
   'hot_path': True,
   'facets': ('provider', 'lowering', 'fallible_evaluation'),
-  'operations': ('transform_faces',)})
+  'operations': ('transform_faces',)},
+ {'id': 11,
+  'name': 'accepted_initial_ghost',
+  'uri': 'pops://interfaces/accepted-initial-ghost',
+  'version': 1,
+  'cpp_table': 'PopsAcceptedInitialGhostApiV1',
+  'hot_path': False,
+  'facets': ('provider', 'lowering', 'fallible_evaluation'),
+  'operations': ('apply_initial_region_batch',)})
 NATIVE_COMPONENT_INTERFACE_BY_NAME = {row['name']: row for row in NATIVE_COMPONENT_INTERFACES}
 NATIVE_COMPONENT_INTERFACE_BY_URI = {row['uri']: row for row in NATIVE_COMPONENT_INTERFACES}
 NATIVE_COMPONENT_BOUNDARY_HANDLE_ROUTES = {'boundary_provider': ('ghost_boundary', 'apply_region_batch'),

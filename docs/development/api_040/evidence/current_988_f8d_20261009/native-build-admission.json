@@ -1,0 +1,371 @@
+{
+  "SDK": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+  "Source": "98804c6849c9966e05b5397126bab983a5fa0227",
+  "build_result": {
+    "SDK": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+    "Source": "98804c6849c9966e05b5397126bab983a5fa0227",
+    "command": [
+      "rtk",
+      "proxy",
+      "bash",
+      "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/run-official-build.sh"
+    ],
+    "core_fingerprint": "b756f21226ad09e2108026bc9c3bfce9a251d1480e8a81e0e733db0c0845871a",
+    "disk_after": {
+      "free": 4345245696,
+      "total": 494384795648,
+      "used": 490039549952
+    },
+    "disk_before": {
+      "free": 4366372864,
+      "total": 494384795648,
+      "used": 490018422784
+    },
+    "duration_seconds": 231.87710174999665,
+    "exit": 0,
+    "finished_utc": "2026-10-08T22:26:48.074857+00:00",
+    "log_sha256": "c3e540ed964dd8beb8fd5270a144edad70985003a74e3d0703fee6d0531c82ec"
+  },
+  "cache_files_after": {
+    ".ninja_log": {
+      "bytes": 6794,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/.ninja_log",
+      "sha256": "4148727ca737006c76c4f4dba91ac27c805f56feb6012ee061a4232ab685c395"
+    },
+    "CMakeCache.txt": {
+      "bytes": 31847,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/CMakeCache.txt",
+      "sha256": "547b9c1f00b9d714fdde5bbadf32f7c30d5e2b2177c756464ccdbe12b9c4179f"
+    },
+    "build.ninja": {
+      "bytes": 93554,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/build.ninja",
+      "sha256": "4c601f5e7689ca5afc5d84ea1711d2984c46cbc1c315e74f99e889cfb13e7f18"
+    }
+  },
+  "cache_native": {
+    "bytes": 14468728,
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "sha256": "53f11bc24c38cd13a361ebc295a034fc9682b9fbeec904eba7346124cdebaf6e"
+  },
+  "core_files": 1213,
+  "core_fingerprint": "b756f21226ad09e2108026bc9c3bfce9a251d1480e8a81e0e733db0c0845871a",
+  "core_scope_schema": 2,
+  "identity": {
+    "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584;dim=2",
+    "doctor": {
+      "compilateur": [
+        true,
+        "/usr/bin/clang++ [baked by the _pops build] ; -std=c++20 accepted"
+      ],
+      "headers_sync": [
+        true,
+        "headers == module build (sig de2b5ef24a9f...)"
+      ],
+      "include": [
+        true,
+        "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include"
+      ],
+      "interpreteur": [
+        true,
+        "/Users/romaindespoulain/miniforge3/envs/pops/bin/python (3.12) ; extension /Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so"
+      ],
+      "kokkos": [
+        true,
+        "Kokkos module (thread/device resources selected before initialization)"
+      ],
+      "kokkos_root": [
+        true,
+        "/Users/romaindespoulain/miniforge3/envs/pops"
+      ],
+      "numpy": [
+        true,
+        "2.5.1"
+      ],
+      "threads": [
+        true,
+        "OMP_NUM_THREADS=2 ; first System created=False"
+      ]
+    },
+    "execution_environment": {
+      "FI_PROVIDER": "tcp",
+      "FI_TCP_IFACE": null,
+      "OMP_NUM_THREADS": "2",
+      "OMP_PROC_BIND": "false",
+      "POPS_THREADS": null
+    },
+    "native_file": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "native_sha256": "f8d9281232039f3ed3f92b7a14ae6530aa18baf41257a3c99a9629a50af61f64",
+    "package_file": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/__init__.py",
+    "package_version": "1.1.0",
+    "python": "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "schema_version": 2,
+    "scope": "installed production PoPS, local CPU Kokkos, MPI-enabled Dim=2",
+    "source_commit": "98804c6849c9966e05b5397126bab983a5fa0227",
+    "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "source_files_sha256": "33505180fb4c48b3292c8b60430a807d292b97a562950f4a2109db7e1d4f52d5",
+    "sys_path": [
+      "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/scripts",
+      "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+      "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/docs/development/api_040",
+      "/Users/romaindespoulain/miniforge3/envs/pops/lib/python312.zip",
+      "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12",
+      "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/lib-dynload",
+      "/Users/romaindespoulain/.local/lib/python3.12/site-packages",
+      "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages"
+    ],
+    "verified_source_files": 1167
+  },
+  "identity_path": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/identity/identity.json",
+  "identity_sha256": "2d7ac73296694487d9c97d112ca68195210c83c5fcc8a60451f30a0178a9256b",
+  "installed_native": {
+    "bytes": 14468728,
+    "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "sha256": "f8d9281232039f3ed3f92b7a14ae6530aa18baf41257a3c99a9629a50af61f64"
+  },
+  "ninja_CXX_actions": [
+    "  [1/28] Building CXX object src/CMakeFiles/pops_runtime_core_objects.dir/runtime/prepared_embedded_boundary.cpp.o",
+    "  [2/28] Building CXX object src/CMakeFiles/pops_runtime_core_objects.dir/runtime/program/step_transaction.cpp.o",
+    "  [3/28] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system.cpp.o",
+    "  [4/28] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_aux.cpp.o",
+    "  [5/28] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_install.cpp.o",
+    "  [6/28] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_fields.cpp.o",
+    "  [7/28] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_embedded_boundary.cpp.o",
+    "  [8/28] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_field_plans.cpp.o",
+    "  [9/28] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_layout_transfer.cpp.o",
+    "  [10/28] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_io.cpp.o",
+    "  [11/28] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_profiling.cpp.o",
+    "  [12/28] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_program.cpp.o",
+    "  [15/28] Building CXX object src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_layout_transfer.cpp.o",
+    "  [16/28] Building CXX object src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o",
+    "  [17/28] Building CXX object src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_component.cpp.o",
+    "  [18/28] Building CXX object src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o",
+    "  [19/28] Building CXX object src/CMakeFiles/pops_runtime_output.dir/runtime/output/hdf5_collective.cpp.o",
+    "  [20/28] Building CXX object python/CMakeFiles/_pops.dir/bindings/core/bindings.cpp.o",
+    "  [21/28] Building CXX object python/CMakeFiles/_pops.dir/bindings/core/init/init_core.cpp.o",
+    "  [22/28] Building CXX object python/CMakeFiles/_pops.dir/bindings/core/init/init_identity.cpp.o",
+    "  [23/28] Building CXX object python/CMakeFiles/_pops.dir/bindings/core/init/init_component_loader.cpp.o",
+    "  [24/28] Building CXX object python/CMakeFiles/_pops.dir/bindings/core/init/init_parallel_hdf5.cpp.o",
+    "  [25/28] Building CXX object python/CMakeFiles/_pops.dir/bindings/core/init/init_system.cpp.o",
+    "  [26/28] Building CXX object python/CMakeFiles/_pops.dir/bindings/core/init/init_amr.cpp.o"
+  ],
+  "object_bytes_changed_count": 4,
+  "objects": [
+    {
+      "byte_changed": false,
+      "bytes": 160656,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/bindings.cpp.o",
+      "pre_sha256": "b6496238f116944154552a23ec7a3b05c0a9938a627349f5b52075fe73cd22ab",
+      "sha256": "b6496238f116944154552a23ec7a3b05c0a9938a627349f5b52075fe73cd22ab"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 2426920,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/init/init_amr.cpp.o",
+      "pre_sha256": "a0b8e9587d21788b36ae1fc181b05d3990a8432c729a17ae1d154e57b8cd1a67",
+      "sha256": "a0b8e9587d21788b36ae1fc181b05d3990a8432c729a17ae1d154e57b8cd1a67"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 533632,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/init/init_component_loader.cpp.o",
+      "pre_sha256": "e3a33bab6da60b24e6ec21905d1b2dc1424e29958e4308aee4ff410760e261ff",
+      "sha256": "e3a33bab6da60b24e6ec21905d1b2dc1424e29958e4308aee4ff410760e261ff"
+    },
+    {
+      "byte_changed": true,
+      "bytes": 882328,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/init/init_core.cpp.o",
+      "pre_sha256": "f0b46ed6cd3a6aa01eece59b23db1e4abea39e51fb205e295cfdc4cb220f5ae6",
+      "sha256": "0ebb966c6a88f948b5c2510d3a121e7f07a9dd1063c081bb02acf77cef56530e"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 346512,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/init/init_identity.cpp.o",
+      "pre_sha256": "b5e35cfc64aa2180235649d404ca61e89ce3ff61f03d1d3e8b96ed56d408da2c",
+      "sha256": "b5e35cfc64aa2180235649d404ca61e89ce3ff61f03d1d3e8b96ed56d408da2c"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 231552,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/init/init_parallel_hdf5.cpp.o",
+      "pre_sha256": "94741c72c6ca2f37c22b5240fca6390d4cb7d23b3dffccf30e258648a0a7360f",
+      "sha256": "94741c72c6ca2f37c22b5240fca6390d4cb7d23b3dffccf30e258648a0a7360f"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 2070120,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/init/init_system.cpp.o",
+      "pre_sha256": "79d296a97e58e7ef4ce1c48926777b3c82141f386acdd9408d6a6e981ba1006c",
+      "sha256": "79d296a97e58e7ef4ce1c48926777b3c82141f386acdd9408d6a6e981ba1006c"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 1776248,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o",
+      "pre_sha256": "4894afb2750ac6ad2c151552d3dc5403fcc18c1f630778b2ecd3e2f6406dd610",
+      "sha256": "4894afb2750ac6ad2c151552d3dc5403fcc18c1f630778b2ecd3e2f6406dd610"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 324584,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_component.cpp.o",
+      "pre_sha256": "bf82a9679da0ee4e4d9c8fe1e49860b583ffac6c0fd7e2271f9bca66490a408c",
+      "sha256": "bf82a9679da0ee4e4d9c8fe1e49860b583ffac6c0fd7e2271f9bca66490a408c"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 418448,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_layout_transfer.cpp.o",
+      "pre_sha256": "f9bd7bbeb0727fa423ae531263a18a1f5b08c040d0359c876817e1816ae70a60",
+      "sha256": "f9bd7bbeb0727fa423ae531263a18a1f5b08c040d0359c876817e1816ae70a60"
+    },
+    {
+      "byte_changed": true,
+      "bytes": 8656328,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o",
+      "pre_sha256": "eb19e7e5cdaa99649d185d615d61b46236fac52e6e754d5a0d4e14bb7e076add",
+      "sha256": "462a5b558cb93fa4d35c76bfd2784e4e62b5a9a764c4f8dbd0236e92ea36dd90"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 1050552,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_core_objects.dir/runtime/prepared_embedded_boundary.cpp.o",
+      "pre_sha256": "1493af65e7cf764d26dfab36658d6fe587da467eb28bd84845557294a6b9c17c",
+      "sha256": "1493af65e7cf764d26dfab36658d6fe587da467eb28bd84845557294a6b9c17c"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 5392,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_core_objects.dir/runtime/program/step_transaction.cpp.o",
+      "pre_sha256": "a757fb4a890b3d2ea87a489f8ec17035d3c1ea855990a8d46715ac9737236b11",
+      "sha256": "a757fb4a890b3d2ea87a489f8ec17035d3c1ea855990a8d46715ac9737236b11"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 120648,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_output.dir/runtime/output/hdf5_collective.cpp.o",
+      "pre_sha256": "29517540fd5612a0dbcc07b50fc8917419e461bd1d89fbe54e936df66db4e836",
+      "sha256": "29517540fd5612a0dbcc07b50fc8917419e461bd1d89fbe54e936df66db4e836"
+    },
+    {
+      "byte_changed": true,
+      "bytes": 1174920,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system.cpp.o",
+      "pre_sha256": "a28c3ef86e00ae9dd96cac7dae5661f0c4d7f9be27894da9bfa07bbd4f12644e",
+      "sha256": "df9841bc4f381d4ced9c6d144799472d8a38bd021fb218d4f6018d0a064de9fa"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 844544,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_aux.cpp.o",
+      "pre_sha256": "0183e52268fb9f16fa4f47c84f20d53fbe40c374696300b016a695253fc1645d",
+      "sha256": "0183e52268fb9f16fa4f47c84f20d53fbe40c374696300b016a695253fc1645d"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 120152,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_embedded_boundary.cpp.o",
+      "pre_sha256": "79e0e8dcc7d81909ca79d31545c61ec2f651df378c851b10abcf4852957da5bd",
+      "sha256": "79e0e8dcc7d81909ca79d31545c61ec2f651df378c851b10abcf4852957da5bd"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 170664,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_field_plans.cpp.o",
+      "pre_sha256": "62b56a73497484b5805121ea32240476e2695b2fd041ff55bf100b73c606b39c",
+      "sha256": "62b56a73497484b5805121ea32240476e2695b2fd041ff55bf100b73c606b39c"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 1544752,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_fields.cpp.o",
+      "pre_sha256": "db95d148be1e0753a7de860ce43390043d37fc6f97eb9142f03d26faf962d04b",
+      "sha256": "db95d148be1e0753a7de860ce43390043d37fc6f97eb9142f03d26faf962d04b"
+    },
+    {
+      "byte_changed": true,
+      "bytes": 3099760,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_install.cpp.o",
+      "pre_sha256": "95059a9b915c858d28f0b49cddbf78aa86716bbc3442407ab1504e6c90b301f8",
+      "sha256": "6681c91185bde7f1418dea28d70f3d171711ea350965fc680616893a2cdcc696"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 512960,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_io.cpp.o",
+      "pre_sha256": "d4548320c92bcca814b992b1487b0d3c6afa415108c9aa9b7a523f13f2d623b6",
+      "sha256": "d4548320c92bcca814b992b1487b0d3c6afa415108c9aa9b7a523f13f2d623b6"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 351120,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_layout_transfer.cpp.o",
+      "pre_sha256": "24ee5848d4e58c87fd5818136cfc8b18cd773626a26b51bfc376c9ce9e6e93d3",
+      "sha256": "24ee5848d4e58c87fd5818136cfc8b18cd773626a26b51bfc376c9ce9e6e93d3"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 15272,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_profiling.cpp.o",
+      "pre_sha256": "76e650286c97c4f0733202f57ca45caf1a5c8470671376f920d2260542f50dc6",
+      "sha256": "76e650286c97c4f0733202f57ca45caf1a5c8470671376f920d2260542f50dc6"
+    },
+    {
+      "byte_changed": false,
+      "bytes": 687528,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_program.cpp.o",
+      "pre_sha256": "f013809d61ee0fb610b5dfce86fc62e6d310c54b1d5636f4d2ebc9360ddc20d6",
+      "sha256": "f013809d61ee0fb610b5dfce86fc62e6d310c54b1d5636f4d2ebc9360ddc20d6"
+    }
+  ],
+  "packaging": {
+    "distribution_root": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages",
+    "expected_dimensions": [
+      2
+    ],
+    "installed_member_count": 1172,
+    "installed_tree_sha256": "515d4f21096f674bd1da19b6385cdb226b6befab18495e2f2577ccc3961f02e7",
+    "native_manifest": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/variants.json",
+    "native_manifest_member": "pops/_native/variants.json",
+    "native_manifest_sha256": "98f6649ff4896324cdf1af10bdf8944895989408745121812734f66b360bdb6a",
+    "native_variants": [
+      {
+        "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584;dim=2",
+        "dimension": 2,
+        "extension": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+        "has_kokkos": true,
+        "has_mpi": true,
+        "member": "pops/_native/dim2/_pops.cpython-312-darwin.so",
+        "sha256": "f8d9281232039f3ed3f92b7a14ae6530aa18baf41257a3c99a9629a50af61f64",
+        "version": "1.1.0"
+      }
+    ],
+    "package_file": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/__init__.py",
+    "proof_script_sha256": "3aa78bc8c3648e120439ac6e90a0887b60a54f37da7b7db2b2983015be5f1a8d",
+    "python_executable": "/Users/romaindespoulain/miniforge3/envs/pops/bin/python3.12",
+    "schema_version": 3,
+    "version": "1.1.0",
+    "wheel_path": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/wheel/pops-1.1.0-cp312-cp312-macosx_26_0_arm64.whl",
+    "wheel_sha256": "8ba01454f883750be892a8bbeaef9c2b82d16491f919a5bfd7420116c61e1272"
+  },
+  "prior_native_backup": {
+    "bytes": 14468728,
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/prior-installed-native/_pops.cpython-312-darwin.so",
+    "sha256": "22da10777dbd3e17698ba80193f3de4b95d1953d1009d0a952d0bdc92aa18f52"
+  },
+  "schema": 1,
+  "scope": "Actual incremental installed CPU OpenMP+Serial/MPI Dim2 build admission only; no scientific acceptance and no GPU/3D claim.",
+  "wheel": {
+    "bytes": 9354929,
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/wheel/pops-1.1.0-cp312-cp312-macosx_26_0_arm64.whl",
+    "sha256": "8ba01454f883750be892a8bbeaef9c2b82d16491f919a5bfd7420116c61e1272"
+  },
+  "wheel_native": {
+    "bytes": 14468728,
+    "member": "pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "sha256": "f8d9281232039f3ed3f92b7a14ae6530aa18baf41257a3c99a9629a50af61f64"
+  },
+  "wheel_source_count": 1167
+}

@@ -21,9 +21,26 @@ struct DiffusionContext {
                                                      coverage);
   }
   const Field* pointwise_active_mask(int, const Field&) const { return nullptr; }
+  const Field* pointwise_exchange_coverage_mask(int, const Field&) const { return nullptr; }
+  bool is_external_trace_face(int axis, int side, const Index<2>& cell) const {
+    const auto boundary = side == 0 ? BoundarySide::lower : BoundarySide::upper;
+    return !topology.is_periodic(Face<2>{axis, boundary}) &&
+           cell[axis] == (side == 0 ? geometry_.domain().lo[axis] : geometry_.domain().hi[axis]);
+  }
+  auto prepare_external_trace_face_predicate() const {
+    const auto domain = geometry_.domain();
+    const auto snapshot_topology = topology;
+    return [domain, snapshot_topology](int axis, int side, const Index<2>& cell) {
+      const auto boundary = side == 0 ? BoundarySide::lower : BoundarySide::upper;
+      return !snapshot_topology.is_periodic(Face<2>{axis, boundary}) &&
+             cell[axis] == (side == 0 ? domain.lo[axis] : domain.hi[axis]);
+    };
+  }
   template <class Producer>
   void stage_exchange_batch(Producer&& producer) {
-    auto records = prepare_exchange_batch(std::forward<Producer>(producer), [](auto&) {}, lane);
+    auto records = prepare_exchange_batch(
+        std::forward<Producer>(producer),
+        [](auto& record) { record.source_evaluation_identity = record.evaluation_context; }, lane);
     stage_exchange_batch_collectively(ledger, records, lane);
   }
 };
@@ -301,6 +318,18 @@ TEST(PreparedDiffusion, VariableDiagonalStaysInsideDivergenceWithPhysicalValueTr
     exchange += record.integrated_amount();
   EXPECT_EQ(context.ledger.records().size(), 16);
   EXPECT_NEAR(exchange, .05 * .75, 2e-13);
+  for (const auto& record : context.ledger.records()) {
+    EXPECT_TRUE(record.exterior_trace);
+    EXPECT_GE(record.trace_axis, 0);
+    EXPECT_LE(record.trace_axis, 1);
+    EXPECT_EQ(record.trace_component, 0);
+    EXPECT_EQ(record.orientation, record.trace_side == 0 ? -1 : 1);
+    EXPECT_EQ(record.source_evaluation_identity, "stage0");
+  }
+  const auto right =
+      context.ledger.prepare_trace({"operator", "physical-boundary", 0, 1, 0, "stage0"});
+  EXPECT_EQ(right.indices.size(), 4);
+  EXPECT_NEAR(right.local_amount, .05 * 1.25, 2e-13);
 }
 
 namespace {
@@ -316,9 +345,28 @@ struct FittedContext {
     return PreparedScalarBoundarySession<1>::prepare(geometry_, topology, field, execution, 1);
   }
   const MultiFab<1>* pointwise_active_mask(int, const MultiFab<1>&) const { return nullptr; }
+  const MultiFab<1>* pointwise_exchange_coverage_mask(int, const MultiFab<1>&) const {
+    return nullptr;
+  }
+  bool is_external_trace_face(int axis, int side, const Index<1>& cell) const {
+    const auto boundary = side == 0 ? BoundarySide::lower : BoundarySide::upper;
+    return !topology.is_periodic(Face<1>{axis, boundary}) &&
+           cell[axis] == (side == 0 ? geometry_.domain().lo[axis] : geometry_.domain().hi[axis]);
+  }
+  auto prepare_external_trace_face_predicate() const {
+    const auto domain = geometry_.domain();
+    const auto snapshot_topology = topology;
+    return [domain, snapshot_topology](int axis, int side, const Index<1>& cell) {
+      const auto boundary = side == 0 ? BoundarySide::lower : BoundarySide::upper;
+      return !snapshot_topology.is_periodic(Face<1>{axis, boundary}) &&
+             cell[axis] == (side == 0 ? domain.lo[axis] : domain.hi[axis]);
+    };
+  }
   template <class Producer>
   void stage_exchange_batch(Producer&& producer) {
-    auto records = prepare_exchange_batch(std::forward<Producer>(producer), [](auto&) {}, lane);
+    auto records = prepare_exchange_batch(
+        std::forward<Producer>(producer),
+        [](auto& record) { record.source_evaluation_identity = record.evaluation_context; }, lane);
     stage_exchange_batch_collectively(ledger, records, lane);
   }
 };
@@ -766,4 +814,105 @@ TEST(PreparedDiffusion, TensorRejectsAnIndefiniteConstitutiveJacobianWithPositiv
                DiffusiveEvaluationError);
   EXPECT_THROW(prepared.explicit_frequency(), std::logic_error);
   EXPECT_DOUBLE_EQ(reduce_max_local(out), 17);
+}
+
+// A constitutive law's native inputs need exactly the spatial operator support,
+// independently of any larger halo retained by its State allocation.
+TEST(PreparedDiffusion, DiagonalLawDoesNotReadBeyondItsOneCellNativeProviderSupport) {
+  DiffusionContext context;
+  const Box<2> domain{Index<2>{0, 0}, Index<2>{3, 3}};
+  auto wide_state = field(domain, Extent<2>{3, 3});
+  auto wide_rhs = field(domain, Extent<2>{3, 3});
+  auto reference_state = field(domain, Extent<2>{1, 1});
+  auto reference_rhs = field(domain, Extent<2>{1, 1});
+  auto coefficients = field(domain, Extent<2>{1, 1});
+  const auto q = wide_state.fab(0).view();
+  const auto reference = reference_state.fab(0).view();
+  const auto provider = coefficients.fab(0).view();
+  for_each_cell(domain, [=] POPS_HD(const Index<2>& cell) {
+    const Real value = Real(1) + Real(.1) * Kokkos::sin(Real(1.5707963267948966) * cell[0]);
+    q(cell, 0) = reference(cell, 0) = value;
+    provider(cell, 0) = Real(.25) + Real(.05) * cell[1];
+  });
+  context.prepare_mesh_boundary_session(wide_state, context.lane)->fill_halo(wide_state);
+  context.prepare_mesh_boundary_session(reference_state, context.lane)->fill_halo(reference_state);
+  context.prepare_mesh_boundary_session(coefficients, context.lane)->fill_halo(coefficients);
+  const auto provider_support = coefficients.fab(0).grown_box();
+  const auto law = [&](const Field& state) {
+    return [&, values = std::as_const(state).fab(0).view()](std::size_t) {
+      return [=] POPS_HD(const Index<2>& cell) {
+        DiffusiveLawResult<2> result;
+        if (!provider_support.contains(cell)) {
+          result.evaluation_status = 2;
+          result.reason_code = 781;
+          return result;  // A real narrower provider must never be dereferenced here.
+        }
+        const Real mobility = provider(cell, 0);
+        const Real coefficient = Real(2) / Real(7) + mobility * mobility;
+        result.values = {values(cell, 0), coefficient, coefficient, Real(1)};
+        return result;
+      };
+    };
+  };
+  PreparedDiffusion<2> narrow(context, reference_state, {}, true);
+  narrow.apply(reference_state, reference_rhs, law(reference_state));
+  PreparedDiffusion<2> wide(context, wide_state, {}, true);
+  ASSERT_NO_THROW(wide.apply(wide_state, wide_rhs, law(wide_state)));
+  const auto actual = std::as_const(wide_rhs).fab(0).view();
+  const auto expected = std::as_const(reference_rhs).fab(0).view();
+  EXPECT_LE(for_each_cell_reduce_max(domain,
+                                     [=] POPS_HD(const Index<2>& cell) {
+                                       return Kokkos::abs(actual(cell, 0) - expected(cell, 0));
+                                     }),
+            Real(1e-13));
+}
+
+TEST(PreparedDiffusion, TensorLawDoesNotReadBeyondItsTwoCellNativeProviderSupport) {
+  DiffusionContext context;
+  const Box<2> domain{Index<2>{0, 0}, Index<2>{3, 3}};
+  auto wide_state = field(domain, Extent<2>{3, 3});
+  auto wide_rhs = field(domain, Extent<2>{3, 3});
+  auto reference_state = field(domain, Extent<2>{2, 2});
+  auto reference_rhs = field(domain, Extent<2>{2, 2});
+  auto coefficients = field(domain, Extent<2>{2, 2});
+  const auto q = wide_state.fab(0).view();
+  const auto reference = reference_state.fab(0).view();
+  const auto provider = coefficients.fab(0).view();
+  for_each_cell(domain, [=] POPS_HD(const Index<2>& cell) {
+    const Real value = Real(1) + Real(.1) * Kokkos::sin(Real(1.5707963267948966) * cell[0]);
+    q(cell, 0) = reference(cell, 0) = value;
+    provider(cell, 0) = Real(.25) + Real(.05) * cell[1];
+  });
+  context.prepare_mesh_boundary_session(wide_state, context.lane)->fill_halo(wide_state);
+  context.prepare_mesh_boundary_session(reference_state, context.lane)->fill_halo(reference_state);
+  context.prepare_mesh_boundary_session(coefficients, context.lane)->fill_halo(coefficients);
+  const auto provider_support = coefficients.fab(0).grown_box();
+  const auto law = [&](const Field& state) {
+    return [&, values = std::as_const(state).fab(0).view()](std::size_t) {
+      return [=] POPS_HD(const Index<2>& cell) {
+        DiffusiveLawResult<2, 1, true> result;
+        if (!provider_support.contains(cell)) {
+          result.evaluation_status = 2;
+          result.reason_code = 782;
+          return result;
+        }
+        const Real mobility = provider(cell, 0);
+        const Real diagonal = Real(2) / Real(7) + mobility * mobility;
+        result.values = {values(cell, 0),      diagonal, Real(.025), Real(.025),
+                         Real(1.5) * diagonal, Real(1)};
+        return result;
+      };
+    };
+  };
+  PreparedDiffusion<2, 1, true> narrow(context, reference_state, {}, true);
+  narrow.apply(reference_state, reference_rhs, law(reference_state));
+  PreparedDiffusion<2, 1, true> wide(context, wide_state, {}, true);
+  ASSERT_NO_THROW(wide.apply(wide_state, wide_rhs, law(wide_state)));
+  const auto actual = std::as_const(wide_rhs).fab(0).view();
+  const auto expected = std::as_const(reference_rhs).fab(0).view();
+  EXPECT_LE(for_each_cell_reduce_max(domain,
+                                     [=] POPS_HD(const Index<2>& cell) {
+                                       return Kokkos::abs(actual(cell, 0) - expected(cell, 0));
+                                     }),
+            Real(1e-13));
 }

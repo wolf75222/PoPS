@@ -1,0 +1,89 @@
+{
+  "Native_loaded": [],
+  "SDK": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+  "Source_parent": "67623c9508e8f560fc8af18b34040fb6fb151d01",
+  "files": {
+    "cpp-author-ready.json": {
+      "bytes": 3705,
+      "sha256": "52938fdea3342917a0cd6c906728a2c7cb652c405ac0a1233e5feff301df9091",
+      "source": "/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/bounded-support-review-ready.json"
+    },
+    "cpp-host-negative.json": {
+      "bytes": 5575,
+      "sha256": "20cb9300b15fef292cfff8597bdc6e4de3c05f7d3c23c05c8da65c51a957a23f",
+      "source": "/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/wide-support-baseline.json"
+    },
+    "cpp-host-negative.xml": {
+      "bytes": 1560,
+      "sha256": "b593044bfe7eb85e5a4387347b7831dcbbd4d42b18c80b172cdc493a799089e9",
+      "source": "/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/wide-support-baseline.xml"
+    },
+    "cpp-host-positive.json": {
+      "bytes": 10853,
+      "sha256": "35eb0bb347565f17c8acebac9be02515f52202ee4324e3f0a5decdb46fa3f596",
+      "source": "/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/wide-support-candidate.json"
+    },
+    "cpp-host-positive.xml": {
+      "bytes": 8488,
+      "sha256": "10143f5affbeeace19dc159b86f57202b60838954cf5a3e5415fd42814cc73b1",
+      "source": "/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/wide-support-candidate.xml"
+    },
+    "fv-v1-negative.xml": {
+      "bytes": 3733,
+      "sha256": "607e485d749a86e5d3862986e0815a4839049e9700b5e2d0ca7bf1bbeb086599",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-diffusion-field-source-review-20261008/source-tests-fv-v1-discriminator.xml"
+    },
+    "integrated-independent-review.json": {
+      "bytes": 3223,
+      "sha256": "54d025888257bc66a2b254460f4aa2f2657451282e12150959360070a5447aca",
+      "source": "/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/integrated-final-read-support-review.json"
+    },
+    "python-author-v2.json": {
+      "bytes": 2359,
+      "sha256": "65ea7648b865f25733119852c33d828c381bf6469bd5aa9df96c70aba74e1aeb",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-diffusion-field-source-review-20261008/source-contract-receipt-v2.json"
+    },
+    "python-author-v2.xml": {
+      "bytes": 1749,
+      "sha256": "da8969f0848c327bc0a3ce8ce6e0adfcbad6a3a576f7f76ec2f93da33e183653",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-diffusion-field-source-review-20261008/source-tests-v2-final.xml"
+    },
+    "root-first-pytest.xml": {
+      "bytes": 22165,
+      "sha256": "a9bd916aa4f12d58023f1d5863af532ec31689db1faae36af5b717c494e28905",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-source-20261008/pytest.xml"
+    },
+    "root-first-result.json": {
+      "bytes": 1798,
+      "sha256": "c4a2f63a9094f23522fad4d47e806a6036867b8c27690fcbbb1e3a7883c606c3",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-source-20261008/result.json"
+    },
+    "root-pytest.xml": {
+      "bytes": 22014,
+      "sha256": "04aaa7a355add2be0699b55e84b13b5306f7ffdf81aa9f533051b26537116743",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-source-retry2-20261009/pytest.xml"
+    },
+    "root-result.json": {
+      "bytes": 1813,
+      "sha256": "48469b9fc43c0c167520aa63049c13f0317abe35e52be86bf779c8249ef6191b",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-source-retry2-20261009/result.json"
+    },
+    "subcycling-independent.json": {
+      "bytes": 1681,
+      "sha256": "bb21165a21b2bc5255b476c34871de1c13ae55106995c7ce5343bb8a5faff29d",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-subcycled-diffusion-source-counterreview-20261009/frozen-rhs-linear-dt-receipt.json"
+    }
+  },
+  "installed_header_count": 384,
+  "integrated_files": {
+    "docs/development/api_040/nonnegative_diagonal_diffusion.md": "189a94b25420e375da976950a8e4e648b5ccba2c551a6c379094893160799512",
+    "include/pops/numerics/diffusion/prepared_diffusion.hpp": "5f0adf266d50f6b38397179d78a88a1b56f177324ed1031d58b4b9cbfb9a1c39",
+    "python/pops/codegen/_native_auxiliary_shapes.py": "c5fb7767b1f772fd7f322d1592d6b6ab0a7d1b94c57351ff5a0fd5177eda44fa",
+    "python/pops/codegen/module_lowering.py": "8d50bf8a6e4f9865eb59c3e37f1d85e42b56261aba27b0eecf5d4eb52abc5aa5",
+    "tests/cpp/unit/runtime/test_prepared_diffusion.cpp": "308626cb81f56b09e657557345f74f30e816e6ec2b0904c69e26a322ee5ec99f",
+    "tests/python/unit/codegen/test_amr_diffusion_codegen.py": "9b1c833d72008592f5a6107983ade31b994816c4e17573b52192a9ddaa90b721",
+    "tests/python/unit/codegen/test_diffusion_frozen_input_quadrature.py": "20423e8c8a5496400ce32c88295e1b5971f0208e4854347fe61fcdb86f01c52f"
+  },
+  "internal_contract": "constitutive-support@1",
+  "qualification": "Source123 and independent Host21 only; no Native acceptance transferred"
+}

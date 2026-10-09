@@ -153,7 +153,8 @@ def compile_native(
             dependency_flags = ["-MMD", "-MF", dependency_file] if native_components else []
             cmd = [cc, *flags, *dependency_flags, "-I", include, *component_flags,
                    cpp, "-o", so_path, *native_link_flags]
-        _run_compile(cmd, "backend production, compile_native")
+        from pops.codegen.model_compile_evidence import retain
+        retain(so_path, cpp, cmd, sig, _run_compile)
         if native_components:
             from pops.native_components import compiler_include_roots, verify_prepared_native_dependencies
             verify_prepared_native_dependencies(
@@ -183,6 +184,7 @@ def compile_model(
     _native_field_roles: Any = None,
     consumer_owner_qid: Any = None,
     declare_auxiliary_providers: bool = True,
+    model_source_policy: str = "allow_missing",
 ) -> Any:
     """Compilation facade by INTENTION: compiles *model* (a ``HyperbolicModel``)
     into a native fixed-ABI package and returns its path.
@@ -195,6 +197,8 @@ def compile_model(
     @p require_metadata: if True, requires physical roles AND explicit gamma.
     Returns so_path.
     """
+    from pops.codegen.model_compile_evidence import policy, read, paths, guard_recompile
+    policy(model_source_policy)
     m = model
     backend = lower_backend(backend)
     if target not in ("system", "amr_system"):
@@ -261,6 +265,7 @@ def compile_model(
             consumer_owner_qid=consumer_owner_qid,
             declare_auxiliary_providers=declare_auxiliary_providers,
         )
+        read(out_path, require=model_source_policy != "allow_missing")
         if destination is None:
             write_artifact_sidecar(
                 out_path, semantic_identity=semantic_identity, spec_identity=spec_identity
@@ -275,6 +280,7 @@ def compile_model(
             )
             published = destination
         _record_artifact_identity(published, spec_identity)
+        read(published, require=model_source_policy != "allow_missing")
         return published
 
     # Out-of-source CACHE when so_path is omitted.  The check and publication share one
@@ -283,23 +289,33 @@ def compile_model(
     if so_path is None:
         so_path = _identity_cache_so_path(spec_identity)
         with _artifact_cache_lock(so_path):
-            if os.path.exists(so_path):
+            if model_source_policy == "recompile": guard_recompile(so_path)
+            if os.path.exists(so_path) and model_source_policy != "recompile":
                 verify_cached_artifact(
                     so_path, semantic_identity=semantic_identity, spec_identity=spec_identity
                 )
+                read(so_path, require=model_source_policy == "require")
                 return so_path
             staging = _artifact_cache_staging_path(so_path)
             try:
                 return _compile_and_authenticate(staging, so_path)
             finally:
-                for leftover in (staging, artifact_sidecar_path(staging)):
+                for leftover in (staging, artifact_sidecar_path(staging), *paths(staging)):
                     try:
                         os.remove(leftover)
                     except FileNotFoundError:
                         pass
     else:
         so_path = _artifact_distinct_so_path(so_path, spec_identity)
-    return _compile_and_authenticate(so_path)
+    with _artifact_cache_lock(so_path):
+        if model_source_policy == "recompile": guard_recompile(so_path)
+        staging = _artifact_cache_staging_path(so_path)
+        try:
+            return _compile_and_authenticate(staging, so_path)
+        finally:
+            for leftover in (staging, artifact_sidecar_path(staging), *paths(staging)):
+                try: os.remove(leftover)
+                except FileNotFoundError: pass
 
 
 # compile_problem -- compile a pops.time.Program into a problem.so
@@ -357,6 +373,19 @@ def compile_problem(
     )
 
 
+def _program_compile_options(plan: Any) -> dict[str, Any]:
+    """Project authenticated options to the Program compiler's authority.
+
+    Model TU admission is applied to every block by compile_install_models;
+    it is retained in the resolved plan but is not a Program compiler option.
+    Both single-layout and sliced-layout routes must use this same projection.
+    """
+    options = dict(plan.compile_options)
+    options.pop("model_source_policy", None)
+    options["libraries"] = plan.libraries
+    return options
+
+
 def _compile_resolved_problem(plan: Any) -> Any:
     """Compile only the route authenticated by one exact resolved plan."""
     from pops.codegen._plans import ResolvedSimulationPlan
@@ -374,8 +403,7 @@ def _compile_resolved_problem(plan: Any) -> Any:
 
     balance_due_contract = BalanceDueContract.from_consumer_graph(plan.consumer_graph)
     validate_balance_due_contract(plan.time, balance_due_contract)
-    options = dict(plan.compile_options)
-    options["libraries"] = plan.libraries
+    options = _program_compile_options(plan)
     return _compile_problem_impl(
         model_graph=build_program_model_graph(plan),
         time=plan.time,
@@ -386,6 +414,7 @@ def _compile_resolved_problem(plan: Any) -> Any:
         balance_due_contract=balance_due_contract,
         native_dimension=plan.resolved_dimension,
         shared_interface_codegen_evidence=evidence,
+        physical_global_sources=plan._physical_global_sources,
         **options,
     )
 
@@ -409,6 +438,7 @@ def _compile_problem_impl(
     balance_due_contract: Any = None,
     native_dimension: Any = None,
     shared_interface_codegen_evidence: Any,
+    physical_global_sources: Any = None,
 ) -> Any:
     """Compile a time Program into an ABI-compatible native ``problem.so``.
 
@@ -479,7 +509,12 @@ def _compile_problem_impl(
     )
     from pops.time._program.detach import detach_compiled_program
 
-    time = detach_compiled_program(time)
+    time = detach_compiled_program(time, physical_global_sources=physical_global_sources)
+    from pops.runtime._mapped_field_capability import (
+        requires_mapped_consumed_field_output, require_mapped_field_native_facts,
+    )
+    if requires_mapped_consumed_field_output(time._serialize()):
+        require_mapped_field_native_facts(adaptive=target == "amr_system")
     program_graph = time.to_graph()
     from pops._balance_due_contract import BalanceDueContract
 
@@ -489,7 +524,7 @@ def _compile_problem_impl(
         raise TypeError("compile_problem balance_due_contract must be an exact BalanceDueContract")
     from pops.codegen.program_emit_kernels import _prepared_native_components
 
-    native_components = _prepared_native_components(time)
+    native_components = _prepared_native_components(time, target=target)
     if shared_interface_codegen_evidence is None:
         from pops.codegen.program_graph_lowering import emit_program_graph
 

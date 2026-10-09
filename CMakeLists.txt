@@ -11,7 +11,7 @@ if(POLICY CMP0144)
 endif()
 
 project(PoPS
-  VERSION 1.0.0  # single source of the version: propagated to the Python module (__version__), the
+  VERSION 1.1.0  # single source of the version: propagated to the Python module (__version__), the
                  # pip wheel, Doxygen and Sphinx (see docs/VERSIONING.md). Never duplicate elsewhere.
   DESCRIPTION "Solveur advection-diffusion-couplage hyperbolique-elliptique sur AMR, cible cluster"
   LANGUAGES CXX

@@ -1,0 +1,31 @@
+{
+  "returncode": 0,
+  "counts": {
+    "tests": 1,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "duration_seconds": 40.37784895799996,
+  "status": "passed",
+  "Source": "67623c9508e8f560fc8af18b34040fb6fb151d01",
+  "Native": "22da10777dbd3e17698ba80193f3de4b95d1953d1009d0a952d0bdc92aa18f52",
+  "SDK": "e0b1d301cdad59a5e8874b0fc3a56e1b272810037555291fe13399631c5b717f",
+  "pytest_args": [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-x",
+    "-ra",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "-p",
+    "no:cacheprovider",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/cold-uniform/pytest.xml",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/cold-uniform/pytest-tmp",
+    "tests/python/integration/runtime/test_field_publication_instances_runtime.py::test_installed_three_instance_solved_provider_reads[cells0-False-False]"
+  ],
+  "identity_sha256": "303cb6b8732343fbb1070437457679ce757080e63574a605cfe9db1756f8ba3d"
+}

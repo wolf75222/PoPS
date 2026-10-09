@@ -5,6 +5,7 @@ channels:
   - conda-forge
 dependencies:
   - python=3.12
+  - pip
   - cmake>=3.27
   - ninja
   - ccache
@@ -15,6 +16,8 @@ dependencies:
   # Keep the MPI/HDF5 ABI pair aligned with the ParaView integration.
   - mpich=4.1.2
   - mpi=1.0=mpich
+  - mpi4py=4.1.2
   - "hdf5=1.14.3=mpi_mpich_*"
+  - zlib
   - llvm-openmp
   - fftw

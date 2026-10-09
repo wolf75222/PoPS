@@ -42,6 +42,7 @@ struct KrylovMethodControls {
   Real rel_tol = Real(1e-8);
   Real abs_tol = Real(0);
   int max_iterations = 1;
+  KrylovPhysicalNorm physical_norm = KrylovPhysicalNorm::metric_l2;
 };
 
 /// Exact vector-space facts needed before persistent method storage is allocated.
@@ -84,6 +85,7 @@ struct KrylovMethodProblemFacts {
   std::size_t robust_payload_width = 0;
   bool has_nullspace = false;
   bool has_preconditioner = false;
+  KrylovPhysicalNorm physical_norm = KrylovPhysicalNorm::metric_l2;
 };
 
 /// Allocation-free provider validation result.  Code zero means accepted.  A provider owns both
@@ -114,6 +116,12 @@ class PreparedKrylovMethodProvider {
   [[nodiscard]] virtual std::string_view identity() const noexcept = 0;
   [[nodiscard]] virtual std::uint64_t interface_version() const noexcept = 0;
   [[nodiscard]] virtual std::string_view collective_contract() const noexcept = 0;
+
+  /// Existing providers retain their metric stopping norm until explicitly qualified for another
+  /// physical measurement. This capability does not change their inner-product metric.
+  [[nodiscard]] virtual bool supports_physical_norm(KrylovPhysicalNorm norm) const noexcept {
+    return norm == KrylovPhysicalNorm::metric_l2;
+  }
 
   [[nodiscard]] virtual KrylovMethodValidation validate_controls(
       const KrylovMethodControls& controls,
@@ -171,11 +179,19 @@ class PreparedKrylovMethod {
 
   [[nodiscard]] KrylovMethodValidation validate_controls(
       const KrylovMethodControls& controls) const noexcept {
+    if (provider_ &&
+        (controls.physical_norm != KrylovPhysicalNorm::metric_l2 &&
+         controls.physical_norm != KrylovPhysicalNorm::component_linf))
+      return KrylovMethodValidation::reject(29, "physical stopping norm is invalid");
+    if (provider_ && !provider_->supports_physical_norm(controls.physical_norm))
+      return KrylovMethodValidation::reject(30, "physical stopping norm is not supported by this method");
     return provider_ ? provider_->validate_controls(controls, options_)
                      : KrylovMethodValidation::reject(1, "no prepared Krylov method provider");
   }
   [[nodiscard]] KrylovMethodValidation validate_problem(
       const KrylovMethodProblemFacts<Dim>& facts) const noexcept {
+    if (facts.physical_norm == KrylovPhysicalNorm::component_linf && facts.has_nullspace)
+      return KrylovMethodValidation::reject(31, "infinity physical stopping requires a nonsingular problem");
     return provider_ ? provider_->validate_problem(facts, options_)
                      : KrylovMethodValidation::reject(1, "no prepared Krylov method provider");
   }
@@ -376,6 +392,9 @@ class GmresKrylovMethodProvider final : public PreparedKrylovMethodProvider<Dim>
   std::string_view identity() const noexcept override { return "pops.krylov.gmres"; }
   std::uint64_t interface_version() const noexcept override { return 1; }
   std::string_view collective_contract() const noexcept override { return "pops.krylov.gmres@1"; }
+  bool supports_physical_norm(KrylovPhysicalNorm norm) const noexcept override {
+    return norm == KrylovPhysicalNorm::metric_l2 || norm == KrylovPhysicalNorm::component_linf;
+  }
   KrylovMethodValidation validate_controls(
       const KrylovMethodControls& controls,
       const PreparedProviderOptions& options) const noexcept override {

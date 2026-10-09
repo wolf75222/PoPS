@@ -1,0 +1,136 @@
+{
+  "ABI_scope": {
+    "CPP_source_changes_require_new_native_identity": true,
+    "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+    "no_public_header_patch": true,
+    "old_native_a936_qualification_not_carried": true,
+    "recorded_ABI": 13,
+    "recorded_package": 8,
+    "recorded_read": 2
+  },
+  "actual_failure": {
+    "GNU_version": "13.3.0",
+    "lines": [
+      422,
+      466
+    ],
+    "log": "/Users/romaindespoulain/dev/tmp/pops-pr681-ci-failed-a82e6268.log",
+    "sha256": "295f2fd7da9e3638320d5f87437299bd4fd3a59ff8c4c1d4e74f03fca5925224",
+    "site": "std::_Vector_base<function-local Carrier> at stl_vector.h:90; apply_identity_attributes cp/tree.cc:1525",
+    "source_instantiation_lines": [
+      18601,
+      19804,
+      24914
+    ],
+    "warning_separate": "AcceptedSnapshot anonymous CompletedCheckpointAdvancePoint -Wsubobject-linkage is a warning preceding the fatal vector ICE; causal relationship not inferred"
+  },
+  "author_Clang_evidence": {
+    "does_not_qualify_GNU13_3": true,
+    "independent_rerun": false,
+    "profile": "Full affected CPP, current Ninja-profile AppleClang -O3 -std=c++20 Dim2 MPI/Kokkos/OpenMP syntax only",
+    "receipt_sha256": "d5c9a74dd1435ee8dc8d815432db8bdd61d7f835086c680e5b937a8673f65723",
+    "recorded_exit": 0
+  },
+  "baseline_CPP_sha256": "f3e4727bec9da03d09af3307c74e62973ffccd315deece0400795a3ace2bbf4e",
+  "blocker": "Actual GNU13.3 affected-TU compilation and rebuilt Native/backend validation pending; source admission does not establish compiler repair.",
+  "candidate_CPP_sha256": "59e3fd9fe42cc8c31d2999840d16b1e2ac5ca399a828986126c98265add0a185",
+  "checkout": {
+    "HEAD": "d227c8b54360ee5a51917ebef43ebd397226d293",
+    "branch": "codex/api040-integrated-main-20261004",
+    "observed_dirty": [
+      "scripts/ci_select_tests.py",
+      "tests/python/architecture/test_amr_program_support_parity.py",
+      "tests/python/architecture/test_ci_cpp_include_impact.py",
+      "tests/python/architecture/test_ci_impacted_selection.py",
+      "tests/python/architecture/test_final_nd_amr_consumers.py"
+    ],
+    "root": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+    "untracked": "PoPS_Codex_handoff_0.4.0/"
+  },
+  "decision": "ADMIT_SOURCE_PATCH",
+  "git_blob_baseline_identity": {
+    "6d898599a3f66fa9aa3c049ba0f3114f1960b6dc": "f3e4727bec9da03d09af3307c74e62973ffccd315deece0400795a3ace2bbf4e",
+    "a82e6268": "f3e4727bec9da03d09af3307c74e62973ffccd315deece0400795a3ace2bbf4e",
+    "d227c8b54360ee5a51917ebef43ebd397226d293": "f3e4727bec9da03d09af3307c74e62973ffccd315deece0400795a3ace2bbf4e"
+  },
+  "independent_whole_CPP_forward_transform_exact": true,
+  "independent_whole_CPP_inverse_restores_baseline_exact": true,
+  "patch_sha256": "287ec1c94f1e7c9b162865c62b49e2d06e2f4cc1291a3f1d584bceb037e5b2f5",
+  "pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-amr-system-gcc13-local-carrier-candidate-v1-d227c8b5-20261008/clang-syntax-receipt.json": {
+      "bytes": 1610,
+      "sha256": "d5c9a74dd1435ee8dc8d815432db8bdd61d7f835086c680e5b937a8673f65723"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-amr-system-gcc13-local-carrier-candidate-v1-d227c8b5-20261008/clang-syntax.stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-amr-system-gcc13-local-carrier-candidate-v1-d227c8b5-20261008/clang-syntax.stdout.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-amr-system-gcc13-local-carrier-candidate-v1-d227c8b5-20261008/gcc13-named-private-carrier.patch": {
+      "bytes": 1421,
+      "sha256": "287ec1c94f1e7c9b162865c62b49e2d06e2f4cc1291a3f1d584bceb037e5b2f5"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-amr-system-gcc13-local-carrier-candidate-v1-d227c8b5-20261008/source-equivalence-review.json": {
+      "bytes": 1595,
+      "sha256": "827ea3989aac311e831e93747cd3c5a53b7ef808c3ae53789ed56f12524b040a"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-amr-system-gcc13-local-carrier-candidate-v1-d227c8b5-20261008/source-pins.json": {
+      "bytes": 525,
+      "sha256": "3f553bedd1e930acc29b26732657e4dd3c66f6f0541415ccb5501f64ace02ed4"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-amr-system-gcc13-local-carrier-candidate-v1-d227c8b5-20261008/src/runtime/amr/amr_system.cpp": {
+      "bytes": 1349845,
+      "sha256": "59e3fd9fe42cc8c31d2999840d16b1e2ac5ca399a828986126c98265add0a185"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include/pops/mesh/storage/fab.hpp": {
+      "bytes": 8194,
+      "sha256": "7ed3555c927cfe336eafa841b268770d57a30650b2b454abf85bb087e5bb26ac"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include/pops/runtime/amr_system.hpp": {
+      "bytes": 121216,
+      "sha256": "45ac6cfb92c23323659df37b420cadf11a7731e6c2c37966e9ab67f07daf14a8"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_system.cpp": {
+      "bytes": 1349610,
+      "sha256": "f3e4727bec9da03d09af3307c74e62973ffccd315deece0400795a3ace2bbf4e"
+    },
+    "/Users/romaindespoulain/dev/tmp/pops-pr681-ci-failed-a82e6268.log": {
+      "bytes": 1662362,
+      "sha256": "295f2fd7da9e3638320d5f87437299bd4fd3a59ff8c4c1d4e74f03fca5925224"
+    }
+  },
+  "reduced_GNU13_4_scope": "Different compiler/reduced input. If baseline reduction passes, candidate PASS is compatibility evidence only, not reproduction or repair of real GNU13.3 ICE.",
+  "required_closure": [
+    "Apply exact peer-admitted patch under Root ownership; inspect final Source diff/hash.",
+    "Actual GNU13.3 full affected translation unit using failing CI optimization/macros/includes: Serial and OpenMP, plus MPI/Kokkos lane and extension/shared visibility profile; inspect exact final SHA checks/gate.",
+    "Rebuild/relink production Native against final CPP; authenticate new extension hash and source receipt despite unchanged header SDK/ABI.",
+    "Run affected backend C++ Field/auxiliary registry and native installed original PDE/OwnRetry/Native8 tests on that exact fresh Native; qualify each actual backend/world scope separately.",
+    "Keep global 94=86+8 principles1.1-1.8 mission unfinished until its own matrix evidence closes."
+  ],
+  "schema": "pops.independent-private-carrier-source-admission@1",
+  "scope": "Read-only non-author review. No compile, build, test, import, install, remote operation, Source/header/doc edit.",
+  "scratch_relative_include_companions_identical": {
+    "src/runtime/amr/amr_layout_transfer_bridge.inc": "9998619851f739474514825d2f6ab667c9da9f393ddbd740ccb631deb61b8c2a",
+    "src/runtime/amr/amr_program_field_publication.inc": "47ce87aa8f380908bf15e47f72b7cd8bdc29d5b621cd31d96cfbc6b2afe1289c",
+    "src/runtime/system/auxiliary_consumer_preparation.hpp": "46bc17c93b777c9494859ef3707a2200eb03c44cfc39e4fb7f4c8950c9075b26"
+  },
+  "source_findings": {
+    "aggregate": "Same declaration order: size_t block, level; const MultiFab<Dim>* state; vector<Fab<Dim>::storage_type> allocations. No constructors, initializers, bases, virtual members or additional state introduced.",
+    "exact_guard_body": "All session expiry, topology/materialization generation, macro step, physical time/dt, transaction depth, clock/halo point, checkpoint metadata, parameter raw bits, field binding, exact MultiFab membership and storage data-pointer comparisons are byte-identical.",
+    "implicit_copy_move_destructor": "Both forms use implicit memberwise copy/move/destruction of the identical member types. Type identity/mangled internal symbols change; binary bitwise equivalence is not claimed.",
+    "no_changed_policy": "No field projection, ghost width, materialization choice, time/math, numerical constants, tolerances, wire/storage format, capture/fence/allocation/collective/publication statements changed; whole inverse CPP proof bounds this claim.",
+    "ownership_graph": [
+      "make_shared<vector<Carrier>> owns the same carrier vector",
+      "validate lambda captures carriers shared_ptr by value; closure retains vector",
+      "carrier.allocations stores copies of the same Kokkos::View<Real*,MemorySpace> from Fab::storage(); allocation ownership remains pinned",
+      "carrier.state and owner are borrowed pointers; weak field_rhs_session validation and short-circuit guard are unchanged",
+      "logical metadata, block_params and plan-binding snapshots remain copied immutable captures",
+      "lambda handed via std::move to NativeAcceptedAuxiliaryPoint with identical scope and use"
+    ],
+    "placement": "Defined inside AmrSystem<Dim>::Impl in implementation CPP. Impl forward declaration is under private in amr_system.hpp; no public header surface added.",
+    "template_lookup": "typename Impl::AcceptedAuxiliaryStateCarrier is a dependent qualified type alias; MultiFab<Dim> and Fab<Dim>::storage_type remain the same outer Dim specialization."
+  }
+}

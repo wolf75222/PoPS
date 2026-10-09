@@ -12,7 +12,7 @@ import json
 from collections.abc import Iterable
 from typing import Any, cast
 
-from .expr import Const, Expr, Var, _Bin, Neg, Sqrt, Abs, Sign
+from .expr import Const, Expr, Var, _Bin, Neg, Sqrt, Exp, Abs, Sign
 from .values import EigWitness, StateRef, RuntimeParamRef
 
 
@@ -33,7 +33,7 @@ def _children(e: Any) -> Any:
             return children
     if isinstance(e, _Bin):
         return (e.a, e.b)
-    if isinstance(e, (Neg, Sqrt, Abs, Sign)):
+    if isinstance(e, (Neg, Sqrt, Exp, Abs, Sign)):
         return (e.a,)
     if isinstance(e, EigWitness):
         return tuple(e.entries())  # entrees de la matrice : enfants pour CSE / decouverte deps
@@ -118,6 +118,8 @@ def _key(e: Any, _memo: dict[int, Any] | None = None) -> Any:
         key = ("neg", recurse(e.a))
     elif isinstance(e, Sqrt):
         key = ("sqrt", recurse(e.a))
+    elif isinstance(e, Exp):
+        key = ("exp", recurse(e.a))
     elif isinstance(e, Abs):
         key = ("abs", recurse(e.a))
     elif isinstance(e, Sign):
@@ -179,6 +181,8 @@ def _dag_key_ids(exprs: Any) -> tuple[dict[int, int], tuple[Any, ...], tuple[int
                 descriptor = ("neg", visit(e.a))
             elif isinstance(e, Sqrt):
                 descriptor = ("sqrt", visit(e.a))
+            elif isinstance(e, Exp):
+                descriptor = ("exp", visit(e.a))
             elif isinstance(e, Abs):
                 descriptor = ("abs", visit(e.a))
             elif isinstance(e, Sign):
@@ -218,3 +222,197 @@ def _dag_key_data(exprs: Any) -> dict[str, Any]:
 
     _, nodes, roots = _dag_key_ids(exprs)
     return {"protocol": "pops.expr.dag.v1", "nodes": nodes, "roots": roots}
+
+
+def validate_dag_key_data(graph, *, root_count=None):
+    """Validate inert structural Expr DAG data, without reconstructing/evaluating IR.
+
+    The wire descriptors are emitted above in deterministic post-order. Child references
+    therefore point strictly backwards; metadata is never mistaken for a child index.
+    """
+    from collections.abc import Mapping
+    import math
+
+    def fail():
+        raise ValueError("invalid canonical expression DAG descriptor")
+
+    def seq(value):
+        return type(value) in (tuple, list)
+
+    def text(value):
+        return type(value) is str and bool(value)
+
+    def inert(value):
+        if value is None or type(value) in (str, int, bool):
+            return
+        if type(value) is float and math.isfinite(value):
+            return
+        if seq(value):
+            for item in value:
+                inert(item)
+            return
+        if type(value) is dict and all(type(key) is str for key in value):
+            for item in value.values():
+                inert(item)
+            return
+        fail()
+
+    if not isinstance(graph, Mapping) or set(graph) != {"protocol", "nodes", "roots"} or graph["protocol"] != "pops.expr.dag.v1":
+        fail()
+    nodes, roots = graph["nodes"], graph["roots"]
+    if not seq(nodes) or not nodes or not seq(roots) or not roots:
+        fail()
+    if root_count is not None and len(roots) != root_count:
+        fail()
+    edges = []
+    descriptors = set()
+
+    def handle_key(value):
+        if not seq(value) or not value: fail()
+        if value[0] == "qualified":
+            if len(value) != 2 or not text(value[1]): fail()
+        elif value[0] == "local":
+            if len(value) != 4 or not text(value[1]) or not text(value[2]) or (value[3] is not None and not text(value[3])): fail()
+        else: fail()
+
+    binary = {"+", "-", "*", "/", "**", "minimum", "maximum", "==", "!=", "<", "<=", ">", ">=", "&", "|"}
+    unary = {"neg", "sqrt", "exp", "abs", "sign", "boolean_not"}
+    for index, node in enumerate(nodes):
+        if not seq(node) or not node or not text(node[0]):
+            fail()
+        inert(node)
+        descriptor = json.dumps(node, sort_keys=True, separators=(",", ":"))
+        if descriptor in descriptors: fail()
+        descriptors.add(descriptor)
+        op = node[0]
+        children = []
+
+        def ref(value):
+            if type(value) is not int or not 0 <= value < index:
+                fail()
+            children.append(value)
+
+        def refs(values):
+            if not seq(values):
+                fail()
+            for value in values:
+                ref(value)
+
+        def arity(size):
+            if len(node) != size:
+                fail()
+
+        if op in binary:
+            arity(2)
+            if not seq(node[1]) or len(node[1]) != 2:
+                fail()
+            refs(node[1])
+        elif op in unary:
+            arity(2); ref(node[1])
+        elif op == "where":
+            arity(4); refs(node[1:])
+        elif op == "rounded":
+            arity(3)
+            if node[1] != "binary64": fail()
+            ref(node[2])
+        elif op in {"const", "param_const"}:
+            arity(2 if op == "const" else 3)
+            if op == "param_const" and not text(node[1]): fail()
+            if not text(node[-1]): fail()
+            try:
+                from pops.identity.scalar import ScalarLiteral
+                literal = json.loads(node[-1])
+                if type(literal) is not dict or type(literal.get("kind")) is not str: fail()
+                kind = literal["kind"]
+                if kind not in {"integer", "rational", "decimal", "binary64", "algebraic"}: fail()
+                required = {"kind", "numerator", "denominator"} if kind == "rational" else {"kind", "value"}
+                if not required <= set(literal) or set(literal) - required - {"unit", "target", "cpp"}: fail()
+                payload = ((int(literal["numerator"]), int(literal["denominator"])) if kind == "rational"
+                           else int(literal["value"]) if kind == "integer" else literal["value"])
+                restored = ScalarLiteral(kind, payload, **{key: literal[key] for key in ("unit", "target", "cpp") if key in literal})
+                if restored.to_data() != literal: fail()
+            except (TypeError, ValueError, KeyError):
+                fail()
+        elif op in {"rparam", "handle_value", "unknown", "field_logical_time", "temporal_tau@1", "method_coefficient"}:
+            arity(2)
+            if not text(node[1]): fail()
+        elif op == "var":
+            arity(3)
+            if not all(text(value) for value in node[1:]): fail()
+        elif op == "quantity":
+            arity(4)
+            if not seq(node[1]) or not seq(node[3]) or type(node[2]) is not int or node[2] < 0: fail()
+            handle_key(node[1]); inert(node[3])
+            if len(node[3]) < 3 or not seq(node[3][2]) or node[2] >= len(node[3][2]): fail()
+        elif op == "state":
+            arity(3)
+            if not text(node[1]): fail()
+            ref(node[2])
+        elif op == "eig":
+            if len(node) not in (4, 5) or not text(node[1]) or type(node[2]) is not int or node[2] < 0: fail()
+            if len(node) == 5 and (type(node[3]) not in (int, float) or not math.isfinite(node[3])): fail()
+            refs(node[-1])
+        elif op in {"partial", "gradient"}:
+            arity(4 if op == "partial" else 3)
+            if type(node[1]) is int: ref(node[1])
+            elif seq(node[1]): handle_key(node[1])
+            else: fail()
+            if op == "partial" and type(node[2]) is not int: fail()
+            if not text(node[-1]): fail()
+        elif op == "gradient_magnitude":
+            arity(3); inert(node[1]); ref(node[2])
+        elif op in {"boundary_value", "interior_trace"}:
+            arity(3)
+            if not text(node[1]) or type(node[2]) is not int or node[2] < 0: fail()
+        elif op in {"program_component", "program_scalar", "program_global"}:
+            arity(4 if op == "program_component" else 3)
+            if type(node[1]) is not str or type(node[2]) is not int or node[2] < 0: fail()
+            if len(node) == 4 and (type(node[3]) is not int or node[3] < 0): fail()
+        elif op == "physical_global.v1":
+            arity(3); handle_key(node[1]); inert(node[2])
+        elif op in {"application_projection", "native_projection", "finite_projection_v1"}:
+            arity(3 if op == "finite_projection_v1" else 4)
+            ref(node[1])
+            if op != "finite_projection_v1" and not text(node[2]): fail()
+            if type(node[-1]) is not int or node[-1] < 0: fail()
+        elif op == "rate_application_projection":
+            arity(5); ref(node[1])
+            if not text(node[2]): fail()
+            inert(node[3]); inert(node[4])
+        elif op in {"operator_application", "native_call"}:
+            arity(7 if op == "operator_application" else 5)
+            inert(node[1])
+            inputs = node[2] if op == "operator_application" else node[3]
+            if not seq(inputs): fail()
+            for row in inputs: refs(row)
+            if op == "operator_application":
+                if not seq(node[3]): fail()
+                for row in node[3]:
+                    if not seq(row) or len(row) != 2 or not text(row[0]): fail()
+                    refs(row[1])
+                for value in node[4:]: inert(value)
+            else:
+                inert(node[2]); inert(node[4])
+        elif op == "finite_linear_v1":
+            arity(6)
+            from .finite_linear import _support
+            if node[1] not in ("apply", "solve"): fail()
+            try:
+                source, target = _support(node[2]), _support(node[3])
+            except (TypeError, ValueError): fail()
+            if not seq(node[4]) or len(node[4]) != len(target[1]) or any(not seq(row) or len(row) != len(source[1]) for row in node[4]): fail()
+            if any(type(value) not in (int, float) or not math.isfinite(value) for row in node[4] for value in row): fail()
+            if not seq(node[5]) or len(node[5]) != len(source[1]): fail()
+            refs(node[5])
+        else:
+            fail()
+        edges.append(children)
+    for root in roots:
+        if type(root) is not int or not 0 <= root < len(nodes): fail()
+    reachable, pending = set(), list(roots)
+    while pending:
+        index = pending.pop()
+        if index not in reachable:
+            reachable.add(index); pending.extend(edges[index])
+    if len(reachable) != len(nodes):
+        fail()

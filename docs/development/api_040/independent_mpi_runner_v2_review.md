@@ -1,0 +1,11 @@
+# Independent source review: installed MPI runner v2
+
+Reviewed root commit `4bb0639e33598b6c0aa0d1198ba74e5b5d5200db`, limited to `run_installed_mpi_checks.py` and `installed_mpi_reception.md`. No MPI reception was launched for this review.
+
+The selected dimension travels through three separate boundaries: the pre/post authentication subprocess receives `POPS_NATIVE_DIM`, the MPI command passes `--dimension` to every worker, and each worker calls `select_native_dimension(dimension)` before obtaining `mpi_world()`. The authenticated `before/identity.json` records the selected native binary and ABI key, including `dim=1|2|3`; workers compare their imported package path, native path and native SHA-256 with that identity. The result and each worker identity record the requested dimension. The runner does not implement a Dim2 extrusion fallback. A missing selected variant causes the preflight or worker to fail closed.
+
+The rest of the acceptance gate remains intact: actual world size, rank node parity, at least one test on every rank, zero failures/errors/skips, pre/post native and source-manifest identity, unchanged test sources, launcher success and timeout handling. The per-rank counts are not added as independent trials. This is a source-contract review; it does not qualify Dim3 or any scientific model. `python3 run_installed_mpi_checks.py --help` exited 0 and showed `--dimension {1,2,3}`; `--dimension 4` exited 2 at argparse without creating a receipt or invoking PoPS.
+
+No blocking defect was found in the dimension route. A rank's `dimension` field is recorded but the allgather comparison explicitly checks only rank, package path, native path and native digest. Under this runner's identical worker command and exact native selection, the digest/path check authenticates the selected binary. A future independent rank-receipt verifier can also check the dimension field and ABI key for clearer external audit; this observation is not a failure of the current execution gate.
+
+The subsequent M07 MPI2 scientific run uses a different scientific runner and must be qualified from its own receipt; it does not by itself test this generic MPI runner. Historical schema-1 Dim2 receipts retain their original bytes.

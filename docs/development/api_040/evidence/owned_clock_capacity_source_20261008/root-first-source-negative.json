@@ -1,0 +1,26 @@
+{
+  "exit": 1,
+  "args": [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-q",
+    "-p",
+    "no:cacheprovider",
+    "tests/python/unit/codegen/test_diffusion_frozen_input_quadrature.py",
+    "tests/python/unit/codegen/test_uniform_clock_manifest_contract.py",
+    "tests/python/architecture/test_ci_shard_binpack.py",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-root-integrated-owned-clock-source-20261008/tmp",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-root-integrated-owned-clock-source-20261008/pytest.xml"
+  ],
+  "duration_seconds": 50.66942849999759,
+  "Source_modules": {
+    "pops": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/__init__.py",
+    "pops.codegen.program_accepted_ssp": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/codegen/program_accepted_ssp.py",
+    "pops.codegen.program_codegen": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/codegen/program_codegen.py"
+  },
+  "Native_loaded": []
+}

@@ -2047,6 +2047,10 @@ def piece_payload(
             "valid_cells": valid,
             "cell_volumes": volumes,
         }
+        if geometry.node_coordinates is not None:
+            nodes = "geometry_%04d_nodes" % index
+            arrays[nodes] = geometry.node_coordinates
+            datasets["geometries"]["%s#%d" % geometry.key]["node_coordinates"] = nodes
     evidence = {name: array_evidence(value) for name, value in arrays.items()}
     return arrays, datasets, evidence
 

@@ -1,0 +1,80 @@
+{
+  "GPU_inter_node_Dim1_Dim3_current_qualification": false,
+  "amr_signed_zero_getter_correction_received": true,
+  "build": {
+    "CXX_objects": 24,
+    "header_signature": "2d3aa1140e6b24d30cdb501d70012b700b1ce70ce36871756f2e7cffda7d828d",
+    "installed_files": 1156,
+    "job": "732041",
+    "native_sha256": "4efc61b3a4a01ed82e41ef1eac4baaa450914afa516e806b88e282a0ac8fc0b7",
+    "shipped_source_files": 1147,
+    "source_files": 1191
+  },
+  "full_M16_M17_qualification": false,
+  "github_ci_qualified": false,
+  "main_equivalent_code_commit": "802e921c6e5bbcd0880a6a6a568d410508119b8a",
+  "native_jobs": {
+    "m16_cpu": "732047",
+    "m16_mpi2": "732051",
+    "uniform_initial_cpu": "732048",
+    "uniform_initial_mpi2": "732054"
+  },
+  "receipts": [
+    {
+      "name": "root-sdk19-build-reception-732041.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk19-build-reception-732041.json",
+      "schema": "root.sdk19.build-install-reception@1",
+      "sha256": "5e48488724fc719ad3e4febf394ea3867e34f55fe1975242d16ada1c9e199566"
+    },
+    {
+      "name": "root-sdk19-source-terminal-negative-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk19-source-terminal-negative-reception.json",
+      "schema": "root.sdk19.source-terminal-negative-reception@1",
+      "sha256": "3ca97a43cfdd1e8463a2c21f872195ca45e2046fd1b178aa1836d153046af6b2"
+    },
+    {
+      "name": "root-uniform-observation-source-reviews-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-uniform-observation-source-reviews-reception.json",
+      "schema": "root.uniform-observation-source-reviews-reception@1",
+      "sha256": "9e81df7f27d31d2358e20f7b387695a9a06733f07cedd76e36396f722627decd"
+    },
+    {
+      "name": "root-sdk19-m16-state2-cpu-scientific-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk19-m16-state2-cpu-scientific-reception.json",
+      "schema": "root.sdk19-m16-state2-cpu-scoped-scientific-reception@1",
+      "sha256": "26aa6c1eb3c7b14bcde113ec9919333b945def7d9c29406dbe2d048d9f270dd6"
+    },
+    {
+      "name": "root-sdk19-m16-state2-mpi2-scientific-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk19-m16-state2-mpi2-scientific-reception.json",
+      "schema": "root.sdk19-m16-state2-mpi2-scoped-scientific-reception@1",
+      "sha256": "2c934f52047920336f5255c3c1f53479683c7487fd9087fd3e7e52a015cb2de3"
+    },
+    {
+      "name": "root-sdk19-uniform-storage-cpu-engineering-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk19-uniform-storage-cpu-engineering-reception.json",
+      "schema": "root.sdk19-uniform-storage-cpu-engineering-reception@1",
+      "sha256": "34a7e8a09cd1e16040b325ccf965618df929cebe2a5fa2e8c40f8557715a924d"
+    },
+    {
+      "name": "root-sdk19-uniform-storage-mpi2-engineering-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk19-uniform-storage-mpi2-engineering-reception.json",
+      "schema": "root.sdk19-uniform-storage-mpi2-engineering-reception@1",
+      "sha256": "653c815e36d02f0677eca7f27c2399a40ecf514e7faa80e34e742e89da039d1f"
+    }
+  ],
+  "schema": "root.sdk19-public-composition-progress@1",
+  "source_cohort": {
+    "correction_received_in_distinct_future_freeze": false,
+    "deselected_native": 1,
+    "errors": 0,
+    "failed": 1,
+    "files": 48,
+    "green": false,
+    "passed": 371,
+    "selected": 372,
+    "skips": 0
+  },
+  "source_freeze": "1b64477d2f1c93e856e996a4c83e506fcc91b386",
+  "whole_mission_complete": false
+}

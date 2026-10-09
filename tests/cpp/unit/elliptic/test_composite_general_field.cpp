@@ -1,6 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <pops/numerics/elliptic/nd/prepared_composite_general_field.hpp>
+#include <pops/runtime/program/prepared_amr_field_residual.hpp>
+#include <pops/runtime/program/prepared_resource_cache.hpp>
+#include <pops/runtime/program/spatial_direct_interaction.hpp>
 
 #include <array>
 #include <cmath>
@@ -12,7 +15,8 @@ using namespace pops::runtime::program;
 using Solver = elliptic::nd::PreparedCompositeGeneralField<1>;
 using Provider = elliptic::nd::CompositeGeneralFieldProvider<1>;
 
-HierarchyTensorSolverBuildRequest<1> three_field_request(const ExecutionLane& lane) {
+HierarchyTensorSolverBuildRequest<1> three_field_request(const ExecutionLane& lane,
+                                                         int cells = 16) {
   HierarchyTensorSolverBuildRequest<1> request;
   request.components = 3;
   request.block = std::numeric_limits<std::size_t>::max();  // field-owned, no species index
@@ -40,15 +44,17 @@ HierarchyTensorSolverBuildRequest<1> three_field_request(const ExecutionLane& la
   values["physical.0.1"] = std::string("neumann");
   const mesh::RankSpace<1> ranks{Index<1>{0}, Extent<1>{lane.size()}};
   const Index<1> rank{lane.rank()};
-  const auto coarse = Geometry<1>::from_bounds(Box<1>{Index<1>{0}, Index<1>{15}}, RealVector<1>{0},
-                                               RealVector<1>{1});
+  const auto coarse = Geometry<1>::from_bounds(Box<1>{Index<1>{0}, Index<1>{cells - 1}},
+                                               RealVector<1>{0}, RealVector<1>{1});
   const auto fine = coarse.refine(Extent<1>{2});
   // Genuine partial refinement, with coarse/fine interfaces at x=1/4 and x=3/4.
   // Each level is also split into patches, so same-level coefficient halos are exercised.
   const std::array<Geometry<1>, 2> geometries{coarse, fine};
   const std::vector<std::vector<Box<1>>> boxes{
-      {Box<1>{Index<1>{0}, Index<1>{7}}, Box<1>{Index<1>{8}, Index<1>{15}}},
-      {Box<1>{Index<1>{8}, Index<1>{15}}, Box<1>{Index<1>{16}, Index<1>{23}}}};
+      {Box<1>{Index<1>{0}, Index<1>{cells / 2 - 1}},
+       Box<1>{Index<1>{cells / 2}, Index<1>{cells - 1}}},
+      {Box<1>{Index<1>{cells / 2}, Index<1>{cells - 1}},
+       Box<1>{Index<1>{cells}, Index<1>{3 * cells / 2 - 1}}}};
   for (int level = 0; level < 2; ++level) {
     const mesh::BoxArray<1> layout(boxes[level]);
     const auto distribution = mesh::Distribution<1>::partitioned(
@@ -240,4 +246,6 @@ TEST(CompositeGeneralField, RefusesMissingAndWrongConstantModes) {
   request.options.values["modes.count"] = std::uint64_t{1};
   EXPECT_FALSE(provider.supports(request).accepted());
 }
+#include "amr_original_field_residual.inc"
+#include "amr_original_field_interaction.inc"
 }  // namespace

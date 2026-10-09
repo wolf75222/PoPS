@@ -255,10 +255,23 @@ def _thaw_parameter_value(value: Any) -> Any:
 
 @dataclass(frozen=True, slots=True)
 class ExternalComponentType:
+    __pops_snapshot_immutable_data__: ClassVar[int] = 1
     package: SourceComponentPackage = field(repr=False)
     alias: str
     manifest: ComponentManifest
     interface: ComponentInterface
+
+    def snapshot_data(self) -> dict[str, Any]:
+        """A verified data factory, not a Python numerical callback."""
+        self.package.verify()
+        if self.package.exports.get(self.alias) != self.manifest.component_id:
+            raise ValueError("component factory export authority changed")
+        declared = next(item for item in self.package.manifests if item.component_id == self.manifest.component_id)
+        if declared.manifest_digest != self.manifest.manifest_digest:
+            raise ValueError("component factory manifest authority changed")
+        self.interface.require_manifest(self.manifest)
+        return {"source_package": self.package.identity.token, "alias": self.alias,
+                "manifest": self.manifest.manifest_digest.token, "interface": self.interface.to_data()}
 
     def __call__(self, **parameters: Any) -> ExternalComponent:
         unknown = sorted(set(parameters) - _parameter_names(self.manifest))
@@ -278,9 +291,16 @@ class ExternalComponent:
     # authority instead of recursively cloning the package graph (which would also lose the
     # intentional identity relationship used by resolve component matching).
     __pops_ir_immutable__: ClassVar[bool] = True
+    __pops_snapshot_immutable_data__: ClassVar[int] = 1
 
     component_type: ExternalComponentType
     parameters: Mapping[str, Any]
+
+    def snapshot_data(self) -> dict[str, Any]:
+        """Re-authenticate detached source bytes and interface before a data-only snapshot."""
+        self.component_type.package.verify()
+        self.component_type.interface.require_manifest(self.component_manifest)
+        return {"component": self.to_data(), "interface": self.component_type.interface.to_data()}
 
     @property
     def component_manifest(self) -> ComponentManifest:

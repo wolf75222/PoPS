@@ -3,8 +3,9 @@
 The public `Model.state` and `Model.species` declarations accept `PhysicalSupport`,
 `PhysicalDimension` units and explicit sampling metadata. Physical population,
 quantity, support and storage identities remain separate. `PhysicalSupportMap`
-represents only two explicit directional operations: a uniform velocity
-cell-average integral and a constant-extension field pullback. It has no inverse
+represents two explicit directional operations: a tensor-product
+cell-average reduction with exact authored per-axis weights, and a
+constant-extension field pullback. It has no inverse
 moment closure.
 
 ## Native realization and timing
@@ -46,12 +47,33 @@ included in the authenticated component package; ordinary header/ABI signature
 checks reject incompatible stale packages. Older native runtimes reject unknown
 operation values. No incompatible Dim=1 library is loaded alongside Dim=2.
 
-The implemented physical-map cell is Uniform / Dim=2 storage / CPU float64 /
-one rank / one patch per layout / two layouts / FixedDt / accepted-state field
-solve / one moment and one pullback. Distinct physical x meshes, AMR, multiple
-patches, multiple ranks, device memory, other physical supports and higher rank
-are explicit refusals. These restrictions describe this bounded implementation,
-not the general PoPS backend capabilities.
+The source realization now supports generic strict support subsets, explicit axis
+permutations and one or more eliminated coordinates within the native Dim1/2/3
+storage contract. `AxisQuadrature` accepts signed, nonuniform complete weights;
+the uniform velocity measure remains a convenience declaration. Components stay
+separate from spatial coordinates. Product cells are never packed into components.
+The singleton embedding of a lower-dimensional field has zero differential
+contribution; it does not turn its mathematical support into phase space.
+
+The prepared Uniform consumer authenticates exact shared geometry/topology,
+rank space, locally owned patch distributions and exact domain tiling. It gathers
+complete reduction fibres across patches and ranks into target-owned carriers,
+then invokes the loaded Transfer provider. An extension may repeat source
+carriers per target patch; its receipt counts those carriers explicitly. MPI
+replicated fields are refused by this consumer because its contribution protocol
+requires unique ownership. This is a realization boundary, not a restriction on
+physical product supports. Host float64 remains the realized mapping execution
+space. Native device execution is pending.
+
+AMR has a separate prepared composite route (`amr_layout_transfer.cpp`) using
+finest-owned coverage, measures and negotiated `TransferApiV2` intersection
+integrals. Inter-stage maps use the existing Program continuation rather than
+relabeling authored stage points. The source contracts and native fixtures for
+these routes exist; their reception must be pinned to matching installed native
+artifacts. This document no longer states the superseded one-rank/one-patch bound.
+
+The finite M19 witness and exact current pending/received boundary are tracked in
+[`api_040/m19_product_support_reception.md`](api_040/m19_product_support_reception.md).
 
 ## Qualification ledger
 

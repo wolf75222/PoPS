@@ -1471,6 +1471,10 @@ def test_uniform_capture_uses_field_slots_without_materializing_default_field(
             calls.append(("field", slot))
             return field_values[slot]
 
+        def checkpoint_state_carriers(self):
+            """I/O fixture sentinel only, not a complete C++ carrier image."""
+            return b"POPSCAR1"
+
         def capture_auxiliary_checkpoint_accepted_state(self):
             return b"POPSAUX2"
 
@@ -1522,6 +1526,10 @@ def test_uniform_capture_defers_field_free_alias_until_every_native_gather_finis
         def capture_auxiliary_checkpoint_accepted_state(self):
             calls.append(("auxiliary",))
             return b"POPSAUX2"
+
+        def checkpoint_state_carriers(self):
+            """I/O fixture sentinel only, not a complete C++ carrier image."""
+            return b"POPSCAR1"
 
         def program_cache_global(self, node):
             calls.append(("cache", node))
@@ -1580,6 +1588,10 @@ def test_uniform_capture_default_field_keeps_the_legacy_phi_as_an_exact_alias(mo
             calls.append(("field", slot))
             assert slot == _DEFAULT_FIELD_SLOT
             return default.copy()
+
+        def checkpoint_state_carriers(self):
+            """I/O fixture sentinel only, not a complete C++ carrier image."""
+            return b"POPSCAR1"
 
         def capture_auxiliary_checkpoint_accepted_state(self):
             return b"POPSAUX2"

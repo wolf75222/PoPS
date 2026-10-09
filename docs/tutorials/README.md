@@ -22,6 +22,8 @@ complets de l'architecture.
 - [HyQMOM a 15 moments](hyqmom/README.md) : cas constant, ondes fluide/electrostatique/magnetique,
   diocotron, tube a choc et jets croises, avec fermeture HyQMOM polynomiale, HLL, Euler, Poisson
   composite sur AMR lorsque le cas le demande, et sources de Lorentz natives.
+- [HyQMOM15 avec collisions BGK](hyqmom_bgk/README.md) : relaxation homogene et tube a choc
+  avec nombre de Knudsen, source maxwellienne isotrope et controles de conservation.
 
 Les cas plus longs se trouvent dans
 [l'exemple d'advection scalaire](../../examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py)

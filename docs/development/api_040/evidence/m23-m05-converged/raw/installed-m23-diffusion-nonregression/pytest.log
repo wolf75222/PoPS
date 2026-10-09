@@ -1,0 +1,59 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 5 items
+
+tests/python/integration/runtime/test_tensor_transport_composition.py::test_separate_transport_tensor_update_and_signed_ledgers[explicit] PASSED [ 20%]
+tests/python/integration/runtime/test_tensor_transport_composition.py::test_separate_transport_tensor_update_and_signed_ledgers[implicit] FAILED [ 40%]
+tests/python/integration/runtime/test_tensor_transport_composition.py::test_independent_bounds_do_not_admit_a_sum_exceeding_the_combined_bound PASSED [ 60%]
+tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_explicit_exchange_quadrature[euler] PASSED [ 80%]
+tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_explicit_exchange_quadrature[ssprk2] PASSED [100%]
+
+=================================== FAILURES ===================================
+______ test_separate_transport_tensor_update_and_signed_ledgers[implicit] ______
+tests/python/integration/runtime/test_tensor_transport_composition.py:143: in test_separate_transport_tensor_update_and_signed_ledgers
+    runtime, context, initial = _bind(VALID_DT, implicit=implicit)
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_tensor_transport_composition.py:133: in _bind
+    runtime = pops.bind(artifact, initial_values={subject: initial},
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:91: in bind
+    return phase(artifact, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:636: in bind
+    return install(install_plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:651: in install
+    return runtime_install(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_adapters.py:22: in install_plan
+    run_bind_gates(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_validation.py:706: in run_bind_gates
+    manifest = manifest_fn()
+               ^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_compiled_artifact.py:904: in manifest
+    return build_compiled_manifest(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/external/artifact_manifest.py:423: in build_compiled_manifest
+    args = compiled.arguments() if hasattr(compiled, "arguments") else None
+           ^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_compiled_artifact.py:909: in arguments
+    return build_arguments(self)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:211: in build_arguments
+    return _build_arguments(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/inspect_compiled.py:425: in _build_arguments
+    raise ValueError("compiled Program State read has no exact state identity")
+E   ValueError: compiled Program State read has no exact state identity
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_tensor_transport_composition.py::test_separate_transport_tensor_update_and_signed_ledgers[explicit]
+tests/python/integration/runtime/test_tensor_transport_composition.py::test_separate_transport_tensor_update_and_signed_ledgers[implicit]
+  tests/python/integration/runtime/test_tensor_transport_composition.py:138: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.parametrize("implicit", (False, True), ids=("explicit", "implicit"))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m23-diffusion-nonregression/pytest.xml -
+=========================== short test summary info ============================
+FAILED tests/python/integration/runtime/test_tensor_transport_composition.py::test_separate_transport_tensor_update_and_signed_ledgers[implicit]
+============= 1 failed, 4 passed, 2 warnings in 165.28s (0:02:45) ==============

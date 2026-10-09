@@ -289,6 +289,11 @@ class ScalarLiteral:
             )
         return cls("algebraic", expression, unit, _target_name(target), cpp)
 
+    def __pops_scalar_literal__(self) -> dict[str, Any]:
+        """Expose the existing immutable literal contract to dependency-free consumers."""
+        return {"kind": self.kind, "payload": self.payload, "unit": self.unit,
+                "target": self.target, "cpp": self.cpp}
+
     def to_data(self) -> dict[str, Any]:
         data: dict[str, Any] = {"kind": self.kind}
         if self.kind == "integer":

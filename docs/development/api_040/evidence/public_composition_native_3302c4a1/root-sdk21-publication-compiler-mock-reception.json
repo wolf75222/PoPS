@@ -1,0 +1,149 @@
+{
+  "actual_compiler_failure_qualified": false,
+  "body": {
+    "JUnit_PASS": 1,
+    "JUnit_seconds": 2.761,
+    "actual_CXX_compilation_proved": false,
+    "cache_members": [
+      "ce28797c66715c0cb93905d4ce6f7fc440d93baa0d132c645681aba9e186fbde.failed.cpp",
+      "ce28797c66715c0cb93905d4ce6f7fc440d93baa0d132c645681aba9e186fbde.so.pops-cache.lock"
+    ],
+    "cache_payload_retained": true,
+    "cleanup_evidence": "retained files plus JUnit",
+    "compiler_graph_qualified": false,
+    "compiler_mock": true,
+    "failed_cpp_sha256": "c2e5785df908f9dcbf28fe56ea73512a094bb0728b168ac791f22d3edb02160d",
+    "flags_and_header_mocked": true,
+    "freeze": "3302c4a19d94a0b08dbba9c05c4de3ae2debb232",
+    "frozen_test_source_sha256": "b43c106eb8b26e9bfd87a24c0702e1e3c3dfc8ab446cb05b41929dcd0be8f63e",
+    "installed_identity": {
+      "abi_key": "compiler=15.3.0;std=202002L;headers=2d3aa1140e6b24d30cdb501d70012b700b1ce70ce36871756f2e7cffda7d828d;kokkos=1;stdlib=libstdc++_20260612;mpi=1;mpi_abi=f0d5c4a08c55d4d84a14c6cfd4d12d992c3afa7c5f9c2ca3ee140e5d87a0fa9e;dim=2",
+      "doctor": {
+        "compilateur": [
+          true,
+          "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/bin/g++ [baked by the _pops build] ; -std=c++20 accepted"
+        ],
+        "headers_sync": [
+          true,
+          "headers == module build (sig 2d3aa1140e6b...)"
+        ],
+        "include": [
+          true,
+          "/project/r250127/api040-composition15-mpich-20261002-v15/source/include"
+        ],
+        "interpreteur": [
+          true,
+          "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/bin/python (3.12) ; extension /gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "kokkos": [
+          true,
+          "Kokkos module (thread/device resources selected before initialization)"
+        ],
+        "kokkos_root": [
+          true,
+          "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15"
+        ],
+        "numpy": [
+          true,
+          "2.5.3"
+        ],
+        "threads": [
+          true,
+          "OMP_NUM_THREADS=1 ; first System created=False"
+        ]
+      },
+      "execution_environment": {
+        "FI_PROVIDER": null,
+        "FI_TCP_IFACE": null,
+        "OMP_NUM_THREADS": "1",
+        "OMP_PROC_BIND": "false",
+        "POPS_THREADS": "1"
+      },
+      "native_file": "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so",
+      "native_sha256": "4efc61b3a4a01ed82e41ef1eac4baaa450914afa516e806b88e282a0ac8fc0b7",
+      "package_file": "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages/pops/__init__.py",
+      "package_version": "1.1.0",
+      "python": "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/bin/python",
+      "schema_version": 2,
+      "scope": "installed production PoPS, local CPU Kokkos, MPI-enabled Dim=2",
+      "source_commit": "3302c4a19d94a0b08dbba9c05c4de3ae2debb232",
+      "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_files_sha256": "3a555a75268830b2b7073a33040562ab181af1600b67a28d73d4d28f93043cfa",
+      "sys_path": [
+        "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/source/scripts",
+        "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/source",
+        "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/source/docs/development/api_040",
+        "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python312.zip",
+        "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12",
+        "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/lib-dynload",
+        "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages"
+      ],
+      "verified_source_files": 1147
+    },
+    "inventory_counts": {
+      "installed": 1156,
+      "preserved": 2377,
+      "source": 1191
+    },
+    "job": "732113",
+    "native_bind_run_qualified": false,
+    "node": "tests/python/unit/codegen/test_compile_cache_lock.py::test_failed_program_compile_leaves_no_partial_final_or_staging_binary",
+    "pins": {
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/build21-received-732100/identity/identity.json": "259d596e8b54801395b55f92818c584353dd4fc2448773662ec1cf2a0a9bef93",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/after/identity.json": "90fa7f4b2e2395541957a65e09fdfcc7508d0d691a1f5cde5f4ee64a19990bed",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/after/source-files.json": "3a555a75268830b2b7073a33040562ab181af1600b67a28d73d4d28f93043cfa",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/before/identity.json": "90fa7f4b2e2395541957a65e09fdfcc7508d0d691a1f5cde5f4ee64a19990bed",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/before/source-files.json": "3a555a75268830b2b7073a33040562ab181af1600b67a28d73d4d28f93043cfa",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/compute-output-path.txt": "462741c9fe177869760bff30a26f673095659f756e0f5354144796a2acb81413",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/installed-after.json": "bc9980c209ee044399f3b19db292a278ac10527ff96feaf558e37d9c9e907da9",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/installed-before.json": "bc9980c209ee044399f3b19db292a278ac10527ff96feaf558e37d9c9e907da9",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/output/identity.json": "90fa7f4b2e2395541957a65e09fdfcc7508d0d691a1f5cde5f4ee64a19990bed",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/output/pytest-tmp/test_failed_program_compile_le0/ce28797c66715c0cb93905d4ce6f7fc440d93baa0d132c645681aba9e186fbde.failed.cpp": "c2e5785df908f9dcbf28fe56ea73512a094bb0728b168ac791f22d3edb02160d",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/output/pytest-tmp/test_failed_program_compile_le0/ce28797c66715c0cb93905d4ce6f7fc440d93baa0d132c645681aba9e186fbde.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/output/pytest.log": "1c23909e2ed949e51d9e24611905baaf558709b8a45d383b828442d9d7203285",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/output/pytest.xml": "731c68c417110dec43f232a0ad84fdc8579509a434924ef864b7873b5d451f61",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/output/result.json": "4ed0572eb589b961ba57554b7bfcdb9dccc45765c0ac9dbcbe6b353b50556a66",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/output/source-files.json": "3a555a75268830b2b7073a33040562ab181af1600b67a28d73d4d28f93043cfa",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/preserved-after.json": "ac88be16e6521f1d800f9c5ddf94fc950be7c874560c6073f03eabf31f7cd262",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/preserved-before.json": "ac88be16e6521f1d800f9c5ddf94fc950be7c874560c6073f03eabf31f7cd262",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/result.json": "d29e9532c3459d043830795fe2cf483241ead9d84b214f13f3693348b935c7de",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/run.log": "8159bbb489eca07e3a63cdf56b0c7a589746c87ea9ddacfee6e6cb93fbcd04b6",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/source-after.json": "239fcc7f4b32470b1e23f0a32b8de7ddd3c512bfa16dff0045f9df47fd7ea6a6",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/source-before.json": "239fcc7f4b32470b1e23f0a32b8de7ddd3c512bfa16dff0045f9df47fd7ea6a6",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/test-exit.json": "300ffe4f1ef21e149d0eb56cd4e35a73727ac1f1b1b01e00c1d71071a54b7087",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/native-sdk21-publication-compiler-mock-job-732113/test-wrapper.log": "4ed0572eb589b961ba57554b7bfcdb9dccc45765c0ac9dbcbe6b353b50556a66",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-complete-received-732113/root-transfer-reception.json": "e328f1ce66f0e526bd521b46417bd5b93e37d480f9c5d48c79b24f66d3765d1b",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-publication-compiler-mock-job-732113.transfer.json": "db224bbe1cd74a19407cff96ef0b49f454e24f2047be4cbf0225b97c070303c5",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk21-build-reception-732100.json": "b4361a6ec3e94a3e0f5905c5b6c40550a6a37d82dec155a9d3096b34678e884b"
+    },
+    "root_seal": false,
+    "schema": "sol61.sdk21-publication-compiler-mock-reception@1",
+    "scientific_acceptance": false,
+    "symlinks": [
+      {
+        "kind": "symlink",
+        "path": "output/pytest-tmp/test_failed_program_compile_lecurrent",
+        "target": "/tmp/pops-api040-composition15-sdk21-publication-compiler-mock-732113/output/pytest-tmp/test_failed_program_compile_le0"
+      }
+    ],
+    "world": 1
+  },
+  "current_installed_publication_mock_scope_received": true,
+  "independent_helper_pins_rehashed": 5,
+  "independent_helper_pins_sha256": "3dbf8cb7943d8b946743438fd5fcffffc8e14af9b389e462a8f6a15322caf935",
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk21-publication-independent-20261003/report.json",
+    "sha256": "4f02a3f3cf9185eaa7069e5304ae345566cf7ca4478bf8adf993dd909c034ce7"
+  },
+  "job": "732113",
+  "native_join_pins_rehashed": 26,
+  "reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk21-publication-independent-20261003/receive.py",
+    "sha256": "f6c36207da3644a46ece24b6dbe23b38720b5f337b7b1fa2ce96233af8d8f645"
+  },
+  "root_recompute_exact_bytes": true,
+  "schema": "root.sdk21-publication-compiler-mock-reception@1",
+  "scientific_acceptance": false,
+  "source_freeze": "3302c4a19d94a0b08dbba9c05c4de3ae2debb232",
+  "whole_mission_complete": false
+}

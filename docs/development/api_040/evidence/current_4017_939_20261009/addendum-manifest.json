@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "files": {
+    "ci-focused-source/current-ci-route-source-receipt.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-current-ci-route-source-validation-20261009/current-ci-route-source-receipt.json",
+      "bytes": 17324,
+      "sha256": "882be18372b07ac54a0713ca91211da7362a1402aa557f79a2172bcc3ddee22d"
+    },
+    "ci-focused-source/pytest.xml": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-current-ci-route-source-validation-20261009/pytest.xml",
+      "bytes": 10608,
+      "sha256": "2b37d4a029dffe84627aa06825af6d9b2c8d152039e05274dc544f2477e9598f"
+    },
+    "ci-focused-source/focused-result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-current-ci-route-source-validation-20261009/focused-result.json",
+      "bytes": 2833,
+      "sha256": "7d28277cddb13d70d320db193c5e2541b66787306d2dd51ea31d5ad19b3f1a96"
+    },
+    "ci-focused-source/geometry-route-result.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-current-ci-route-source-validation-20261009/geometry-route-result.json",
+      "bytes": 1326,
+      "sha256": "9c999eb90ce968868f7993d8f98b5d1b585c7c73f1ada3f3a97014509ea0125f"
+    },
+    "ci-focused-source/run_focused_source.py": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-current-ci-route-source-validation-20261009/run_focused_source.py",
+      "bytes": 3789,
+      "sha256": "9ce52370cd2e0cb66f7eda06afabe3c4431496acb95f29e1de2dfca3f594eb21"
+    },
+    "ci-focused-source/geometry_route_probe.py": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-current-ci-route-source-validation-20261009/geometry_route_probe.py",
+      "bytes": 3413,
+      "sha256": "688e0f1cbb527413a4590fd13a70cc775f16b9f064c8136486b523b11f4a6daa"
+    },
+    "static-inputs/reviewed-runner/references.py": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-inputs-reviewed-runner-r2-4017-20261009/references.py",
+      "bytes": 3776,
+      "sha256": "a11c7d3dab64918203f51371d2627ac267b4cd5b86e9bb133ad1f2423454e982"
+    },
+    "ci-exact-4017/actual-pr-4017-prepublication.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-current-4017-publication-20261009-r2/actual-pr-4017-prepublication.json",
+      "bytes": 44851,
+      "sha256": "fb124747d1aced1761244c847d4d71354807d02414edeaa6acc004de96bd139a"
+    },
+    "gpu-988-r5/actual-r5-failed-dependency-cancellation-r2.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r5-failed-dependency-cancellation-r2.json",
+      "bytes": 1391,
+      "sha256": "ad3cc2387e717123cf672f084962b82737c3b4fb8edce3c42c0f8a3b65f7a629"
+    },
+    "gpu-988-r5/actual-readonly-20261009T012915113064Z.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-r5-readonly-job-reception-20261009/actual-readonly-20261009T012915113064Z.json",
+      "bytes": 256329,
+      "sha256": "fef075f1ec7ff09e74e2b49dd3867b1dc27e8fe901d1172fda5ea31de519588b"
+    },
+    "gpu-988-r5/actual-env-selector-readonly-20261009T013008393096Z.json": {
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-r5-readonly-job-reception-20261009/actual-env-selector-readonly-20261009T013008393096Z.json",
+      "bytes": 40887,
+      "sha256": "675ad75e480f39ce9c38b56c22c6bbac1f95bb82b81b7598b3729eb3773c3195"
+    }
+  },
+  "scope": "Additive exact currentCI60Source, portableInputreference, live4017CInegative and actualR5failure/closedcancellation receipts. Original154filemanifest unchanged; noGPUscience orCIgreen claim."
+}

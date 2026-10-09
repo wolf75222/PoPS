@@ -1,0 +1,70 @@
+{
+  "evidence_gate_patch_sha256": "8fa031273d154484d24f6733be9865440deb6f55c4c29723174a6c272e8ea78b",
+  "limits": {
+    "Native_GPU7_build_import_or_science_received": false,
+    "actual_NVCC_candidate_acceptance": false,
+    "inner_command_provenance": "Bash xtrace-derived, not syscall-instrumented argv/argc",
+    "resources": "retained read-only actual24h short partition;8cpu96GH1001 shape unchanged; not refreshed by reviewer"
+  },
+  "placement": {
+    "all_new_source_header_outputs_dep_keep_trace_tmp_cache_logs": "same private scratch root; no new writes under common project",
+    "old_dependency_toolchain": "read-only borrowed paths, before/after identities required",
+    "root": "/gpfs/scratch/rmdraux/PoPS-api040-cuda-braced-probe-6d898599-20261008-v1"
+  },
+  "plan_sha256": "7772a7ada805494e500f542a489341877ae274c431842c147f2ecddaf78fb78b",
+  "preserved_scientific_contract": {
+    "Field_read": 2,
+    "Native_ABI": 13,
+    "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+    "Source": "6d898599a3f66fa9aa3c049ba0f3114f1960b6dc",
+    "flags": [
+      "--fmad=false",
+      "O3",
+      "std=c++20",
+      "Dim2",
+      "MPI",
+      "sm80",
+      "fopenmp"
+    ],
+    "package_ABI": 8,
+    "physics_equations_guards_serialization_order_FP": "unchanged; script gate/control/output changes only"
+  },
+  "prior_review_sha256": "338a08499f0d6ceefc0d627b4d7f0e1f7aa3e3ebf5bbac40073977a6e4f1adc8",
+  "probe_script_sha256": "25f1c4c615d417cab4af99461d35a66cb62795c83e58cb4f8afcc0dbfe7d3b47",
+  "read_checks": {
+    "Root_GO_script_digest_bound": true,
+    "V1_to_V2_changed_payload_paths": [
+      "plan.json",
+      "payload-file-pins.json",
+      "probe.py"
+    ],
+    "argv_env_Slurm_source_header_dependencies_unchanged": true,
+    "baseline": "nonzero real compile exit plus all three errors at original lines232,992,1361 required",
+    "baseline_cpp_sha256": "32ffe0d0fb907e678a6238cec7e07ec11d2516695e65c85413458645bb8174d6",
+    "borrowed_compiler_wrapper_rows": 4,
+    "borrowed_dependency_header_rows": 1619,
+    "byte_mode_mismatches": 0,
+    "candidate_cpp_sha256": "c4f84bbac8c16fa55a502e8d9a849f2c20788c25ad1e8caef5c45b2a45a1e457",
+    "candidate_object": "exact outer -o pathname; regular file, bytes>=64, hash, ELF64 little-endian AArch64 ET_REL required",
+    "delta_exact_against_V1": true,
+    "facts_and_negative_retention": "logs, parsed inner trace commands, keep inventory and result written before gate-failure/break",
+    "keep_names": "nonempty regular variant-local amr_layout_transfer.*.ii plus exact amr_layout_transfer.cudafe1.cpp",
+    "original_three_failure_patterns_match_retained_actual_log": true,
+    "owned_Source_header_files": 394,
+    "payload_regular_rows": 403,
+    "terminal_success": "exact two variants with individual evidence gates true plus unchanged borrowed files/headers"
+  },
+  "reviewer_actions": {
+    "Main_edits": 0,
+    "Native_edits": 0,
+    "compiler_invocations": 0,
+    "local_artifact": "Only this independent review",
+    "remote_reads": 0,
+    "remote_writes": 0,
+    "sbatch": 0,
+    "test_runs": 0
+  },
+  "schema": "pops.independent-private-cuda-probe-plan-review@2",
+  "source_blockers": [],
+  "verdict": "Source admission granted for exact V2 one-TU actual NVCC baseline/candidate probe; V1 evidence gate blocker closed. Root may issue GO and own the single sbatch. No compiler or runtime success is claimed by this review."
+}

@@ -1,0 +1,40 @@
+{
+  "abi_environment": {
+    "compiler": "Apple LLVM 21.0.0 (clang-2100.1.1.101)",
+    "dim": "2",
+    "kokkos": "1",
+    "mpi": "1",
+    "mpi_abi": "f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5",
+    "std": "202002L",
+    "stdlib": "libc++_210106"
+  },
+  "artifact_properties": [
+    "abi_key",
+    "cxx",
+    "std",
+    "so_path",
+    "layout_program_paths"
+  ],
+  "doctor_checks": [
+    "compilateur",
+    "headers_sync",
+    "include",
+    "interpreteur",
+    "kokkos",
+    "kokkos_root",
+    "numpy",
+    "threads"
+  ],
+  "header_signature": "188bd89463b43e0e8edfed6123df93d7eded84803eacdc6359f48d151089cc68",
+  "include_root": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/artifacts/3d06cab/pops/include",
+  "native_abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=188bd89463b43e0e8edfed6123df93d7eded84803eacdc6359f48d151089cc68;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+  "native_sha256": "4574ed6096650aa708ad040fd6ee056414a3cfa1735a0440bd74220170265beb",
+  "package_file": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/artifacts/3d06cab/pops/__init__.py",
+  "phase": "metadata",
+  "schema": "pops.api040.joint-reconstruction-comparison.v1.2",
+  "sdk_version": {
+    "available": true,
+    "version": "26.5"
+  },
+  "source_commit": "3d06cabee9db4a31c4d07fa4e00dc5a40d164155"
+}

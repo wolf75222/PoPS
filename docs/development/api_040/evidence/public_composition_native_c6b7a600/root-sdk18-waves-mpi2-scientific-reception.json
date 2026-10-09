@@ -1,0 +1,261 @@
+{
+  "allocation": {
+    "batch_host": "romeo-c022",
+    "job": "732027",
+    "requested_nodes": 1,
+    "requested_tasks": 2,
+    "script_sha256": "ff2f056d2d50619a3c02d40d70b2a3e66cd8547e4fcacb122a42f73ca04977d6",
+    "submission_sha256": "86e20785058f0eb41b5308f055dac464584d5784e863002b6bfbc352b39f79ea"
+  },
+  "build_receipt_sha256": "a20ca731187e441352cdf7730a7618022d36c4748065ccc59ec540c710d8818c",
+  "cases": [
+    {
+      "Program_IR_sha256": "f883849e586c0d522123ae93907f6135a8173765ef088011cb5b75f66713dabb",
+      "Program_binary_sha256": "48914b45e3f2644f71a50a7ae4557ad950aee60d1254d89307a5ebf79d8996f1",
+      "Program_cpp_sha256": "c9cf33b2ef290482232572e2e9887f93e49ab782deeeaf0a99d9ea94f1cf2ea1",
+      "actual_model_records": [
+        {
+          "binary_sha256": "b08f7bd89834ccf31a854f380a73c6b2a56ff36d60df6db640562acd5e5f4a65",
+          "block": "early_transport",
+          "compiler_sha256_recorded": "e802ef021bccd09d2ae1dae3f9400e53ab2c2c7bc2b4e47dc29a81c7ec3bcd31",
+          "record_sha256": "a484d22452e260267589d033c917a92f65b38e077aeb2fb61c10d395b8c8e02f",
+          "source_sha256": "cfa601342a6ed134725dffb7adf23d0d5687024769829e8c5acbfa2054a4ebdb",
+          "states": [
+            "early_transport"
+          ]
+        },
+        {
+          "binary_sha256": "892ff2440ed9a90b9ddac5ebdaf62aa46a3b31300435ab1c9df0346e6ada12e5",
+          "block": "late_transport",
+          "compiler_sha256_recorded": "e802ef021bccd09d2ae1dae3f9400e53ab2c2c7bc2b4e47dc29a81c7ec3bcd31",
+          "record_sha256": "ec389dc93e043bbb47cdc66b89cc69d832ff42f49fe42fd2adf33e2cbfc9722c",
+          "source_sha256": "1b98da434b4c52ce7bb0bf3b90e38e3b74b157e53d40cda925b7ebe808a0a91e",
+          "states": [
+            "late_transport"
+          ]
+        }
+      ],
+      "actual_model_sources": 2,
+      "compiler_to_binary_semantic_proof": false,
+      "kind": "wave-transports",
+      "phases": [
+        {
+          "carrier": {
+            "grown_values": 500,
+            "patches": [
+              {
+                "axes": [
+                  [
+                    0,
+                    7,
+                    -1,
+                    8
+                  ],
+                  [
+                    0,
+                    7,
+                    -1,
+                    8
+                  ]
+                ],
+                "components": 2,
+                "key": [
+                  0,
+                  0,
+                  0
+                ],
+                "owner": -1
+              },
+              {
+                "axes": [
+                  [
+                    0,
+                    7,
+                    -1,
+                    8
+                  ],
+                  [
+                    0,
+                    7,
+                    -1,
+                    8
+                  ]
+                ],
+                "components": 3,
+                "key": [
+                  1,
+                  0,
+                  0
+                ],
+                "owner": -1
+              }
+            ]
+          },
+          "clock": [
+            0.0,
+            0,
+            1
+          ],
+          "max_abs_error": 0.0,
+          "phase": "initial"
+        },
+        {
+          "carrier": {
+            "grown_values": 500,
+            "patches": [
+              {
+                "axes": [
+                  [
+                    0,
+                    7,
+                    -1,
+                    8
+                  ],
+                  [
+                    0,
+                    7,
+                    -1,
+                    8
+                  ]
+                ],
+                "components": 2,
+                "key": [
+                  0,
+                  0,
+                  0
+                ],
+                "owner": -1
+              },
+              {
+                "axes": [
+                  [
+                    0,
+                    7,
+                    -1,
+                    8
+                  ],
+                  [
+                    0,
+                    7,
+                    -1,
+                    8
+                  ]
+                ],
+                "components": 3,
+                "key": [
+                  1,
+                  0,
+                  0
+                ],
+                "owner": -1
+              }
+            ]
+          },
+          "clock": [
+            0.00390625,
+            1,
+            1
+          ],
+          "max_abs_error": 0.0,
+          "phase": "accepted1"
+        },
+        {
+          "carrier": {
+            "grown_values": 500,
+            "patches": [
+              {
+                "axes": [
+                  [
+                    0,
+                    7,
+                    -1,
+                    8
+                  ],
+                  [
+                    0,
+                    7,
+                    -1,
+                    8
+                  ]
+                ],
+                "components": 2,
+                "key": [
+                  0,
+                  0,
+                  0
+                ],
+                "owner": -1
+              },
+              {
+                "axes": [
+                  [
+                    0,
+                    7,
+                    -1,
+                    8
+                  ],
+                  [
+                    0,
+                    7,
+                    -1,
+                    8
+                  ]
+                ],
+                "components": 3,
+                "key": [
+                  1,
+                  0,
+                  0
+                ],
+                "owner": -1
+              }
+            ]
+          },
+          "clock": [
+            0.0078125,
+            2,
+            1
+          ],
+          "max_abs_error": 0.0,
+          "phase": "accepted2"
+        }
+      ]
+    }
+  ],
+  "independent_pins": "/Users/romaindespoulain/dev/tmp/sol61-sdk18-wave-mpi2-m16-negative-independent-20261002/pins.json",
+  "independent_pins_sha256": "68f87f6c015e9e5b2a3db7363e9b1b545769d9b2729d0e712bfbde3e87d3ad41",
+  "independent_report_sha256": "aa06d0086c699dbae284925130d0c0f3244944396242f3e70e870fc0edd037bb",
+  "job": "732027",
+  "limits": "valid-state math only; grown storage finite/correspondence, no Ghost readiness; MPI2 one-node requires independent launcher/node/rank authentication outside this case reader; no performance/GPU/inter-node/fullM16 qualification",
+  "pops_imported_by_reader": false,
+  "pure_readers_recomputed_exactly": true,
+  "rank_authority": {
+    "JUnit_seconds_by_rank": {
+      "0": 141.981,
+      "1": 141.981
+    },
+    "actual_native_ranks": [
+      0,
+      1
+    ],
+    "logical_scenarios": 1,
+    "nodes": [
+      [
+        "tests.python.integration.runtime.test_scoped_flux_wave_runtime",
+        "test_installed_independent_state_scoped_wave_transports"
+      ]
+    ],
+    "separate_ranklocal_raw_images_received": false,
+    "world": 2
+  },
+  "regular_pins_verified": 158,
+  "repinned_mutants_refused": 4,
+  "root_replay_script_sha256": "d73cc5be1a276a297b84ba2a0e183aebd376f47063d915371c3b71128e899e96",
+  "root_seal": true,
+  "schema": "root.sdk18-waves-mpi2-scoped-scientific-reception@1",
+  "scientific_acceptance": true,
+  "scope": "two actual Native ranks on one requested SLURM node CPU/OpenMP2D; no inter-node/GPU/performance/fullM16 or ranklocal-raw claim",
+  "source_freeze": "c6b7a600033cb3ba42ca6adf7ca9c743e216ab87",
+  "symlinks_verified": 4,
+  "whole_mission_complete": false
+}

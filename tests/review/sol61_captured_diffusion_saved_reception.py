@@ -1,0 +1,725 @@
+"""Saved captured-D reception: NumPy/Fraction/stdlib, no PoPS/native execution.
+
+Assembly produces a pending inventory, never approval. Two external ROOT seals
+are required. Synthetic protocol tests are not native evidence.
+"""
+from __future__ import annotations
+import argparse
+import ast
+from fractions import Fraction
+import importlib.util
+import json
+import math
+import os
+from pathlib import Path
+import re
+import struct
+import sys
+import xml.etree.ElementTree as ET
+import numpy as np
+
+spec = importlib.util.spec_from_file_location("captured_d_wire", Path(__file__).with_name("sol61_m19_saved_reception.py"))
+wire = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = wire
+spec.loader.exec_module(wire)
+protocol = wire.protocol
+need, exact, digest = wire.need, wire.exact, wire.digest
+
+
+def strict_json(raw):
+    value = wire.strict_json(raw)
+    def finite(node):
+        if type(node) is float:
+            need(math.isfinite(node), "nonfinite JSON number")
+        elif type(node) in (dict, list):
+            for item in node.values() if type(node) is dict else node:
+                finite(item)
+    finite(value)
+    return value
+PHASES = ("accepted", "continuous", "reloaded", "replay")
+CLOCKS = dict(accepted=(.01, 1), continuous=(.02, 2), reloaded=(.01, 1), replay=(.02, 2))
+CASES = {"scalar1": (1, [0]), "coupled3-201": (3, [2, 0, 1])}
+DT, TOL = .01, 3e-8
+CONTROLS = dict(tolerance=1e-10, max_iterations=20, linear_tolerance=1e-8,
+                linear_max_iterations=240, restart=60, armijo=1e-4, minimum_step=1/1024)
+QUALIFICATION = "saved-states-original-residual@2"
+QUALIFICATION_V3 = "saved-states-original-residual@3"
+MAX_BINARY_BYTES = 1024*1024*1024  # offline DSO hashing budget, not a runtime limit
+
+
+def scope(version):
+    need(type(version) is int and version in (2, 3), "explicit Frozen fixture scope must be 2 or 3")
+    return QUALIFICATION if version == 2 else QUALIFICATION_V3
+
+
+def program_identity(raw, cpp, declared_hash):
+    """Actual dump_ir projection, not an invented artifact/semantic aggregate."""
+    ir = strict_json(raw)
+    need(type(ir) is dict and type(ir.get("version")) is int and ir["version"] == 10
+         and type(ir.get("nodes")) is list, "Frozen@3 actual Program IR10 absent")
+
+    def project(node):
+        need(type(node) is dict and {"id", "name", "vtype", "op", "attrs", "inputs", "point"} <= set(node),
+             "actual Program node is malformed")
+        result = {key: value for key, value in node.items() if key != "provenance"}
+        attrs = dict(result["attrs"])
+        regions = {"while": ("cond_block", "body_block"), "range": ("body_block",),
+                   "subcycle": ("body_block",), "post_synchronization": ("body_block",),
+                   "branch": ("true_block", "false_block"), "matrix_free_operator": ("apply_block",),
+                   "solve_local_nonlinear": ("residual_block",), "solve_spatial_nonlinear": ("residual_block",),
+                   "solve_coupled_implicit": ("residual_block",)}
+        for key in regions.get(node["op"], ()):
+            if key in attrs and attrs[key] is not None:
+                need(type(attrs[key]) is list, "actual Program region is malformed")
+                attrs[key] = [project(value) for value in attrs[key]]
+        result["attrs"] = attrs
+        return result
+
+    projected = dict(ir, nodes=[project(node) for node in ir["nodes"]])
+    if "dt_bound" in projected:
+        projected["dt_bound"] = dict(projected["dt_bound"], nodes=[project(node) for node in ir["dt_bound"]["nodes"]])
+    hashed = digest(json.dumps(projected, sort_keys=True, separators=(",", ":")).encode())
+    literal = re.findall(r'extern\s+"C"\s+const\s+char\s*\*\s*pops_program_hash\s*\(\s*\)\s*\{\s*return\s*"([0-9a-f]{64})"\s*;\s*\}', cpp)
+    need(type(declared_hash) is str and re.fullmatch("[0-9a-f]{64}", declared_hash) is not None
+         and literal == [hashed] and declared_hash == hashed, "actual Program IR/CPP/receipt hash link differs")
+    return hashed
+
+
+def diagnostic_images(arrays, ranks, cpp):
+    """Rank-owned POPSDIA1: opaque names and float bits, no rank equality assumption."""
+    need({"program_diagnostics_state", "program_diagnostics_offsets"} <= set(arrays),
+         "Frozen@3 durable Program diagnostic images absent")
+    raw, offsets = arrays["program_diagnostics_state"], arrays["program_diagnostics_offsets"]
+    need(raw.dtype == np.dtype("uint8") and raw.ndim == 1 and offsets.dtype == np.dtype("int64")
+         and offsets.ndim == 1 and len(offsets) == ranks+1 and offsets[0] == 0
+         and offsets[-1] == len(raw) and np.all(offsets[1:] > offsets[:-1]), "diagnostic rank offsets/geometry differ")
+    names = re.findall(r'ctx\.record_scalar\(\s*("(?:[^"\\]|\\.)*")\s*,', cpp)
+    names = {json.loads(name).encode() for name in names}
+    suffixes = {b"residual_norm", b"reference_residual_norm", b"rel_residual",
+                b"full_residual_evaluations", b"finite_difference_jvps"}
+    need(len(names) == 5 and {name.rsplit(b".", 1)[-1] for name in names} == suffixes,
+         "actual CPP original field diagnostic inventory differs")
+    reports = []
+    for rank, (lo, hi) in enumerate(zip(offsets[:-1], offsets[1:], strict=True)):
+        image = raw[int(lo):int(hi)].tobytes()
+        need(len(image) >= 40 and image[:8] == b"POPSDIA1", "diagnostic @1 header absent")
+        width, owner, count_ranks, count = struct.unpack_from("<QQQQ", image, 8)
+        need((width, owner, count_ranks) == (64, rank, ranks) and count <= (len(image)-40)//16,
+             "diagnostic width/rank/count authority differs")
+        position, records, previous = 40, {}, None
+        for _ in range(count):
+            need(position+8 <= len(image), "diagnostic name length truncated")
+            length, = struct.unpack_from("<Q", image, position)
+            position += 8
+            need(length <= len(image)-position-8, "diagnostic name/body exceeds actual bytes")
+            name = image[position:position+length]
+            position += length
+            bits, = struct.unpack_from("<Q", image, position)
+            position += 8
+            need((previous is None or previous < name) and not name.startswith(b"pops.balance-term"),
+                 "diagnostic duplicate/unordered/reserved name")
+            records[name] = bits
+            previous = name
+        need(position == len(image), "diagnostic trailing bytes")
+        need(names <= set(records) <= names | {b"pops.frontier.duration"}, "diagnostic inventory differs from actual compiled source")
+        for name, bits in records.items():
+            value, = struct.unpack("<d", struct.pack("<Q", bits))
+            need(math.isfinite(value) and value >= 0, "original field diagnostic is nonfinite/negative")
+            if name.endswith((b"full_residual_evaluations", b"finite_difference_jvps")):
+                need(value.is_integer() and (value > 0 or not name.endswith(b"full_residual_evaluations")),
+                     "field evaluation counter is not an admissible integer")
+        reports.append({name.hex(): "%016x" % bits for name, bits in records.items()})
+    return reports
+
+
+def program_blocks(raw, cpp):
+    ir = strict_json(raw)
+    rows = ir.get("block_order")
+    need(type(rows) is list and len(rows) == 3 and all(type(row) is dict for row in rows), "actual Program block order absent")
+    names = [row.get("local_id") for row in rows]
+    need(all(type(name) is str for name in names) and len(set(names)) == 3
+         and set(names) == {"response", "forcing", "material"}, "actual Program block owners differ")
+    body = re.findall(r'extern\s+"C"\s+const\s+char\s*\*\s*pops_program_block_name\s*\(int\s+i\)\s*\{(.*?)\n\}', cpp, re.S)
+    need(len(body) == 1, "actual CPP block registry export absent/duplicated")
+    exports = re.findall(r'case\s+([0-9]+)\s*:\s*return\s*("(?:[^"\\]|\\.)*")\s*;', body[0])
+    need([(int(index), json.loads(name)) for index, name in exports] == list(enumerate(names)),
+         "actual IR/CPP block registry order differs")
+    return names
+
+
+def checkpoint_v3(arrays, ranks, cpp, program_hash):
+    need("pops_checkpoint_version" in arrays and protocol.scalar(arrays["pops_checkpoint_version"], "int") == 8,
+         "Frozen@3 requires actual Uniform checkpoint payload8")
+    need("program_hash" in arrays and arrays["program_hash"].shape == ()
+         and arrays["program_hash"].dtype.kind == "U" and arrays["program_hash"].item() == program_hash,
+         "checkpoint installed Program hash differs from actual IR/CPP")
+    return diagnostic_images(arrays, ranks, cpp)
+
+
+def matrices(width):
+    """Independent exact original coefficients: no SPD or symmetrization."""
+    need(type(width) is int and width in (1, 3), "foreign witness width")
+    d, r = ([[".012"]], [["1.1"]]) if width == 1 else (
+        [[".012", ".002", "0"], ["-.001", ".014", "0"], [".001", "0", "0"]],
+        [["1.1", ".03", "-.01"], ["-.02", "1.3", ".02"], [".01", "-.03", "1.5"]])
+    return tuple(tuple(Fraction(v) for v in row) for row in d), tuple(tuple(Fraction(v) for v in row) for row in r)
+
+
+def prescribed(n, width):
+    """Declared centre samples; no claim of continuum cell-average quadrature."""
+    centres = (np.arange(n, dtype=np.float64)+.5)/n
+    xx, yy = np.meshgrid(centres, centres, indexing="xy")
+    q = np.stack([.15+.025*np.cos(2*np.pi*(i+1)*xx)+.02*np.sin(2*np.pi*yy) for i in range(width)])
+    return q, .25*np.sin(2*np.pi*xx)+.15*np.cos(2*np.pi*yy)
+
+
+def original(q, alpha, *, diffusion=None, harmonic=False):
+    """Visit each periodic face once, add its equal/opposite FV contributions.
+
+    Plane axis0 is physical y, axis1 x. Area/volume/gradient gives N**2 on
+    the unit square. All signed, nonsymmetric, singular matrix entries survive.
+    """
+    width, ny, nx = q.shape
+    need(alpha.shape == (ny, nx), "material geometry differs")
+    d, r = matrices(width)
+    d = np.array(d if diffusion is None else diffusion, dtype=float)
+    spatial = np.zeros_like(q)
+    for y in range(ny):
+        for x in range(nx):
+            for yy, xx, n in (((y+1) % ny, x, ny), (y, (x+1) % nx, nx)):
+                a, b = 1+alpha[y, x], 1+alpha[yy, xx]
+                mean = 2*a*b/(a+b) if harmonic else (a+b)/2
+                flux = (d @ (q[:, yy, xx]-q[:, y, x]))*mean*n**2
+                spatial[:, y, x] -= flux
+                spatial[:, yy, xx] += flux
+    return spatial+np.einsum("ij,jyx->iyx", np.array(r, dtype=float), q)+float(Fraction(1, 5))*q**3, spatial
+
+
+def array(value, shape, label):
+    need(type(value) is np.ndarray and value.dtype == np.dtype("float64") and value.shape == shape
+         and np.isfinite(value).all(), "invalid finite binary64 array: "+label)
+
+
+def same(a, b, label):
+    need(a.dtype == b.dtype and a.shape == b.shape and a.tobytes() == b.tobytes(), label+" differs in bytes")
+
+
+def science(initial, states, width, n=16):
+    exact(initial, ("response", "forcing", "material", "target"), "initial NPZ")
+    q0, alpha0 = prescribed(n, width)
+    for key in ("response", "forcing", "target"):
+        array(initial[key], (width, n, n), key)
+    array(initial["material"], (1, n, n), "material")
+    need(np.max(np.abs(initial["target"]-q0)) < 2e-14 and np.max(np.abs(initial["material"][0]-alpha0)) < 2e-14,
+         "initial material/target differs from declared centre-sample recipe")
+    need(not np.any(initial["response"].view(np.uint64)), "initial response is not canonical zero")
+    forcing, _ = original(q0, initial["material"][0])
+    need(np.max(np.abs(forcing-initial["forcing"])) < 2e-12, "initial forcing differs from original declared operator")
+    exact(states, PHASES, "phase inventory")
+    reports = {}
+    for phase, saved in states.items():
+        exact(saved, ("response", "forcing", "material", "solution", "time", "step"), "phase NPZ")
+        time, step = CLOCKS[phase]
+        need(protocol.scalar(saved["time"], "real").hex() == time.hex()
+             and protocol.scalar(saved["step"], "int") == step, "phase exact clock differs")
+        for key in ("response", "forcing", "solution"):
+            array(saved[key], (width, n, n), key)
+        array(saved["material"], (1, n, n), "material")
+        for key in ("forcing", "material"):
+            same(saved[key], initial[key], "readonly capture "+key)
+        q = saved["solution"]
+        need(all(np.ptp(component) > .07 for component in q), "constant/incorrectly permuted solution")
+        lhs, spatial = original(q, saved["material"][0])
+        residual = float(np.linalg.norm(lhs-saved["forcing"])/np.linalg.norm(saved["forcing"]))
+        error = float(np.max(np.abs(q-q0)))
+        consumption = float(np.max(np.abs(saved["response"]/(step*DT)-q)))
+        need(error < TOL, "solution differs from independent declared target")
+        need(residual < TOL, "original captured-D residual exceeds fixed tolerance")
+        need(consumption < TOL, "true exterior consumer duration/value differs")
+        need(float(np.max(np.abs(spatial))) > .01, "nonconstant diffusion action absent")
+        reports[phase] = dict(solution_linf=error, original_residual_relative_l2=residual,
+                              consumer_linf=consumption, spatial_action_linf=float(np.max(np.abs(spatial))))
+    for a, b in (("accepted", "reloaded"), ("continuous", "replay")):
+        for key in states[a]:
+            same(states[a][key], states[b][key], a+"/"+b+" "+key)
+    return reports
+
+
+def read(path, *, budget=protocol.MAX_FILE_BYTES):
+    path = wire.canonical(path)  # reject file/parent aliases and .. before resolve
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        before = os.fstat(fd)
+        need(before.st_size <= budget, "file exceeds reception budget")
+        raw = os.pread(fd, before.st_size+1, 0)
+        after = os.fstat(fd)
+        def image(s):
+            return s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns
+        need(image(before) == image(after) and len(raw) == before.st_size, "file drift during bounded read")
+        return path, raw
+    finally:
+        os.close(fd)
+
+
+def leaf(path):
+    path, raw = read(path)
+    return {"path": str(path), "sha256": digest(raw)}
+
+
+def pinned(row, roots, *, budget=protocol.MAX_FILE_BYTES):
+    exact(row, ("path", "sha256"), "file pin")
+    need(type(row["path"]) is str and type(row["sha256"]) is str
+         and re.fullmatch("[0-9a-f]{64}", row["sha256"]) is not None, "invalid file pin")
+    path, raw = read(row["path"], budget=budget)
+    need(any(path.is_relative_to(wire.canonical(root)) for root in roots), "file outside approved roots")
+    need(digest(raw) == row["sha256"], "external file digest differs")
+    return path, raw
+
+
+def declared_source(raw, *, fixture_version=2):
+    """Literal D/R verification in ROOT-pinned original declaration, no execution."""
+    scope(fixture_version)
+    tree = ast.parse(raw)
+    fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "matrices"), None)
+    need(fn is not None, "original matrix recipe absent")
+    calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "array"]
+    def encode(rows):
+        return tuple(tuple(Fraction(str(v)) for v in row) for row in rows)
+    actual = [encode(ast.literal_eval(n.args[0])) for n in calls]
+    expected = [encode(np.array(rows, dtype=float).tolist()) for width in (1, 3) for rows in matrices(width)]
+    need(sorted(actual, key=repr) == sorted(expected, key=repr), "source original D/R canonicals differ")
+    build = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "build"), None)
+    need(build is not None, "physical declaration absent")
+    names = {n.id for n in ast.walk(build) if isinstance(n, ast.Name)}
+    literals = {n.value for n in ast.walk(build) if isinstance(n, ast.Constant) and type(n.value) is str}
+    need({"DivCoeffGrad", "Reaction", "FieldProblem"} <= names and "Arithmetic@1" in literals,
+         "original physical field/arithmetic declaration absent")
+    # Versioned source-witness contract, not a model dispatch or execution.
+    critical = (
+        'lhs = Reaction(unknowns[row], .2*ValueExpr(unknowns[row])**2)',
+        'lhs += Reaction(unknowns[column], float(reaction[row, column]))',
+        'equations.append(lhs == load[row])',
+        'source = fluid.source("actual_field_response", on=response, value=auxiliaries)',
+        'captures = {blocks[1][load]: forcing.n}',
+        'captures[blocks[2][material]] = coefficient.n',
+        'request = field.bind_program_inputs(program=program, values=captures, at=program.stage("frozen-original-coefficients", c=0), solver=solver)',
+        'outputs = tuple(observed[field[unknown]] for unknown in unknowns)',
+        'rhs = program.rhs(state=current.n, fields=publication, terms=[SourceTerm(blocks[0][module.operator_handle("actual_field_response")])])',
+        'program.commit(current.next, program.value("response-update", current.n+program.dt*rhs, at=current.next.point))',
+    )
+    if fixture_version == 2:
+        critical += ('lhs -= DivCoeffGrad(unknowns[column], float(diffusion[row, column])*(1+material[0]))',)
+    else:
+        critical += ("""if diffusion[row, column] != 0:
+    coefficient = float(diffusion[row, column])*(1+material[0])
+    if candidate_diffusion:
+        coefficient *= 1+CANDIDATE_BETA*ValueExpr(unknowns[column])**2
+    lhs -= DivCoeffGrad(unknowns[column], coefficient)""",)
+        defaults = dict(zip((arg.arg for arg in build.args.kwonlyargs), build.args.kw_defaults, strict=True))
+        need(isinstance(defaults.get("candidate_diffusion"), ast.Constant)
+             and defaults["candidate_diffusion"].value is False,
+             "Frozen@3 shared helper default must select frozen coefficients")
+        need(not any(isinstance(n, ast.Name) and n.id == "candidate_diffusion" and isinstance(n.ctx, ast.Store)
+                     for n in ast.walk(build)), "Frozen selector cannot be reassigned")
+        methods = [n for n in ast.walk(build) if isinstance(n, ast.Call)
+                   and isinstance(n.func, ast.Name) and n.func.id == "CellCenteredNonlinearCoupled"]
+        policy = ast.parse('"PerCandidate@1" if candidate_diffusion else None', mode="eval").body
+        need(len(methods) == 1 and any(keyword.arg == "coefficient_evaluation"
+             and ast.dump(keyword.value, include_attributes=False) == ast.dump(policy, include_attributes=False)
+             for keyword in methods[0].keywords), "Frozen/Candidate method policy selection differs")
+    nodes = {ast.dump(n, include_attributes=False) for n in ast.walk(build)}
+    need(all(ast.dump(ast.parse(statement).body[0], include_attributes=False) in nodes for statement in critical),
+         "source original body/capture point/consumer contract differs")
+
+
+
+def declared_frozen_fixture_v3(raw):
+    """Authenticate the public Frozen entry's explicit shared-helper route."""
+    tree = ast.parse(raw)
+    functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    frozen = functions.get("test_public_captured_diffusion_nonconstant_saved_and_exact_replay")
+    runner = functions.get("_run_public_diffusion_mms")
+    need(frozen is not None and runner is not None, "Frozen@3 public entry/runner absent")
+    expected = ast.parse("_run_public_diffusion_mms(isolated_native_cache, tmp_path, record_property, width, order)").body
+    need([ast.dump(n, include_attributes=False) for n in frozen.body]
+         == [ast.dump(n, include_attributes=False) for n in expected], "Frozen public entry does not select default frozen path")
+    defaults = dict(zip((arg.arg for arg in runner.args.kwonlyargs), runner.args.kw_defaults, strict=True))
+    need(isinstance(defaults.get("candidate_diffusion"), ast.Constant)
+         and defaults["candidate_diffusion"].value is False,
+         "Frozen public runner default is not exact false")
+    need(not any(isinstance(n, ast.Name) and n.id == "candidate_diffusion" and isinstance(n.ctx, ast.Store)
+                 for n in ast.walk(runner)), "Frozen public runner selector reassigned")
+    builds = [n for n in ast.walk(runner) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "build"]
+    need(len(builds) == 1 and any(keyword.arg == "candidate_diffusion"
+         and isinstance(keyword.value, ast.Name) and keyword.value.id == "candidate_diffusion"
+         for keyword in builds[0].keywords), "Frozen runner must forward exact selector to physical helper")
+
+def history_point(raw, name, step):
+    need(type(step) is int and step in (1, 2), "foreign history phase step")
+    # MAX_LAG=1 => two physical slots. End-of-step rotation leaves the
+    # previous store in slot 0 and the latest accepted store in slot 1.
+    header = b"POPSHID1"+struct.pack("<Q", len(name))+name.encode()+struct.pack("<qQ", -1, 2)
+    need(raw.startswith(header) and len(raw) == len(header)+64, "history identity header differs")
+    starts = (0., (step-1)*DT)
+    for slot, start_time in enumerate(starts):
+        kind, start, interval, ordinal = struct.unpack_from("<QQQQ", raw, len(header)+32*slot)
+        need(kind == 2 and start == int.from_bytes(struct.pack("<d", start_time), "little")
+             and interval == int.from_bytes(struct.pack("<d", DT), "little") and ordinal == 1,
+             "stale captured/history publication point slot %d" % slot)
+
+
+def temporal_v3(temporal, time, step, ir, width):
+    """Exact declared lag cursors; history rings have no synthetic phase field."""
+    clock = ir["clock"]
+    exact(clock, ("schema_version", "name", "owner"), "carried Program clock")
+    clock_id = "pops.clock.v1::sha256:" + digest(
+        json.dumps(clock, sort_keys=True, separators=(",", ":")).encode())
+    histories = ir["histories"]
+    names = [f"q{i}" for i in range(width)]
+    need(histories == [dict(lag=1, name=name, ncomp=1, state=None) for name in names]
+         and all(type(row["lag"]) is int and type(row["ncomp"]) is int for row in histories),
+         "carried Program history lag/registry differs")
+    policies = ir["history_persistence"]
+    policy = dict(kind="history-persistence", payload=dict(policy="dense"),
+                  protocol="pops.manifest", schema_version=1)
+    need(policies == [dict(depth=2, name=name, policy=policy) for name in names]
+         and all(type(row["depth"]) is int for row in policies),
+         "carried Program history persistence differs")
+    expected_histories = [dict(name=name, depth=1, ring_slots=2, ncomp=1,
+                               clock=clock_id, checkpoint_policy=policy,
+                               interpolation=dict(dense_output=False, provider="exact", schema_version=1),
+                               owner=None, space=dict(kind="scalar_field"),
+                               state=dict(kind="scalar_history", qualified_id="scalar-history:"+name),
+                               validity=dict(domain="accepted_clock_ticks", newest_lag=0, oldest_lag=1))
+                          for name in names]
+    schedule = dict(schema_version=1, kind="pops.temporal-program-schedule", primary_clock=clock_id,
+                    clocks=[dict(descriptor=clock, id=clock_id, ticks_per_macro=1)],
+                    histories=expected_histories, schedules=[], subcycles=[], synchronizations=[])
+    cursors = {name: dict(clock=clock_id, newest_tick=step, oldest_tick=max(0, step-1),
+                          valid_lags=1, cold_start_extended=False, initialized=True) for name in names}
+    expected = dict(schema_version=2, clock=dict(time=time.hex(), macro_step=step),
+                    status="accepted", synchronized=True,
+                    strategy=dict(controls={}, strategy=dict(kind="fixed_dt", dt=dict(kind="binary64", value=DT.hex()))),
+                    controller_state=dict(last_accepted_dt=DT.hex(), fixed_dt_grid=dict(schema_version=1,
+                        origin=0..hex(), macro_step=step, steps=step, time=time.hex())),
+                    program_schedule=schedule,
+                    clock_cursors={clock_id: dict(time=time.hex(), tick=step, phase="accepted")},
+                    schedule_cursors=dict(macro_step=dict(macro_step=step, phase="accepted")),
+                    synchronization_cursors={}, history_cursors=cursors, cache_cursors={}, event_queue=[],
+                    transaction_stats=dict(accepted=step, failed=0, rejected=0))
+    # Canonical JSON comparison also discriminates bool/int and extra metadata.
+    need(json.dumps(temporal, sort_keys=True, separators=(",", ":"))
+         == json.dumps(expected, sort_keys=True, separators=(",", ":")),
+         "Frozen@3 declared clock/schedule/history cursors or controller differs")
+
+
+def checkpoint(raw, phase, saved, artifact, abi, *, first_accepted, block_order=None, program_ir=None):
+    arrays, manifest = wire.envelope(raw, "accepted", abi, artifact=artifact)
+    need(manifest["runtime_kind"] == "uniform", "foreign checkpoint runtime")
+    time, step = CLOCKS[phase]
+    need(protocol.scalar(arrays["t"], "real").hex() == time.hex()
+         and protocol.scalar(arrays["macro_step"], "int") == step, "checkpoint exact phase clock differs")
+    geometry = strict_json(str(arrays["pops_spatial_contract"].item()))
+    exact(geometry, ("schema_version", "dimension", "shape", "lower", "upper", "periodicity",
+                     "refinement_ratios", "native_layout_identity", "identity"), "spatial contract")
+    need(type(geometry["schema_version"]) is int and geometry["schema_version"] == 1
+         and type(geometry["dimension"]) is int and geometry["dimension"] == 2
+         and geometry["shape"] == [16, 16] and geometry["lower"] == [0..hex()]*2
+         and geometry["upper"] == [1..hex()]*2 and geometry["periodicity"] == [True, True]
+         and geometry["refinement_ratios"] == [] and all(type(v) is bool for v in geometry["periodicity"])
+         and all(type(v) is int for v in geometry["shape"]), "checkpoint coordinate/axis/periodicity geometry differs")
+    need(type(geometry["native_layout_identity"]) is str
+         and re.fullmatch(r"pops\.native-spatial-layout\.v1:sha256:[0-9a-f]{64}", geometry["native_layout_identity"]) is not None,
+         "native layout identity absent")
+    need(geometry["identity"] == "pops.checkpoint-spatial-layout.v1:sha256:"+wire.identity_hash("checkpoint-spatial-layout", {k: v for k, v in geometry.items() if k != "identity"}),
+         "spatial identity differs")
+    need(protocol.scalar(first_accepted["time"], "real").hex() == .01.hex()
+         and protocol.scalar(first_accepted["step"], "int") == 1, "first accepted history anchor differs")
+    width = saved["solution"].shape[0]
+    need(first_accepted["solution"].shape == saved["solution"].shape, "first accepted history geometry differs")
+    need(list(arrays["blocks"]) == (["response", "forcing", "material"] if block_order is None else block_order),
+         "checkpoint block order differs")
+    for block, names in (("response", [f"u{i}" for i in range(width)]),
+                         ("forcing", [f"f{i}" for i in range(width)]), ("material", ["alpha"])):
+        need(list(arrays["names_"+block]) == names and protocol.scalar(arrays["ncomp_"+block], "int") == len(names), "component ordering differs")
+        actual = arrays["state_"+block]
+        need(actual.dtype == np.dtype("float64") and actual.size == len(names)*16**2, "checkpoint physical array differs")
+        same(actual.reshape(len(names), 16, 16), saved[block], "checkpoint state "+block)
+    need(list(arrays["history_names"]) == [f"q{i}" for i in range(width)], "history registry differs")
+    for i in range(width):
+        name = f"q{i}"
+        need(protocol.scalar(arrays["history_depth_"+name], "int") == 2 and protocol.scalar(arrays["history_ncomp_"+name], "int") == 1
+             and arrays["history_init_"+name].item() is True and protocol.scalar(arrays["history_fill_count_"+name], "int") == min(step, 2)
+             and arrays["history_stored_slots_"+name].dtype == np.dtype("int64")
+             and list(arrays["history_stored_slots_"+name]) == [0, 1], "history initialization/storage differs")
+        same(arrays["history_slot_dt_"+name], np.array([DT, DT]), "history outgoing duration")
+        sample = arrays["history_sample_identity_"+name]
+        need(sample.dtype == np.dtype("uint8") and sample.ndim == 1, "history point storage differs")
+        history_point(sample.tobytes(), name, step)
+        expected = (first_accepted["solution"][i], saved["solution"][i])
+        for slot in (0, 1):
+            value = arrays["history_"+name+"_%d" % slot]
+            need(value.dtype == np.dtype("float64") and value.size == 16**2, "history field geometry differs")
+            same(value.reshape(16, 16), expected[slot], "observed history solution slot %d" % slot)
+    need({"program_exchange_state", "program_exchange_offsets", "temporal_restart_state", "auxiliary_checkpoint"} <= set(arrays),
+         "exact continuation images absent")
+    temporal = strict_json(str(arrays["temporal_restart_state"].item()))
+    need(temporal["clock"] == dict(time=time.hex(), macro_step=step) and temporal["status"] == "accepted"
+         and temporal["synchronized"] is True and temporal["controller_state"]["last_accepted_dt"] == DT.hex(),
+         "temporal accepted boundary/window differs")
+    if program_ir is not None:
+        temporal_v3(temporal, time, step, program_ir, width)
+    else:
+        for key in ("clock_cursors", "schedule_cursors", "synchronization_cursors", "history_cursors", "cache_cursors"):
+            need(type(temporal[key]) is dict, "temporal cursor map absent")
+            for cursor in temporal[key].values():
+                need(type(cursor) is dict and cursor.get("phase") == "accepted", "temporal cursor not accepted")
+                if "time" in cursor:
+                    need(cursor["time"] == time.hex(), "temporal cursor point differs")
+                if "macro_step" in cursor:
+                    need(cursor["macro_step"] == step, "temporal cursor step differs")
+    return arrays
+
+
+def junit(raw, rank, size, cases, *, other_cases=()):
+    root = ET.fromstring(raw)
+    need(not root.findall(".//failure") and not root.findall(".//error") and not root.findall(".//skipped"), "JUnit failure/error/skip")
+    for suite in root.iter("testsuite"):
+        for name in ("failures", "errors", "skipped"):
+            if name in suite.attrib:
+                need(suite.attrib[name] == "0", "JUnit declared failure/error/skip count")
+        if "tests" in suite.attrib:
+            need(suite.attrib["tests"] == str(len(suite.findall("testcase"))), "JUnit declared test count differs")
+    tests = root.findall(".//testcase")
+    need(type(other_cases) in (list, tuple) and all(type(name) is str and name for name in other_cases)
+         and len(set(other_cases)) == len(other_cases)
+         and not any(name.startswith("test_public_captured_diffusion_nonconstant_saved_and_exact_replay") for name in other_cases),
+         "explicit non-Frozen JUnit case list differs")
+    need(len(tests) == 2+len(other_cases), "JUnit requires two actual Frozen cases and exact other case inventory")
+    extras = [test for test in tests if test.get("name") in other_cases]
+    need(len(extras) == len(other_cases) and {test.get("name") for test in extras} == set(other_cases),
+         "JUnit other case inventory is duplicated/incomplete")
+    tests = [test for test in tests if test.get("name") not in other_cases]
+    seen = set()
+    for test in tests:
+        need(test.get("classname", "").endswith("test_public_captured_diffusion"), "foreign JUnit class")
+        rows = test.findall("./properties/property")
+        need(len({p.get("name") for p in rows}) == len(rows), "duplicate JUnit property")
+        props = {p.get("name"): p.get("value") for p in rows}
+        matches = [k for k, c in cases.items() if props.get("captured_diffusion_receipt") == c["receipt"]["path"]]
+        need(len(matches) == 1 and matches[0] not in seen, "JUnit receipt absent/duplicate")
+        key = matches[0]
+        suffix = "1-order0" if key == "scalar1" else "3-order1"
+        need(test.get("name") == "test_public_captured_diffusion_nonconstant_saved_and_exact_replay["+suffix+"]", "JUnit parameters differ")
+        need(props.get("dimension") == "2" and props.get("rank") == str(rank)
+             and props.get("size") == str(size) and props.get("artifact_identity") == cases[key]["artifact"]
+             and props.get("evidence_path") == cases[key]["directory"], "JUnit actual provenance differs")
+        seen.add(key)
+    need(seen == set(CASES), "JUnit incomplete")
+
+
+def case_inventory(directory, *, fixture_version=2):
+    scope(fixture_version)
+    directory = wire.canonical(directory)
+    receipt = strict_json(read(directory/"receipt.json")[1])
+    files = {directory/"receipt.json"}
+    initial = leaf(receipt["initial_npz"])
+    files.add(Path(initial["path"]))
+    need(initial["sha256"] == receipt["initial_sha256"], "initial receipt digest differs")
+    exact(receipt["phases"], PHASES, "receipt phases")
+    phases = {}
+    for phase in PHASES:
+        row = receipt["phases"][phase]
+        exact(row, ("npz", "sha256", "checks"), "receipt phase")
+        phases[phase] = leaf(row["npz"])
+        need(phases[phase]["sha256"] == row["sha256"], "phase receipt digest differs")
+        files.add(Path(phases[phase]["path"]))
+    exact(receipt["checkpoints"], ("accepted", "continuous", "replay"), "checkpoint phases")
+    cps = {k: leaf(row["path"]) for k, row in receipt["checkpoints"].items()}
+    need(all(cps[k] == receipt["checkpoints"][k] for k in cps), "checkpoint receipt digest differs")
+    files.update(Path(row["path"]) for row in cps.values())
+    need(type(receipt["sources"]) is list, "compiler source inventory absent")
+    for row in receipt["sources"]:
+        exact(row, ("component", "path", "sha256"), "compiler source receipt")
+    sources = [leaf(row["path"]) for row in receipt["sources"]]
+    need(len(sources) == 1 and sources[0]["sha256"] == receipt["sources"][0]["sha256"], "retained Program CPP absent")
+    files.update(Path(row["path"]) for row in sources)
+    irs = []
+    if fixture_version == 3:
+        need(receipt.get("fixture_schema") == "pops.captured-diffusion-native-fixture@3", "explicit Frozen@3 fixture receipt absent")
+        need(type(receipt.get("program_irs")) is list and len(receipt["program_irs"]) == 1, "actual compiled Program IR export absent")
+        row = receipt["program_irs"][0]
+        exact(row, ("component", "path", "sha256", "program_hash"), "compiled Program IR receipt")
+        irs = [leaf(row["path"])]
+        need(irs[0]["sha256"] == row["sha256"] and row["component"] == receipt["sources"][0]["component"],
+             "actual Program IR receipt/source component differs")
+        files.update(Path(row["path"]) for row in irs)
+    need(len(files) == (11 if fixture_version == 3 else 10) and all(p.parent == directory for p in files) and set(directory.iterdir()) == files,
+         "closed captured-D case inventory differs")
+    result = dict(directory=str(directory), artifact=receipt["artifact"], receipt=leaf(directory/"receipt.json"),
+                  initial=initial, phases=phases, checkpoints=cps, sources=sources)
+    if fixture_version == 3:
+        result["program_irs"] = irs
+    return result
+
+
+def origins(value, roots, *, fixture_version=2):
+    exact(value, ("schema", "source_commit", "native_build_source_commit", "abi_key", "python_package", "sdk", "native", "sources", "cpp_dso_links"), "owner")
+    need(value["schema"] == "sol61.captured-d-execution-owner@2", "owner schema differs")
+    for key in ("source_commit", "native_build_source_commit"):
+        need((value[key] is None and key == "native_build_source_commit") or
+             (type(value[key]) is str and re.fullmatch("[0-9a-f]{40}", value[key]) is not None), "owner commit differs")
+    need(type(value["abi_key"]) is str and value["abi_key"], "ABI absent")
+    for key in ("python_package", "sdk", "native"):
+        pinned(value[key], roots, budget=MAX_BINARY_BYTES if key == "native" else protocol.MAX_FILE_BYTES)
+    exact(value["sources"], ("fixture", "physical_helper"), "source origins")
+    declared_source(pinned(value["sources"]["physical_helper"], roots)[1], fixture_version=fixture_version)
+    fixture = pinned(value["sources"]["fixture"], roots)[1]
+    if fixture_version == 3:
+        declared_frozen_fixture_v3(fixture)
+    need(value["cpp_dso_links"] is None, "unreviewed CPP-to-DSO link format cannot certify linking")
+
+
+def assemble(root, directories, junits, owner, roots, *, fixture_version=2, other_junit_cases=()):
+    qualification = scope(fixture_version)
+    need(fixture_version == 3 or not other_junit_cases, "legacy @2 has no mixed JUnit scope")
+    root = wire.canonical(root)
+    need(len(directories) == 2 and len(junits) in (1, 2), "two cases and Serial/MPI2 required")
+    need(type(roots) is list and len(roots) == len(set(roots)) and str(root) in roots, "approved roots differ")
+    origins(owner, roots, fixture_version=fixture_version)
+    cases = {}
+    for directory in directories:
+        case = case_inventory(directory, fixture_version=fixture_version)
+        need(Path(case["directory"]).is_relative_to(root), "case escapes archive")
+        receipt = strict_json(pinned(case["receipt"], roots)[1])
+        key = next((k for k, (w, o) in CASES.items() if (receipt["width"], receipt["order"]) == (w, o)), None)
+        need(key is not None and key not in cases, "foreign/duplicate case")
+        cases[key] = case
+    need(set(cases) == set(CASES), "incomplete case coverage")
+    junit_pins = [leaf(p) for p in junits]
+    for rank, row in enumerate(junit_pins):
+        junit(pinned(row, roots)[1], rank, len(junits), cases, other_cases=other_junit_cases)
+    result = dict(schema="sol61.captured-d-owner-pins@%d" % fixture_version, qualification=qualification, archive_root=str(root), file_roots=roots,
+                  mode="serial" if len(junits) == 1 else "mpi2", ranks=len(junits), owner=owner, junit=junit_pins, cases=cases)
+    if fixture_version == 3:
+        result["other_junit_cases"] = list(other_junit_cases)
+    return result
+
+
+def receive(pins_path, pins_sha, approval_path, approval_sha):
+    raw, approved = read(pins_path)[1], read(approval_path)[1]
+    need(digest(raw) == pins_sha and digest(approved) == approval_sha, "external seal differs")
+    pins = strict_json(raw)
+    version = 3 if pins.get("schema") == "sol61.captured-d-owner-pins@3" else 2
+    qualification = scope(version)
+    approval = strict_json(approved)
+    exact(approval, ("schema", "approved_by", "pins_sha256", "qualification"), "approval")
+    need(approval == dict(schema="sol61.captured-d-root-approval@%d" % version, approved_by="ROOT", pins_sha256=pins_sha, qualification=qualification), "ROOT approval scope differs")
+    pin_keys = ("schema", "qualification", "archive_root", "file_roots", "mode", "ranks", "owner", "junit", "cases")
+    exact(pins, (*pin_keys, "other_junit_cases") if version == 3 else pin_keys, "pins")
+    need(pins["schema"] == "sol61.captured-d-owner-pins@%d" % version and pins["qualification"] == qualification
+         and type(pins["ranks"]) is int and pins["ranks"] in (1, 2)
+         and pins["mode"] == ("serial" if pins["ranks"] == 1 else "mpi2"), "owner scope differs")
+    roots = pins["file_roots"]
+    need(type(roots) is list and pins["archive_root"] in roots and len(roots) == len(set(roots)), "file roots differ")
+    origins(pins["owner"], roots, fixture_version=version)
+    exact(pins["cases"], CASES, "sealed cases")
+    need(len(pins["junit"]) == pins["ranks"] and len({r["path"] for r in pins["junit"]}) == pins["ranks"], "JUnit rank inventory differs")
+    for rank, row in enumerate(pins["junit"]):
+        junit(pinned(row, roots)[1], rank, pins["ranks"], pins["cases"], other_cases=pins.get("other_junit_cases", ()))
+    reports = {}
+    for key, case in pins["cases"].items():
+        need(Path(case["directory"]).is_relative_to(wire.canonical(pins["archive_root"])), "case outside archive root")
+        need(case_inventory(case["directory"], fixture_version=version) == case, "sealed case inventory differs")
+        receipt = strict_json(pinned(case["receipt"], roots)[1])
+        receipt_keys = ("kind", "fixture_schema", "artifact", "dimension", "rank", "size", "cells", "width", "order", "face_policy", "newton", "fd_step",
+                        "solution_tolerance", "residual_tolerance", "native", "platform", "binaries", "sources", "initial_npz", "initial_sha256",
+                        "phases", "checkpoints", "exact_restart_and_replay")
+        exact(receipt, (*receipt_keys, "program_irs") if version == 3 else receipt_keys, "receipt")
+        width, order = CASES[key]
+        need(receipt["fixture_schema"] == "pops.captured-diffusion-native-fixture@%d" % version, "fixture history semantics version differs")
+        need(receipt["kind"] == "actual-native-captured-D-original-MMS" and receipt["dimension"] == 2 and receipt["cells"] == 16
+             and receipt["width"] == width and receipt["order"] == order and receipt["rank"] == 0 and receipt["size"] == pins["ranks"], "receipt case differs")
+        need(all(type(receipt[k]) is int for k in ("dimension", "cells", "width", "rank", "size")), "receipt exact integer types differ")
+        need(type(receipt["order"]) is list and all(type(i) is int for i in receipt["order"]), "permutation exact integer types differ")
+        exact(receipt["newton"], CONTROLS, "Newton controls")
+        need(all(type(receipt["newton"][k]) is type(v) for k, v in CONTROLS.items()), "Newton controls exact types differ")
+        need(receipt["face_policy"] == "pops.field.face-mean.arithmetic@1" and receipt["newton"] == CONTROLS and receipt["fd_step"] == 1e-6
+             and receipt["solution_tolerance"] == TOL and receipt["residual_tolerance"] == TOL and receipt["exact_restart_and_replay"] is True, "method/guards differ")
+        need(receipt["native"] == pins["owner"]["native"], "selected native owner differs")
+        need(len(receipt["binaries"]) == 4 and len({r["component"] for r in receipt["binaries"]}) == 4
+             and {r["component"] for r in receipt["binaries"] if r["component"].startswith("block-")}
+             == {"block-response", "block-forcing", "block-material"}, "compiled components differ")
+        for row in receipt["binaries"]:
+            exact(row, ("component", "path", "sha256", "compile_command"), "binary receipt")
+            pinned({k: row[k] for k in ("path", "sha256")}, roots, budget=MAX_BINARY_BYTES)
+        source = receipt["sources"][0]
+        need(source["component"].startswith("program-") and source["component"] in {r["component"] for r in receipt["binaries"]},
+             "compiler source component owner differs")
+        cpp = pinned(case["sources"][0], roots)[1].decode("utf-8")
+        linked_hash = None
+        linked_blocks = None
+        linked_ir = None
+        if version == 3:
+            carried_ir = pinned(case["program_irs"][0], roots)[1]
+            linked_hash = program_identity(carried_ir, cpp,
+                                           receipt["program_irs"][0]["program_hash"])
+            linked_blocks = program_blocks(carried_ir, cpp)
+            linked_ir = strict_json(carried_ir)
+        signature = r"apply_general_field\s*<\s*pops::kNativeDimension\s*,\s*%d\s*,\s*%d\s*,\s*true\s*>" % (width, width**2)
+        need(re.search(signature, cpp) is not None and "nonfinite_original_field_residual" in cpp
+             and "field expression inputs require exact layout/distribution identity" in cpp,
+             "retained compiler source original/capture/arithmetic route absent")
+        initial = protocol.archive(pinned(case["initial"], roots)[1])
+        states = {phase: protocol.archive(pinned(row, roots)[1]) for phase, row in case["phases"].items()}
+        reports[key] = science(initial, states, width)
+        images = {phase: checkpoint(pinned(row, roots)[1], phase, states[phase], receipt["artifact"], pins["owner"]["abi_key"], first_accepted=states["accepted"], block_order=linked_blocks, program_ir=linked_ir)
+                  for phase, row in case["checkpoints"].items()}
+        if version == 3:
+            reports[key]["actual_program_hash"] = linked_hash
+            reports[key]["checkpoint_diagnostics_by_rank_bits"] = {
+                phase: checkpoint_v3(image, pins["ranks"], cpp, linked_hash)
+                for phase, image in images.items()}
+        checkpoint(pinned(case["checkpoints"]["accepted"], roots)[1], "reloaded", states["reloaded"], receipt["artifact"], pins["owner"]["abi_key"], first_accepted=states["accepted"], block_order=linked_blocks, program_ir=linked_ir)
+        skip = {"pops_checkpoint_manifest", "pops_restart_identity"}
+        need(set(images["continuous"]) == set(images["replay"]), "replay checkpoint inventory differs")
+        for name in set(images["continuous"])-skip:
+            same(images["continuous"][name], images["replay"][name], "replay continuation "+name)
+    return dict(qualification=qualification, cases=reports, cpp_dso_link_qualified=False,
+                gaps=["original artifact/Program aggregate payload absent" if version == 2 else "original artifact aggregate payload absent; carried Program IR hash is linked",
+                      "block compiler CPP absent",
+                      "independent restored checkpoint absent", "in-memory carrier/diagnostic comparison images absent",
+                      "private PreparedFieldCapture owner/lease/point image not persisted; history point is checked separately",
+                      "no convergence/AMR/arbitrary-D solvability/SPD/empty-MPI partition qualification"]
+                     + (["native build source commit unavailable"] if pins["owner"]["native_build_source_commit"] is None else []),
+                evidence="externally ROOT-approved files; checker performs no native execution")
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    a = sub.add_parser("assemble", help="pending inventory only")
+    for name in ("archive-root", "owner", "output"):
+        a.add_argument("--"+name, required=True)
+    for name in ("case", "junit", "file-root"):
+        a.add_argument("--"+name, action="append", required=True)
+    a.add_argument("--fixture-version", type=int, choices=(2, 3), default=2)
+    a.add_argument("--other-junit-case", action="append", default=[])
+    r = sub.add_parser("receive")
+    for name in ("pins", "pins-sha256", "approval", "approval-sha256"):
+        r.add_argument("--"+name, required=True)
+    args = parser.parse_args(argv)
+    if args.command == "assemble":
+        data = assemble(args.archive_root, args.case, args.junit, strict_json(read(args.owner)[1]), args.file_root,
+                        fixture_version=args.fixture_version, other_junit_cases=args.other_junit_case)
+        encoded = json.dumps(data, sort_keys=True, indent=2, allow_nan=False)+"\n"
+        target = Path(args.output)
+        need(not target.exists() or target.read_text() == encoded, "existing pending inventory differs")
+        target.write_text(encoded)
+        print("pending external ROOT approval; no native qualification")
+    else:
+        print(json.dumps(receive(args.pins, args.pins_sha256, args.approval, args.approval_sha256), sort_keys=True, indent=2))
+
+
+if __name__ == "__main__":
+    main()

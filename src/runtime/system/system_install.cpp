@@ -33,6 +33,17 @@
 namespace pops {
 namespace {
 
+// Preserve the reduction adapter without a CUDA extended lambda in a private member.
+template <int Dim>
+struct CoupledFrequencyMaximumKernel {
+  CoupledFreqKernel<Dim> kernel;
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    Real value = std::numeric_limits<Real>::lowest();
+    kernel(index, value);
+    return value;
+  }
+};
+
 template <class FieldPlans>
 auto select_field_rhs_binding(FieldPlans& plans, const std::string& block, const std::string& field,
                               const std::string& identity = {}) {
@@ -741,6 +752,13 @@ void validate_prepared_block(const PreparedSystemBlock<Dim>& block) {
                         "primitive");
 
   const auto& closures = block.closures;
+  if (block.physical_boundary_route != PreparedPhysicalBoundaryRoute::legacy_spatial &&
+      block.physical_boundary_route != PreparedPhysicalBoundaryRoute::path_residual)
+    throw std::invalid_argument("prepared System block has an unknown physical boundary route");
+  if (block.physical_boundary_route == PreparedPhysicalBoundaryRoute::path_residual &&
+      !closures.path_rhs_at_point_prepared)
+    throw std::invalid_argument(
+        "prepared System path boundary route lacks its staged path residual");
   if (!closures.rhs_into || !closures.rhs_flux_only || !closures.source_only ||
       !closures.rhs_at_point || !closures.rhs_flux_only_at_point || !closures.rhs_core_at_point ||
       !closures.rhs_flux_only_core_at_point || !closures.rhs_core_at_point_prepared ||
@@ -748,7 +766,7 @@ void validate_prepared_block(const PreparedSystemBlock<Dim>& block) {
       !closures.prepare_generated_state_at_point ||
       !closures.prepare_generated_state_at_point_prepared ||
       !closures.prepare_generated_state_with_transport_prepared ||
-      !closures.external_ghost_boundary || !block.maximum_speed || !block.poisson_rhs ||
+      !closures.external_ghost_boundary || !block.maximum_speed ||
       !block.primitive_to_conservative || !block.conservative_to_primitive ||
       !block.batch_conservative_to_primitive)
     throw std::invalid_argument(
@@ -849,6 +867,8 @@ PreparedBlockInstallation<Dim, Implementation> prepare_block_installation(
   candidate.rhs_core_at_point_prepared = std::move(prepared.closures.rhs_core_at_point_prepared);
   candidate.rhs_flux_only_core_at_point_prepared =
       std::move(prepared.closures.rhs_flux_only_core_at_point_prepared);
+  candidate.path_rhs_at_point_prepared =
+      std::move(prepared.closures.path_rhs_at_point_prepared);
   candidate.boundary_full_at_point_prepared =
       std::move(prepared.closures.boundary_full_at_point_prepared);
   candidate.boundary_core_at_point_prepared =
@@ -878,17 +898,21 @@ PreparedBlockInstallation<Dim, Implementation> prepare_block_installation(
   candidate.external_ghost_boundary = std::move(prepared.closures.external_ghost_boundary);
   candidate.boundary = boundary;
   candidate.state_identity = state_identity;
+  const bool complete_legacy_boundary =
+      candidate.boundary_full_at_point_prepared && candidate.boundary_core_at_point_prepared &&
+      candidate.boundary_flux_full_at_point_prepared &&
+      candidate.boundary_flux_core_at_point_prepared &&
+      candidate.boundary_residual_at_point_prepared &&
+      candidate.boundary_jvp_at_point_prepared && candidate.external_boundary_flux &&
+      candidate.external_field_boundary_residual && candidate.external_field_boundary_jvp &&
+      candidate.prepare_generated_state_with_transport_prepared &&
+      candidate.external_ghost_boundary;
   if (candidate.boundary &&
-      (!candidate.boundary_full_at_point_prepared || !candidate.boundary_core_at_point_prepared ||
-       !candidate.boundary_flux_full_at_point_prepared ||
-       !candidate.boundary_flux_core_at_point_prepared ||
-       !candidate.boundary_residual_at_point_prepared ||
-       !candidate.boundary_jvp_at_point_prepared || !candidate.external_boundary_flux ||
-       !candidate.external_field_boundary_residual || !candidate.external_field_boundary_jvp ||
-       !candidate.prepare_generated_state_with_transport_prepared ||
-       !candidate.external_ghost_boundary))
+      (prepared.physical_boundary_route == PreparedPhysicalBoundaryRoute::legacy_spatial
+           ? !complete_legacy_boundary
+           : !candidate.path_rhs_at_point_prepared))
     throw std::invalid_argument(
-        "prepared System boundary lacks its complete full/core/residual/JVP authority");
+        "prepared System boundary lacks its selected full/core/residual/JVP or path authority");
 
   return {std::move(candidate), prepared.name, std::move(boundary)};
 }
@@ -1728,6 +1752,33 @@ void System<Dim>::set_block_elliptic_field(
 }
 
 template <int Dim>
+void System<Dim>::set_block_elliptic_field_v2(
+    const std::string& block_name, const std::string& field,
+    const std::string& binding_identity, const std::string& consumer_qid,
+    std::size_t provider_count, runtime::system::FieldRhsCallbackV2<Dim> rhs) {
+  if (binding_identity.empty() || consumer_qid.empty() || !rhs)
+    throw std::invalid_argument("System Field RHS V2 lacks its exact binding/consumer");
+  auto* finalize = p_->native_package_finalize_candidate_;
+  auto& blocks = finalize == nullptr ? p_->blocks_ : finalize->blocks;
+  auto& plans = finalize == nullptr ? p_->field_plans_ : finalize->field_plans;
+  const int block = blocks.index(block_name);
+  const auto [selected, key] = select_field_rhs_binding(plans, block_name, field);
+  if (selected == plans.end() || std::none_of(selected->second.providers.begin(),
+      selected->second.providers.end(), [&](const auto& binding) {
+        return binding.block == block_name && binding.key == key &&
+               binding.identity == binding_identity;
+      }))
+    throw std::invalid_argument("System Field RHS V2 differs from its resolved binding");
+  const std::string slot = selected->first;
+  set_block_elliptic_field(block_name, field,
+      [this, slot, block, binding_identity, consumer_qid, provider_count,
+       rhs = std::move(rhs)](const MultiFab<Dim>& state, MultiFab<Dim>& output) {
+        invoke_field_rhs_v2_(slot, block, state, output, binding_identity, consumer_qid,
+                            provider_count, rhs);
+      });
+}
+
+template <int Dim>
 void System<Dim>::add_dt_bound(const std::string& label, std::function<double()> function) {
   require_assembling(p_->lifecycle_, "add_dt_bound");
   if (label.empty() || !function)
@@ -2242,8 +2293,20 @@ void System<Dim>::finalize_native_packages() {
                   {selected->first, package.capability->identity, provider_key}))
             throw std::logic_error(
                 "System native elliptic attachment is duplicate or was not required");
-          set_block_elliptic_field(package.capability->identity, provider_key,
-                                   std::move(attachment.rhs));
+          if (attachment.rhs_v2) {
+            std::string binding_identity = attachment.binding_identity;
+            for (const auto& binding : selected->second.providers)
+              if (binding.block == package.capability->identity && binding.key == provider_key) {
+                if (!binding_identity.empty() && binding_identity != binding.identity)
+                  throw std::logic_error("System Field RHS V2 has conflicting native bindings");
+                binding_identity = binding.identity;
+              }
+            set_block_elliptic_field_v2(package.capability->identity, provider_key,
+                binding_identity, attachment.rhs_consumer_qid,
+                attachment.rhs_provider_count, std::move(attachment.rhs_v2));
+          } else
+            set_block_elliptic_field(package.capability->identity, provider_key,
+                                    std::move(attachment.rhs));
         } catch (...) {
           field_error = std::current_exception();
         }
@@ -2709,11 +2772,7 @@ void System<Dim>::add_coupled_source_prepared_(const CoupledSourceProgram& descr
           kernel.consts[constant] = constants[static_cast<std::size_t>(constant)];
         local_maximum = std::max(
             local_maximum,
-            for_each_cell_reduce_max(reference.box(local), [=] POPS_HD(const Index<Dim>& index) {
-              Real value = std::numeric_limits<Real>::lowest();
-              kernel(index, value);
-              return value;
-            }));
+            for_each_cell_reduce_max(reference.box(local), CoupledFrequencyMaximumKernel<Dim>{kernel}));
       }
       return all_reduce_max(local_maximum, *lane);
     };
@@ -2864,6 +2923,9 @@ template void System<kNativeDimension>::register_elliptic_field(
 template void System<kNativeDimension>::set_block_elliptic_field(
     const std::string&, const std::string&,
     std::function<void(const MultiFab<kNativeDimension>&, MultiFab<kNativeDimension>&)>);
+template void System<kNativeDimension>::set_block_elliptic_field_v2(
+    const std::string&, const std::string&, const std::string&, const std::string&,
+    std::size_t, runtime::system::FieldRhsCallbackV2<kNativeDimension>);
 template void System<kNativeDimension>::add_dt_bound(const std::string&, std::function<double()>);
 template std::string System<kNativeDimension>::last_dt_bound() const;
 template void System<kNativeDimension>::register_native_package(

@@ -41,3 +41,10 @@ def expand_primitive_recipes(expressions, recipes):
         return value
 
     return clone(expressions)
+
+
+def expand_evaluation_boundaries(expressions, recipes):
+    """Inline owned recipes only when an evaluation boundary needs their scopes."""
+    from .control_expr import has_evaluation_boundary
+    expanded = expand_primitive_recipes(expressions, recipes)
+    return expanded if has_evaluation_boundary(expanded) else expressions

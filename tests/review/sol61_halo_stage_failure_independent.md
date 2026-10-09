@@ -1,0 +1,15 @@
+# Independent Source review: accepted Halo test failure@1
+
+Reviewed frozen author3bb67aaafe3cae683f075c98da68bd4415a5c051 plusfab80ff1, basea491ad65. No blocking production Source defect retained. Request is generic block/level/rank/phase@1, exactpyints and final readonlytypedbinding; no model/solver/environment branch.
+
+Arming serializes request, hierarchy authorities, acceptedtick and topologyepoch inside votedpreflight; consensus precedes diagnostic mutation. Unsupportedtarget/version, activeowner and duplicatearm refuse. Staleowner check precedes candidate staging. At targetlevel genuine preparation/copy/fence first completes its allrankvote; only then allranks consume and selectedrank throws under a second collectivevote. Outer restore catch restores fullgrown accepted Q/Field/provider images/registry; enclosing AcceptedSnapshot restores clocks/history/diagnostics/Aux and publication. Consumed diagnostic receipt deliberately remains outside physicalsnapshot and successful retry must match continuouscontrol. `before_publication` means final canonicalcandidatepublication, not absence of temporary liveQ candidate bindings.
+
+ROOT's suspected initializer allocation is not retained: actual ExactOrderedBytePair is pair<string_view,string_view>; initializer_list uses automatic storage and no stringcopy. Real comm header host probe succeeds with allocation disabled during argument construction, and its allocation-failure consensus returns bad_alloc in serial. Internal vector allocation is caught and voted by comm.hpp. This is not an MPI OOM execution proof.
+
+ABI8 retention is consistent with additive exported nonvirtualmethods and standalone request/receipt types, private Impl storage only. Existing AmrSystem pointerlayout/config/componentcontracts and accepted9/CP12 wires unchanged. SDK headers manifest/signature must change; old DSO lacks newexports and cannot execute fixture. Author actual fullTU syntax logs are separate evidence, not reproduced as Native build here.
+
+Independent host matrix validates 2blocks×5levels×3ranks and rejects negative/out-of-range targets. Native fixture now also requires installed actual ABI8 paths, exercises seven malformedrequests and duplicatearm without diagnostic mutation, persists early JUnitreceipt and negativeproofs. MPI divergentrequests test remains. Portable compiler discovery replaces hardcoded /usr/bin/clang++; no external archived fixture dependency.
+
+Command: env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/romaindespoulain/miniforge3/envs/pops/bin/python -m pytest --noconftest -o pythonpath=python tests/review/test_sol61_halo_stage_failure_source.py tests/review/test_sol61_halo_failure_independent.py tests/review/test_sol61_halo_substep_discriminator.py -q --tb=short
+
+Actual16PASS4.81s initialreplay; finalcoherent replay16PASS3.91s, zeroSkip. No Native/JIT/build/ENV/Main mutation. Expanded Native refusals, ranklocal consumedproof, rollback and successful retry remain ROOT runtime obligations; Source cannot qualify them. No SCI approval or receipt seal generated.

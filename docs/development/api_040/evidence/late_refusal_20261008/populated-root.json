@@ -1,0 +1,19 @@
+{
+  "date_utc": "2026-10-08T20:53:15.997336+00:00",
+  "peer": "/Users/romaindespoulain/dev/tmp/PoPS-populated-history-independent-reception-20261008/receipt.json",
+  "peer_sha256": "6c1e3307f196a1d501a572f328e536430923a702dc5e8d9b58eb8763dcc64f26",
+  "raw_pins_rehashed": 12,
+  "core": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "Source": "1766b40b94fa5310f99105e69efaae45095347f1",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "Root_independent_FV_error": 0.0,
+  "Root_independent_screened_FFT_error": 1.5987211554602254e-14,
+  "exact_eight_keys": true,
+  "both_history_physical_slots_populated": true,
+  "consumer_cursors": "empty rows; no populated-output-cursor acceptance",
+  "GO": "Currentfinite Native tranche independently received; mayliftcorefreeze for genericpublication proof andCPP repairs",
+  "scope": "world1AMR1 lateFail afterfirstacceptedinterval andtwo-stepcontrol. No publicsnapshot/retainedticket/rank0-only/ownership/GPU/full94 claim",
+  "Root_screened_FFT_bound": 1.4665873675443233e-10,
+  "Root_state_FV_bound": 2.2737367544323206e-12,
+  "Root_validation_note": "Earlier root script literal tolerance replaced in this admission by exact original declared solver/oracle bound expression; unchanged bound semantics."
+}

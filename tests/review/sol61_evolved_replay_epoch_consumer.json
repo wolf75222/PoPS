@@ -1,0 +1,14 @@
+{
+  "schema": "pops.evolved-replay-epoch-consumer-source@2",
+  "parent": "7bccf27064624d5e3d81f81732d0cdbdd52f304d",
+  "passed": 42,
+  "skipped": 0,
+  "scope": "SOURCE_ONLY",
+  "xml": "/Users/romaindespoulain/dev/tmp/sol61-evolved-epoch-consumer-source-green.xml",
+  "xml_sha256": "163a91c52c150e92b0cdf122815cc5680010725c52598f3c174d56d534e83911",
+  "production_diff_empty": true,
+  "legacy_comparator_byte_identical": true,
+  "old_native_failed_job": 732306,
+  "native_qualification": false,
+  "root_approval": false
+}

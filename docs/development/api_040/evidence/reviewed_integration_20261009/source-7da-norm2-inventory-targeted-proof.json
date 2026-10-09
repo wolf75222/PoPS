@@ -1,0 +1,15 @@
+{
+  "Source": "7daee302e5af72d4c9b43c77167e349ddb21da5b",
+  "patch_sha256": "15105f07d773023620a78636375e7e2d95704ee85e26b29f57b655986b861e16",
+  "checks": [
+    {
+      "candidate": "original",
+      "result": "expected original FAIL"
+    },
+    {
+      "candidate": "four-entry-candidate",
+      "result": "PASS"
+    }
+  ],
+  "scope": "Extracted exact failing Source-only test function against actual frozen Main files, candidate changes only four ordered inventory declarations; no pytest full rerun, CXX, Native, Main edits"
+}

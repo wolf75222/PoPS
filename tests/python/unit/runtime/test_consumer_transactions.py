@@ -38,13 +38,18 @@ from pops.runtime._runtime_planning import build_runtime_plans
 from pops.runtime._consumer import (
     ConsumerPublicationError,
     ConsumerPublisher,
-    ConsumerTransaction,
+    ConsumerTransaction as _ConsumerTransaction,
     PreparedPublication,
     PublicationReceipt,
     plan_accepted_side_effects,
 )
+from pops.runtime._consumer_transaction import ConsumerCursorAuthority
 from pops.time import AcceptedStep, Clock, Every, Schedule, TimePoint, every_dt
 from tests.python.unit.runtime.test_runtime_planning import _install, _manifest
+
+
+def _transaction(plan, cursors, publisher):
+    return _ConsumerTransaction(plan, cursors, publisher, ConsumerCursorAuthority(cursors))
 
 
 def _output_mode(runtime) -> ParallelMode:
@@ -387,7 +392,7 @@ def test_rejected_attempt_discards_temporaries_without_publication_or_cursor_adv
     plan = plan_accepted_side_effects(runtime, ConsumerGraph((manifest,)), _moment(clock), cursors)
     publisher = _Publisher()
 
-    report = ConsumerTransaction(plan, cursors, publisher).reject()
+    report = _transaction(plan, cursors, publisher).reject()
 
     assert report.status == "rejected"
     assert report.published == ()
@@ -406,7 +411,7 @@ def test_failure_actions_have_exact_cursor_and_artifact_semantics():
     fail_plan = plan_accepted_side_effects(runtime, ConsumerGraph((fail,)), _moment(clock))
     fail_publisher = _Publisher(fail_publications=1)
     with pytest.raises(ConsumerPublicationError) as failure:
-        ConsumerTransaction(fail_plan, cursors, fail_publisher).accept()
+        _transaction(fail_plan, cursors, fail_publisher).accept()
     assert "OSError: injected publication failure" in str(failure.value)
     assert failure.value.report.cursors.to_data() == cursors.to_data()
     assert failure.value.report.published == ()
@@ -416,7 +421,7 @@ def test_failure_actions_have_exact_cursor_and_artifact_semantics():
     retry = _manifest_for(runtime, "retry", clock, action=Retry(2))
     retry_plan = plan_accepted_side_effects(runtime, ConsumerGraph((retry,)), _moment(clock))
     retry_publisher = _Publisher(fail_publications=1)
-    retried = ConsumerTransaction(retry_plan, cursors, retry_publisher).accept()
+    retried = _transaction(retry_plan, cursors, retry_publisher).accept()
     assert retried.status == "accepted"
     assert len(retried.published) == 1
     assert retried.cursors.for_consumer(retry.qualified_id).committed_samples == 1
@@ -426,7 +431,7 @@ def test_failure_actions_have_exact_cursor_and_artifact_semantics():
     skip = _manifest_for(runtime, "skip", clock, action=SkipSampleReported())
     skip_plan = plan_accepted_side_effects(runtime, ConsumerGraph((skip,)), _moment(clock))
     skip_publisher = _Publisher(fail_publications=1)
-    skipped = ConsumerTransaction(skip_plan, cursors, skip_publisher).accept()
+    skipped = _transaction(skip_plan, cursors, skip_publisher).accept()
     assert skipped.status == "accepted"
     assert skipped.published == ()
     assert len(skipped.skipped) == 1
@@ -443,7 +448,7 @@ def test_success_receipt_is_the_only_cursor_commit_and_deduplicates_occurrence()
     plan = plan_accepted_side_effects(runtime, graph, moment, cursors)
     publisher = _Publisher()
 
-    report = ConsumerTransaction(plan, cursors, publisher).accept()
+    report = _transaction(plan, cursors, publisher).accept()
 
     assert len(report.published) == 1
     assert report.published[0].payload_identity == plan.effects[0].payload.identity
@@ -472,7 +477,7 @@ def test_every_dt_is_due_only_on_reached_physical_thresholds_and_deduplicates():
         runtime, graph, _moment(clock, step=2, physical_time=0.1), cursors
     )
     assert len(due.effects) == 1
-    accepted = ConsumerTransaction(due, cursors, _Publisher()).accept()
+    accepted = _transaction(due, cursors, _Publisher()).accept()
     assert accepted.cursors.for_consumer(manifest.qualified_id).committed_samples == 1
 
     duplicate = plan_accepted_side_effects(
@@ -526,7 +531,7 @@ def test_every_dt_deduplicates_one_lattice_index_across_nearby_deadlines():
         runtime, graph, _moment(clock, step=3, physical_time=0.3), cursors)
     assert [effect.consumer_id for effect in decimal_landing.effects] == [
         first.qualified_id]
-    accepted = ConsumerTransaction(decimal_landing, cursors, _Publisher()).accept()
+    accepted = _transaction(decimal_landing, cursors, _Publisher()).accept()
 
     nextafter_landing = plan_accepted_side_effects(
         runtime,
@@ -546,7 +551,7 @@ def test_accepted_publications_remain_compensatable_until_the_outer_transaction_
     plan = plan_accepted_side_effects(
         runtime, ConsumerGraph((manifest,)), _moment(clock), cursors)
     publisher = _Publisher()
-    transaction = ConsumerTransaction(plan, cursors, publisher)
+    transaction = _transaction(plan, cursors, publisher)
 
     accepted = transaction.accept()
     assert accepted.published
@@ -568,7 +573,7 @@ def test_seal_explicitly_finalizes_every_accepted_publication_once():
     plan = plan_accepted_side_effects(
         runtime, ConsumerGraph((manifest,)), _moment(clock), cursors)
     publisher = _Publisher()
-    transaction = ConsumerTransaction(plan, cursors, publisher)
+    transaction = _transaction(plan, cursors, publisher)
 
     transaction.accept()
     assert publisher.finalize_calls == 0
@@ -587,7 +592,7 @@ def test_seal_failure_is_non_compensating_diagnostic_and_retryable():
     plan = plan_accepted_side_effects(
         runtime, ConsumerGraph((manifest,)), _moment(clock), cursors)
     publisher = _Publisher(fail_finalizations=1)
-    transaction = ConsumerTransaction(plan, cursors, publisher)
+    transaction = _transaction(plan, cursors, publisher)
 
     transaction.accept()
     artifact = next(iter(publisher.artifacts))
@@ -609,7 +614,7 @@ def test_seal_rejects_a_non_none_finalizer_result_without_compensation():
     plan = plan_accepted_side_effects(
         runtime, ConsumerGraph((manifest,)), _moment(clock), cursors)
     publisher = _Publisher(non_none_finalize=True)
-    transaction = ConsumerTransaction(plan, cursors, publisher)
+    transaction = _transaction(plan, cursors, publisher)
 
     transaction.accept()
     diagnostics = transaction.seal()
@@ -630,7 +635,7 @@ def test_later_publication_failure_compensates_every_earlier_artifact():
     publisher = _Publisher(fail_on=(2,))
 
     with pytest.raises(ConsumerPublicationError) as failure:
-        ConsumerTransaction(plan, cursors, publisher).accept()
+        _transaction(plan, cursors, publisher).accept()
 
     assert failure.value.report.published == ()
     assert failure.value.report.cursors.to_data() == cursors.to_data()

@@ -129,13 +129,74 @@ class ResolvedTaggingAuthority:
 
     def canonical_identity(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "authority_type": "resolved_amr_tagging",
+            "selection_contract": "pops.amr.tag-selection@1",
             "graph": self.graph.canonical_identity(),
             "buffer_cells": self.buffer_cells,
         }
 
     inspect = canonical_identity
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedAMRStateStorage:
+    """One exact, flux-free block state admitted to an adaptive layout."""
+
+    block: Any
+    subject: Handle
+
+    @staticmethod
+    def supports_block(block: Any) -> bool:
+        """Admit exact local storage, including an explicitly resolved pointwise plan."""
+        from pops.codegen._plans import ResolvedBlock
+        from pops.numerics import StateStorage
+        from pops.numerics.plan import ResolvedDiscretizationPlan
+
+        if type(block) is not ResolvedBlock or type(block.spatial) is not StateStorage:
+            return False
+        if block.numerics is None:
+            return True
+        plan = block.numerics
+        return (type(plan) is ResolvedDiscretizationPlan
+                and str(plan.block.instance_owner_path.canonical()) == block.instance_owner_qid
+                and all(type(row.method) is StateStorage for row in plan.rates)
+                and block.spatial.to_data() == plan.primary_spatial().to_data())
+
+    def __post_init__(self) -> None:
+        if not self.supports_block(self.block):
+            raise TypeError("AMR local state requires exact flux-free ResolvedBlock storage")
+        if (not isinstance(self.subject, Handle) or self.subject.kind != "state"
+                or not self.subject.is_resolved
+                or self.block.state_identities != (self.subject.qualified_id,)):
+            raise ValueError("AMR local storage must match its exact resolved block state")
+        if self.block.numerics is not None:
+            from pops.codegen._compiler_lowering import require_compiler_lowering
+            from pops.model import RateSpace
+
+            module = require_compiler_lowering(self.block.model).source_module
+            for row in self.block.numerics.rates:
+                operator = row.rate
+                signature = operator.signature
+                declared = module.operator_registry().get(operator.registered_operator_name)
+                if (operator.owner_path != self.subject.owner_path
+                        or signature != declared.signature
+                        or operator.kind != declared.kind
+                        or not isinstance(signature.output, RateSpace)
+                        or signature.output.base_space != self.subject.space
+                        or not signature.inputs or signature.inputs[0] != self.subject.space):
+                    raise ValueError("AMR local storage rate must match its exact resolved block state")
+                contracts = [contract for handle, contract in module._rate_contracts.items()
+                             if handle.local_id == operator.local_id
+                             and handle.kind == operator.kind
+                             and handle.registered_operator_name == operator.registered_operator_name]
+                if len(contracts) != 1:
+                    raise ValueError("AMR local storage requires one exact registered rate contract")
+                row.method.validate_rate_contract(contracts[0])
+
+    @property
+    def ghost_depth(self) -> int:
+        return self.block.spatial.ghost_depth
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +207,7 @@ class AMRTaggingResolutionContext:
     layout_plan: Any
     numerics: tuple[Any, ...]
     resolve: Callable[[Handle], Handle]
+    state_storage: tuple[ResolvedAMRStateStorage, ...] = ()
 
     def __post_init__(self) -> None:
         from pops.mesh import LayoutPlan
@@ -154,13 +216,19 @@ class AMRTaggingResolutionContext:
         if type(self.layout_plan) is not LayoutPlan:
             raise TypeError("AMR tagging requires an exact LayoutPlan")
         rows = tuple(self.numerics)
-        if not rows:
-            raise ValueError("AMR tagging requires at least one resolved numerical plan")
+        storage = tuple(self.state_storage)
+        if not rows and not storage:
+            raise ValueError("AMR tagging requires resolved numerics or exact local state storage")
         if any(not hasattr(row, "rates") or not hasattr(row, "identity") for row in rows):
             raise TypeError("AMR tagging numerical plans do not implement the resolved protocol")
+        if any(type(row) is not ResolvedAMRStateStorage for row in storage):
+            raise TypeError("AMR tagging local states require exact storage authorities")
+        if len({row.subject.qualified_id for row in storage}) != len(storage):
+            raise ValueError("AMR tagging has duplicate local storage subjects")
         if not callable(self.resolve):
             raise TypeError("AMR tagging resolve must be callable")
         object.__setattr__(self, "numerics", rows)
+        object.__setattr__(self, "state_storage", storage)
 
     def _indicator_layout(self, state: Handle) -> Any:
         layout = self.layout_plan.layout_for(state)
@@ -171,6 +239,7 @@ class AMRTaggingResolutionContext:
 
     def _discrete_context(self, state: Handle) -> Any:
         from pops.mesh._amr import DiscreteIndicatorContext
+        from pops.numerics import StateStorage
 
         if not isinstance(state, Handle) or state.kind != "state" or not state.is_resolved:
             raise TypeError(
@@ -181,6 +250,8 @@ class AMRTaggingResolutionContext:
         matches = []
         for plan in self.numerics:
             for rate in plan.rates:
+                if type(rate.method) is StateStorage:
+                    continue  # Pointwise storage does not declare a spatial gradient stencil.
                 subject = rate.method.variables.options.get("state")
                 if isinstance(subject, Handle) and subject.qualified_id == state.qualified_id:
                     matches.append((plan, rate.method))
@@ -416,6 +487,7 @@ class AMRResolutionContext:
     program: Any
     resolve: Callable[[Handle], Handle]
     components: tuple[Any, ...] = ()
+    state_storage: tuple[ResolvedAMRStateStorage, ...] = ()
 
     def __post_init__(self) -> None:
         from pops.mesh import LayoutPlan
@@ -425,9 +497,19 @@ class AMRResolutionContext:
         if type(self.layout_plan) is not LayoutPlan:
             raise TypeError("AMR resolution requires an exact LayoutPlan")
         rows = tuple(self.numerics)
-        if not rows:
-            raise ValueError("AMR resolution requires resolved numerics")
+        storage = tuple(self.state_storage)
+        if not rows and not storage:
+            raise ValueError("AMR resolution requires resolved numerics or exact local state storage")
+        if any(type(row) is not ResolvedAMRStateStorage for row in storage):
+            raise TypeError("AMR resolution local states require exact storage authorities")
+        if len({row.subject.qualified_id for row in storage}) != len(storage):
+            raise ValueError("AMR resolution has duplicate local storage subjects")
+        for row in storage:
+            if row.subject.owner_path.nodes[0] != self.owner.nodes[0]:
+                raise ValueError("AMR local storage belongs to another Case owner")
+            self.layout_plan.layout_for(row.subject)
         object.__setattr__(self, "numerics", rows)
+        object.__setattr__(self, "state_storage", storage)
         if not callable(getattr(self.initials, "resolve_amr", None)):
             raise TypeError("AMR initials authority must implement resolve_amr(...)")
         if type(self.program) is not Program:
@@ -509,11 +591,30 @@ def _hierarchy(
         )
         for row in context.numerics
     )
+    stencil_sources += tuple(
+        NestingRequirementSource(
+            Handle(
+                "stencil_%s" % make_identity("amr-state-storage-stencil", {
+                    "state": row.subject.canonical_identity(),
+                    "storage": row.block.spatial.to_data(),
+                    "dimension": dimension,
+                }).token,
+                kind="amr_stencil_requirement",
+                owner=context.owner,
+            ),
+            (row.ghost_depth,) * dimension,
+            0,
+        )
+        for row in context.state_storage
+    )
+    local_plan_ids = {row.block.numerics.identity.token for row in context.state_storage
+                      if row.block.numerics is not None}
     reflux_sources = tuple(
         _protocol(row, "amr_reflux_requirement", where="resolved numerics")(
             owner=context.owner, dimension=dimension
         )
         for row in context.numerics
+        if row.identity.token not in local_plan_ids
     )
     boundary_sources = tuple(
         _protocol(boundary, "amr_boundary_requirement", where="resolved boundary")(
@@ -555,9 +656,9 @@ def _hierarchy(
             )
         ),
     )
-    minimum_buffer = tuple(
-        max(tagging.buffer_cells, value) for value in nesting.minimum_buffer
-    )
+    # Authored tag dilation is a separate selection policy. Derived nesting
+    # constrains parent coverage, never which cells the predicates select.
+    minimum_buffer = nesting.minimum_buffer
     hierarchy_data = _protocol(
         authoring, "to_data", where="AMR hierarchy authority"
     )()
@@ -699,13 +800,14 @@ def resolve_amr_authorities(
     resolved_providers = tuple(
         value.resolve_references(context.resolve) for value in providers)
     resolved_transfer = transfer.resolve_references(context.resolve).resolve(
-        context.layout_plan, context.numerics
+        context.layout_plan, context.numerics, state_storage=context.state_storage
     )
     tagging_context = AMRTaggingResolutionContext(
         context.owner,
         context.layout_plan,
         context.numerics,
         context.resolve,
+        context.state_storage,
     )
     resolved_tagging = resolve_tagging(tagging, tagging_context)
     from pops.amr.providers import (
@@ -770,6 +872,7 @@ __all__ = [
     "AMRLayoutResolver",
     "AMRResolutionContext",
     "AMRTaggingResolutionContext",
+    "ResolvedAMRStateStorage",
     "ResolvedAMRAuthorities",
     "ResolvedTaggingAuthority",
     "resolve_amr_authorities",

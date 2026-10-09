@@ -1,0 +1,17 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 7 items
+
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py::test_two_block_captures_and_rebind_match_independent_fv_oracle[2-amr1] PASSED [ 14%]
+tests/python/integration/runtime/test_principal_amr_runtime.py::test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths0-False-1-False] PASSED [ 28%]
+tests/python/integration/runtime/test_principal_amr_runtime.py::test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths1-False-1-True] PASSED [ 42%]
+tests/python/integration/runtime/test_principal_amr_runtime.py::test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths2-True-2-True] PASSED [ 57%]
+tests/python/integration/runtime/test_principal_amr_runtime.py::test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths3-False-2-False] PASSED [ 71%]
+tests/python/integration/runtime/test_principal_amr_runtime.py::test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths4-True-2-True] PASSED [ 85%]
+tests/python/integration/runtime/test_principal_amr_runtime.py::test_principal_amr_active_singular_flux_rolls_back_all_rows_levels_and_time PASSED [100%]
+
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-a085890-amr-routes/pytest.xml -
+======================== 7 passed in 284.37s (0:04:44) =========================

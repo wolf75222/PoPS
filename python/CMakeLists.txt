@@ -162,7 +162,18 @@ if(SKBUILD)
       "${_pops_packaging_preflight_stdout}${_pops_packaging_preflight_stderr}")
   endif()
   install(TARGETS _pops LIBRARY DESTINATION pops/_native/dim${POPS_NATIVE_DIM})
-  install(FILES "${POPS_PY_NATIVE_MANIFEST}" DESTINATION pops/_native)
+  # Target installation can rewrite RPATHs, strip or update a Darwin signature. The build-tree
+  # manifest authenticates the linked image; the wheel needs a separate row for its final bytes.
+  install(CODE "
+    execute_process(
+      COMMAND \"${Python_EXECUTABLE}\"
+              \"${CMAKE_SOURCE_DIR}/scripts/write_native_variant_manifest.py\"
+              --extension \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/pops/_native/dim${POPS_NATIVE_DIM}/$<TARGET_FILE_NAME:_pops>\"
+              --manifest \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/pops/_native/variants.json\"
+              --dimension \"${POPS_NATIVE_DIM}\"
+              --version \"${PROJECT_VERSION}\"
+      COMMAND_ERROR_IS_FATAL ANY)
+  ")
   # External AOT packages compile against the exact headers whose signature is baked into _pops.
   # Keep them inside the wheel so installed-package compilation never reaches back into a checkout.
   pops_install_headers("pops/include")

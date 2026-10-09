@@ -34,11 +34,18 @@ class Expr(ImmutableSymbolic):
         collect_expr_references(self, references, set())
         return tuple(references)
 
-    def __add__(self, o: Any) -> Any: return Add(self, _wrap(o))
+    def __add__(self, o: Any) -> Any:
+        from .vector_expr import VectorExpr
+        return o.__radd__(self) if isinstance(o, VectorExpr) else Add(self, _wrap(o))
     def __radd__(self, o: Any) -> Any: return Add(_wrap(o), self)
-    def __sub__(self, o: Any) -> Any: return Sub(self, _wrap(o))
+    def __sub__(self, o: Any) -> Any:
+        from .vector_expr import VectorExpr
+        return o.__rsub__(self) if isinstance(o, VectorExpr) else Sub(self, _wrap(o))
     def __rsub__(self, o: Any) -> Any: return Sub(_wrap(o), self)
     def __mul__(self, o: Any) -> Any:
+        from .vector_expr import VectorExpr
+        if isinstance(o, VectorExpr):
+            return o.__rmul__(self)
         # ``kappa_expr * unknown`` is an elliptic reaction term, not an ordinary pointwise
         # multiplication.  Keeping this conversion here makes the natural screened-Poisson
         # spelling work for an explicit ``model.value(RuntimeParam(...))`` while Handles retain
@@ -48,7 +55,9 @@ class Expr(ImmutableSymbolic):
             return Reaction(o, self)
         return Mul(self, _wrap(o))
     def __rmul__(self, o: Any) -> Any: return Mul(_wrap(o), self)
-    def __truediv__(self, o: Any) -> Any: return Div(self, _wrap(o))
+    def __truediv__(self, o: Any) -> Any:
+        from .vector_expr import VectorExpr
+        return o.__rtruediv__(self) if isinstance(o, VectorExpr) else Div(self, _wrap(o))
     def __rtruediv__(self, o: Any) -> Any: return Div(_wrap(o), self)
     def __neg__(self) -> Any: return Neg(self)
     def __pos__(self) -> Any: return self  # +expr = identity (the CoupledSource API writes +k*ne*ng)
@@ -72,6 +81,10 @@ class Expr(ImmutableSymbolic):
     def _str(self) -> str: return "?"
 
 
+def is_scalar_expression(value: Any) -> bool:
+    return isinstance(value, Expr) or callable(getattr(value, "__pops_scalar_plan__", None))
+
+
 def _wrap(o: Any) -> Any:
     if isinstance(o, Expr):
         return o
@@ -79,6 +92,9 @@ def _wrap(o: Any) -> Any:
     node = getattr(o, "_node", None)
     if isinstance(node, Expr):
         return node
+    if callable(getattr(o, "__pops_scalar_plan__", None)):
+        from .finite_linear import lower_finite_scalars
+        return lower_finite_scalars((o,))[0]
     return Const(o)
 
 class Const(Expr):
@@ -317,6 +333,17 @@ class Sqrt(Expr):
     def deps(self) -> Any: return self.a.deps()
     def to_cpp(self) -> str: return "std::sqrt(%s)" % self.a.to_cpp()
     def _str(self) -> str: return "sqrt(%s)" % self.a
+
+
+class Exp(Expr):
+    """Pointwise exponential, distinct from powers and analytic initial-data expressions."""
+    def __init__(self, a: Any) -> None: self.a = a
+    def eval(self, env: Any) -> Any:
+        import numpy as np
+        return np.exp(self.a.eval(env))
+    def deps(self) -> Any: return self.a.deps()
+    def to_cpp(self) -> str: return "std::exp(%s)" % self.a.to_cpp()
+    def _str(self) -> str: return "exp(%s)" % self.a
 
 
 class Abs(Expr):
@@ -633,13 +660,15 @@ class RateExpr(RateTerm):
             if not isinstance(term, (tuple, list)) or len(term) != 3:
                 raise TypeError("a rate term must be a (kind, payload, sign) triple")
             kind, payload, sign = term
-            if kind not in ("flux", "diffusion", "drift", "source", "projection"):
+            if kind not in ("flux", "diffusion", "coupled_gradient", "drift", "source", "projection", "nonconservative"):
                 raise ValueError("unknown rate term kind %r" % (kind,))
             if kind == "projection":
                 from .application import RateApplicationProjection
                 if not isinstance(payload, RateApplicationProjection):
                     raise TypeError("a projection rate term requires a whole typed RateSpace projection")
-            elif getattr(payload, "kind", None) != ({"diffusion":"diffusive_flux","drift":"drift_flux"}.get(kind,kind)):
+            elif getattr(payload, "kind", None) != ({"diffusion": "diffusive_flux",
+                    "coupled_gradient": "coupled_gradient_flux",
+                    "drift": "drift_flux", "nonconservative": "nonconservative_product"}.get(kind, kind)):
                 raise TypeError("rate term %s payload must be a matching declaration Handle" % kind)
             sign = exact_numeric_scalar(sign, where="rate term sign")
             normalized.append((kind, payload, sign))
@@ -660,7 +689,8 @@ class Divergence(RateTerm):
         self.scale = exact_numeric_scalar(scale, where="Divergence scale")
 
     def _rate_terms(self) -> Any:
-        kind = {"diffusive_flux":"diffusion","drift_flux":"drift"}.get(getattr(self.flux,"kind",""),"flux")
+        kind = {"diffusive_flux":"diffusion","coupled_gradient_flux":"coupled_gradient",
+                "drift_flux":"drift"}.get(getattr(self.flux,"kind",""),"flux")
         return [(kind, self.flux, self.scale)]
 
     def __repr__(self) -> str:

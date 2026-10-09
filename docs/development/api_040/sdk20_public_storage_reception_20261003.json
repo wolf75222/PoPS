@@ -1,0 +1,103 @@
+{
+  "GPU_inter_node_Dim1_Dim3_current_qualification": false,
+  "backend": "Dim2 CPU OpenMP, MPI-enabled MPICH SDK, one actual rank for the three SDK20 Native jobs",
+  "build": {
+    "CXX_objects_observed": 0,
+    "header_signature": "2d3aa1140e6b24d30cdb501d70012b700b1ce70ce36871756f2e7cffda7d828d",
+    "installed_files": 1156,
+    "job": "732069",
+    "native_extension_changed": false,
+    "native_sha256": "4efc61b3a4a01ed82e41ef1eac4baaa450914afa516e806b88e282a0ac8fc0b7",
+    "shipped_source_files": 1147,
+    "source_files": 1191,
+    "wheel_nonRECORD_members": 1152
+  },
+  "full_M16_M17_qualification": false,
+  "github_ci_qualified": false,
+  "main_equivalent_code_commit": "9dc62a332df587d9ec2175a70b922e61cda97570",
+  "native_jobs": {
+    "amr_gather_replicated_cpu": {
+      "job": "732076",
+      "scope": "private valid setter/public getter engineering; three blocks/two levels",
+      "status": "PASSED",
+      "world": 1
+    },
+    "fanli8_canonical_cpu": {
+      "attempts": 8,
+      "cause": "ModuleNotFoundError: scipy at DOP853 reference after nine real saved images",
+      "job": "732072",
+      "saved_images": 9,
+      "status": "FAILED"
+    },
+    "uniform_observation_v2_cpu": {
+      "job": "732075",
+      "scope": "readonly idle initial engineering storage; two retained observations",
+      "status": "PASSED",
+      "world": 1
+    }
+  },
+  "offline_nine_state_science": {
+    "DOP853_final_error": 4.460334324107862e-10,
+    "GL24_48_max_gap": 0.0,
+    "SSPRK2_max_error": 4.440892098500626e-16,
+    "checkpoint_restart_qualified": false,
+    "ghost_formula_qualified": false,
+    "native_authority": false,
+    "native_end_to_end_qualified": false,
+    "original_DOP853_tolerance": 3e-08
+  },
+  "receipts": [
+    {
+      "name": "root-sdk20-build-reception-732069.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk20-build-reception-732069.json",
+      "schema": "root.sdk20.build-install-reception@1",
+      "sha256": "6aa1d496481ae12aa581448abf5c5cdb2f372da3bfb80abdc5cca8003f769c9a"
+    },
+    {
+      "name": "root-sdk20-source-terminal-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk20-source-terminal-reception.json",
+      "schema": "root.sdk20.source-terminal-reception@1",
+      "sha256": "40fcb20e88216099fc6a379d95bfbcf33aed11f7ed443a63cc0ee2591495332a"
+    },
+    {
+      "name": "root-sdk20-negative-envelope-reception-v2.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk20-negative-envelope-reception-v2.json",
+      "schema": "root.sdk20-negative-envelope-reception@2",
+      "sha256": "64ca49d387cbd1de25bfa902eb48405f28223e53587e2560d499308fac09e758"
+    },
+    {
+      "name": "root-sdk20-pure-nine-state-math-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk20-pure-nine-state-math-reception.json",
+      "schema": "root.sdk20-pure-nine-state-math-reception@1",
+      "sha256": "b16353b375ac7aa03a5f40a4acb759459c4c5fd308f221b870773c5dcca03e7c"
+    },
+    {
+      "name": "root-sdk20-uniform-v2-engineering-reception-v2.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk20-uniform-v2-engineering-reception-v2.json",
+      "schema": "root.sdk20-uniform-v2-engineering-reception@2",
+      "sha256": "6c617cd9119d013b44eae5d9931ac3b430886617bb27ca94ed3426c060186867"
+    },
+    {
+      "name": "root-sdk20-amr-gather-replicated-engineering-reception.json",
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk20-amr-gather-replicated-engineering-reception.json",
+      "schema": "root.sdk20-amr-gather-replicated-engineering-reception@1",
+      "sha256": "d8204591539cf8688bc75ac904e86afa9557e68a885c2197567e82f85981a18b"
+    }
+  ],
+  "schema": "root.sdk20-public-storage-progress@1",
+  "source_cohort": {
+    "ci_qualified": false,
+    "deselected": 1,
+    "errors": 0,
+    "failed": 0,
+    "files": 56,
+    "green": true,
+    "native_qualified": false,
+    "passed": 428,
+    "production_blob_domain": 1241,
+    "selected": 428,
+    "skips": 0
+  },
+  "source_freeze": "bdfea618dd5479e30f451f16e0dea5b632b12ccf",
+  "whole_mission_complete": false
+}

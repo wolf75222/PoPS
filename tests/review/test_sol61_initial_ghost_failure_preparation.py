@@ -1,0 +1,46 @@
+"""Source package/resolve only; no native-module qualification."""
+from pathlib import Path
+import subprocess
+import shutil
+import sys
+import pytest
+import pops
+from pops import interfaces
+from tests.python.support.initial_ghost_failure_component import package_data,load_component,InitialFailureBoundary
+from tests.python.support.initial_field_ghost_native_case import build
+ROOT=Path(__file__).resolve().parents[2]
+
+def test_genuine_failure_package_and_field_dependency(tmp_path):
+    assert Path(pops.__file__).resolve().is_relative_to(ROOT/'python')
+    assert 'pops._pops' not in sys.modules
+    component=load_component(tmp_path/'component')
+    manifest,_=package_data();interfaces.GhostBoundary.require_manifest(manifest)
+    assert interfaces.required_native_interface_tables(manifest.signature,interfaces.GhostBoundary)==((1,1,'PopsGhostBoundaryApiV1'),(11,1,'PopsAcceptedInitialGhostApiV1'))
+    case,layout=build(boundary_composer=lambda base:InitialFailureBoundary(base,component))
+    plan=pops.resolve(pops.validate(case),layout=layout,components=(component,));plan.verify()
+    assert len(plan.field_plans)==1 and len(plan.component_inputs)==1
+    from pops.mesh.boundaries.compiled_plan import CompiledBoundaryPlan
+    compiled=CompiledBoundaryPlan.from_resolved(plan.blocks[0].numerics.boundaries[0])
+    data=compiled.runtime_boundary_data({})
+    assert len([f for f in compiled.compile_data['faces'] if 'value_delegate' in f])==1
+    assert data['faces']
+    boundary=plan.blocks[0].numerics.boundaries[0]
+    manual=boundary.execution_authority
+    from tests.python.support.initial_ghost_failure_component import ManualInitialFaceExecution
+    class Mixed:
+        def inferred_component_bindings(self):return manual.base.inferred_component_bindings()*2
+    with pytest.raises(AssertionError):ManualInitialFaceExecution(Mixed(),manual.binding,component)
+    # The production reader must reject detachment that drops the authenticated delegate.
+    from copy import deepcopy
+    bad=deepcopy(boundary.compile_boundary_data())
+    bad['faces']=[dict(face) for face in bad['faces']]
+    next(face for face in bad['faces'] if 'value_delegate' in face).pop('value_delegate')
+    with pytest.raises(ValueError,match='invalid contract'):CompiledBoundaryPlan(bad).runtime_boundary_data({})
+    assert 'pops._pops' not in sys.modules
+
+def test_complete_generated_header_source_syntax(tmp_path):
+    _,source=package_data();path=tmp_path/'initial.cpp';path.write_bytes(source)
+    compiler=shutil.which('clang++') or shutil.which('c++');assert compiler
+    mpi=Path('/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/include')
+    assert (mpi/'mpi.h').is_file()
+    subprocess.run([compiler,'-std=c++20','-fsyntax-only','-DPOPS_NATIVE_DIM=2','-Wall','-Wextra','-Werror','-I',str(ROOT/'include'),'-I',str(mpi),str(path)],check=True,capture_output=True)

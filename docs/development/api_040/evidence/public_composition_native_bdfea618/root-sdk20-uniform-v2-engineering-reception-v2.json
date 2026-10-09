@@ -1,0 +1,44 @@
+{
+  "adversaries": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk20-uniform-v2-independent-20261003/adverses.json",
+    "sha256": "83eaa47690f1c79859e55b147c35cee362e25e787fbbeb4f9f7136af7aa25c4d",
+    "unique_repinned_refused": 4
+  },
+  "build_receipt_sha256": "6aa1d496481ae12aa581448abf5c5cdb2f372da3bfb80abdc5cca8003f769c9a",
+  "engineering_or_negative_scope": {
+    "actual_model_source_provenance": true,
+    "complete_grown_words": 360,
+    "job": 732075,
+    "junit_case_seconds": "37.916",
+    "logical_scenarios": 1,
+    "root_seal": false,
+    "schema": "sol61.sdk20.uniform-observation-engineering@2",
+    "scientific_acceptance": false,
+    "scope": "readonly idle initial storage; no step, rollback, Ghost formula or transport science",
+    "two_observations_bit_exact": true,
+    "valid_npy_bits_exact": true,
+    "world": 1
+  },
+  "independent_domain_pins_rehashed": 24,
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk20-uniform-v2-independent-20261003/report.json",
+    "sha256": "d980dc8344d78675608dcee51cf33a484242a348c0d81a03cd4027dc9b04efb6"
+  },
+  "job": "732075",
+  "native_envelope_pins_rehashed": 44,
+  "native_regular_file_count": 42,
+  "reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk20-uniform-v2-independent-20261003/receive.py",
+    "sha256": "5b17bccce49684a5726fad60b380b33143fd4cecd5203125029b37a6ff0b1168"
+  },
+  "root_recompute_exact_bytes": true,
+  "schema": "root.sdk20-uniform-v2-engineering-reception@2",
+  "scientific_acceptance": false,
+  "source_freeze": "bdfea618dd5479e30f451f16e0dea5b632b12ccf",
+  "supersedes_domain_label": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk20-uniform-v2-engineering-reception.json",
+    "reason": "separate independent helper-domain pins from complete Native envelope pins; original checks remain preserved",
+    "sha256": "11ce9f849e3a4c066ee7ef9cc3fa5abde023583ff64c523ac6095c6cfed968c9"
+  },
+  "whole_mission_complete": false
+}

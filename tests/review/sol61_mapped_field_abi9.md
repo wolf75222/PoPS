@@ -1,0 +1,11 @@
+# Mapped consumed Field admission: Native ABI9
+
+Source authority: `pops::kAbiVersion` and generated release contract are 9. The authoritative `ModuleCapabilities` adds `mapped_consumed_field_output`; both module_capabilities and the structured native report expose this actual C++ fact. It is not an unauthenticated runtime_backend_manifest addition. The reported route is Uniform scalar candidate transfer.
+
+A Program carrying `mapped-consumed-output@1` or `field_map_pack` requires exact integer ABI9 and exact boolean true capability. Compilation checks the detached serialized Program before native component preparation/emission. Installation checks every compiled layout Program before provider selection/installation. A legacy State mapping, including a Program with an unrelated high IR version, does not request this capability. IR24 activation is conditional on the actual mapped-consumed request and is maintained separately by the Program serializer.
+
+The native transfer adds int32 mapped_field_components and consumes a private scalar candidate rather than accepted State storage. This is a native ABI change requiring rebuilt SDK and Program binaries. Component interface ABI1 and native System package ABI7 remain unchanged because their interfaces did not change. Uniform checkpoint9 and AMR checkpoint12 are independent wire versions. Historical ABI8 readers and immutable receipts remain historical.
+
+Native selector/variants retain schema1: leaf SHA, actual module ABI key, dimension and backend facts are authenticated before selection. Header signature changes with the actual new headers, and compiled artifact bind validation compares this header ABI. Release preflight reads the generated Native ABI9. No variant metadata or old binary is backfilled. The new request is additionally refused by the exact live capability check before System installation.
+
+Validation is Source admission with metadata-only capability reader and an actual C++ header CPU probe, not a fabricated Native extension. Complete SDK/binding TU rebuild and actual scalar-candidate execution remain ROOT requirements. No Native, MPI, GPU, checkpoint or scientific qualification follows from these tests.

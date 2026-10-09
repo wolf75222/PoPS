@@ -962,6 +962,43 @@ TEST(PreparedLocalNonlinear, FiniteDifferenceAnalyticAndAdUseOneOutcomeContract)
   EXPECT_EQ(initial[0], Real(2));
 }
 
+TEST(PreparedLocalNonlinear, SmallStepDoesNotAuthorizeUnsatisfiedOriginalResidual) {
+  auto controls = scalar_controls();
+  controls.step_tolerance = Real(1);
+  const Real initial[1] = {Real(2)};
+  const auto problem = pops::prepare_local_nonlinear_problem<1>(
+      SquareRootResidual{},
+      pops::AnalyticLocalJacobian<1, SquareRootJacobian>{SquareRootJacobian{}},
+      pops::AcceptAllLocalCandidates<1>{}, controls);
+  const auto result = pops::solve_prepared_local_nonlinear(problem, initial);
+  EXPECT_EQ(result.status, pops::LocalNonlinearStatus::kSafeguardFailure);
+  EXPECT_FALSE(result.solved());
+  EXPECT_EQ(result.value[0], Real(1.5));
+  EXPECT_EQ(result.residual_norm, Real(.25));
+  EXPECT_EQ(result.step_norm, Real(.5));
+  EXPECT_EQ(initial[0], Real(2));
+  const auto report = pops::local_nonlinear_solve_report(
+      pops::local_nonlinear_status_code(result.status), result.iterations, result.evaluations,
+      result.reference_residual_norm, result.residual_norm, result.step_norm,
+      result.condition_evidence, result.safeguard_steps);
+  EXPECT_TRUE(report.valid());
+  EXPECT_FALSE(report.solved_value_available());
+}
+
+TEST(PreparedLocalNonlinear, SatisfiedOriginalResidualPrecedesStagnationGuard) {
+  auto controls = scalar_controls();
+  controls.step_tolerance = Real(1);
+  const Real initial[1] = {Real(1)};
+  const auto problem = pops::prepare_local_nonlinear_problem<1>(
+      LinearResidual{}, pops::FiniteDifferenceLocalJacobian<1>{},
+      pops::AcceptAllLocalCandidates<1>{}, controls);
+  const auto result = pops::solve_prepared_local_nonlinear(problem, initial);
+  EXPECT_TRUE(result.solved());
+  EXPECT_EQ(result.residual_norm, Real(0));
+  EXPECT_EQ(result.iterations, 0);
+  EXPECT_EQ(result.value[0], Real(1));
+}
+
 TEST(PreparedLocalNonlinear, PivotThresholdIsRelativeToTheScaledEquation) {
   auto controls = scalar_controls();
   controls.absolute_tolerance = Real(1e-30);

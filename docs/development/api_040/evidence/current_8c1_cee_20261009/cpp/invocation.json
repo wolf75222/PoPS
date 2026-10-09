@@ -1,0 +1,63 @@
+{
+  "Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "targets": [
+    "test_tensor_fac_conservative_interface",
+    "test_amr_tensor_fac_provider",
+    "test_mpi_composite_fac_partitioned_nd",
+    "test_amr_program_field_publication",
+    "test_field_nullspace",
+    "test_mpi_field_nullspace_preflight"
+  ],
+  "argv": [
+    "rtk",
+    "proxy",
+    "bash",
+    "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/actual-commands.sh"
+  ],
+  "configure_argv": [
+    "cmake",
+    "--preset",
+    "mpi",
+    "-B",
+    "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build",
+    "-DPOPS_BUILD_PYTHON=OFF",
+    "-DPOPS_USE_KOKKOS=ON",
+    "-DKokkos_ROOT=/Users/romaindespoulain/miniforge3/envs/pops",
+    "-DCMAKE_C_COMPILER=/usr/bin/clang",
+    "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
+    "-DPOPS_NATIVE_DIM=2"
+  ],
+  "build_argv": [
+    "cmake",
+    "--build",
+    "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build",
+    "--parallel",
+    "2",
+    "--target",
+    "test_tensor_fac_conservative_interface",
+    "test_amr_tensor_fac_provider",
+    "test_mpi_composite_fac_partitioned_nd",
+    "test_amr_program_field_publication",
+    "test_field_nullspace",
+    "test_mpi_field_nullspace_preflight"
+  ],
+  "ctest_argv": [
+    "ctest",
+    "--test-dir",
+    "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build",
+    "--output-on-failure",
+    "--no-tests=error",
+    "-j",
+    "1",
+    "-R",
+    "^(test_tensor_fac_conservative_interface(_np2)?|test_amr_tensor_fac_provider|test_mpi_composite_fac_partitioned_nd_np2|test_amr_program_field_publication|test_field_nullspace|test_mpi_field_nullspace_preflight_np2)$",
+    "--output-junit",
+    "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/ctest.xml"
+  ],
+  "disk_before": {
+    "total": 494384795648,
+    "used": 493946454016,
+    "free": 438341632
+  },
+  "scope": "Real repository MPI preset, Release/O3 Kokkos and selected C++ non-regressions, separate from installed Python Native cache."
+}

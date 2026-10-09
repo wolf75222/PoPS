@@ -1,0 +1,65 @@
+{
+  "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=bb416020c8971068a97b22b37fa6a2d495b28a8f42c562d9bedceee8a7b6aa5d;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=4f0ddfff213bbc8f41ec9b7c80af3672d966f0527a55a041ed2b7e91e90198ab;dim=2",
+  "after": {
+    "identity.json": {
+      "bytes": 2917,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-representative-serial-dim2/after/identity.json",
+      "sha256": "cef658cd200a9ac8e426029e25d62e68eea795125e2c944f4268a839d54e30b0"
+    },
+    "source-files.json": {
+      "bytes": 132419,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-representative-serial-dim2/after/source-files.json",
+      "sha256": "d1d9e07dd99d7f05b59081eb56e2ed6250322fe4a709796c960d6bc00e793c9d"
+    }
+  },
+  "before_after_identity_and_source_bytes_equal": true,
+  "corrective_author": "faa9486d5cf134babe54b86c8b8ff0b8cee22f27",
+  "counts": {
+    "errors": 0,
+    "failures": 1,
+    "skipped": 0,
+    "tests": 1
+  },
+  "duration_seconds": 84.49480941705406,
+  "failure": "AttributeError: InstallPlan.resolved_tagging absent",
+  "independent_source_review": "a95b761d",
+  "native_scientific_acceptance": false,
+  "native_sha256": "488123fe4d7c4ecb3ac604f4eec9e97525a8e745034ea01a69624616d8b09e54",
+  "raw": {
+    "identity.json": {
+      "bytes": 2917,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-representative-serial-dim2/identity.json",
+      "sha256": "cef658cd200a9ac8e426029e25d62e68eea795125e2c944f4268a839d54e30b0"
+    },
+    "pytest.log": {
+      "bytes": 2315,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-representative-serial-dim2/pytest.log",
+      "sha256": "2545776036a9eee88b591aa892f82178656ac29b3fa739c12a41107935b0fe6d"
+    },
+    "pytest.xml": {
+      "bytes": 1033,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-representative-serial-dim2/pytest.xml",
+      "sha256": "ea5cd6f493c56daa813c762da3eafd24ee373708304b3d29f6593a1652bec1e1"
+    },
+    "result.json": {
+      "bytes": 1711,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-representative-serial-dim2/result.json",
+      "sha256": "3ecb4341c98b92ed1165bf1c739638c7b35ee8bd56520d2c3a7e8957312f4211"
+    },
+    "source-files.json": {
+      "bytes": 132419,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-representative-serial-dim2/source-files.json",
+      "sha256": "d1d9e07dd99d7f05b59081eb56e2ed6250322fe4a709796c960d6bc00e793c9d"
+    }
+  },
+  "relay_reinstallation": {
+    "bytes": 4122,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-amr-tag-relay-dim2-fc670393/build-reception.json",
+    "sha256": "6eb6b48df6c655a66b68114445bbbe053244c3d8b3b51e83a4e2e4401110bb87"
+  },
+  "returncode": 1,
+  "schema": "root.api040.amr-tag-selection-bind-attempt@1",
+  "source_commit": "01c5b6545273dbb2f17b776ba2a23d31066a1c71",
+  "stage": "compile completed; bind failed before native run",
+  "verified_installed_source_files": 1132
+}

@@ -1,0 +1,11 @@
+{
+  "archive": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/m08-eac92bb-openmp1/states/state_32.npz",
+  "archive_sha256": "7abc44f77e22e4485b4accfbb4aee5946698620268a2d48dcd41a149753e5e1b",
+  "expected_stage0_time": 0.02,
+  "final_time": 0.04,
+  "oracle_final_step_vs_initial_max": 5.235496359987102e-06,
+  "saved_stage0_vs_final_step_oracle_max": 5.235496359987102e-06,
+  "saved_stage0_vs_initial_max": 0.0,
+  "step_dt": 0.02,
+  "steps": 2
+}

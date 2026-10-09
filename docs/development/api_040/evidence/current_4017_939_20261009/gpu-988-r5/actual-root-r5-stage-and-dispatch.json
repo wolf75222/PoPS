@@ -1,0 +1,43 @@
+{
+  "utc": "2026-10-09T01:27:04.401930+00:00",
+  "operations": [
+    {
+      "stage": "fresh-additive-precheck",
+      "exit": 0,
+      "stdout": "private additive paths available\n",
+      "stderr": "** WARNING: connection is not using a post-quantum key exchange algorithm.\n** This session may be vulnerable to \"store now, decrypt later\" attacks.\n** The server may need to be upgraded. See https://openssh.com/pq.html\n"
+    },
+    {
+      "argv": [
+        "scp",
+        "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/runtime_context_r5.sh",
+        "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/read-r5-pins.py",
+        "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/resume_probe_r5.sh",
+        "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/build_native_r5.sh",
+        "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/phase_quota_r5.py",
+        "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/capture_kokkos_profile_r5.py",
+        "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/capture_gpu_native_r5.py",
+        "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/native_install_rpath_r5.py",
+        "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/launch_phase_r5.py",
+        "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/phase_rank_runner_r5.py",
+        "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/build_phase_r5.sbatch",
+        "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/runtime_phase_r5.sbatch",
+        "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/run_campaign_r5.sh",
+        "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/r5-admission.json",
+        "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r5/root-r5-staged-envelope.json",
+        "romeo:/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/"
+      ],
+      "exit": 0,
+      "stdout": "",
+      "stderr": "** WARNING: connection is not using a post-quantum key exchange algorithm.\n** This session may be vulnerable to \"store now, decrypt later\" attacks.\n** The server may need to be upgraded. See https://openssh.com/pq.html\n"
+    },
+    {
+      "stage": "actual-r5-dispatch",
+      "exit": 0,
+      "stdout": "{\"utc\": \"2026-10-09T01:27:04.435434+00:00\", \"Source\": \"98804c6849c9966e05b5397126bab983a5fa0227\", \"SDK\": \"de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a\", \"pins\": {\"runtime_context_r5.sh\": \"1378875b47aaf16fd1222d9b0f509d6dd9e9578d0e92895e439940c2d89c6a72\", \"read-r5-pins.py\": \"e1d58390fadbf172463b5a4eea2ea48d41e33a4a0ee42eb458919f55854ca8db\", \"resume_probe_r5.sh\": \"4ca7f56bfd07da245c1d2dfc4b6f2fd376f2db509140acbfaeab7826ddade50c\", \"build_native_r5.sh\": \"f586b80503e8f00f05928bf37d834fe03de0e78a6a736e8f6f769d5aadc086be\", \"phase_quota_r5.py\": \"ea534f527ae56483240cf074a9a4492111e0aac16ea3580eee018d6b3189f20b\", \"capture_kokkos_profile_r5.py\": \"b33a1e9f7350f1acbbc2336f9747750236d6a1234f78c8fd26ef5087bd4e4602\", \"capture_gpu_native_r5.py\": \"e91de487a476e58d83e30d38f253280500ac55253c005448779d5a197a364f17\", \"native_install_rpath_r5.py\": \"e88c78f30aa832e53811ca864261a96ce858fde03a2faf296ef4b7467ca59c70\", \"launch_phase_r5.py\": \"a7bc9ad6ff2e44c2b183a78d26766650f94f271baf628b522a4da63a31612678\", \"phase_rank_runner_r5.py\": \"cb7115f637f889d5e90bed17c0345fc0614c9bdf94d6ccc9357095b9e9e04ca6\", \"build_phase_r5.sbatch\": \"0bfa12b5516f6d537c417e87956cf1d9a9aa4687986f49be0423579ae9bd1c08\", \"runtime_phase_r5.sbatch\": \"cfe85ee73b81e8ed308a9e8c0a4c884f9869d5c1a767964e39e0125d698c351c\", \"run_campaign_r5.sh\": \"d55fe5543c917bee59757dcb8dcc96324c1ba84c19b940d74861737eb71f5f47\", \"r5-admission.json\": \"da9537653501e456cfff1b2eea484a5e5d9d5a56ea812cddce2dfb534e57ac01\", \"root-r5-staged-envelope.json\": \"f819d27d7c9dc8fef57f353d3ecd137ccbb59a086a83cedaea8cda9f7181a7b7\"}, \"jobs\": [{\"kind\": \"build\", \"job\": 738183, \"script_sha256\": \"0bfa12b5516f6d537c417e87956cf1d9a9aa4687986f49be0423579ae9bd1c08\", \"dependency\": null}, {\"kind\": \"runtime\", \"job\": 738184, \"script_sha256\": \"cfe85ee73b81e8ed308a9e8c0a4c884f9869d5c1a767964e39e0125d698c351c\", \"dependency\": \"afterok:738183\"}], \"commands\": [{\"argv\": [\"squeue\", \"-u\", \"rmdraux\", \"-h\", \"-o\", \"%i|%j|%T|%R\"], \"exit\": 0, \"stdout\": \"\", \"stderr\": \"\"}, {\"argv\": [\"/usr/bin/python3\", \"/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/quota_guard_resume.py\", \"/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009\", \"root-before-r5-dispatch\", \"2147483648\"], \"exit\": 0, \"stdout\": \"\", \"stderr\": \"\"}, {\"argv\": [\"sbatch\", \"--parsable\", \"--job-name=pops988-r5-build\", \"--export=ALL,FUTURE_GPU_ROOT=/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009\", \"--output=/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/build-%j-r5.log\", \"--error=/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/build-%j-r5.log\", \"/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/build_phase_r5.sbatch\"], \"exit\": 0, \"stdout\": \"738183\\n\", \"stderr\": \"\"}, {\"argv\": [\"sbatch\", \"--parsable\", \"--job-name=pops988-r5-runtime\", \"--export=ALL,FUTURE_GPU_ROOT=/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009\", \"--output=/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/runtime-%j-r5.log\", \"--error=/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/results/runtime-%j-r5.log\", \"--dependency=afterok:738183\", \"/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009/runtime_phase_r5.sbatch\"], \"exit\": 0, \"stdout\": \"738184\\n\", \"stderr\": \"\"}, {\"argv\": [\"squeue\", \"-j\", \"738183,738184\", \"-h\", \"-o\", \"%i|%j|%T|%R\"], \"exit\": 0, \"stdout\": \"738184|pops988-r5-runtime|PENDING|(Dependency)\\n738183|pops988-r5-build|PENDING|(None)\\n\", \"stderr\": \"\"}], \"scope\": \"Actual additive stage, physical prechecks and Slurm submissions; no GPU Native or scientific success inferred.\"}\n",
+      "stderr": "** WARNING: connection is not using a post-quantum key exchange algorithm.\n** This session may be vulnerable to \"store now, decrypt later\" attacks.\n** The server may need to be upgraded. See https://openssh.com/pq.html\n"
+    }
+  ],
+  "Source": "98804c6849c9966e05b5397126bab983a5fa0227",
+  "SDK": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a"
+}

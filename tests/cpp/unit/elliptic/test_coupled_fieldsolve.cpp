@@ -717,3 +717,108 @@ TEST(test_coupled_fieldsolve,
   if (pops::n_ranks() > 1)
     check_package_interface_mask_consensus(true);
 }
+
+
+namespace {
+NativeSystem m2_named_stage_system(int cells, const std::vector<double>& first,
+                                   const std::vector<double>& second) {
+  NativeSystem system(config(cells));
+  install_execution_lane(system);
+  add_charge_block(system, "first");
+  add_charge_block(system, "second");
+  const std::string slot = "m2-qualified-two-block-field";
+  system.register_configured_field_solver_provider(
+      "cartesian_cg", slot,
+      {"pops.system.cartesian-cg-options@1",
+       {{"abs_tol", 0.0}, {"max_iterations", std::int64_t{200}}, {"rel_tol", 1.0e-10}}});
+  system.set_field_solver_plan(
+      slot, "tests.m2.named-solve/plan@1", "tests.m2.named-solve/provider@1",
+      "tests.m2.named-solve/output@1", "first", "potential",
+      {"tests.m2.first/potential/rhs@1", "tests.m2.second/potential/rhs@1"}, {"first", "second"},
+      {"potential", "potential"}, {1.0, 1.0}, slot);
+  system.set_field_topology_authority(slot, "builtin_rectangular_cell_graph_v1",
+                                      "tests.m2.periodic-cartesian",
+                                      "tests.m2.periodic-cartesian@1");
+  system.set_field_boundary_plan(slot, periodic_kinds(), periodic_faces(0.0), periodic_faces(0.0),
+                                 periodic_faces(0.0));
+  system.set_field_nullspace(
+      slot, "pops.field-nullspace.operator-topology-derived",
+      {"pops.field-nullspace.operator-topology-derived.options@1", {{"gauge.value", 0.0}}});
+  const auto outputs = install_field_outputs(system, "tests.m2.named-solve/output@1", "potential");
+  system.register_elliptic_field("first", "potential", outputs, -1);
+  for (const auto& block : {"first", "second"})
+    system.set_block_elliptic_field(block, "potential",
+                                    [](const NativeField& state, NativeField& rhs) {
+                                      pops::add_scaled_component(state, pops::Real(1), 0, rhs);
+                                    });
+  system.set_density("first", first);
+  system.set_density("second", second);
+  system.mark_bound();
+  return system;
+}
+}  // namespace
+
+TEST(test_coupled_fieldsolve, named_solve_honors_every_qualified_stage_without_live_mutation) {
+  constexpr int cells = 16;
+  const std::string slot = "m2-qualified-two-block-field";
+  const auto live_first = charge_density(cells, 1.0, 0.0);
+  const auto live_second = charge_density(cells, 0.6, 0.25);
+  const auto stage_first_values = charge_density(cells, 0.35, 0.125);
+  const auto stage_second_values = charge_density(cells, -0.45, 0.375);
+  auto system = m2_named_stage_system(cells, live_first, live_second);
+  auto stage_source = m2_named_stage_system(cells, stage_first_values, stage_second_values);
+  auto first_only =
+      m2_named_stage_system(cells, stage_first_values, std::vector<double>(cell_count(cells), 0));
+  auto second_only =
+      m2_named_stage_system(cells, std::vector<double>(cell_count(cells), 0), stage_second_values);
+  const auto solve_live = [&](NativeSystem& target) {
+    return pops::consume_solve_outcome(
+        target.solve_fields_from_blocks(slot, {&target.block_state(0), &target.block_state(1)}));
+  };
+  const auto original_report = solve_live(system);
+  ASSERT_TRUE(original_report.solved()) << original_report.reason;
+  const auto live_potential = system.field_potential_global(slot);
+  const auto accepted_state_bytes = system.checkpoint_state_carriers();
+  NativeField first_stage = stage_source.block_state(0);
+  NativeField second_stage = stage_source.block_state(1);
+  const auto reference_report = solve_live(stage_source);
+  ASSERT_TRUE(reference_report.solved()) << reference_report.reason;
+  const auto report = pops::consume_solve_outcome(
+      system.solve_fields_from_blocks(slot, {&first_stage, &second_stage}));
+  ASSERT_TRUE(report.solved()) << report.reason;
+  const auto staged_potential = system.field_potential_global(slot);
+  const auto expected = stage_source.field_potential_global(slot);
+  EXPECT_LE(max_difference(staged_potential, expected), 1e-11);
+  EXPECT_GT(max_difference(staged_potential, live_potential), 1e-5);
+  ASSERT_TRUE(solve_live(first_only).solved());
+  ASSERT_TRUE(solve_live(second_only).solved());
+  EXPECT_GT(max_difference(staged_potential, first_only.field_potential_global(slot)), 1e-5)
+      << "the second exact stage contribution cannot be omitted";
+  EXPECT_GT(max_difference(staged_potential, second_only.field_potential_global(slot)), 1e-5)
+      << "the first exact stage contribution cannot be replaced by accepted live State";
+  EXPECT_EQ(system.checkpoint_state_carriers(), accepted_state_bytes)
+      << "all live valid and grown State object bits must remain unchanged";
+  // A null entry has an explicit accepted-live meaning; prove this mixed contract too.
+  auto mixed_reference = m2_named_stage_system(cells, stage_first_values, live_second);
+  ASSERT_TRUE(solve_live(mixed_reference).solved());
+  const auto mixed_report =
+      pops::consume_solve_outcome(system.solve_fields_from_blocks(slot, {&first_stage, nullptr}));
+  ASSERT_TRUE(mixed_report.solved()) << mixed_report.reason;
+  const auto mixed_potential = system.field_potential_global(slot);
+  EXPECT_LE(max_difference(mixed_potential, mixed_reference.field_potential_global(slot)), 1e-11);
+  EXPECT_GT(max_difference(mixed_potential, staged_potential), 1e-5);
+  EXPECT_EQ(system.checkpoint_state_carriers(), accepted_state_bytes);
+  std::string refusal;
+  try {
+    (void)pops::consume_solve_outcome(system.solve_fields_from_blocks(slot, {&first_stage}));
+    ADD_FAILURE() << "incomplete qualified stage map was accepted";
+  } catch (const std::exception& error) {
+    refusal = error.what();
+  }
+  EXPECT_NE(refusal.find("System field stage vector does not cover every block"),
+            std::string::npos);
+  RecordProperty("missing_stage_refusal", refusal);
+  EXPECT_EQ(system.checkpoint_state_carriers(), accepted_state_bytes);
+  EXPECT_EQ(system.field_potential_global(slot), mixed_potential)
+      << "failed stage admission cannot replace the previously solved field";
+}

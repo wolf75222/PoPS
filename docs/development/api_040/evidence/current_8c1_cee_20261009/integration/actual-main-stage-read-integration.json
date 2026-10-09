@@ -1,0 +1,35 @@
+{
+  "Native_rebuilt": false,
+  "after_sha256": {
+    "docs/development/api_040/stageproviderread_v1.md": "22e32bfaf91e42ccdf774ca22a098303452c7db4d3af69f9c0c769bfc9a3994f",
+    "python/pops/codegen/_orchestration_compile.py": "dc8caa33f3d3ce48e3c5a8dd0ffae73dd0a1c39eed6e5181678e28795d18d178",
+    "python/pops/codegen/program_accepted_ssp.py": "db2bcad5e83ba97796c4a3d35698053ecc8d1cefb9b1c1635e44e353181b454f",
+    "python/pops/codegen/program_models.py": "b7762f5ec4dadeb3e4d58768b89d0e182901a32d796fe60a31fdcef4a904ee8f",
+    "python/pops/codegen/program_stage_provider_proof.py": "a4da9619ffd7837ddbc634aa2a6fbf1299554ca0532f95a9d6a7ba161c9d4870",
+    "tests/python/integration/runtime/test_m10_self_consistent_sg.py": "c37b2fe0ee4f5b428156944d05c07267f6075b0194ec5d11efb629aea744065b",
+    "tests/python/unit/codegen/test_stage_provider_ssp_proof.py": "19245f7bdedcc17957c862bfdffd204c20698ad4ba4cb01c6a53182c6a94152b"
+  },
+  "base_HEAD": "397626de9e003ab15a076319d2ee4c3d227a389c",
+  "before_sha256": {
+    "docs/development/api_040/stageproviderread_v1.md": null,
+    "python/pops/codegen/_orchestration_compile.py": "bf523902080750e5f885abc88f175e9d45c0fd246776c827f97f080e210935bb",
+    "python/pops/codegen/program_accepted_ssp.py": "b264d64a072318848fd211cf81453a29a9783142c85916ea879a655a53331567",
+    "python/pops/codegen/program_models.py": "8e3a8704a9ad9d8765dbddf6e19a8fdf1bf09d7927d86bd929faedcb90290d89",
+    "python/pops/codegen/program_stage_provider_proof.py": null,
+    "tests/python/integration/runtime/test_m10_self_consistent_sg.py": "8fd87c8254c8fb153a9ccfbc420b663fe1dad6ea173362f3bf6bd255fd9730cc",
+    "tests/python/unit/codegen/test_stage_provider_ssp_proof.py": null
+  },
+  "complete_patch_sha256": "7c56955f223d529209c4c11c351ab6d4b0f165fb4134772432bf6a5958d3c666",
+  "paths": [
+    "python/pops/codegen/_orchestration_compile.py",
+    "python/pops/codegen/program_accepted_ssp.py",
+    "python/pops/codegen/program_models.py",
+    "python/pops/codegen/program_stage_provider_proof.py",
+    "tests/python/integration/runtime/test_m10_self_consistent_sg.py",
+    "tests/python/unit/codegen/test_stage_provider_ssp_proof.py",
+    "docs/development/api_040/stageproviderread_v1.md"
+  ],
+  "peer_sha256": "5c538c960660fe3b29d0a639f8282aad249e43d3d4ca7f68227b61207e8319d5",
+  "scope": "Root actual Main integration of reviewed generic stage-read authority and its registered boundary correction; same exact SSP arithmetic/equations/guards. No numerical or Native acceptance inherited.",
+  "utc": "2026-10-09T02:42:23.842301+00:00"
+}

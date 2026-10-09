@@ -1,0 +1,228 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 19 items
+
+tests/python/integration/runtime/test_api040_coordinated_face_independent_runtime.py::test_native_asymmetric_face_matches_independent_oracle_and_preserves_transverse_invariance[order0] PASSED [  5%]
+tests/python/integration/runtime/test_api040_coordinated_face_independent_runtime.py::test_native_asymmetric_face_matches_independent_oracle_and_preserves_transverse_invariance[order1] PASSED [ 10%]
+tests/python/integration/runtime/test_api040_coordinated_face_independent_runtime.py::test_one_coordinated_artifact_two_bind_time_dissipations_match_separate_oracles PASSED [ 15%]
+tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[False-False] FAILED [ 21%]
+tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[False-True] FAILED [ 26%]
+tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[True-False] FAILED [ 31%]
+tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[True-True] FAILED [ 36%]
+tests/python/integration/runtime/test_api040_m22_h05_runtime.py::test_h05_original_residual_rebind_and_domain_rollback[False] FAILED [ 42%]
+tests/python/integration/runtime/test_api040_m22_h05_runtime.py::test_h05_original_residual_rebind_and_domain_rollback[True] FAILED [ 47%]
+tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py::test_h05_nonuniform_cells_rebind_and_collective_negative_rate[False] FAILED [ 52%]
+tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py::test_h05_nonuniform_cells_rebind_and_collective_negative_rate[True] FAILED [ 57%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_adaptive_cfl_without_max_dt_matches_two_step_oracle PASSED [ 63%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_refusal_preserves_accepted_state_and_clock[fixed_dt] FAILED [ 68%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_refusal_preserves_accepted_state_and_clock[actual_stage_cfl] PASSED [ 73%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_fixed_dt_uses_unit_numerical_budget PASSED [ 78%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_state[fractional] PASSED [ 84%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_state[diagnostic] PASSED [ 89%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_state[guarded] FAILED [ 94%]
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_checkpoint_restart_does_not_request_an_absent_poisson_field PASSED [100%]
+
+=================================== FAILURES ===================================
+___________ test_joint_product_rebind_or_atomic_failure[False-False] ___________
+tests/python/integration/runtime/test_local_residual_product_runtime.py:21: in test_joint_product_rebind_or_atomic_failure
+    artifact, world = _compile(case, layout, "local-product-%s-%s" % (reverse, invalid))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []
+----------------------------- Captured stdout call -----------------------------
+[rank 0] local-product-False-False: compile and publish start
+___________ test_joint_product_rebind_or_atomic_failure[False-True] ____________
+tests/python/integration/runtime/test_local_residual_product_runtime.py:21: in test_joint_product_rebind_or_atomic_failure
+    artifact, world = _compile(case, layout, "local-product-%s-%s" % (reverse, invalid))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []
+----------------------------- Captured stdout call -----------------------------
+[rank 0] local-product-True-False: compile and publish start
+___________ test_joint_product_rebind_or_atomic_failure[True-False] ____________
+tests/python/integration/runtime/test_local_residual_product_runtime.py:21: in test_joint_product_rebind_or_atomic_failure
+    artifact, world = _compile(case, layout, "local-product-%s-%s" % (reverse, invalid))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []
+----------------------------- Captured stdout call -----------------------------
+[rank 0] local-product-False-True: compile and publish start
+____________ test_joint_product_rebind_or_atomic_failure[True-True] ____________
+tests/python/integration/runtime/test_local_residual_product_runtime.py:21: in test_joint_product_rebind_or_atomic_failure
+    artifact, world = _compile(case, layout, "local-product-%s-%s" % (reverse, invalid))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []
+----------------------------- Captured stdout call -----------------------------
+[rank 0] local-product-True-True: compile and publish start
+_________ test_h05_original_residual_rebind_and_domain_rollback[False] _________
+tests/python/integration/runtime/test_api040_m22_h05_runtime.py:35: in test_h05_original_residual_rebind_and_domain_rollback
+    artifact,world=_compile(case,layout,"M22-H05-%s" % reverse)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []
+----------------------------- Captured stdout call -----------------------------
+[rank 0] M22-H05-False: compile and publish start
+_________ test_h05_original_residual_rebind_and_domain_rollback[True] __________
+tests/python/integration/runtime/test_api040_m22_h05_runtime.py:35: in test_h05_original_residual_rebind_and_domain_rollback
+    artifact,world=_compile(case,layout,"M22-H05-%s" % reverse)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []
+----------------------------- Captured stdout call -----------------------------
+[rank 0] M22-H05-True: compile and publish start
+_____ test_h05_nonuniform_cells_rebind_and_collective_negative_rate[False] _____
+tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py:51: in test_h05_nonuniform_cells_rebind_and_collective_negative_rate
+    artifact, world = _compile(case, layout, "H05-adversarial-%s" % reverse)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []
+----------------------------- Captured stdout call -----------------------------
+[rank 0] H05-adversarial-False: compile and publish start
+_____ test_h05_nonuniform_cells_rebind_and_collective_negative_rate[True] ______
+tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py:51: in test_h05_nonuniform_cells_rebind_and_collective_negative_rate
+    artifact, world = _compile(case, layout, "H05-adversarial-%s" % reverse)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []
+----------------------------- Captured stdout call -----------------------------
+[rank 0] H05-adversarial-True: compile and publish start
+____ test_uniform_path_refusal_preserves_accepted_state_and_clock[fixed_dt] ____
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py:111: in test_uniform_path_refusal_preserves_accepted_state_and_clock
+    with pytest.raises((ValueError, RuntimeError), match="user_face_numerical_stability"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE any of (ValueError, RuntimeError)
+----------------------------- Captured stdout call -----------------------------
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.1.0 | resolved simulation launch
+================================================================
+  case                : uniform-path-protocol
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 1
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : transport
+  numerics transport  : path_conservative_finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 8 x 8 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : fixed_dt (dt=0.1)
+  interval            : 0 -> 0.1 (max 1 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 342c7edec36c6df8
+  run identity        : e84c4af2dbf1e2bc
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.1 / 1
+  elapsed             : 0.000856 s
+  run identity        : e84c4af2dbf1e2bc
+_ test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_state[guarded] _
+tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py:151: in test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_state
+    with pytest.raises((ValueError, RuntimeError), match="user_face_numerical_stability"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE any of (ValueError, RuntimeError)
+----------------------------- Captured stdout call -----------------------------
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.1.0 | resolved simulation launch
+================================================================
+  case                : uniform-path-protocol
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 1
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : transport
+  numerics transport  : path_conservative_finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 8 x 8 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : external_time_grid (grid_id=path_samples)
+  interval            : 0 -> 0.0001 (max 1 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 6307ce791561100e
+  run identity        : c1c4df5d12858ea4
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.0001 / 1
+  elapsed             : 0.001101 s
+  run identity        : c1c4df5d12858ea4
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.1.0 | resolved simulation launch
+================================================================
+  case                : uniform-path-protocol
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 1
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : transport
+  numerics transport  : path_conservative_finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 8 x 8 cells; 1 level; [0, 1] x [0, 1]
+  step strategy       : external_time_grid (grid_id=path_samples)
+  interval            : 0 -> 0.1 (max 1 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 6307ce791561100e
+  run identity        : 83e169de83be21f8
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 1 / 0
+  final time / step   : 0.1 / 1
+  elapsed             : 0.000816 s
+  run identity        : 83e169de83be21f8
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-5d11268-dim2-face-products/pytest.xml -
+=========================== short test summary info ============================
+FAILED tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[False-False]
+FAILED tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[False-True]
+FAILED tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[True-False]
+FAILED tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[True-True]
+FAILED tests/python/integration/runtime/test_api040_m22_h05_runtime.py::test_h05_original_residual_rebind_and_domain_rollback[False]
+FAILED tests/python/integration/runtime/test_api040_m22_h05_runtime.py::test_h05_original_residual_rebind_and_domain_rollback[True]
+FAILED tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py::test_h05_nonuniform_cells_rebind_and_collective_negative_rate[False]
+FAILED tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py::test_h05_nonuniform_cells_rebind_and_collective_negative_rate[True]
+FAILED tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_refusal_preserves_accepted_state_and_clock[fixed_dt]
+FAILED tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_state[guarded]
+=================== 10 failed, 9 passed in 180.22s (0:03:00) ===================

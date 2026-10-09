@@ -1,0 +1,23 @@
+{
+  "checks": {
+    "author_suite": {
+      "sha256": "adfcc321ba2360cf4e33edf52ece5345a69e76032ad3698cebf4967b5e625f70",
+      "stdout": ".....................                                                    [100%]\n21 passed in 108.56s (0:01:48)\n"
+    },
+    "legacy_unit_suite": {
+      "sha256": "265ac11009f4f525665fcb76548c29b043f70cf85f3adf90559595437932d92f",
+      "stdout": "..............................                                           [100%]\n30 passed in 18.25s\n"
+    },
+    "template_syntax": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": ""
+    }
+  },
+  "git_diff_check": "PASS",
+  "installed_package": false,
+  "kind": "private-source-reception",
+  "native_execution": false,
+  "production_commit": "c28a8f4370bbf2e9d781ddf52ddcc59597ce2e65",
+  "python_command": "rtk proxy env -u PYTHONPATH /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python -c 'import sys;sys.path.insert(0,\"python\");import pytest;raise SystemExit(pytest.main([\"-q\",\"tests/review/test_sol61_amr_python_spatial_jacobi.py\",\"--tb=short\"]))'",
+  "ruff": "PASS"
+}

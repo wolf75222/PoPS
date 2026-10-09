@@ -8,11 +8,14 @@ from typing import Any
 _UNSLICEABLE_OPS = frozenset({
     "solve_coupled_implicit", "solve_fields_from_blocks",
     "field_solve_from_blocks", "while", "branch", "range", "subcycle",
-    "solve_local_nonlinear", "solve_spatial_nonlinear",
+    "solve_local_nonlinear", "solve_spatial_nonlinear", "solve_spatial_field",
 })
 
 
 def _block_id(value: Any) -> str | None:
+    from pops.model import Handle
+    if isinstance(value, Handle) and value.kind == "block":
+        return value.local_id
     block = getattr(value, "block", None)
     if block is None:
         block = getattr(value, "block_ref", None)
@@ -64,6 +67,15 @@ def slice_program(program: Any, block_names: Any) -> Any:
     if unsupported:
         raise ValueError("multi-layout Program contains unsliceable operation(s) %s" % unsupported)
     roots = [value for value in values if _block_id(value) in selected]
+    for value in values:
+        if value.op == "layout_map_export" and value.attrs.get("contract") == "mapped-consumed-output@1":
+            owners = _block_ids(value.attrs.get("source_blocks", ()))
+            if not owners:
+                raise ValueError("consumed Field map lost all equation input owners")
+            if owners & selected:
+                if not owners <= selected:
+                    raise ValueError("consumed Field equation inputs span distinct storage layouts")
+                roots.append(value)
     if not roots:
         raise ValueError("layout Program partition contains no executable nodes")
     keep: set[int] = set()

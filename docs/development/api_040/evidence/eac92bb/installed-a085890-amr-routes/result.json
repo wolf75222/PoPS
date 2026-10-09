@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-a085890-amr-routes/pytest.xml",
+    "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py::test_two_block_captures_and_rebind_match_independent_fv_oracle[2-amr1]",
+    "tests/python/integration/runtime/test_principal_amr_runtime.py"
+  ],
+  "returncode": 0,
+  "duration_seconds": 284.85036354209296,
+  "counts": {
+    "tests": 7,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "passed",
+  "identity_sha256": "d52ca7795a341204e03fe8ef79b47e49c3337e4e052dfddcb79139deccce37a3",
+  "log_sha256": "fbc0f8644ed353f6673b71e1215f75c17092378168c5dada202ff1c15d159c9a"
+}

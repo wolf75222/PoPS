@@ -1,0 +1,1708 @@
+{
+  "backend": {
+    "compiler": "Apple LLVM 21",
+    "cpu": "Apple arm64",
+    "kokkos": "5.2.0",
+    "mpi": "MPICH 4.1.2",
+    "threads": 1
+  },
+  "corrected_diffusion_and_uniform_amr_diagnostics_mpi2": {
+    "installation_and_test_sources_unchanged": true,
+    "junit": [
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-diffusion-archive-and-diagnostics-mpi2-dim2/rank0.xml",
+        "sha256": "ef02a4f56c863cb1c70c434b32adf3fb6e6a7cb762ecf1adfd9e6d6e3a524304"
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-diffusion-archive-and-diagnostics-mpi2-dim2/rank1.xml",
+        "sha256": "eae069ad4246c462f395c7de20e2198361a60ab3c458ad8305e742e12c41562e"
+      }
+    ],
+    "rank_counts": [
+      {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 8
+      },
+      {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 8
+      }
+    ],
+    "ranks": 2,
+    "result": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-diffusion-archive-and-diagnostics-mpi2-dim2/result.json",
+      "sha256": "7b44da996085289b580188177ad4059b1c7587eef362bf626fa6584385307a97"
+    },
+    "seconds": 569.4212627499364,
+    "source_commit": "1807a16b4e20b3d40fb88cd0c3ba3f4f263ac8ad",
+    "status": "passed"
+  },
+  "corrected_diffusion_and_uniform_diagnostics_serial": {
+    "counts": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 7
+    },
+    "junit": [
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-diffusion-archive-and-uniform-diagnostics-serial-dim2/pytest.xml",
+        "sha256": "80fccc149a9d1315727eac2ea162868f31fafc686ed28c30214422cd51bd8f67"
+      }
+    ],
+    "ranks": 1,
+    "result": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-diffusion-archive-and-uniform-diagnostics-serial-dim2/result.json",
+      "sha256": "c7af55b293b84e34dcbae9403aa35ec0e5a0b9f7a5d9b035b28f34dc24a4ba53"
+    },
+    "seconds": 388.969469249947,
+    "source_commit": "457e07000c35a466be3c80a7d7864f44a5f546c6",
+    "status": "passed"
+  },
+  "diffusion_scientific_receptions": {
+    "candidate_MPI2": {
+      "approval": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/diffusion-candidate-mpi2-scientific-root-owner-v1/root-approval.json",
+        "sha256": "7eac5cb845bcdc2913b59cc46275f84daa06889364fa7ff454b9409ed629aacc"
+      },
+      "compound_semantic_payload_recomputed": false,
+      "cpp_to_dso_graph_proof": false,
+      "cryptographic_aggregate_binding": false,
+      "gaps": [
+        "reloaded checkpoint not independently saved; accepted checkpoint anchored to exact reloaded NPZ",
+        "no aggregate payload/block CPP/private lease snapshot/CPP-to-DSO graph proof",
+        "no AMR/GPU/convergence/arbitrary-D/SPD/partition qualification"
+      ],
+      "original_residual_relative_l2_max": 1.1978305400827463e-11,
+      "physical_archives": 2,
+      "pins": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/diffusion-candidate-mpi2-scientific-root-owner-v1/owner-pins.json",
+        "sha256": "aab5be7c9d554a6701f67a2b2ad2315126ac08aee99a99d564eb615530aeeed7"
+      },
+      "qualification": "saved-candidate-d-checkpoint-original-residual@2",
+      "root": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/diffusion-candidate-mpi2-scientific-root-owner-v1/root-reception.json",
+        "sha256": "cbf2dc7a2d2ed80a96527614cd7450ba45761c65d2d22b287f7c3dc9a2522517"
+      },
+      "science": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/diffusion-candidate-mpi2-scientific-root-owner-v1/scientific-reception.json",
+        "sha256": "a85212605d1113220acffab24ea46da11627490969a8ad8dd96db41ff59e19ed"
+      },
+      "scientific_cases": 2,
+      "solution_linf_max": 2.3106239144254914e-12,
+      "status": "received"
+    },
+    "candidate_Serial": {
+      "approval": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/diffusion-candidate-serial-scientific-root-owner-v5/root-approval.json",
+        "sha256": "fa43b4399b324e29139216ca8cec07e99fc1a9e7b4fd38f04bc7fe8b9d146279"
+      },
+      "compound_semantic_payload_recomputed": false,
+      "cpp_to_dso_graph_proof": false,
+      "cryptographic_aggregate_binding": false,
+      "gaps": [
+        "reloaded checkpoint not independently saved; accepted checkpoint anchored to exact reloaded NPZ",
+        "no aggregate payload/block CPP/private lease snapshot/CPP-to-DSO graph proof",
+        "no AMR/GPU/convergence/arbitrary-D/SPD/partition qualification"
+      ],
+      "original_residual_relative_l2_max": 1.1978305400827463e-11,
+      "physical_archives": 2,
+      "pins": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/diffusion-candidate-serial-scientific-root-owner-v5/owner-pins.json",
+        "sha256": "2a9ca3722b46cca3c9b8f11b39c596f3386b88dad71d03558d4cd304f1f063bb"
+      },
+      "qualification": "saved-candidate-d-checkpoint-original-residual@2",
+      "root": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/diffusion-candidate-serial-scientific-root-owner-v5/root-reception.json",
+        "sha256": "d5f8ffc7100312d29f482812b605bc9b1ece6f6cfe18fcaf628aa7a9ec401ec7"
+      },
+      "science": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/diffusion-candidate-serial-scientific-root-owner-v5/scientific-reception.json",
+        "sha256": "1cd96b7d8cefdda5f9e2d380d461cca579a697624d42665f5c84a91df109d393"
+      },
+      "scientific_cases": 2,
+      "solution_linf_max": 2.3106239144254914e-12,
+      "status": "received"
+    },
+    "frozen_MPI2": {
+      "approval": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/diffusion-frozen-mpi2-scientific-root-owner-v1/root-approval.json",
+        "sha256": "920fa353dbea8f26a33b8f90717c157e3301f47bf78b49fbc6cc5c9f0fb47b83"
+      },
+      "compound_semantic_payload_recomputed": false,
+      "cpp_to_dso_graph_proof": false,
+      "cryptographic_aggregate_binding": false,
+      "gaps": [
+        "original artifact aggregate payload absent; carried Program IR hash is linked",
+        "block compiler CPP absent",
+        "independent restored checkpoint absent",
+        "in-memory carrier/diagnostic comparison images absent",
+        "private PreparedFieldCapture owner/lease/point image not persisted; history point is checked separately",
+        "no convergence/AMR/arbitrary-D solvability/SPD/empty-MPI partition qualification"
+      ],
+      "original_residual_relative_l2_max": 2.9075324825715963e-15,
+      "physical_archives": 2,
+      "pins": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/diffusion-frozen-mpi2-scientific-root-owner-v1/owner-pins.json",
+        "sha256": "822a6ebb8ced27e74b4c1f041b25aaaa26eb9278d53b8d337e13a821096dc57c"
+      },
+      "qualification": "saved-states-original-residual@3",
+      "root": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/diffusion-frozen-mpi2-scientific-root-owner-v1/root-reception.json",
+        "sha256": "d94fa18160c72663a5d557787f3179c434a49f6f462f8173be52919151f56487"
+      },
+      "science": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/diffusion-frozen-mpi2-scientific-root-owner-v1/scientific-reception.json",
+        "sha256": "fe23a53da9a148b26d30744fae049ce11e1328001b7db749574fe1fb25b85e3a"
+      },
+      "scientific_cases": 2,
+      "solution_linf_max": 6.661338147750939e-16,
+      "status": "received"
+    },
+    "frozen_Serial": {
+      "approval": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/diffusion-frozen-serial-scientific-root-owner-v4/root-approval.json",
+        "sha256": "21f94cbdb2a23648710d945aec91495d3b827f66dd0465c075c8cefbd83ca74a"
+      },
+      "compound_semantic_payload_recomputed": false,
+      "cpp_to_dso_graph_proof": false,
+      "cryptographic_aggregate_binding": false,
+      "gaps": [
+        "original artifact aggregate payload absent; carried Program IR hash is linked",
+        "block compiler CPP absent",
+        "independent restored checkpoint absent",
+        "in-memory carrier/diagnostic comparison images absent",
+        "private PreparedFieldCapture owner/lease/point image not persisted; history point is checked separately",
+        "no convergence/AMR/arbitrary-D solvability/SPD/empty-MPI partition qualification"
+      ],
+      "original_residual_relative_l2_max": 2.9075324825715963e-15,
+      "physical_archives": 2,
+      "pins": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/diffusion-frozen-serial-scientific-root-owner-v4/owner-pins.json",
+        "sha256": "12e931977dec0c66777ce3eb971ab7ec871cd0ccc10885585a8f23d5dad16e8e"
+      },
+      "qualification": "saved-states-original-residual@3",
+      "root": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/diffusion-frozen-serial-scientific-root-owner-v4/root-reception.json",
+        "sha256": "0579249f991c39308eef285f8cd5c3ce9d0b045565577bdd193262061c688f32"
+      },
+      "science": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/diffusion-frozen-serial-scientific-root-owner-v4/scientific-reception.json",
+        "sha256": "09e15e65cc9360f7350401738ee357e9c1f065f62b8a23fecb79c4e04ab388f9"
+      },
+      "scientific_cases": 2,
+      "solution_linf_max": 6.661338147750939e-16,
+      "status": "received"
+    }
+  },
+  "historical_red_receipts_preserved": [
+    "installed-sdk2e4-evolved-stage-serial-dim2",
+    "installed-sdk2e4-evolved-stage-corrected-serial-dim2",
+    "installed-sdk2e4-diffusion-and-diagnostics-serial-dim2-corrected-selection"
+  ],
+  "independent_offline_stage_countermodels": {
+    "backends": [
+      "Serial",
+      "MPI2"
+    ],
+    "junit_rank_forgery_refusals": 3,
+    "native_execution": false,
+    "resealed_refused_per_backend": 18
+  },
+  "limits": [
+    "No corpus-wide completion or inherited historical native/scientific acceptance.",
+    "No AMR Stage, regrid, nonlocal convolution, full M06/M13/M22/M26/M27 acceptance yet.",
+    "No GPU, official OpenMPI/Kokkos4.4 or GitHub CI reception.",
+    "All MPI counters refer to unique cases per rank; physical diffusion archives are shared collective rank0 publications.",
+    "External ROOT owner association is distinct from absent compound/aggregate payload and CPP-to-DSO graph proof."
+  ],
+  "migration_complete": false,
+  "native_dimensions": [
+    1,
+    2,
+    3
+  ],
+  "production_cpp_recompiled_for_that_python_installation": false,
+  "python_only_stage_installation": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-python-stage-repair-1807/installation-reception.json",
+    "sha256": "bea35cd4bd46655a657affc2e6250ae40e37377da81c7ce50879163a7f91cc7d"
+  },
+  "schema": "root.api040.sdk2e4-diffusion-stage-followup@1",
+  "sdk_signature": "2e4d69fd3574933f4b83cf014ad2d0159902fea6197d74623bee4b4ee6cf1675",
+  "source_extensions_pending": [
+    "explicit global field history storage owner for AMR"
+  ],
+  "stage_fixture_checks": [
+    {
+      "candidate_diffusion": false,
+      "cells": 8,
+      "checkpoint_equivalence": {
+        "contract": "pops.evolved-stage-checkpoint-equivalence@1",
+        "exact_payload_and_manifest": true,
+        "provenance": {
+          "accepted": {
+            "artifact": "pops.artifact.v1:sha256:a89ea4b7d85cdb498e1474f44d8d3d0664ab50eafd000cb12f2bdb0f92808421",
+            "bind": "pops.bind.v1:sha256:dbe034e36a6f599cd6fe868980ee0ef8b6d556e746399773dcd0dc4af3db52ac",
+            "clock": {
+              "macro_step": 1,
+              "time": "0x1.47ae147ae147bp-7"
+            },
+            "last_restart": null,
+            "restart": "pops.restart.v1:sha256:46b96974c34047dae9e94c34ee4b83c48c94d325795322ff76a6b603c5aae028",
+            "run": "pops.run.v1:sha256:9cd46259ac5a4a7081fc94ced11116a4dbf2598058afcdee54a4e1b6b124c664",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:dbe034e36a6f599cd6fe868980ee0ef8b6d556e746399773dcd0dc4af3db52ac",
+                "continuation_identity": null,
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-7"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.01
+                },
+                "run_identity": "pops.run.v1:sha256:9cd46259ac5a4a7081fc94ced11116a4dbf2598058afcdee54a4e1b6b124c664",
+                "start_macro_step": 0,
+                "start_time": 0.0
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:b19d474d5025e8cc703acd185726fa342f4c18a41b3d7f3eafc1d30632ec88b0"
+          },
+          "continuous": {
+            "artifact": "pops.artifact.v1:sha256:a89ea4b7d85cdb498e1474f44d8d3d0664ab50eafd000cb12f2bdb0f92808421",
+            "bind": "pops.bind.v1:sha256:dbe034e36a6f599cd6fe868980ee0ef8b6d556e746399773dcd0dc4af3db52ac",
+            "clock": {
+              "macro_step": 2,
+              "time": "0x1.47ae147ae147bp-6"
+            },
+            "last_restart": null,
+            "restart": "pops.restart.v1:sha256:d9e59076c89f43fed55ed13584138df4e9d03d750eab8036832d8a2039eff76e",
+            "run": "pops.run.v1:sha256:2a4fa2aa0df89e0d71ab9752ee5233cb16ae2d49b2bb9ae0ca270cf583841c3b",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:dbe034e36a6f599cd6fe868980ee0ef8b6d556e746399773dcd0dc4af3db52ac",
+                "continuation_identity": null,
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-7"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.02
+                },
+                "run_identity": "pops.run.v1:sha256:2a4fa2aa0df89e0d71ab9752ee5233cb16ae2d49b2bb9ae0ca270cf583841c3b",
+                "start_macro_step": 1,
+                "start_time": 0.01
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:b19d474d5025e8cc703acd185726fa342f4c18a41b3d7f3eafc1d30632ec88b0"
+          },
+          "replay": {
+            "artifact": "pops.artifact.v1:sha256:a89ea4b7d85cdb498e1474f44d8d3d0664ab50eafd000cb12f2bdb0f92808421",
+            "bind": "pops.bind.v1:sha256:dbe034e36a6f599cd6fe868980ee0ef8b6d556e746399773dcd0dc4af3db52ac",
+            "clock": {
+              "macro_step": 2,
+              "time": "0x1.47ae147ae147bp-6"
+            },
+            "last_restart": "pops.restart.v1:sha256:46b96974c34047dae9e94c34ee4b83c48c94d325795322ff76a6b603c5aae028",
+            "restart": "pops.restart.v1:sha256:4ccd1d43452ca87ed6f565129a2d6f6c9c494365648ea3007c03b5eeb847c130",
+            "run": "pops.run.v1:sha256:38984e532c9614d0c183e02516de5c12b122610be4517dbc8c1c7250cde45ca4",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:dbe034e36a6f599cd6fe868980ee0ef8b6d556e746399773dcd0dc4af3db52ac",
+                "continuation_identity": "pops.run.v1:sha256:9cd46259ac5a4a7081fc94ced11116a4dbf2598058afcdee54a4e1b6b124c664",
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-7"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.02
+                },
+                "run_identity": "pops.run.v1:sha256:38984e532c9614d0c183e02516de5c12b122610be4517dbc8c1c7250cde45ca4",
+                "start_macro_step": 1,
+                "start_time": 0.01
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:b19d474d5025e8cc703acd185726fa342f4c18a41b3d7f3eafc1d30632ec88b0"
+          }
+        }
+      },
+      "dt": 0.01,
+      "evolved_states": 1,
+      "phase_checks": {
+        "accepted": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "global_balance_linf": 2.9405704928605215e-12,
+          "original_relative_l2": 1.953003193578846e-11,
+          "physical_field_linf": 9.434786285567043e-12,
+          "spatial_linf": 0.017872460017873452,
+          "volume_sum": 1.0
+        },
+        "continuous": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "global_balance_linf": 5.170289110040249e-18,
+          "original_relative_l2": 1.4943145342876125e-16,
+          "spatial_linf": 0.04759350946713263,
+          "volume_sum": 1.0
+        },
+        "reloaded": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "global_balance_linf": 2.9405704928605215e-12,
+          "original_relative_l2": 1.953003193578846e-11,
+          "physical_field_linf": 9.434786285567043e-12,
+          "spatial_linf": 0.017872460017873452,
+          "volume_sum": 1.0
+        },
+        "replay": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "global_balance_linf": 5.170289110040249e-18,
+          "original_relative_l2": 1.4943145342876125e-16,
+          "spatial_linf": 0.04759350946713263,
+          "volume_sum": 1.0
+        }
+      },
+      "receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-continuation-serial-dim2/pytest-tmp/test_public_evolved_original_s0/evolved-original-stage/receipt.json",
+        "sha256": "51c3527d002d4fbc7a49f588b0805b8f69dd01005d05784f8c94b61915237dfc"
+      },
+      "unknowns": 1
+    },
+    {
+      "candidate_diffusion": false,
+      "cells": 16,
+      "checkpoint_equivalence": {
+        "contract": "pops.evolved-stage-checkpoint-equivalence@1",
+        "exact_payload_and_manifest": true,
+        "provenance": {
+          "accepted": {
+            "artifact": "pops.artifact.v1:sha256:642ee47f19cbb2afb1cb864854702d23f09c2da905962b67afc8e8401b1deab5",
+            "bind": "pops.bind.v1:sha256:7aa2e39c360eb0ef69c0a9c4772d3e0bbec6134d5ea89bc467a957b671e4ee8d",
+            "clock": {
+              "macro_step": 1,
+              "time": "0x1.47ae147ae147bp-7"
+            },
+            "last_restart": null,
+            "restart": "pops.restart.v1:sha256:82579e0b05bf6990115598194c2c4b96a86965a32b6098e523525e07f60a9ada",
+            "run": "pops.run.v1:sha256:023a1c26c8f344142a7abc2cbd2cacd17d19f37b3fd4719580e52b89120cfa7c",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:7aa2e39c360eb0ef69c0a9c4772d3e0bbec6134d5ea89bc467a957b671e4ee8d",
+                "continuation_identity": null,
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-7"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.01
+                },
+                "run_identity": "pops.run.v1:sha256:023a1c26c8f344142a7abc2cbd2cacd17d19f37b3fd4719580e52b89120cfa7c",
+                "start_macro_step": 0,
+                "start_time": 0.0
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:73746c437f0378af9fb73a7e3137a77b7d833118f690f87246c4272b3540afab"
+          },
+          "continuous": {
+            "artifact": "pops.artifact.v1:sha256:642ee47f19cbb2afb1cb864854702d23f09c2da905962b67afc8e8401b1deab5",
+            "bind": "pops.bind.v1:sha256:7aa2e39c360eb0ef69c0a9c4772d3e0bbec6134d5ea89bc467a957b671e4ee8d",
+            "clock": {
+              "macro_step": 2,
+              "time": "0x1.47ae147ae147bp-6"
+            },
+            "last_restart": null,
+            "restart": "pops.restart.v1:sha256:45a163533a128e02b3cb78c786b61e9d92d014b7ba540ad753d263d49f62b95d",
+            "run": "pops.run.v1:sha256:714f341b55b0ef08b11b748202b88872d6fdacc1f4583c0c56769d8febc9d3bd",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:7aa2e39c360eb0ef69c0a9c4772d3e0bbec6134d5ea89bc467a957b671e4ee8d",
+                "continuation_identity": null,
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-7"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.02
+                },
+                "run_identity": "pops.run.v1:sha256:714f341b55b0ef08b11b748202b88872d6fdacc1f4583c0c56769d8febc9d3bd",
+                "start_macro_step": 1,
+                "start_time": 0.01
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:73746c437f0378af9fb73a7e3137a77b7d833118f690f87246c4272b3540afab"
+          },
+          "replay": {
+            "artifact": "pops.artifact.v1:sha256:642ee47f19cbb2afb1cb864854702d23f09c2da905962b67afc8e8401b1deab5",
+            "bind": "pops.bind.v1:sha256:7aa2e39c360eb0ef69c0a9c4772d3e0bbec6134d5ea89bc467a957b671e4ee8d",
+            "clock": {
+              "macro_step": 2,
+              "time": "0x1.47ae147ae147bp-6"
+            },
+            "last_restart": "pops.restart.v1:sha256:82579e0b05bf6990115598194c2c4b96a86965a32b6098e523525e07f60a9ada",
+            "restart": "pops.restart.v1:sha256:e53b1538dbb290496af55a2cbd5c9ab9f6c6025b5142cc011cfd9c02538254be",
+            "run": "pops.run.v1:sha256:46e3632eefb54fb9ab71d04346264b58cace1984b71f0b26ba5dd2a05e4e2c93",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:7aa2e39c360eb0ef69c0a9c4772d3e0bbec6134d5ea89bc467a957b671e4ee8d",
+                "continuation_identity": "pops.run.v1:sha256:023a1c26c8f344142a7abc2cbd2cacd17d19f37b3fd4719580e52b89120cfa7c",
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-7"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.02
+                },
+                "run_identity": "pops.run.v1:sha256:46e3632eefb54fb9ab71d04346264b58cace1984b71f0b26ba5dd2a05e4e2c93",
+                "start_macro_step": 1,
+                "start_time": 0.01
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:73746c437f0378af9fb73a7e3137a77b7d833118f690f87246c4272b3540afab"
+          }
+        }
+      },
+      "dt": 0.01,
+      "evolved_states": 1,
+      "phase_checks": {
+        "accepted": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "global_balance_linf": 2.9391501744620383e-12,
+          "original_relative_l2": 1.9513776001087653e-11,
+          "physical_field_linf": 1.0679568340776768e-11,
+          "spatial_linf": 0.01972400250342366,
+          "volume_sum": 1.0
+        },
+        "continuous": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "global_balance_linf": 1.3552527156068805e-18,
+          "original_relative_l2": 1.4989006766334558e-16,
+          "spatial_linf": 0.05135392327561941,
+          "volume_sum": 1.0
+        },
+        "reloaded": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "global_balance_linf": 2.9391501744620383e-12,
+          "original_relative_l2": 1.9513776001087653e-11,
+          "physical_field_linf": 1.0679568340776768e-11,
+          "spatial_linf": 0.01972400250342366,
+          "volume_sum": 1.0
+        },
+        "replay": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "global_balance_linf": 1.3552527156068805e-18,
+          "original_relative_l2": 1.4989006766334558e-16,
+          "spatial_linf": 0.05135392327561941,
+          "volume_sum": 1.0
+        }
+      },
+      "receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-continuation-serial-dim2/pytest-tmp/test_public_evolved_original_s1/evolved-original-stage/receipt.json",
+        "sha256": "a19854222b3b44c1e4028827fc4dfdbe817e1cf56b6a76baa29b0d20204d1409"
+      },
+      "unknowns": 1
+    },
+    {
+      "candidate_diffusion": false,
+      "cells": 8,
+      "checkpoint_equivalence": {
+        "contract": "pops.evolved-stage-checkpoint-equivalence@1",
+        "exact_payload_and_manifest": true,
+        "provenance": {
+          "accepted": {
+            "artifact": "pops.artifact.v1:sha256:38d1ef9da93a7709c8393c43fa7d3c4b8ea712c6f7027d2aea5ef59d57e5371e",
+            "bind": "pops.bind.v1:sha256:c2ed50f056b39ff885a2001af3ee22f68c134dfb02faf621cdb1b12cf00ea97b",
+            "clock": {
+              "macro_step": 1,
+              "time": "0x1.47ae147ae147bp-6"
+            },
+            "last_restart": null,
+            "restart": "pops.restart.v1:sha256:1d990cd84fa79a1d282e6172d7c8d6a7b73a2bfd47c8e2d2a027ad91b978b743",
+            "run": "pops.run.v1:sha256:e20de94f4d75508899beb9cfbb6b03653ce982f5c7a52f33dd86785df8bbfdb0",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:c2ed50f056b39ff885a2001af3ee22f68c134dfb02faf621cdb1b12cf00ea97b",
+                "continuation_identity": null,
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-6"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.02
+                },
+                "run_identity": "pops.run.v1:sha256:e20de94f4d75508899beb9cfbb6b03653ce982f5c7a52f33dd86785df8bbfdb0",
+                "start_macro_step": 0,
+                "start_time": 0.0
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:3cf380d3c53aab91287c2d54b61ec461c56e7dfacdab87c379f2e42b5329b096"
+          },
+          "continuous": {
+            "artifact": "pops.artifact.v1:sha256:38d1ef9da93a7709c8393c43fa7d3c4b8ea712c6f7027d2aea5ef59d57e5371e",
+            "bind": "pops.bind.v1:sha256:c2ed50f056b39ff885a2001af3ee22f68c134dfb02faf621cdb1b12cf00ea97b",
+            "clock": {
+              "macro_step": 2,
+              "time": "0x1.47ae147ae147bp-5"
+            },
+            "last_restart": null,
+            "restart": "pops.restart.v1:sha256:fd102ef5fce6497d92fee56d936f5989497bacaeefc2313a60ab7981f1727888",
+            "run": "pops.run.v1:sha256:78db7aa4c0ebc22545ff1d0e4dece3ee3c648682afd32e1b7d9cd50f6bd4a18f",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:c2ed50f056b39ff885a2001af3ee22f68c134dfb02faf621cdb1b12cf00ea97b",
+                "continuation_identity": null,
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-6"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.04
+                },
+                "run_identity": "pops.run.v1:sha256:78db7aa4c0ebc22545ff1d0e4dece3ee3c648682afd32e1b7d9cd50f6bd4a18f",
+                "start_macro_step": 1,
+                "start_time": 0.02
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:3cf380d3c53aab91287c2d54b61ec461c56e7dfacdab87c379f2e42b5329b096"
+          },
+          "replay": {
+            "artifact": "pops.artifact.v1:sha256:38d1ef9da93a7709c8393c43fa7d3c4b8ea712c6f7027d2aea5ef59d57e5371e",
+            "bind": "pops.bind.v1:sha256:c2ed50f056b39ff885a2001af3ee22f68c134dfb02faf621cdb1b12cf00ea97b",
+            "clock": {
+              "macro_step": 2,
+              "time": "0x1.47ae147ae147bp-5"
+            },
+            "last_restart": "pops.restart.v1:sha256:1d990cd84fa79a1d282e6172d7c8d6a7b73a2bfd47c8e2d2a027ad91b978b743",
+            "restart": "pops.restart.v1:sha256:5a7cbc6dd8ba9fb32da7d9f15fe598f4dbcf6b3b701e97b492d3026a37cc6cf7",
+            "run": "pops.run.v1:sha256:e529bdda0806ae13505378c1ecf557227e882658b881dcfa31d979e0fdc753b8",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:c2ed50f056b39ff885a2001af3ee22f68c134dfb02faf621cdb1b12cf00ea97b",
+                "continuation_identity": "pops.run.v1:sha256:e20de94f4d75508899beb9cfbb6b03653ce982f5c7a52f33dd86785df8bbfdb0",
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-6"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.04
+                },
+                "run_identity": "pops.run.v1:sha256:e529bdda0806ae13505378c1ecf557227e882658b881dcfa31d979e0fdc753b8",
+                "start_macro_step": 1,
+                "start_time": 0.02
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:3cf380d3c53aab91287c2d54b61ec461c56e7dfacdab87c379f2e42b5329b096"
+          }
+        }
+      },
+      "dt": 0.02,
+      "evolved_states": 1,
+      "phase_checks": {
+        "accepted": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "global_balance_linf": 2.9085458610263355e-12,
+          "original_relative_l2": 1.919643704486136e-11,
+          "physical_field_linf": 9.190093130939658e-12,
+          "spatial_linf": 0.01787246001762081,
+          "volume_sum": 1.0
+        },
+        "continuous": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "global_balance_linf": 2.222614453595284e-18,
+          "original_relative_l2": 1.6569436338632274e-16,
+          "spatial_linf": 0.047448259595025334,
+          "volume_sum": 1.0
+        },
+        "reloaded": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "global_balance_linf": 2.9085458610263355e-12,
+          "original_relative_l2": 1.919643704486136e-11,
+          "physical_field_linf": 9.190093130939658e-12,
+          "spatial_linf": 0.01787246001762081,
+          "volume_sum": 1.0
+        },
+        "replay": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "global_balance_linf": 2.222614453595284e-18,
+          "original_relative_l2": 1.6569436338632274e-16,
+          "spatial_linf": 0.047448259595025334,
+          "volume_sum": 1.0
+        }
+      },
+      "receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-continuation-serial-dim2/pytest-tmp/test_public_evolved_original_s2/evolved-original-stage/receipt.json",
+        "sha256": "2b0ac9715110f00761f37d9fc41b7f4ae8ce237104f6e0ba6d20269789582056"
+      },
+      "unknowns": 1
+    },
+    {
+      "candidate_diffusion": false,
+      "cells": 16,
+      "checkpoint_equivalence": {
+        "contract": "pops.evolved-stage-checkpoint-equivalence@1",
+        "exact_payload_and_manifest": true,
+        "provenance": {
+          "accepted": {
+            "artifact": "pops.artifact.v1:sha256:615877f1bf7657da3758a150a880be9a72933145774913568ad5cd30e3e69768",
+            "bind": "pops.bind.v1:sha256:d1af8b8d2de6b4dcef324bff497cf098f4bf3543ddde75abef366d93afd9c9bc",
+            "clock": {
+              "macro_step": 1,
+              "time": "0x1.47ae147ae147bp-6"
+            },
+            "last_restart": null,
+            "restart": "pops.restart.v1:sha256:ff6cc802253009a4abb4a65ff5d72b0375aaa1e0e5d53ff9726d8ea0eaf8ba9d",
+            "run": "pops.run.v1:sha256:740e9bac7f3396d0d572215b863162eea41dd4578e957a5799eaadc744f7226a",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:d1af8b8d2de6b4dcef324bff497cf098f4bf3543ddde75abef366d93afd9c9bc",
+                "continuation_identity": null,
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-6"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.02
+                },
+                "run_identity": "pops.run.v1:sha256:740e9bac7f3396d0d572215b863162eea41dd4578e957a5799eaadc744f7226a",
+                "start_macro_step": 0,
+                "start_time": 0.0
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:be57f4ec4e2a318b087af70e009d753b508d941073694177e3c08c7f4f8d7606"
+          },
+          "continuous": {
+            "artifact": "pops.artifact.v1:sha256:615877f1bf7657da3758a150a880be9a72933145774913568ad5cd30e3e69768",
+            "bind": "pops.bind.v1:sha256:d1af8b8d2de6b4dcef324bff497cf098f4bf3543ddde75abef366d93afd9c9bc",
+            "clock": {
+              "macro_step": 2,
+              "time": "0x1.47ae147ae147bp-5"
+            },
+            "last_restart": null,
+            "restart": "pops.restart.v1:sha256:0706fc38072d6c8a804fbfec41c1be21727f2d78ce69fd6f94694cf6b8d2a070",
+            "run": "pops.run.v1:sha256:a5b745785b9567bf11c897d0ad05fe0a625869c7792cf048f26f5a705e7e093e",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:d1af8b8d2de6b4dcef324bff497cf098f4bf3543ddde75abef366d93afd9c9bc",
+                "continuation_identity": null,
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-6"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.04
+                },
+                "run_identity": "pops.run.v1:sha256:a5b745785b9567bf11c897d0ad05fe0a625869c7792cf048f26f5a705e7e093e",
+                "start_macro_step": 1,
+                "start_time": 0.02
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:be57f4ec4e2a318b087af70e009d753b508d941073694177e3c08c7f4f8d7606"
+          },
+          "replay": {
+            "artifact": "pops.artifact.v1:sha256:615877f1bf7657da3758a150a880be9a72933145774913568ad5cd30e3e69768",
+            "bind": "pops.bind.v1:sha256:d1af8b8d2de6b4dcef324bff497cf098f4bf3543ddde75abef366d93afd9c9bc",
+            "clock": {
+              "macro_step": 2,
+              "time": "0x1.47ae147ae147bp-5"
+            },
+            "last_restart": "pops.restart.v1:sha256:ff6cc802253009a4abb4a65ff5d72b0375aaa1e0e5d53ff9726d8ea0eaf8ba9d",
+            "restart": "pops.restart.v1:sha256:aacb26bd3dfdda9e0d34486366adfb4e74162463cd94594f9aa5765d94243fc4",
+            "run": "pops.run.v1:sha256:c39a6beaf74c6920052269781717acebe0f75c615e3bcefe510a6e638b45c373",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:d1af8b8d2de6b4dcef324bff497cf098f4bf3543ddde75abef366d93afd9c9bc",
+                "continuation_identity": "pops.run.v1:sha256:740e9bac7f3396d0d572215b863162eea41dd4578e957a5799eaadc744f7226a",
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-6"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.04
+                },
+                "run_identity": "pops.run.v1:sha256:c39a6beaf74c6920052269781717acebe0f75c615e3bcefe510a6e638b45c373",
+                "start_macro_step": 1,
+                "start_time": 0.02
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:be57f4ec4e2a318b087af70e009d753b508d941073694177e3c08c7f4f8d7606"
+          }
+        }
+      },
+      "dt": 0.02,
+      "evolved_states": 1,
+      "phase_checks": {
+        "accepted": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "global_balance_linf": 2.9057763749969386e-12,
+          "original_relative_l2": 1.9164346932680397e-11,
+          "physical_field_linf": 1.0364320512934455e-11,
+          "spatial_linf": 0.019724002503006887,
+          "volume_sum": 1.0
+        },
+        "continuous": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "global_balance_linf": 1.1248597539537109e-18,
+          "original_relative_l2": 1.5350966505874991e-16,
+          "spatial_linf": 0.051153279026940356,
+          "volume_sum": 1.0
+        },
+        "reloaded": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "global_balance_linf": 2.9057763749969386e-12,
+          "original_relative_l2": 1.9164346932680397e-11,
+          "physical_field_linf": 1.0364320512934455e-11,
+          "spatial_linf": 0.019724002503006887,
+          "volume_sum": 1.0
+        },
+        "replay": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "global_balance_linf": 1.1248597539537109e-18,
+          "original_relative_l2": 1.5350966505874991e-16,
+          "spatial_linf": 0.051153279026940356,
+          "volume_sum": 1.0
+        }
+      },
+      "receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-continuation-serial-dim2/pytest-tmp/test_public_evolved_original_s3/evolved-original-stage/receipt.json",
+        "sha256": "fae6bc62279f8a4ce39d9b53304eec57827a6fdc50f86633103c13766ae23c3d"
+      },
+      "unknowns": 1
+    },
+    {
+      "candidate_diffusion": true,
+      "cells": 8,
+      "checkpoint_equivalence": {
+        "contract": "pops.evolved-stage-checkpoint-equivalence@1",
+        "exact_payload_and_manifest": true,
+        "provenance": {
+          "accepted": {
+            "artifact": "pops.artifact.v1:sha256:d3c2dba20dd478f11e8c40c662dfe2b0b24f565b5c65cf2c5900f952a01ad4d4",
+            "bind": "pops.bind.v1:sha256:43d3af3470073b3504052cb92e8e2ffa62fabe6a79ae9d48d4ab35c9c64bb9c7",
+            "clock": {
+              "macro_step": 1,
+              "time": "0x1.47ae147ae147bp-7"
+            },
+            "last_restart": null,
+            "restart": "pops.restart.v1:sha256:8873027a9689906e9d75cc699e9c27df6ad62f33073bc6a4a6192650c4b76b00",
+            "run": "pops.run.v1:sha256:e0ddda155b05c33afdfcf512b1cea8babce61b9dc0fd07a2014c69f696ad601d",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:43d3af3470073b3504052cb92e8e2ffa62fabe6a79ae9d48d4ab35c9c64bb9c7",
+                "continuation_identity": null,
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-7"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.01
+                },
+                "run_identity": "pops.run.v1:sha256:e0ddda155b05c33afdfcf512b1cea8babce61b9dc0fd07a2014c69f696ad601d",
+                "start_macro_step": 0,
+                "start_time": 0.0
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:a11409cc3ac33c13a798b37bfee4c1be1e2b69d33fcae174ff77de56a3b173be"
+          },
+          "continuous": {
+            "artifact": "pops.artifact.v1:sha256:d3c2dba20dd478f11e8c40c662dfe2b0b24f565b5c65cf2c5900f952a01ad4d4",
+            "bind": "pops.bind.v1:sha256:43d3af3470073b3504052cb92e8e2ffa62fabe6a79ae9d48d4ab35c9c64bb9c7",
+            "clock": {
+              "macro_step": 2,
+              "time": "0x1.47ae147ae147bp-6"
+            },
+            "last_restart": null,
+            "restart": "pops.restart.v1:sha256:e6a6669a64468d692f8fb685aea678a4ee212173f7062168c0e190d30548a27d",
+            "run": "pops.run.v1:sha256:cb0915da7c95cdbd6580993252a07dd30bca5e029dc593ad52e9e671bd26d45e",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:43d3af3470073b3504052cb92e8e2ffa62fabe6a79ae9d48d4ab35c9c64bb9c7",
+                "continuation_identity": null,
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-7"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.02
+                },
+                "run_identity": "pops.run.v1:sha256:cb0915da7c95cdbd6580993252a07dd30bca5e029dc593ad52e9e671bd26d45e",
+                "start_macro_step": 1,
+                "start_time": 0.01
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:a11409cc3ac33c13a798b37bfee4c1be1e2b69d33fcae174ff77de56a3b173be"
+          },
+          "replay": {
+            "artifact": "pops.artifact.v1:sha256:d3c2dba20dd478f11e8c40c662dfe2b0b24f565b5c65cf2c5900f952a01ad4d4",
+            "bind": "pops.bind.v1:sha256:43d3af3470073b3504052cb92e8e2ffa62fabe6a79ae9d48d4ab35c9c64bb9c7",
+            "clock": {
+              "macro_step": 2,
+              "time": "0x1.47ae147ae147bp-6"
+            },
+            "last_restart": "pops.restart.v1:sha256:8873027a9689906e9d75cc699e9c27df6ad62f33073bc6a4a6192650c4b76b00",
+            "restart": "pops.restart.v1:sha256:5ef06e8a41d433ab617468ecf047947aa0af473e27f3b27b692cf2e9ea2a9cef",
+            "run": "pops.run.v1:sha256:faa5987462ef0e030950ea8dde12edcfa6eb3741b515c5b2c6a2302a0eebcea4",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:43d3af3470073b3504052cb92e8e2ffa62fabe6a79ae9d48d4ab35c9c64bb9c7",
+                "continuation_identity": "pops.run.v1:sha256:e0ddda155b05c33afdfcf512b1cea8babce61b9dc0fd07a2014c69f696ad601d",
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-7"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.02
+                },
+                "run_identity": "pops.run.v1:sha256:faa5987462ef0e030950ea8dde12edcfa6eb3741b515c5b2c6a2302a0eebcea4",
+                "start_macro_step": 1,
+                "start_time": 0.01
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:a11409cc3ac33c13a798b37bfee4c1be1e2b69d33fcae174ff77de56a3b173be"
+          }
+        }
+      },
+      "dt": 0.01,
+      "evolved_states": 2,
+      "phase_checks": {
+        "accepted": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "auxiliary_constraint_linf": 2.7755575615628914e-17,
+          "global_balance_linf": 9.202165938970719e-18,
+          "original_relative_l2": 1.1191897511577696e-16,
+          "physical_field_linf": 5.551115123125783e-17,
+          "spatial_linf": 0.04210802360574559,
+          "volume_sum": 1.0
+        },
+        "continuous": {
+          "Q_projection_linf": 1.1102230246251565e-16,
+          "auxiliary_constraint_linf": 8.326672684688674e-17,
+          "global_balance_linf": 6.965998958219366e-18,
+          "original_relative_l2": 1.5645013679731592e-16,
+          "spatial_linf": 0.10588798912358105,
+          "volume_sum": 1.0
+        },
+        "reloaded": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "auxiliary_constraint_linf": 2.7755575615628914e-17,
+          "global_balance_linf": 9.202165938970719e-18,
+          "original_relative_l2": 1.1191897511577696e-16,
+          "physical_field_linf": 5.551115123125783e-17,
+          "spatial_linf": 0.04210802360574559,
+          "volume_sum": 1.0
+        },
+        "replay": {
+          "Q_projection_linf": 1.1102230246251565e-16,
+          "auxiliary_constraint_linf": 8.326672684688674e-17,
+          "global_balance_linf": 6.965998958219366e-18,
+          "original_relative_l2": 1.5645013679731592e-16,
+          "spatial_linf": 0.10588798912358105,
+          "volume_sum": 1.0
+        }
+      },
+      "receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-continuation-serial-dim2/pytest-tmp/test_public_evolved_original_s4/evolved-original-stage/receipt.json",
+        "sha256": "108d0424137c8d51290ecdce4b22a40a4300f3a5b72f9f640264dde5419742c2"
+      },
+      "unknowns": 3
+    },
+    {
+      "candidate_diffusion": true,
+      "cells": 16,
+      "checkpoint_equivalence": {
+        "contract": "pops.evolved-stage-checkpoint-equivalence@1",
+        "exact_payload_and_manifest": true,
+        "provenance": {
+          "accepted": {
+            "artifact": "pops.artifact.v1:sha256:f38b797af366a0b96f3267ab24a5cbc3474a38be73e5aa435c85893a8c4a0d45",
+            "bind": "pops.bind.v1:sha256:e921780a3c966d836ed3807281a7bc45f0a0859ac1574f4024bd7b44813d6b6d",
+            "clock": {
+              "macro_step": 1,
+              "time": "0x1.47ae147ae147bp-7"
+            },
+            "last_restart": null,
+            "restart": "pops.restart.v1:sha256:296a545cd280626fec5f4cdbad97d2d3e4f3a80d74684c20eaf630a81abc7468",
+            "run": "pops.run.v1:sha256:5e38b2d041d807b852823ded7b7ab1eab89116f84bf788569825e09b31ab502b",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:e921780a3c966d836ed3807281a7bc45f0a0859ac1574f4024bd7b44813d6b6d",
+                "continuation_identity": null,
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-7"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.01
+                },
+                "run_identity": "pops.run.v1:sha256:5e38b2d041d807b852823ded7b7ab1eab89116f84bf788569825e09b31ab502b",
+                "start_macro_step": 0,
+                "start_time": 0.0
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:ee10f03afb99535d5238d5ee0a2ed54de060173c91d26fbfbec902c1a0e82bc2"
+          },
+          "continuous": {
+            "artifact": "pops.artifact.v1:sha256:f38b797af366a0b96f3267ab24a5cbc3474a38be73e5aa435c85893a8c4a0d45",
+            "bind": "pops.bind.v1:sha256:e921780a3c966d836ed3807281a7bc45f0a0859ac1574f4024bd7b44813d6b6d",
+            "clock": {
+              "macro_step": 2,
+              "time": "0x1.47ae147ae147bp-6"
+            },
+            "last_restart": null,
+            "restart": "pops.restart.v1:sha256:d36be51ae3bae151afa830a1aab969939433f4bef2913b379bdbf6ec01e3da86",
+            "run": "pops.run.v1:sha256:cc4bbfdadc2445b9e95a2f5a41dc49728a676903bae691fc5891ac566c4e3af3",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:e921780a3c966d836ed3807281a7bc45f0a0859ac1574f4024bd7b44813d6b6d",
+                "continuation_identity": null,
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-7"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.02
+                },
+                "run_identity": "pops.run.v1:sha256:cc4bbfdadc2445b9e95a2f5a41dc49728a676903bae691fc5891ac566c4e3af3",
+                "start_macro_step": 1,
+                "start_time": 0.01
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:ee10f03afb99535d5238d5ee0a2ed54de060173c91d26fbfbec902c1a0e82bc2"
+          },
+          "replay": {
+            "artifact": "pops.artifact.v1:sha256:f38b797af366a0b96f3267ab24a5cbc3474a38be73e5aa435c85893a8c4a0d45",
+            "bind": "pops.bind.v1:sha256:e921780a3c966d836ed3807281a7bc45f0a0859ac1574f4024bd7b44813d6b6d",
+            "clock": {
+              "macro_step": 2,
+              "time": "0x1.47ae147ae147bp-6"
+            },
+            "last_restart": "pops.restart.v1:sha256:296a545cd280626fec5f4cdbad97d2d3e4f3a80d74684c20eaf630a81abc7468",
+            "restart": "pops.restart.v1:sha256:69d7513bbe3c8b37e55eeb5b308fec1b27523da27534f0f63d07f9d034893333",
+            "run": "pops.run.v1:sha256:3291a43f07a1de7344067c5f509cfa8f998a16fcbcec0c9c9adb69e29f86863b",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:e921780a3c966d836ed3807281a7bc45f0a0859ac1574f4024bd7b44813d6b6d",
+                "continuation_identity": "pops.run.v1:sha256:5e38b2d041d807b852823ded7b7ab1eab89116f84bf788569825e09b31ab502b",
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-7"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.02
+                },
+                "run_identity": "pops.run.v1:sha256:3291a43f07a1de7344067c5f509cfa8f998a16fcbcec0c9c9adb69e29f86863b",
+                "start_macro_step": 1,
+                "start_time": 0.01
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:ee10f03afb99535d5238d5ee0a2ed54de060173c91d26fbfbec902c1a0e82bc2"
+          }
+        }
+      },
+      "dt": 0.01,
+      "evolved_states": 2,
+      "phase_checks": {
+        "accepted": {
+          "Q_projection_linf": 1.1102230246251565e-16,
+          "auxiliary_constraint_linf": 2.7755575615628914e-17,
+          "global_balance_linf": 3.130633773051894e-18,
+          "original_relative_l2": 1.3856402080776565e-16,
+          "physical_field_linf": 5.551115123125783e-17,
+          "spatial_linf": 0.0607024883883577,
+          "volume_sum": 1.0
+        },
+        "continuous": {
+          "Q_projection_linf": 1.1102230246251565e-16,
+          "auxiliary_constraint_linf": 5.551115123125783e-17,
+          "global_balance_linf": 6.5052130349130266e-18,
+          "original_relative_l2": 1.573240196247977e-16,
+          "spatial_linf": 0.14957344047822663,
+          "volume_sum": 1.0
+        },
+        "reloaded": {
+          "Q_projection_linf": 1.1102230246251565e-16,
+          "auxiliary_constraint_linf": 2.7755575615628914e-17,
+          "global_balance_linf": 3.130633773051894e-18,
+          "original_relative_l2": 1.3856402080776565e-16,
+          "physical_field_linf": 5.551115123125783e-17,
+          "spatial_linf": 0.0607024883883577,
+          "volume_sum": 1.0
+        },
+        "replay": {
+          "Q_projection_linf": 1.1102230246251565e-16,
+          "auxiliary_constraint_linf": 5.551115123125783e-17,
+          "global_balance_linf": 6.5052130349130266e-18,
+          "original_relative_l2": 1.573240196247977e-16,
+          "spatial_linf": 0.14957344047822663,
+          "volume_sum": 1.0
+        }
+      },
+      "receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-continuation-serial-dim2/pytest-tmp/test_public_evolved_original_s5/evolved-original-stage/receipt.json",
+        "sha256": "a7462950b445265ce9019e64ce82c8e8671107ac45bafc37f2ebcaa99120f36e"
+      },
+      "unknowns": 3
+    },
+    {
+      "candidate_diffusion": true,
+      "cells": 8,
+      "checkpoint_equivalence": {
+        "contract": "pops.evolved-stage-checkpoint-equivalence@1",
+        "exact_payload_and_manifest": true,
+        "provenance": {
+          "accepted": {
+            "artifact": "pops.artifact.v1:sha256:ddfe234de4c70468581318b158d706503b87ad7f8cefa198c5290cdb5604ca9e",
+            "bind": "pops.bind.v1:sha256:d72098845e1ae6d342ec827344bce1cac181862d720531b41b498a9aeeb8d984",
+            "clock": {
+              "macro_step": 1,
+              "time": "0x1.47ae147ae147bp-6"
+            },
+            "last_restart": null,
+            "restart": "pops.restart.v1:sha256:9908249da4daa31fae2e1e00a14826d734c8e1b9859acbe40ca0e25ca49b6645",
+            "run": "pops.run.v1:sha256:0863eba1a1a3497a6af66ea7beb1b0685df5a597f6b595db2ed817f9bbcc5db4",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:d72098845e1ae6d342ec827344bce1cac181862d720531b41b498a9aeeb8d984",
+                "continuation_identity": null,
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-6"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.02
+                },
+                "run_identity": "pops.run.v1:sha256:0863eba1a1a3497a6af66ea7beb1b0685df5a597f6b595db2ed817f9bbcc5db4",
+                "start_macro_step": 0,
+                "start_time": 0.0
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:7a0d0d688d37f2f89e4fd9806bc941b7c7d36a1e5eff26657caf95236d7e5a30"
+          },
+          "continuous": {
+            "artifact": "pops.artifact.v1:sha256:ddfe234de4c70468581318b158d706503b87ad7f8cefa198c5290cdb5604ca9e",
+            "bind": "pops.bind.v1:sha256:d72098845e1ae6d342ec827344bce1cac181862d720531b41b498a9aeeb8d984",
+            "clock": {
+              "macro_step": 2,
+              "time": "0x1.47ae147ae147bp-5"
+            },
+            "last_restart": null,
+            "restart": "pops.restart.v1:sha256:7aacd7c731c8e8caa531a385f4b89dc905607c18b0a251b628aaa78ad36975fb",
+            "run": "pops.run.v1:sha256:3ccb41416b44b0fb623f380224e3d3ebd53cbb6b8e48caccdbdd373603d87926",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:d72098845e1ae6d342ec827344bce1cac181862d720531b41b498a9aeeb8d984",
+                "continuation_identity": null,
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-6"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.04
+                },
+                "run_identity": "pops.run.v1:sha256:3ccb41416b44b0fb623f380224e3d3ebd53cbb6b8e48caccdbdd373603d87926",
+                "start_macro_step": 1,
+                "start_time": 0.02
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:7a0d0d688d37f2f89e4fd9806bc941b7c7d36a1e5eff26657caf95236d7e5a30"
+          },
+          "replay": {
+            "artifact": "pops.artifact.v1:sha256:ddfe234de4c70468581318b158d706503b87ad7f8cefa198c5290cdb5604ca9e",
+            "bind": "pops.bind.v1:sha256:d72098845e1ae6d342ec827344bce1cac181862d720531b41b498a9aeeb8d984",
+            "clock": {
+              "macro_step": 2,
+              "time": "0x1.47ae147ae147bp-5"
+            },
+            "last_restart": "pops.restart.v1:sha256:9908249da4daa31fae2e1e00a14826d734c8e1b9859acbe40ca0e25ca49b6645",
+            "restart": "pops.restart.v1:sha256:e8714d0b0e35ec3f962be61c86cb8d41de46e487ac6af245b20c3d201d949ccf",
+            "run": "pops.run.v1:sha256:74602ccff4aaf8fb6e9ed6d3754ab5826fe766a5e19ae34820ef9bdc9bf587a8",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:d72098845e1ae6d342ec827344bce1cac181862d720531b41b498a9aeeb8d984",
+                "continuation_identity": "pops.run.v1:sha256:0863eba1a1a3497a6af66ea7beb1b0685df5a597f6b595db2ed817f9bbcc5db4",
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-6"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.04
+                },
+                "run_identity": "pops.run.v1:sha256:74602ccff4aaf8fb6e9ed6d3754ab5826fe766a5e19ae34820ef9bdc9bf587a8",
+                "start_macro_step": 1,
+                "start_time": 0.02
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:7a0d0d688d37f2f89e4fd9806bc941b7c7d36a1e5eff26657caf95236d7e5a30"
+          }
+        }
+      },
+      "dt": 0.02,
+      "evolved_states": 2,
+      "phase_checks": {
+        "accepted": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "auxiliary_constraint_linf": 2.7755575615628914e-17,
+          "global_balance_linf": 1.0421893383016911e-17,
+          "original_relative_l2": 1.1608094396104628e-16,
+          "physical_field_linf": 5.551115123125783e-17,
+          "spatial_linf": 0.04210802360574559,
+          "volume_sum": 1.0
+        },
+        "continuous": {
+          "Q_projection_linf": 1.1102230246251565e-16,
+          "auxiliary_constraint_linf": 5.551115123125783e-17,
+          "global_balance_linf": 3.903127820947816e-18,
+          "original_relative_l2": 1.4555463885689634e-16,
+          "spatial_linf": 0.10530691099112573,
+          "volume_sum": 1.0
+        },
+        "reloaded": {
+          "Q_projection_linf": 5.551115123125783e-17,
+          "auxiliary_constraint_linf": 2.7755575615628914e-17,
+          "global_balance_linf": 1.0421893383016911e-17,
+          "original_relative_l2": 1.1608094396104628e-16,
+          "physical_field_linf": 5.551115123125783e-17,
+          "spatial_linf": 0.04210802360574559,
+          "volume_sum": 1.0
+        },
+        "replay": {
+          "Q_projection_linf": 1.1102230246251565e-16,
+          "auxiliary_constraint_linf": 5.551115123125783e-17,
+          "global_balance_linf": 3.903127820947816e-18,
+          "original_relative_l2": 1.4555463885689634e-16,
+          "spatial_linf": 0.10530691099112573,
+          "volume_sum": 1.0
+        }
+      },
+      "receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-continuation-serial-dim2/pytest-tmp/test_public_evolved_original_s6/evolved-original-stage/receipt.json",
+        "sha256": "9e9f6399e4d712a26ad49eebc771528d058071f024bac5480afe3fed9490b69d"
+      },
+      "unknowns": 3
+    },
+    {
+      "candidate_diffusion": true,
+      "cells": 16,
+      "checkpoint_equivalence": {
+        "contract": "pops.evolved-stage-checkpoint-equivalence@1",
+        "exact_payload_and_manifest": true,
+        "provenance": {
+          "accepted": {
+            "artifact": "pops.artifact.v1:sha256:c7ead2ec39bc31c1ad64effd65d47d937f602b01afb38dd81115217cf80230af",
+            "bind": "pops.bind.v1:sha256:e0a7b6d3bf038a7314c81497bd5dee1a97bfe26e7ee8cbec99e7bde4dcd7fd67",
+            "clock": {
+              "macro_step": 1,
+              "time": "0x1.47ae147ae147bp-6"
+            },
+            "last_restart": null,
+            "restart": "pops.restart.v1:sha256:ca60023cd33e27da97737d31237ee455dac198c641f3dd22e7e5828ed8bff04c",
+            "run": "pops.run.v1:sha256:89c1e69e031fd99b450e31abe22c17e4477987f90e5d286c19399ef458a23cb3",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:e0a7b6d3bf038a7314c81497bd5dee1a97bfe26e7ee8cbec99e7bde4dcd7fd67",
+                "continuation_identity": null,
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-6"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.02
+                },
+                "run_identity": "pops.run.v1:sha256:89c1e69e031fd99b450e31abe22c17e4477987f90e5d286c19399ef458a23cb3",
+                "start_macro_step": 0,
+                "start_time": 0.0
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:fe7a9f60dfcfdd79ae541d96e466a6520a18591777e7b9eccb01f586562a67b4"
+          },
+          "continuous": {
+            "artifact": "pops.artifact.v1:sha256:c7ead2ec39bc31c1ad64effd65d47d937f602b01afb38dd81115217cf80230af",
+            "bind": "pops.bind.v1:sha256:e0a7b6d3bf038a7314c81497bd5dee1a97bfe26e7ee8cbec99e7bde4dcd7fd67",
+            "clock": {
+              "macro_step": 2,
+              "time": "0x1.47ae147ae147bp-5"
+            },
+            "last_restart": null,
+            "restart": "pops.restart.v1:sha256:5a3ea57aebdae8512b960ff0a7e57f84fa49c01bf13f80a1de1587d85eeba27d",
+            "run": "pops.run.v1:sha256:ed111b6069e289f0e85b5f0e74e73ae0da4489cdb588f6cc6aaa3b29b29d8e4f",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:e0a7b6d3bf038a7314c81497bd5dee1a97bfe26e7ee8cbec99e7bde4dcd7fd67",
+                "continuation_identity": null,
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-6"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.04
+                },
+                "run_identity": "pops.run.v1:sha256:ed111b6069e289f0e85b5f0e74e73ae0da4489cdb588f6cc6aaa3b29b29d8e4f",
+                "start_macro_step": 1,
+                "start_time": 0.02
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:fe7a9f60dfcfdd79ae541d96e466a6520a18591777e7b9eccb01f586562a67b4"
+          },
+          "replay": {
+            "artifact": "pops.artifact.v1:sha256:c7ead2ec39bc31c1ad64effd65d47d937f602b01afb38dd81115217cf80230af",
+            "bind": "pops.bind.v1:sha256:e0a7b6d3bf038a7314c81497bd5dee1a97bfe26e7ee8cbec99e7bde4dcd7fd67",
+            "clock": {
+              "macro_step": 2,
+              "time": "0x1.47ae147ae147bp-5"
+            },
+            "last_restart": "pops.restart.v1:sha256:ca60023cd33e27da97737d31237ee455dac198c641f3dd22e7e5828ed8bff04c",
+            "restart": "pops.restart.v1:sha256:a51eb441426827daaccd51a29148705d086efdb7e612c4bebcdf190b7775c329",
+            "run": "pops.run.v1:sha256:6d30945a41ca45fdc24454ad80a8f19c54beb910eca5cda6a15a90271ffee465",
+            "run_manifest": {
+              "kind": "run",
+              "payload": {
+                "bind_identity": "pops.bind.v1:sha256:e0a7b6d3bf038a7314c81497bd5dee1a97bfe26e7ee8cbec99e7bde4dcd7fd67",
+                "continuation_identity": "pops.run.v1:sha256:89c1e69e031fd99b450e31abe22c17e4477987f90e5d286c19399ef458a23cb3",
+                "controls": {
+                  "max_steps": 1,
+                  "output_mode": "current-directory",
+                  "step_transaction": {
+                    "controls": {},
+                    "strategy": {
+                      "dt": {
+                        "kind": "binary64",
+                        "value": "0x1.47ae147ae147bp-6"
+                      },
+                      "kind": "fixed_dt"
+                    }
+                  },
+                  "t_end": 0.04
+                },
+                "run_identity": "pops.run.v1:sha256:6d30945a41ca45fdc24454ad80a8f19c54beb910eca5cda6a15a90271ffee465",
+                "start_macro_step": 1,
+                "start_time": 0.02
+              },
+              "protocol": "pops.manifest",
+              "schema_version": 3
+            },
+            "semantic": "pops.semantic.v3:sha256:fe7a9f60dfcfdd79ae541d96e466a6520a18591777e7b9eccb01f586562a67b4"
+          }
+        }
+      },
+      "dt": 0.02,
+      "evolved_states": 2,
+      "phase_checks": {
+        "accepted": {
+          "Q_projection_linf": 1.1102230246251565e-16,
+          "auxiliary_constraint_linf": 5.551115123125783e-17,
+          "global_balance_linf": 2.168404344971009e-18,
+          "original_relative_l2": 1.27817787129379e-16,
+          "physical_field_linf": 5.551115123125783e-17,
+          "spatial_linf": 0.06070248838835664,
+          "volume_sum": 1.0
+        },
+        "continuous": {
+          "Q_projection_linf": 1.1102230246251565e-16,
+          "auxiliary_constraint_linf": 5.551115123125783e-17,
+          "global_balance_linf": 2.7647155398380363e-18,
+          "original_relative_l2": 1.5407987698490406e-16,
+          "spatial_linf": 0.1483143368969866,
+          "volume_sum": 1.0
+        },
+        "reloaded": {
+          "Q_projection_linf": 1.1102230246251565e-16,
+          "auxiliary_constraint_linf": 5.551115123125783e-17,
+          "global_balance_linf": 2.168404344971009e-18,
+          "original_relative_l2": 1.27817787129379e-16,
+          "physical_field_linf": 5.551115123125783e-17,
+          "spatial_linf": 0.06070248838835664,
+          "volume_sum": 1.0
+        },
+        "replay": {
+          "Q_projection_linf": 1.1102230246251565e-16,
+          "auxiliary_constraint_linf": 5.551115123125783e-17,
+          "global_balance_linf": 2.7647155398380363e-18,
+          "original_relative_l2": 1.5407987698490406e-16,
+          "spatial_linf": 0.1483143368969866,
+          "volume_sum": 1.0
+        }
+      },
+      "receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-continuation-serial-dim2/pytest-tmp/test_public_evolved_original_s7/evolved-original-stage/receipt.json",
+        "sha256": "1046ab8410a963ae6879d2d53f3a2c28918c565798891c0638d0ed9ddfbcb0b3"
+      },
+      "unknowns": 3
+    }
+  ],
+  "stage_original_equations_mpi2": {
+    "installation_and_test_sources_unchanged": true,
+    "junit": [
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-continuation-mpi2-dim2/rank0.xml",
+        "sha256": "87d2db2174e57eaef16fe095edb9b07b14fff8790a72612003249b24a42dda0c"
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-continuation-mpi2-dim2/rank1.xml",
+        "sha256": "86f329ade4e2cccff28cba9a3fa82b0419d06b4d6715a9c720135a38e3857f0e"
+      }
+    ],
+    "rank_counts": [
+      {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 8
+      },
+      {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 8
+      }
+    ],
+    "ranks": 2,
+    "result": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-continuation-mpi2-dim2/result.json",
+      "sha256": "de9a6210292dd621b772b2df73021718d4752497d9974f503f5238a26533392f"
+    },
+    "seconds": 358.140186249977,
+    "source_commit": "135179aa9039101f47e47472979f97434ee2b0c9",
+    "status": "passed"
+  },
+  "stage_original_equations_serial": {
+    "counts": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 8
+    },
+    "junit": [
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-continuation-serial-dim2/pytest.xml",
+        "sha256": "c8cf4341db2f59b3063470981be2afd8d9afb68126ea994d15bf21e9c85dc0bd"
+      }
+    ],
+    "ranks": 1,
+    "result": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-continuation-serial-dim2/result.json",
+      "sha256": "b900c5079c3ce03c4da732fd4dcbfd94cd2f0b009110a4ecbccbac405688a142"
+    },
+    "seconds": 337.52364479214884,
+    "source_commit": "135179aa9039101f47e47472979f97434ee2b0c9",
+    "status": "passed"
+  },
+  "stage_scientific_receptions": {
+    "mpi2": {
+      "approval": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/stage-mpi2-scientific-root-owner-v1/root-approval.json",
+        "sha256": "42c98b569c7073c2edd4d449a34550483c492925ecec02dc67baf9f148d2fd22"
+      },
+      "cpp_to_dso_graph_proof": false,
+      "cryptographic_aggregate_binding": false,
+      "gaps": [
+        "No independently authenticated cryptographic CPP-to-DSO aggregate; explicit component/source association only",
+        "Block DSO source/command records absent in fixture; owner attested binaries only",
+        "Uniform cell-constant finite witnesses, no AMR conservation or nonlinear Marshak/full family qualification"
+      ],
+      "guard": 3e-08,
+      "original_F_relative_max": 1.953003193578846e-11,
+      "physical_archives": 8,
+      "pins": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/stage-mpi2-scientific-root-owner-v1/owner-pins.json",
+        "sha256": "029b930014f945f2c547ef9543bb0293f1991c7e5d6169ce96b1c2de68f2444a"
+      },
+      "qualification": "uniform-original-stage-saved-state-equations@1",
+      "root": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/stage-mpi2-scientific-root-owner-v1/root-reception.json",
+        "sha256": "99957114191fa4f8ab890fdd582505d2a883ffbbd13833f4f21e17b75a7383a3"
+      },
+      "science": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/stage-mpi2-scientific-root-owner-v1/scientific-reception.json",
+        "sha256": "20898f73255eace06ab904bd55bfd8f91dba6af2f3f150a174efd56830827521"
+      },
+      "scientific_cases": 8,
+      "status": "received"
+    },
+    "serial": {
+      "approval": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/stage-serial-scientific-root-owner-v1/root-approval.json",
+        "sha256": "2576c3baaa0108c63585effd39a1a136dff7b6b8e47b1bb483656f470b09d89c"
+      },
+      "cpp_to_dso_graph_proof": false,
+      "cryptographic_aggregate_binding": false,
+      "gaps": [
+        "No independently authenticated cryptographic CPP-to-DSO aggregate; explicit component/source association only",
+        "Block DSO source/command records absent in fixture; owner attested binaries only",
+        "Uniform cell-constant finite witnesses, no AMR conservation or nonlinear Marshak/full family qualification"
+      ],
+      "guard": 3e-08,
+      "original_F_relative_max": 1.953003193578846e-11,
+      "physical_archives": 8,
+      "pins": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/stage-serial-scientific-root-owner-v1/owner-pins.json",
+        "sha256": "92c593caf674cb98772c81d8bc06f68cfcd825c6a706e110f2c0082a88134e11"
+      },
+      "qualification": "uniform-original-stage-saved-state-equations@1",
+      "root": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/stage-serial-scientific-root-owner-v1/root-reception.json",
+        "sha256": "dc9a7b3558cd421124c550d8f786c0d34396d2d2464fe5e53e294e4bfdf746f8"
+      },
+      "science": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/stage-serial-scientific-root-owner-v1/scientific-reception.json",
+        "sha256": "aa294483c8e46d7c0a7289b45b5d276aa0648d3ca2c5484367319e9e6d54a8c5"
+      },
+      "scientific_cases": 8,
+      "status": "received"
+    }
+  },
+  "stage_scientific_root_seals_pending": false,
+  "verified_installed_source_files": 1120
+}

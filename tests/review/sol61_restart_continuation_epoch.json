@@ -1,0 +1,38 @@
+{
+  "schema": "pops.restart-continuation-epoch-source-review@1",
+  "source_parent": "12320d97",
+  "scope": "SOURCE_ONLY",
+  "baseline": {
+    "failed": 4,
+    "passed": 3
+  },
+  "coherent": {
+    "passed": 13,
+    "skipped": 0
+  },
+  "exploratory": {
+    "failed": 26,
+    "passed": 20,
+    "deselected": 79
+  },
+  "proofs": {
+    "/Users/romaindespoulain/dev/tmp/sol61-restart-epoch-baseline-red.xml": {
+      "sha256": "4d25f0699b2f163c0df2bfa2562148821ac843b6ec47047e8fad7c2a1d2582a2",
+      "bytes": 8741
+    },
+    "/Users/romaindespoulain/dev/tmp/sol61-restart-epoch-baseline-red.log": {
+      "sha256": "778e250431e71282df08accbac0f47f486314d825b4beaf48ccb3fa0b5f566ee",
+      "bytes": 6181
+    },
+    "/Users/romaindespoulain/dev/tmp/sol61-restart-epoch-coherent.xml": {
+      "sha256": "5c4de9f3727379134d4309d72c5bffb3e367804d823d5ea65c5b35bad2ac53fc",
+      "bytes": 2310
+    },
+    "/Users/romaindespoulain/dev/tmp/sol61-restart-epoch-affected.xml": {
+      "sha256": "9b100776f845e6a969414b183fedb9dec397b544a9176518e85d923c83b65196",
+      "bytes": 83966
+    }
+  },
+  "native_qualification": false,
+  "root_approval": false
+}

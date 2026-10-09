@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='1afb920397c7fca0d683444c8c21b3fbc908847bdd7e8906457e6dd384c44c27'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m23-diffusion-nonregression/pytest.xml",
+    "--basetemp=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m23-diffusion-nonregression/pytest-tmp",
+    "tests/python/integration/runtime/test_tensor_transport_composition.py",
+    "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_explicit_exchange_quadrature"
+  ],
+  "returncode": 1,
+  "pytest_base_temp": "pytest-tmp",
+  "duration_seconds": 165.75033508311026,
+  "counts": {
+    "tests": 5,
+    "failures": 1,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "failed",
+  "identity_sha256": "26da79c61fe503892ac3370aa603d25ad4e0d0f8eadb9b5aca3bff25854738f1",
+  "log_sha256": "a55c8f1e331aeeb864e855a582f61bb513286132293e69d7a965582b2e8347fc"
+}

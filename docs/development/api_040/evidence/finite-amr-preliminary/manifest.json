@@ -1,0 +1,271 @@
+{
+  "bundle": "finite-amr-preliminary",
+  "failed_cpp_count": 6,
+  "files": {
+    "README.md": {
+      "bytes": 3388,
+      "origin": "independent archive review",
+      "role": "scope and failure inventory",
+      "sha256": "d9f1fff1070902bf7638f0f636c908911e079c3b13f26b316c3c3e5341dcdcae"
+    },
+    "build/build-finite-amr-dim2.log": {
+      "bytes": 73447,
+      "origin": "outputs/build-finite-amr-dim2.log",
+      "role": "unaltered build/install/doctor log; final file is later Python-only incremental correction",
+      "sha256": "aea9e1ce43a6ca8d6e80f157e9b899528d90234fcf1f74251c0918d2fe47d58c"
+    },
+    "build/build-finite-materialization-repaired-dim2.log": {
+      "bytes": 69980,
+      "origin": "outputs/build-finite-materialization-repaired-dim2.log",
+      "role": "unaltered build/install/doctor log; final file is later Python-only incremental correction",
+      "sha256": "570ce198e7fcd123f9ae957d0fea0b23de87883d34239c11963d73962bcd99d2"
+    },
+    "build/build-finite-support-dim1.log": {
+      "bytes": 73447,
+      "origin": "outputs/build-finite-support-dim1.log",
+      "role": "unaltered build/install/doctor log; final file is later Python-only incremental correction",
+      "sha256": "767dd43e777c2c18b61dfa6568448900a279117d64aabe0cc90c0255582310df"
+    },
+    "failed-cpp/test_finite_w06_original_equat0/pops-native-cache/2378fefc747b28c4c6296d1370c81f92a1a2f2a3211827fe80b9c7ea6a17912a.failed.cpp": {
+      "bytes": 49673,
+      "origin": "outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat0/pops-native-cache/2378fefc747b28c4c6296d1370c81f92a1a2f2a3211827fe80b9c7ea6a17912a.failed.cpp",
+      "role": "unaltered generated source from failed JIT compilation",
+      "sha256": "98c4c5c9d50936c54abccb28ab0249cf1fa3e3968522f5e62e1fb9b8907cce94"
+    },
+    "failed-cpp/test_finite_w06_original_equat1/pops-native-cache/6ec7af7ad82577cb64955bcbeeaee59a69262ed70dc09966158210e5ce5193d8.failed.cpp": {
+      "bytes": 54312,
+      "origin": "outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat1/pops-native-cache/6ec7af7ad82577cb64955bcbeeaee59a69262ed70dc09966158210e5ce5193d8.failed.cpp",
+      "role": "unaltered generated source from failed JIT compilation",
+      "sha256": "c15067d3035e1a673e6f7927dfd6dd4bb619c34884eeb330332585cf90e6d7b3"
+    },
+    "failed-cpp/test_finite_w06_original_equat2/pops-native-cache/d59e1712c8c94f0357cdb0d69274660b344b5f154455e03ecbd4dd27d8df3227.failed.cpp": {
+      "bytes": 49673,
+      "origin": "outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat2/pops-native-cache/d59e1712c8c94f0357cdb0d69274660b344b5f154455e03ecbd4dd27d8df3227.failed.cpp",
+      "role": "unaltered generated source from failed JIT compilation",
+      "sha256": "aa3df7da64e228f7f5968f1a8df60003f61c346c7e3914c655a00a6f049b39a9"
+    },
+    "failed-cpp/test_finite_w06_original_equat3/pops-native-cache/907aae1583dc0d03bddde02646db56ef987d1987c8c73ad6ce7a67ca52bb9d40.failed.cpp": {
+      "bytes": 54312,
+      "origin": "outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat3/pops-native-cache/907aae1583dc0d03bddde02646db56ef987d1987c8c73ad6ce7a67ca52bb9d40.failed.cpp",
+      "role": "unaltered generated source from failed JIT compilation",
+      "sha256": "14a81105c265357e32d9a2c2f4f92bab915395c62af5cadd863b0243e97056f3"
+    },
+    "failed-cpp/test_singular_elimination_pivo0/pops-native-cache/ca653bcc70ca0abfb6f913ddf9bb5e946da05bc08fb8a275dd57bf2dacc5bc1f.failed.cpp": {
+      "bytes": 49649,
+      "origin": "outputs/installed-finite-amr-native-serial/pytest-tmp/test_singular_elimination_pivo0/pops-native-cache/ca653bcc70ca0abfb6f913ddf9bb5e946da05bc08fb8a275dd57bf2dacc5bc1f.failed.cpp",
+      "role": "unaltered generated source from failed JIT compilation",
+      "sha256": "acb7fbd1136e8643d92d09fb4635878bd9fec97163206df9d32d378767f37ff2"
+    },
+    "failed-cpp/test_singular_elimination_pivo1/pops-native-cache/f21fd3ce9b11d408a2d0dda073ea554d3db0c1708181d138ab16a2a1ef776a2a.failed.cpp": {
+      "bytes": 54276,
+      "origin": "outputs/installed-finite-amr-native-serial/pytest-tmp/test_singular_elimination_pivo1/pops-native-cache/f21fd3ce9b11d408a2d0dda073ea554d3db0c1708181d138ab16a2a1ef776a2a.failed.cpp",
+      "role": "unaltered generated source from failed JIT compilation",
+      "sha256": "3a1c86bd3651b50e97d9ad10753f0254847505c5e56ba6aecfcb56e75091dc02"
+    },
+    "installed-amr-flat-authority-repaired.launcher.log": {
+      "bytes": 1597,
+      "origin": "outputs/installed-amr-flat-authority-repaired.launcher.log",
+      "role": "unaltered launcher log",
+      "sha256": "a93dde51fe34dc8434abf2b0ab6495f0e76924851e2016970a8604718ff971fa"
+    },
+    "installed-amr-flat-authority-repaired/identity.json": {
+      "bytes": 2724,
+      "origin": "outputs/installed-amr-flat-authority-repaired/identity.json",
+      "role": "unaltered runner receipt",
+      "sha256": "a9aa360694284532deb96a79ffa1556e1b42b37b52aec6ec8cfcea2a6c0b1075"
+    },
+    "installed-amr-flat-authority-repaired/pytest.log": {
+      "bytes": 2519,
+      "origin": "outputs/installed-amr-flat-authority-repaired/pytest.log",
+      "role": "unaltered runner receipt",
+      "sha256": "09795bd5cde85270bb31e0c077c01790bd4d7af5097f8d5bf78edf530d443388"
+    },
+    "installed-amr-flat-authority-repaired/pytest.xml": {
+      "bytes": 2492,
+      "origin": "outputs/installed-amr-flat-authority-repaired/pytest.xml",
+      "role": "unaltered runner receipt",
+      "sha256": "cebd9c9684ccfac94a60e0d14f3449c430697d1f81ef89ef0c36f719f29cd0e1"
+    },
+    "installed-amr-flat-authority-repaired/result.json": {
+      "bytes": 1597,
+      "origin": "outputs/installed-amr-flat-authority-repaired/result.json",
+      "role": "unaltered runner receipt",
+      "sha256": "a93dde51fe34dc8434abf2b0ab6495f0e76924851e2016970a8604718ff971fa"
+    },
+    "installed-amr-flat-authority-repaired/source-files.json": {
+      "bytes": 127056,
+      "origin": "outputs/installed-amr-flat-authority-repaired/source-files.json",
+      "role": "unaltered runner receipt",
+      "sha256": "6c432f8e7005a26400f852e24d3f11b9443eeac0d79cac2985fc549f869c13fc"
+    },
+    "installed-finite-amr-native-serial.launcher.log": {
+      "bytes": 1671,
+      "origin": "outputs/installed-finite-amr-native-serial.launcher.log",
+      "role": "unaltered launcher log",
+      "sha256": "371ce02713060e3b22e11e4d1bf597d524c1647b2483562a7350a992bd073b72"
+    },
+    "installed-finite-amr-native-serial/identity.json": {
+      "bytes": 2724,
+      "origin": "outputs/installed-finite-amr-native-serial/identity.json",
+      "role": "unaltered runner receipt",
+      "sha256": "43f51408b28589da03479d1e49dd6dd3030298f0f3bdd933b1bbfd778351ee70"
+    },
+    "installed-finite-amr-native-serial/pytest.log": {
+      "bytes": 54272,
+      "origin": "outputs/installed-finite-amr-native-serial/pytest.log",
+      "role": "unaltered runner receipt",
+      "sha256": "3f9cae7d24e8e6dbf1eba2993ddbbd4fac569174199c9fee2fc4f4b05d472774"
+    },
+    "installed-finite-amr-native-serial/pytest.xml": {
+      "bytes": 95612,
+      "origin": "outputs/installed-finite-amr-native-serial/pytest.xml",
+      "role": "unaltered runner receipt",
+      "sha256": "5ca7385b28421d68bda369e60836637b0ade4b09a6da1b90a365e41d3984d146"
+    },
+    "installed-finite-amr-native-serial/result.json": {
+      "bytes": 1671,
+      "origin": "outputs/installed-finite-amr-native-serial/result.json",
+      "role": "unaltered runner receipt",
+      "sha256": "371ce02713060e3b22e11e4d1bf597d524c1647b2483562a7350a992bd073b72"
+    },
+    "installed-finite-amr-native-serial/source-files.json": {
+      "bytes": 127056,
+      "origin": "outputs/installed-finite-amr-native-serial/source-files.json",
+      "role": "unaltered runner receipt",
+      "sha256": "6c432f8e7005a26400f852e24d3f11b9443eeac0d79cac2985fc549f869c13fc"
+    },
+    "installed-finite-amr-units.launcher.log": {
+      "bytes": 2130,
+      "origin": "outputs/installed-finite-amr-units.launcher.log",
+      "role": "unaltered launcher log",
+      "sha256": "6aba3e0d1091466155931d60c0598104a7d4fef89ac216bb9649b38ccd3f0441"
+    },
+    "installed-finite-amr-units/identity.json": {
+      "bytes": 2724,
+      "origin": "outputs/installed-finite-amr-units/identity.json",
+      "role": "unaltered runner receipt",
+      "sha256": "43f51408b28589da03479d1e49dd6dd3030298f0f3bdd933b1bbfd778351ee70"
+    },
+    "installed-finite-amr-units/pytest.log": {
+      "bytes": 17890,
+      "origin": "outputs/installed-finite-amr-units/pytest.log",
+      "role": "unaltered runner receipt",
+      "sha256": "1c44bdcd05824e3b3a0bac1f7480b24da2395e58bfc996f3d8d3ce36f5f5b36b"
+    },
+    "installed-finite-amr-units/pytest.xml": {
+      "bytes": 20595,
+      "origin": "outputs/installed-finite-amr-units/pytest.xml",
+      "role": "unaltered runner receipt",
+      "sha256": "190288f2ff6f0fe4b8105ce4de713e725e71ad129caa229abe2e33c6752c49c6"
+    },
+    "installed-finite-amr-units/result.json": {
+      "bytes": 2130,
+      "origin": "outputs/installed-finite-amr-units/result.json",
+      "role": "unaltered runner receipt",
+      "sha256": "6aba3e0d1091466155931d60c0598104a7d4fef89ac216bb9649b38ccd3f0441"
+    },
+    "installed-finite-amr-units/source-files.json": {
+      "bytes": 127056,
+      "origin": "outputs/installed-finite-amr-units/source-files.json",
+      "role": "unaltered runner receipt",
+      "sha256": "6c432f8e7005a26400f852e24d3f11b9443eeac0d79cac2985fc549f869c13fc"
+    },
+    "inventory.json": {
+      "bytes": 80344,
+      "origin": "review: XML and runner result crosscheck",
+      "role": "derived exact test inventory",
+      "sha256": "3ddaf3b7f8779770bb7596adc69279cb6c38a62d5f89bb9f4bfd2042fb555458"
+    },
+    "snapshots/70c47248/tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py": {
+      "bytes": 4642,
+      "origin": "git:70c4724835cfad79cd10d0aed9ae1a8278304f3d:tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py",
+      "role": "test snapshot from runner clean source commit; not a separate test-source runner attestation",
+      "sha256": "d3da4a18705855cecd1fc18cca89cf3cefa359ec9918403effb120ca748fb967"
+    },
+    "snapshots/70c47248/tests/python/integration/runtime/test_finite_m09_runtime.py": {
+      "bytes": 5313,
+      "origin": "git:70c4724835cfad79cd10d0aed9ae1a8278304f3d:tests/python/integration/runtime/test_finite_m09_runtime.py",
+      "role": "test snapshot from runner clean source commit; not a separate test-source runner attestation",
+      "sha256": "715238f72d8ebd4b92f53d87fe5c83ba85ed3cbca535aa0c11a93af84aa4f29a"
+    },
+    "snapshots/70c47248/tests/python/unit/amr/test_local_state_storage_adversarial.py": {
+      "bytes": 4015,
+      "origin": "git:70c4724835cfad79cd10d0aed9ae1a8278304f3d:tests/python/unit/amr/test_local_state_storage_adversarial.py",
+      "role": "test snapshot from runner clean source commit; not a separate test-source runner attestation",
+      "sha256": "e405fbe63d70fa1df92375ae60f531246becc675cd05fa713f4474c2265317f3"
+    },
+    "snapshots/70c47248/tests/python/unit/amr/test_local_state_storage_amr.py": {
+      "bytes": 3948,
+      "origin": "git:70c4724835cfad79cd10d0aed9ae1a8278304f3d:tests/python/unit/amr/test_local_state_storage_amr.py",
+      "role": "test snapshot from runner clean source commit; not a separate test-source runner attestation",
+      "sha256": "9610fdbb95ec607995a273fee20faf182cbaedc3f06cf9e3bf043d7e560aa1f1"
+    },
+    "snapshots/70c47248/tests/python/unit/amr/test_public_amr_resolution.py": {
+      "bytes": 33794,
+      "origin": "git:70c4724835cfad79cd10d0aed9ae1a8278304f3d:tests/python/unit/amr/test_public_amr_resolution.py",
+      "role": "test snapshot from runner clean source commit; not a separate test-source runner attestation",
+      "sha256": "e11de6799c236d47f3f238846d680f41f57554d45a1fe3f3acc287a27ec9eedd"
+    },
+    "snapshots/70c47248/tests/python/unit/amr/test_value_expr_tagging_protocol.py": {
+      "bytes": 7263,
+      "origin": "git:70c4724835cfad79cd10d0aed9ae1a8278304f3d:tests/python/unit/amr/test_value_expr_tagging_protocol.py",
+      "role": "test snapshot from runner clean source commit; not a separate test-source runner attestation",
+      "sha256": "124734d7b3501ad0351a918d0f3c3d5e5e661fb39923dc75db817b31d2b59737"
+    },
+    "snapshots/70c47248/tests/python/unit/amr/test_vector_component_tagging.py": {
+      "bytes": 8546,
+      "origin": "git:70c4724835cfad79cd10d0aed9ae1a8278304f3d:tests/python/unit/amr/test_vector_component_tagging.py",
+      "role": "test snapshot from runner clean source commit; not a separate test-source runner attestation",
+      "sha256": "397961db62819ad91dd67ff2d08a55398963ca6cf8d7e8edd6a075c96e060f5a"
+    },
+    "snapshots/70c47248/tests/python/unit/codegen/test_finite_m09_host.py": {
+      "bytes": 9560,
+      "origin": "git:70c4724835cfad79cd10d0aed9ae1a8278304f3d:tests/python/unit/codegen/test_finite_m09_host.py",
+      "role": "test snapshot from runner clean source commit; not a separate test-source runner attestation",
+      "sha256": "060cab1687aa56b28f9a7834ed9ff8ba9e137370e2a981ed29cd44b0ad67ec60"
+    },
+    "snapshots/70c47248/tests/python/unit/codegen/test_finite_m09_source.py": {
+      "bytes": 2969,
+      "origin": "git:70c4724835cfad79cd10d0aed9ae1a8278304f3d:tests/python/unit/codegen/test_finite_m09_source.py",
+      "role": "test snapshot from runner clean source commit; not a separate test-source runner attestation",
+      "sha256": "7083e7a8c400aecd8fa3b76ab98519b6592c629d98daaa170a115086019e5220"
+    },
+    "snapshots/70c47248/tests/python/unit/mesh/amr/test_flat_transfer_contract.py": {
+      "bytes": 10115,
+      "origin": "git:70c4724835cfad79cd10d0aed9ae1a8278304f3d:tests/python/unit/mesh/amr/test_flat_transfer_contract.py",
+      "role": "test snapshot from runner clean source commit; not a separate test-source runner attestation",
+      "sha256": "54f116706f397643f50d04c31ba80b1ce319a6f3449783d4c8c15ebc31544233"
+    },
+    "snapshots/70c47248/tests/python/unit/mesh/amr/test_hierarchy_contract.py": {
+      "bytes": 14679,
+      "origin": "git:70c4724835cfad79cd10d0aed9ae1a8278304f3d:tests/python/unit/mesh/amr/test_hierarchy_contract.py",
+      "role": "test snapshot from runner clean source commit; not a separate test-source runner attestation",
+      "sha256": "40f50766ce6369d723b2d12d3e6f4793c7131fb2c3d3406e852b3df2006a80d2"
+    },
+    "snapshots/70c47248/tests/python/unit/numerics/test_finite_linear_maps.py": {
+      "bytes": 1616,
+      "origin": "git:70c4724835cfad79cd10d0aed9ae1a8278304f3d:tests/python/unit/numerics/test_finite_linear_maps.py",
+      "role": "test snapshot from runner clean source commit; not a separate test-source runner attestation",
+      "sha256": "865ad9c6e93292218e2e59c958233f9d355c8226c52ec572eae0c26e759b53e3"
+    },
+    "snapshots/954b7dcf/tests/python/unit/mesh/amr/test_flat_transfer_contract.py": {
+      "bytes": 10135,
+      "origin": "git:954b7dcf08d0642db4f3556cafbf7f994b5374b1:tests/python/unit/mesh/amr/test_flat_transfer_contract.py",
+      "role": "test snapshot from runner clean source commit; not a separate test-source runner attestation",
+      "sha256": "8b3d0c0179f6b7d4101cc24baf76ab3dcc0ccdaa1ea38860db8eadf472caef8c"
+    }
+  },
+  "registry_conclusion": "deferred pending repaired installed receipts",
+  "schema_version": 1,
+  "scope": "historical installed CPU Dim2 serial receipts; build logs include Dim1 but no Dim1 scientific acceptance",
+  "verified_git_source_snapshots": {
+    "70c4724835cfad79cd10d0aed9ae1a8278304f3d": {
+      "source_files_sha256": "6c432f8e7005a26400f852e24d3f11b9443eeac0d79cac2985fc549f869c13fc",
+      "verified_git_blob_count": 1089
+    },
+    "954b7dcf08d0642db4f3556cafbf7f994b5374b1": {
+      "source_files_sha256": "6c432f8e7005a26400f852e24d3f11b9443eeac0d79cac2985fc549f869c13fc",
+      "verified_git_blob_count": 1089
+    }
+  }
+}

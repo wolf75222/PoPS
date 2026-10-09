@@ -1,0 +1,13 @@
+{
+  "schema": "pops.producer-exit-label-correction@1",
+  "producer_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-private-cpp-af8-native-and-science-preparation-v1-20261008/build-receipt-retry2.json",
+  "producer_sha256": "0eb895e4599bc004ac2b7cce4eba45179f37aa6031f8acf4816ac0eb811bf6a9",
+  "excluded_from_admission": "build_attempt_lineage.first_official_build_exit143_at_MPI_Finalize",
+  "correct_first_official_wrapper_exit": 1,
+  "correct_failed_ninja_link_manifest_command_exit": 143,
+  "retry2_official_wrapper_exit": 0,
+  "reason": "Distinct command exits were conflated by a producer field label; actual original logs and bytes preserved.",
+  "runtime_CXX_actions_first_attempt": 2,
+  "runtime_CXX_actions_retry2": 0,
+  "retry2_completed_link_manifest_actions": 1
+}

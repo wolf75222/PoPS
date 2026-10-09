@@ -1,0 +1,42 @@
+{
+  "Source": "e27d065a5eb7c086ced60b751a2468f729361ff0",
+  "counts": {
+    "tests": 56,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "exit": 0,
+  "seconds": 18.39424487499491,
+  "selectors": [
+    "tests/python/architecture/test_ci_shard_binpack.py",
+    "tests/python/architecture/test_ci_plan.py",
+    "tests/python/architecture/test_ci_impacted_selection.py::test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes"
+  ],
+  "args": [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-q",
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-o",
+    "pythonpath=",
+    "-p",
+    "no:cacheprovider",
+    "--confcutdir=/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-root-ci-stage-catalog-source-validation-e27d-20261009/tmp",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-root-ci-stage-catalog-source-validation-e27d-20261009/cohort.xml",
+    "tests/python/architecture/test_ci_shard_binpack.py",
+    "tests/python/architecture/test_ci_plan.py",
+    "tests/python/architecture/test_ci_impacted_selection.py::test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes"
+  ],
+  "package": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/__init__.py",
+  "Native_import_attempts_blocked": [],
+  "Native_extension_attempts_blocked": [],
+  "Native_modules_loaded": [],
+  "pytest_log_sha256": "df8a23123716c38490c6d85cc412ae18a54ed5eb8f60ec2d390d28bc8004d2f0",
+  "junit_sha256": "59a524fa0c80279006ee2b33b8d44dd1cae949e9ad50de52910f7f02971a7f36",
+  "scope": "Root integration Source validation of complete coherent Main, not independent review, Native execution or GitHub CI."
+}

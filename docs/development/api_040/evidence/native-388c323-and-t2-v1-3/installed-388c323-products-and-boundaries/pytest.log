@@ -1,0 +1,123 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 15 items
+
+tests/python/integration/runtime/test_api040_coordinated_face_independent_runtime.py::test_native_asymmetric_face_matches_independent_oracle_and_preserves_transverse_invariance[order0] PASSED [  6%]
+tests/python/integration/runtime/test_api040_coordinated_face_independent_runtime.py::test_native_asymmetric_face_matches_independent_oracle_and_preserves_transverse_invariance[order1] PASSED [ 13%]
+tests/python/integration/runtime/test_api040_coordinated_face_independent_runtime.py::test_one_coordinated_artifact_two_bind_time_dissipations_match_separate_oracles PASSED [ 20%]
+tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[False-False] FAILED [ 26%]
+tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[False-True] FAILED [ 33%]
+tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[True-False] FAILED [ 40%]
+tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[True-True] FAILED [ 46%]
+tests/python/integration/runtime/test_api040_m22_h05_runtime.py::test_h05_original_residual_rebind_and_domain_rollback[False] FAILED [ 53%]
+tests/python/integration/runtime/test_api040_m22_h05_runtime.py::test_h05_original_residual_rebind_and_domain_rollback[True] FAILED [ 60%]
+tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py::test_h05_nonuniform_cells_rebind_and_collective_negative_rate[False] FAILED [ 66%]
+tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py::test_h05_nonuniform_cells_rebind_and_collective_negative_rate[True] FAILED [ 73%]
+tests/python/integration/runtime/test_symbolic_path_runtime.py::test_authored_product_executes_on_native_faces[1.0-False] PASSED [ 80%]
+tests/python/integration/runtime/test_symbolic_path_runtime.py::test_authored_product_executes_on_native_faces[2.5-True] PASSED [ 86%]
+tests/python/integration/runtime/test_api040_c17_stagnation_runtime.py::test_original_residual_is_required_before_publication_and_history_rotation[1.0-False] PASSED [ 93%]
+tests/python/integration/runtime/test_api040_c17_stagnation_runtime.py::test_original_residual_is_required_before_publication_and_history_rotation[0.0-True] PASSED [100%]
+
+=================================== FAILURES ===================================
+___________ test_joint_product_rebind_or_atomic_failure[False-False] ___________
+tests/python/integration/runtime/test_local_residual_product_runtime.py:21: in test_joint_product_rebind_or_atomic_failure
+    artifact, world = _compile(case, layout, "local-product-%s-%s" % (reverse, invalid))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: detach_compiled_program changed Program IR identity (d9e55be61bb8105a763bfb6baedd04754799938a1f65407ad0050e3694b00eee -> ee98a79d596774754ee15561762b88cc35e46cf5ce047f38b409a82f42895c58)
+----------------------------- Captured stdout call -----------------------------
+[rank 0] local-product-False-False: compile and publish start
+___________ test_joint_product_rebind_or_atomic_failure[False-True] ____________
+tests/python/integration/runtime/test_local_residual_product_runtime.py:21: in test_joint_product_rebind_or_atomic_failure
+    artifact, world = _compile(case, layout, "local-product-%s-%s" % (reverse, invalid))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: detach_compiled_program changed Program IR identity (d9e55be61bb8105a763bfb6baedd04754799938a1f65407ad0050e3694b00eee -> ee98a79d596774754ee15561762b88cc35e46cf5ce047f38b409a82f42895c58)
+----------------------------- Captured stdout call -----------------------------
+[rank 0] local-product-True-False: compile and publish start
+___________ test_joint_product_rebind_or_atomic_failure[True-False] ____________
+tests/python/integration/runtime/test_local_residual_product_runtime.py:21: in test_joint_product_rebind_or_atomic_failure
+    artifact, world = _compile(case, layout, "local-product-%s-%s" % (reverse, invalid))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: detach_compiled_program changed Program IR identity (cbd9fce4c69648b227630c209e9a19755a39173653a662605309c6222601e9db -> cc460cdf7e74f02165924e21c2644ee2b33d8316a67ea5e711657b1096ab00e8)
+----------------------------- Captured stdout call -----------------------------
+[rank 0] local-product-False-True: compile and publish start
+____________ test_joint_product_rebind_or_atomic_failure[True-True] ____________
+tests/python/integration/runtime/test_local_residual_product_runtime.py:21: in test_joint_product_rebind_or_atomic_failure
+    artifact, world = _compile(case, layout, "local-product-%s-%s" % (reverse, invalid))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: detach_compiled_program changed Program IR identity (cbd9fce4c69648b227630c209e9a19755a39173653a662605309c6222601e9db -> cc460cdf7e74f02165924e21c2644ee2b33d8316a67ea5e711657b1096ab00e8)
+----------------------------- Captured stdout call -----------------------------
+[rank 0] local-product-True-True: compile and publish start
+_________ test_h05_original_residual_rebind_and_domain_rollback[False] _________
+tests/python/integration/runtime/test_api040_m22_h05_runtime.py:35: in test_h05_original_residual_rebind_and_domain_rollback
+    artifact,world=_compile(case,layout,"M22-H05-%s" % reverse)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: detach_compiled_program changed Program IR identity (c7f0290a07c30ca3e2cf81cabd32d3d2e8410e0a3317f318f4963c10de0f993c -> 3d7d3d9a167df94215a30d9c23f3b33a5ca04f7a2edf067e333063026ae69b47)
+----------------------------- Captured stdout call -----------------------------
+[rank 0] M22-H05-False: compile and publish start
+_________ test_h05_original_residual_rebind_and_domain_rollback[True] __________
+tests/python/integration/runtime/test_api040_m22_h05_runtime.py:35: in test_h05_original_residual_rebind_and_domain_rollback
+    artifact,world=_compile(case,layout,"M22-H05-%s" % reverse)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: detach_compiled_program changed Program IR identity (c7f0290a07c30ca3e2cf81cabd32d3d2e8410e0a3317f318f4963c10de0f993c -> 3d7d3d9a167df94215a30d9c23f3b33a5ca04f7a2edf067e333063026ae69b47)
+----------------------------- Captured stdout call -----------------------------
+[rank 0] M22-H05-True: compile and publish start
+_____ test_h05_nonuniform_cells_rebind_and_collective_negative_rate[False] _____
+tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py:51: in test_h05_nonuniform_cells_rebind_and_collective_negative_rate
+    artifact, world = _compile(case, layout, "H05-adversarial-%s" % reverse)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: detach_compiled_program changed Program IR identity (c7f0290a07c30ca3e2cf81cabd32d3d2e8410e0a3317f318f4963c10de0f993c -> 3d7d3d9a167df94215a30d9c23f3b33a5ca04f7a2edf067e333063026ae69b47)
+----------------------------- Captured stdout call -----------------------------
+[rank 0] H05-adversarial-False: compile and publish start
+_____ test_h05_nonuniform_cells_rebind_and_collective_negative_rate[True] ______
+tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py:51: in test_h05_nonuniform_cells_rebind_and_collective_negative_rate
+    artifact, world = _compile(case, layout, "H05-adversarial-%s" % reverse)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: detach_compiled_program changed Program IR identity (c7f0290a07c30ca3e2cf81cabd32d3d2e8410e0a3317f318f4963c10de0f993c -> 3d7d3d9a167df94215a30d9c23f3b33a5ca04f7a2edf067e333063026ae69b47)
+----------------------------- Captured stdout call -----------------------------
+[rank 0] H05-adversarial-True: compile and publish start
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-388c323-products-and-boundaries/pytest.xml -
+=========================== short test summary info ============================
+FAILED tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[False-False]
+FAILED tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[False-True]
+FAILED tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[True-False]
+FAILED tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[True-True]
+FAILED tests/python/integration/runtime/test_api040_m22_h05_runtime.py::test_h05_original_residual_rebind_and_domain_rollback[False]
+FAILED tests/python/integration/runtime/test_api040_m22_h05_runtime.py::test_h05_original_residual_rebind_and_domain_rollback[True]
+FAILED tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py::test_h05_nonuniform_cells_rebind_and_collective_negative_rate[False]
+FAILED tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py::test_h05_nonuniform_cells_rebind_and_collective_negative_rate[True]
+=================== 8 failed, 7 passed in 177.36s (0:02:57) ====================

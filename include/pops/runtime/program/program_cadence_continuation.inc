@@ -5,6 +5,7 @@ struct CadenceContinuation {
   PreparedCadenceSubstep partition;
   double accepted_time = 0.0;
   double requested_dt = 0.0;
+  std::optional<double> computed_duration;
   int accepted_macro_step = 0;
   int substep = 0;
   bool numerical_started = false;
@@ -26,6 +27,43 @@ struct EphemeralCadenceContinuation : std::optional<CadenceContinuation> {
   }
 };
 EphemeralCadenceContinuation cadence_continuation_;
+
+/// The Program returns its candidate duration without changing any earlier stage coordinate.
+/// Version 1 deliberately has no spatial exchange remapping rule; the emitter gates that surface.
+void set_computed_duration(double duration) {
+  if (!cadence_continuation_ || !cadence_continuation_->executing || stride_ != 1 || substeps_ != 1)
+    throw std::logic_error("computed Program frontier requires one active cadence 1/1 invocation");
+  auto& frame = *cadence_continuation_;
+  if (frame.computed_duration)
+    throw std::logic_error("computed Program frontier was declared twice");
+  const double reached = frame.accepted_time + duration;
+  if (!std::isfinite(duration) || !(duration > 0.0) || !std::isfinite(reached) ||
+      !(reached > frame.accepted_time))
+    throw std::invalid_argument("computed Program frontier must make finite positive progress");
+  // keep_history captured the entry state before the tail commit. Only its outgoing interval
+  // changes; retained state samples, their entry coordinates and older stages are not relabelled.
+  const auto start_bits = std::bit_cast<std::uint64_t>(frame.accepted_time);
+  for (auto& [name, pending] : hist_.store_pending) {
+    if (!pending)
+      continue;
+    auto& samples = hist_.slot_sample.at(name);
+    auto& durations = hist_.slot_dt.at(name);
+    for (std::size_t slot = 0; slot < samples.size(); ++slot) {
+      auto& sample = samples[slot];
+      if (sample.kind == HistorySampleKind::Publication && sample.start_bits == start_bits) {
+        sample.interval_bits = std::bit_cast<std::uint64_t>(duration);
+        durations[slot] = static_cast<Real>(duration);
+        sample.validate();
+      }
+    }
+  }
+  frame.computed_duration = duration;
+  frame.cadence.window_end = reached;
+  frame.cadence.effective_dt = duration;
+  frame.cadence.numerical_dt = duration;
+  frame.partition.end = reached;
+  last_dt_ = static_cast<Real>(duration);
+}
 
 void suspend_program_map(std::string identity, bool target, std::vector<MultiFab<Dim>*> fields,
                          std::function<void()> next, std::uint64_t stage_generation = 0) {
@@ -70,89 +108,151 @@ void cancel_cadence_continuation() noexcept {
 }
 
 std::string advance_cadence_region(double& physical_time_cursor, int& macro_step_cursor, double dt,
-                                   const std::string& runtime) {
-  if (!cadence_continuation_) {
-    if (cadence_dispatch_active_ || !step_)
-      throw std::logic_error(runtime + " Program region dispatch is reentrant or has no Program");
-    CadenceContinuation candidate;
-    candidate.accepted_time = physical_time_cursor;
-    candidate.accepted_macro_step = macro_step_cursor;
-    candidate.requested_dt = dt;
-    candidate.cadence = prepare_cadence_step(physical_time_cursor, macro_step_cursor, dt, runtime);
-    if (macro_step_cursor == std::numeric_limits<int>::max())
-      throw std::overflow_error(runtime + " Program cadence macro-step counter overflow");
-    if (candidate.cadence.due) {
-      validate_cadence_partition(candidate.cadence, substeps_, runtime);
-      if (macro_step_cursor < candidate.cadence.window_steps - 1)
-        throw std::logic_error(runtime + " Program cadence window starts before macro-step zero");
-      begin_balance_due_window(macro_step_cursor, runtime);
-    }
-    cadence_continuation_ = std::move(candidate);
-    cadence_dispatch_active_ = true;
-  }
-  auto& frame = *cadence_continuation_;
-  if (frame.executing || frame.requested_dt != dt || !frame.port_identity.empty())
-    throw std::logic_error(runtime +
-                           " Program resume requires the same dt and a consumed map port");
+                                   const std::string& runtime,
+                                   const CommunicatorView& communicator = CommunicatorView{}) {
+  // Each region converges before a peer can enter the next numerical substep or
+  // publish a port/cursor. A final vote alone is too late for subcycled Programs.
+  auto phase = [&](auto&& operation) {
+    collective_step_rejection_phase(
+        communicator,
+        {"pops.program-cadence.rejection.v1", "pops.program-cadence.rejection", false, false},
+        "Program cadence phase failed collectively", std::forward<decltype(operation)>(operation),
+        [&] { drain_resource_work(); });
+  };
+  std::string entry_contract;
   try {
-    while (frame.cadence.due && frame.substep < substeps_) {
-      frame.executing = true;
-      if (!frame.numerical_started) {
-        frame.partition = prepare_cadence_substep(frame.cadence, frame.substep, substeps_, runtime);
-        physical_time_cursor = frame.partition.start;
-        macro_step_cursor = frame.accepted_macro_step - (frame.cadence.window_steps - 1);
-        last_dt_ = static_cast<Real>(frame.partition.dt);
-        frame.numerical_started = true;
-        step_(frame.partition.dt);
-      } else {
-        if (!frame.next)
-          throw std::logic_error(runtime + " suspended Program has no continuation");
-        // Moving a std::function leaves its source valid but otherwise unspecified.
-        // Clear the slot before execution so only a newly suspended region can refill it.
-        auto next = std::exchange(frame.next, std::function<void()>{});
-        next();
+    phase([&] {
+      if (!cadence_continuation_) {
+        if (cadence_dispatch_active_ || !step_)
+          throw std::logic_error(runtime +
+                                 " Program region dispatch is reentrant or has no Program");
+        CadenceContinuation candidate;
+        candidate.accepted_time = physical_time_cursor;
+        candidate.accepted_macro_step = macro_step_cursor;
+        candidate.requested_dt = dt;
+        candidate.cadence =
+            prepare_cadence_step(physical_time_cursor, macro_step_cursor, dt, runtime);
+        if (macro_step_cursor == std::numeric_limits<int>::max())
+          throw std::overflow_error(runtime + " Program cadence macro-step counter overflow");
+        if (candidate.cadence.due) {
+          validate_cadence_partition(candidate.cadence, substeps_, runtime);
+          if (macro_step_cursor < candidate.cadence.window_steps - 1)
+            throw std::logic_error(runtime +
+                                   " Program cadence window starts before macro-step zero");
+          begin_balance_due_window(macro_step_cursor, runtime);
+        }
+        cadence_continuation_ = std::move(candidate);
+        cadence_dispatch_active_ = true;
       }
-      frame.executing = false;
+      const auto& frame = *cadence_continuation_;
+      if (frame.executing || frame.requested_dt != dt || !frame.port_identity.empty())
+        throw std::logic_error(runtime +
+                               " Program resume requires the same dt and a consumed map port");
+      ExactContractBuilder contract;
+      contract.text("pops.program-cadence.entry.v2")
+          .scalar(dt)
+          .scalar(substeps_)
+          .scalar(stride_)
+          .scalar(frame.substep)
+          .presence(frame.numerical_started)
+          .presence(frame.cadence.due)
+          .scalar(frame.accepted_time)
+          .scalar(frame.accepted_macro_step)
+          .scalar(frame.cadence.window_start)
+          .scalar(frame.cadence.window_end)
+          .scalar(frame.cadence.numerical_dt)
+          .scalar(frame.cadence.effective_dt)
+          .scalar(frame.cadence.window_steps);
+      entry_contract = std::move(contract).release();
+    });
+    if (!all_ranks_agree_exact_ordered_byte_pairs({{"program-cadence-entry", entry_contract}},
+                                                  communicator))
+      throw std::runtime_error(runtime + " Program cadence entry differs between ranks");
+    auto& frame = *cadence_continuation_;
+    while (frame.cadence.due && frame.substep < substeps_) {
+      phase([&] {
+        frame.executing = true;
+        if (!frame.numerical_started) {
+          frame.partition =
+              prepare_cadence_substep(frame.cadence, frame.substep, substeps_, runtime);
+          physical_time_cursor = frame.partition.start;
+          macro_step_cursor = frame.accepted_macro_step - (frame.cadence.window_steps - 1);
+          last_dt_ = static_cast<Real>(frame.partition.dt);
+          frame.numerical_started = true;
+          step_(frame.partition.dt);
+        } else {
+          if (!frame.next)
+            throw std::logic_error(runtime + " suspended Program has no continuation");
+          auto next = std::exchange(frame.next, std::function<void()>{});
+          next();
+        }
+        finish_resource_work();
+        frame.executing = false;
+        if (frame.port_identity.empty() && frame.next)
+          throw std::logic_error(runtime + " Program continuation has no qualified barrier");
+      });
+      if (!all_ranks_agree_exact_ordered_byte_pairs({{"program-cadence-port", frame.port_identity}},
+                                                    communicator))
+        throw std::runtime_error(runtime + " Program cadence reached different map ports");
       if (!frame.port_identity.empty())
         return frame.port_identity;
-      if (frame.next)
-        throw std::logic_error(runtime + " Program continuation has no qualified barrier");
+      if (frame.computed_duration) {
+        ExactContractBuilder computed;
+        computed.text("pops.program-computed-frontier.v1")
+            .scalar(frame.accepted_time).scalar(frame.requested_dt)
+            .scalar(*frame.computed_duration).scalar(frame.cadence.window_end);
+        if (!all_ranks_agree_exact_ordered_byte_pairs(
+                {{"program-computed-frontier", std::move(computed).release()}}, communicator))
+          throw std::runtime_error(runtime + " computed Program frontier differs between ranks");
+      }
       physical_time_cursor = frame.partition.end;
       ++frame.substep;
       frame.numerical_started = false;
     }
-    const auto cadence = frame.cadence;
-    const int accepted_macro_step = frame.accepted_macro_step;
-    physical_time_cursor = frame.accepted_time;
-    macro_step_cursor = accepted_macro_step;
-    end_balance_due_window();
-    commit_cadence_step(cadence, runtime);
-    physical_time_cursor = cadence.window_end;
-    complete_balance_step(cadence.due);
-    macro_step_cursor = accepted_macro_step + 1;
+    phase([&] {
+      const auto cadence = frame.cadence;
+      const int accepted_macro_step = frame.accepted_macro_step;
+      physical_time_cursor = frame.accepted_time;
+      macro_step_cursor = accepted_macro_step;
+      end_balance_due_window();
+      commit_cadence_step(cadence, runtime);
+      physical_time_cursor = cadence.window_end;
+      complete_balance_step(cadence.due);
+      macro_step_cursor = accepted_macro_step + 1;
+    });
     cancel_cadence_continuation();
     return {};
   } catch (...) {
-    physical_time_cursor = frame.accepted_time;
-    macro_step_cursor = frame.accepted_macro_step;
+    reject_resource_work();
+    if (cadence_continuation_) {
+      physical_time_cursor = cadence_continuation_->accepted_time;
+      macro_step_cursor = cadence_continuation_->accepted_macro_step;
+    }
     cancel_cadence_continuation();
     throw;
   }
 }
 
 void dispatch_cadence_step(double& physical_time_cursor, int& macro_step_cursor, double dt,
-                           const std::string& runtime) {
-  if (cadence_continuation_ || cadence_dispatch_active_)
-    throw std::logic_error(runtime + " Program cadence dispatch is non-reentrant");
+                           const std::string& runtime,
+                           const CommunicatorView& communicator = CommunicatorView{}) {
   const double accepted_time = physical_time_cursor;
   const int accepted_step = macro_step_cursor;
   try {
+    collective_step_rejection_phase(
+        communicator,
+        {"pops.program-dispatch.rejection.v1", "pops.program-dispatch.rejection", false, false},
+        "Program dispatch preflight failed collectively", [&] {
+          if (cadence_continuation_ || cadence_dispatch_active_)
+            throw std::logic_error(runtime + " Program cadence dispatch is non-reentrant");
+        });
     const std::string port =
-        advance_cadence_region(physical_time_cursor, macro_step_cursor, dt, runtime);
+        advance_cadence_region(physical_time_cursor, macro_step_cursor, dt, runtime, communicator);
     if (!port.empty())
       throw std::logic_error(runtime +
                              " Program map requires its resolved multi-layout coordinator");
   } catch (...) {
+    reject_resource_work();
     physical_time_cursor = accepted_time;
     macro_step_cursor = accepted_step;
     cancel_cadence_continuation();

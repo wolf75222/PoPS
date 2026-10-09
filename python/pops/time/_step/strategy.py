@@ -63,6 +63,7 @@ class StepStrategy:
 
     kind: ClassVar[str] = "strategy"
     __pops_ir_immutable__ = True
+    initial_controls_contract: ClassVar[str] = "pops.step-strategy.initial-runtime-controls@1"
 
     def __new__(cls, *args: Any, **kwargs: Any) -> StepStrategy:
         if cls is StepStrategy:
@@ -107,6 +108,14 @@ class StepStrategy:
             raise ValueError(
                 "%s does not accept runtime control(s): %s"
                 % (self.kind, ", ".join(sorted(values))))
+
+    def initial_runtime_controls(self) -> Mapping[str, Any] | None:
+        """Bind-time controls for an accepted initial checkpoint (protocol version 1).
+
+        Providers needing caller-supplied controls return None explicitly. No
+        controller is constructed and validation errors are never suppressed.
+        """
+        return {}
 
 
 _StepStrategyT = TypeVar("_StepStrategyT", bound=StepStrategy)
@@ -175,6 +184,48 @@ class FixedDt(StepStrategy):
                 or payload.get("kind") != cls.kind:
             raise ValueError("FixedDt strategy manifest has invalid keys")
         return cls(_binary64(payload["dt"], where="FixedDt.dt"))
+
+@register_step_strategy_type
+@dataclass(frozen=True, slots=True)
+class ComputedDt(StepStrategy):
+    """Request ``dt``; the Program must return its effective Scalar duration.
+
+    The requested interval is not clipped by the run frontier. The reached point
+    must respect that frontier (up to the explicitly authored binary64 neighbours).
+    """
+
+    dt: float
+    endpoint_ulps: int = 0
+    shrink: float = .5
+    max_rejections: int = 0
+    kind: ClassVar[str] = "computed_dt"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "dt", _positive_float(self.dt, where="ComputedDt.dt"))
+        object.__setattr__(self, "shrink", _positive_float(self.shrink, where="ComputedDt.shrink"))
+        if self.shrink >= 1.0:
+            raise ValueError("ComputedDt.shrink must be < 1")
+        if type(self.max_rejections) is not int or self.max_rejections < 0:
+            raise ValueError("ComputedDt.max_rejections must be a nonnegative integer")
+        if type(self.endpoint_ulps) is not int or not 0 <= self.endpoint_ulps <= 1024:
+            raise ValueError("ComputedDt.endpoint_ulps must be an integer in [0, 1024]")
+
+    def to_data(self) -> dict[str, Any]:
+        return {"kind": self.kind, "schema_version": 1, "dt": scalar_data(self.dt),
+                "endpoint_ulps": self.endpoint_ulps, "interval_rule": "no_spatial_exchanges",
+                "shrink": scalar_data(self.shrink), "max_rejections": self.max_rejections}
+
+    @classmethod
+    def from_data(cls, payload: Mapping[str, Any]) -> ComputedDt:
+        if not isinstance(payload, Mapping) or set(payload) != {
+            "kind", "schema_version", "dt", "endpoint_ulps", "interval_rule", "shrink", "max_rejections",
+        } or payload.get("kind") != cls.kind or type(payload["schema_version"]) is not int \
+                or payload["schema_version"] != 1 \
+                or payload["interval_rule"] != "no_spatial_exchanges":
+            raise ValueError("ComputedDt strategy manifest has invalid keys")
+        return cls(_binary64(payload["dt"], where="ComputedDt.dt"), payload["endpoint_ulps"],
+                   _binary64(payload["shrink"], where="ComputedDt.shrink"), payload["max_rejections"])
+
 
 @register_step_strategy_type
 @dataclass(frozen=True, slots=True)
@@ -277,21 +328,42 @@ class ExternalTimeGrid(StepStrategy):
     """Follow the strictly increasing grid supplied under ``grid_id`` at run time."""
 
     grid_id: str
+    frontier: str = "exact"
+    endpoint_ulps: int = 0
     kind: ClassVar[str] = "external_time_grid"
 
     def __post_init__(self) -> None:
         if not isinstance(self.grid_id, str) or not self.grid_id:
             raise ValueError("ExternalTimeGrid.grid_id must be a non-empty string")
+        if self.frontier not in ("exact", "computed"):
+            raise ValueError("ExternalTimeGrid.frontier must be exact or computed")
+        if type(self.endpoint_ulps) is not int or not 0 <= self.endpoint_ulps <= 1024:
+            raise ValueError("ExternalTimeGrid.endpoint_ulps must be an integer in [0, 1024]")
+        if self.frontier == "exact" and self.endpoint_ulps != 0:
+            raise ValueError("ExternalTimeGrid exact frontier requires endpoint_ulps=0")
 
     def to_data(self) -> dict[str, Any]:
+        if self.frontier == "computed":
+            return {"kind": self.kind, "grid_id": self.grid_id, "schema_version": 2,
+                    "frontier": self.frontier, "endpoint_ulps": self.endpoint_ulps}
         return {"kind": self.kind, "grid_id": self.grid_id}
 
     @classmethod
     def from_data(cls, payload: Mapping[str, Any]) -> ExternalTimeGrid:
-        if not isinstance(payload, Mapping) or set(payload) != {"kind", "grid_id"} \
-                or payload.get("kind") != cls.kind:
+        if not isinstance(payload, Mapping) or payload.get("kind") != cls.kind:
             raise ValueError("ExternalTimeGrid strategy manifest has invalid keys")
-        return cls(payload["grid_id"])
+        if set(payload) == {"kind", "grid_id"}:
+            return cls(payload["grid_id"])
+        if set(payload) != {"kind", "grid_id", "schema_version", "frontier", "endpoint_ulps"} \
+                or type(payload["schema_version"]) is not int or payload["schema_version"] != 2 \
+                or payload["frontier"] != "computed":
+            raise ValueError("ExternalTimeGrid strategy manifest has invalid keys")
+        return cls(payload["grid_id"], frontier=payload["frontier"],
+                   endpoint_ulps=payload["endpoint_ulps"])
+
+    def initial_runtime_controls(self) -> Mapping[str, Any] | None:
+        """The declared grid identity does not supply its runtime coordinates."""
+        return None
 
     def validate_runtime_controls(self, controls: Mapping[str, Any] | None = None) -> None:
         values = _controls(controls)
@@ -310,7 +382,7 @@ class ExternalTimeGrid(StepStrategy):
 
 
 __all__ = [
-    "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid", "FixedDt", "StepStrategy",
+    "AdaptiveCFL", "ComputedDt", "ErrorControlledDt", "ExternalTimeGrid", "FixedDt", "StepStrategy",
     "register_step_strategy_type", "registered_step_strategy_type",
     "validate_step_strategy_manifest",
 ]

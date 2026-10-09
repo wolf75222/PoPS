@@ -1,0 +1,84 @@
+{
+  "native_execution_owner": "root",
+  "oracle_sha256": "c39fcad3eddc3550c6fd2a49aab4ee8f7d6f52d4060febd3c6605482b39551c4",
+  "profiles": {
+    "mpi2": {
+      "cases": {
+        "01": {
+          "amount_error": 6.564505341220828e-21,
+          "balance_error": 1.5299109093307173e-17,
+          "energy_drop": 8.885562614580067e-06,
+          "flux_error": 1.7486012637846216e-15,
+          "records": 3456,
+          "scalar_unknowns": 144,
+          "spatial_cells": 72,
+          "state_error": 4.440892098500626e-16
+        },
+        "10": {
+          "amount_error": 6.564505341220828e-21,
+          "balance_error": 1.5299109093307173e-17,
+          "energy_drop": 8.885562614580067e-06,
+          "flux_error": 1.7486012637846216e-15,
+          "records": 3456,
+          "scalar_unknowns": 144,
+          "spatial_cells": 72,
+          "state_error": 4.440892098500626e-16
+        }
+      },
+      "evidence_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/coupled-gradient-dim3-sdk20d-saved-mpi2-20260930",
+      "historical_git_checked": true,
+      "identity_sha256": "439694a9377920b26d63af81d36c7e1ce007b3236fd47de2b9df0538063a431f",
+      "manifest_sha256": "5c2d35ef17db2536269b214f97eec6dc238a0b3143733fa2917a705b7f65916c",
+      "native_sha256": "0ed823f5f1639172e9913a5fe5e1f15755a70a153e128e7a0f3a1274183c1bdb",
+      "native_source_commit": "48871851f10cd0acb4c0dfa45bd0f3195ab2ef0a",
+      "owner_identity_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/coupled-gradient-dim3-sdk20d-mpi2-owner-identity-20260930.json",
+      "ranks": 2,
+      "records_by_rank": [
+        3456,
+        0
+      ],
+      "scope": "saved Dim3 periodic Uniform SSPRK2; owner-sealed execution",
+      "status": "received",
+      "verified_source_files": 1109
+    },
+    "serial": {
+      "cases": {
+        "01": {
+          "amount_error": 6.564505341220828e-21,
+          "balance_error": 1.5299109093307173e-17,
+          "energy_drop": 8.885562614580067e-06,
+          "flux_error": 1.7486012637846216e-15,
+          "records": 3456,
+          "scalar_unknowns": 144,
+          "spatial_cells": 72,
+          "state_error": 4.440892098500626e-16
+        },
+        "10": {
+          "amount_error": 6.564505341220828e-21,
+          "balance_error": 1.5299109093307173e-17,
+          "energy_drop": 8.885562614580067e-06,
+          "flux_error": 1.7486012637846216e-15,
+          "records": 3456,
+          "scalar_unknowns": 144,
+          "spatial_cells": 72,
+          "state_error": 4.440892098500626e-16
+        }
+      },
+      "evidence_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/coupled-gradient-dim3-sdk20d-saved-serial-20260930",
+      "historical_git_checked": true,
+      "identity_sha256": "5ff0b84abb22189d56d66dac26a00d13e0ba2fd10162652347ca2c636b86405d",
+      "manifest_sha256": "652357acd9fef343ab0a7a9723ee34a9d520f69d66cbecf7c2f956d116882cbf",
+      "native_sha256": "0ed823f5f1639172e9913a5fe5e1f15755a70a153e128e7a0f3a1274183c1bdb",
+      "native_source_commit": "48871851f10cd0acb4c0dfa45bd0f3195ab2ef0a",
+      "owner_identity_path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/coupled-gradient-dim3-sdk20d-serial-owner-identity-20260930.json",
+      "ranks": 1,
+      "records_by_rank": [
+        3456
+      ],
+      "scope": "saved Dim3 periodic Uniform SSPRK2; owner-sealed execution",
+      "status": "received",
+      "verified_source_files": 1109
+    }
+  },
+  "review_date": "2026-09-30"
+}

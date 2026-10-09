@@ -359,6 +359,9 @@ def _physical_point_coordinates(
         3: CARTESIAN_3D_COORDINATES,
     }
     points = np.zeros((len(logical_indices[0]), 3), dtype="<f8")
+    if geometry.node_coordinates is not None:
+        points[:,:dimension] = geometry.node_coordinates[logical_indices]
+        return points
     if geometry.coordinate_system == cartesian[dimension]:
         for coordinate_axis in range(dimension):
             array_axis = dimension - 1 - coordinate_axis

@@ -1,0 +1,1254 @@
+{
+  "verdict": "ACCEPT_THREE_PUBLIC_NATIVE_TESTS_CURRENT_CAPTURE_WITH_LIMITS",
+  "metadata_Source": "e27d065a5eb7c086ced60b751a2468f729361ff0",
+  "qualified_native_build_Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "Native": "cee947c25c771f8c5a155e5f4cb990de308de14fe77e9f55c654e3b3837dee6f",
+  "SDK": "087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626",
+  "core_fingerprint": "95d0ccaa1e7aa39f9cbb01d539c4e31a5a7e6e143207b088fd9c2730482963f5",
+  "core_files_rehashed": 1221,
+  "source_install_wheel_payload_rehashed": 1175,
+  "producer": {
+    "qualified_cpu_build_source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+    "core_fingerprint_unchanged": "95d0ccaa1e7aa39f9cbb01d539c4e31a5a7e6e143207b088fd9c2730482963f5",
+    "Source": "e27d065a5eb7c086ced60b751a2468f729361ff0",
+    "exit": 0,
+    "seconds": 100.91147733300022,
+    "counts": {
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "log_sha256": "0e5a0634e5c8a604774856bc812b2d7c80de2a6cf6e67339facfb1be74de4e7c",
+    "scope": "Author public Native tests using frozen independent oracle after separate representative math acceptance; not independent reception or GitHub CI."
+  },
+  "xml": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/cohort.xml",
+    "bytes": 1506,
+    "sha256": "9c510673cb18a3b1ea0395b9ac78ef73bc861fa31871c701d2301e9cb92d7ebb"
+  },
+  "invocation": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/invocation.json",
+    "bytes": 906,
+    "sha256": "337ee4f020e5f6923a6ac463d85280b21681b5008d349aac320ea4c5b31cddbb"
+  },
+  "cases": [
+    {
+      "variant": "rename",
+      "case": "test_public_three_stage_screened_fields[rename]",
+      "capture": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/rename/capture-receipt.json",
+        "bytes": 1599497,
+        "sha256": "7c3951240257b8d37dbc7eedd1cbebbefadad2b6eab0b88fce3d49feb9fe73ff"
+      },
+      "actual_arrays": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/rename/actual-arrays.npz",
+        "bytes": 24926,
+        "sha256": "38164289fcf45b1aeefdd2b1fea6a7ced8b9792ec334ebc2d002c88cdce4de2f"
+      },
+      "bind_arrays": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/rename/actual-bind-inputs.npz",
+        "bytes": 3584,
+        "sha256": "c637495c5620b1369ec8b93bf66c5fa14bf84f203ab21085dd7e1e2f653228a9"
+      },
+      "budget": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/pre-execution-independent-budget.json",
+        "bytes": 1377,
+        "sha256": "bed47b146393f5b94bb37ee6a57684985951b769773ee0f956ed34dd84129cd3"
+      },
+      "independent_math": {
+        "q0": {
+          "defect": 4.440892098500626e-16,
+          "bound": 1.4210854715202004e-14
+        },
+        "q1": {
+          "defect": 4.440892098500626e-16,
+          "bound": 1.5050694438145373e-13
+        },
+        "q2": {
+          "defect": 4.440892098500626e-16,
+          "bound": 1.677908088212615e-13
+        },
+        "qfinal": {
+          "defect": 6.661338147750939e-16,
+          "bound": 2.458583115919689e-13
+        },
+        "d_initial": {
+          "defect": 1.1102230246251565e-16,
+          "bound": 1.4210854715202004e-14
+        },
+        "phi0": {
+          "defect": 1.5432100042289676e-14,
+          "bound": 5.122298274075318e-10
+        },
+        "psi0": {
+          "defect": 1.5210055437364645e-14,
+          "bound": 3.0738266063687193e-10
+        },
+        "phi1": {
+          "defect": 2.6978419498391304e-14,
+          "bound": 5.122752594374205e-10
+        },
+        "psi1": {
+          "defect": 1.3433698597964394e-14,
+          "bound": 3.0740991985480523e-10
+        },
+        "phi2": {
+          "defect": 1.6653345369377348e-14,
+          "bound": 5.122810207255672e-10
+        },
+        "psi2": {
+          "defect": 2.1316282072803006e-14,
+          "bound": 3.0741337662769315e-10
+        },
+        "resident_phi": {
+          "defect": 1.6653345369377348e-14,
+          "bound": 5.122810207255672e-10
+        },
+        "resident_psi": {
+          "defect": 2.1316282072803006e-14,
+          "bound": 3.0741337662769315e-10
+        }
+      },
+      "canonical_quantities": 14,
+      "all_quantities_byte_exact_prior_independent_capture": [
+        {
+          "quantity": "qfinal",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "d_final",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "d_initial",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "q0",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "phi0",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "psi0",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "q1",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "phi1",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "psi1",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "q2",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "phi2",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "psi2",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "resident_phi",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "resident_psi",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        }
+      ],
+      "checkpoint": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/rename/accepted-checkpoint.npz",
+        "bytes": 82242,
+        "sha256": "a29179a48cd7222365532b0f006159f00fd6b4e3a88ea51ad3039c84e40b22c8",
+        "version": 9,
+        "arrays": 144,
+        "clock": {
+          "macro_step": 1,
+          "time": "0x1.a36e2eb1c432dp-14"
+        },
+        "restart_identity": "7c9ef27c4296ab9663651d13a8df0eef52878cc0f3a789b127d115b1dd5e4de8"
+      },
+      "histories": [
+        {
+          "name": "observed-stage-0-phi",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "observed-stage-0-psi",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "observed-stage-1-phi",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "observed-stage-1-psi",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "observed-stage-2-phi",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "observed-stage-2-psi",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "receiver-stage-0",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "receiver-stage-1",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "receiver-stage-2",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        }
+      ],
+      "binaries": [
+        {
+          "DSO": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/private/generated/025448b39168c9bfc59678921d643aa2329595a04900aaaf4e17842dea21bd0a.so",
+            "bytes": 1488496,
+            "sha256": "4b506828e5e136bdd14916b441cf47984081509283be94b529cceec5a7382bac"
+          },
+          "sidecar": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/private/generated/025448b39168c9bfc59678921d643aa2329595a04900aaaf4e17842dea21bd0a.so.pops-artifact.json",
+            "bytes": 490,
+            "sha256": "5c05477f403958c340c09aa593786a004066b4eccc337379b7cc8a2c8a25c675"
+          }
+        },
+        {
+          "DSO": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/private/jit/d8a2d62c5c248117dd169a7b27231bb5991a2af78635384b64e7d1f39f5974c0.so",
+            "bytes": 357176,
+            "sha256": "fb26a1cacd1366ea298ce2038b6bc3c5702c49db21839a5c73f785103c0f5a44"
+          },
+          "sidecar": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/private/jit/d8a2d62c5c248117dd169a7b27231bb5991a2af78635384b64e7d1f39f5974c0.so.pops-artifact.json",
+            "bytes": 591,
+            "sha256": "c081a2a8b66772b4df5e5b0b9220d89c88ecfca57c9705c8e7ef81e914cba444"
+          },
+          "actual_model_source": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/private/jit/d8a2d62c5c248117dd169a7b27231bb5991a2af78635384b64e7d1f39f5974c0.so.pops-model.cpp",
+            "bytes": 10100,
+            "sha256": "40f78540351ec8e311e7087309866103aff555c621c643c45972ae4110d03ced"
+          },
+          "actual_model_compile_receipt": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/private/jit/d8a2d62c5c248117dd169a7b27231bb5991a2af78635384b64e7d1f39f5974c0.so.pops-model-compile.json",
+            "bytes": 2328,
+            "sha256": "11df5c46bc17915247b86ccbdcf6c9fafa7bcfa0713fbdcccb9cf799ad2ea017"
+          }
+        },
+        {
+          "DSO": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/private/jit/43090e284f6b72b1fc628bc5e7ffdc81c9b45ea4a274ac8743203883be0e6d0a.so",
+            "bytes": 381656,
+            "sha256": "621d8ac9a6fd2cd76089871d61f88ae8f96dd82f8a06b79abaa93404e74cdbae"
+          },
+          "sidecar": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/private/jit/43090e284f6b72b1fc628bc5e7ffdc81c9b45ea4a274ac8743203883be0e6d0a.so.pops-artifact.json",
+            "bytes": 591,
+            "sha256": "04e088334a34a3a06bbfd53505052b7c654c2e469eb0f6c585529078f0966f76"
+          },
+          "actual_model_source": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/private/jit/43090e284f6b72b1fc628bc5e7ffdc81c9b45ea4a274ac8743203883be0e6d0a.so.pops-model.cpp",
+            "bytes": 15544,
+            "sha256": "d7ea4e37f195593d5d4c232e63b36b3dc5e878fe1097c587dcebb1037712430a"
+          },
+          "actual_model_compile_receipt": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/private/jit/43090e284f6b72b1fc628bc5e7ffdc81c9b45ea4a274ac8743203883be0e6d0a.so.pops-model-compile.json",
+            "bytes": 2328,
+            "sha256": "8d2c770f547ff56815b49753912d2ad060283449aa8c9a5df8598a2bde1b77f2"
+          }
+        }
+      ],
+      "actual_program_CPP": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/rename/program0.cpp",
+        "bytes": 99950,
+        "sha256": "6bb21498f6f0263c5ebf0b89da0ac22f5b27d0b51b8de6222945fd241c85f580"
+      },
+      "expanded_CPP": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/private/generated/025448b39168c9bfc59678921d643aa2329595a04900aaaf4e17842dea21bd0a.cpp",
+        "bytes": 1483944,
+        "sha256": "00bc24aef0f9c7a982afc41cacd5144119fc2b8b1c5266ef40e1e636b414f79a"
+      },
+      "saved_program_exact_subset_of_expanded": true,
+      "rate_witness_each_of_three_stages": "0.8",
+      "accepted_clock": [
+        0.0001,
+        1
+      ],
+      "CG_solver_controls_preserved": true
+    },
+    {
+      "variant": "decay",
+      "case": "test_public_three_stage_screened_fields[decay]",
+      "capture": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/decay/capture-receipt.json",
+        "bytes": 1598430,
+        "sha256": "0e53e82feee4dcec293436b939a96e283cb611b887b525abe6e63d0b339b2a23"
+      },
+      "actual_arrays": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/decay/actual-arrays.npz",
+        "bytes": 24926,
+        "sha256": "2d81629a87bdbdd0ca117ee06d019374e209ec794b12cdccb5678c1aa66f3ec7"
+      },
+      "bind_arrays": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/decay/actual-bind-inputs.npz",
+        "bytes": 3584,
+        "sha256": "c637495c5620b1369ec8b93bf66c5fa14bf84f203ab21085dd7e1e2f653228a9"
+      },
+      "budget": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/pre-execution-independent-budget.json",
+        "bytes": 1376,
+        "sha256": "515bec429b4dec301ed8ebb339a54045249521c5225093e536ac3bfd5b8a2ff4"
+      },
+      "independent_math": {
+        "q0": {
+          "defect": 4.440892098500626e-16,
+          "bound": 1.4210854715202004e-14
+        },
+        "q1": {
+          "defect": 4.440892098500626e-16,
+          "bound": 1.505073707070952e-13
+        },
+        "q2": {
+          "defect": 4.440892098500626e-16,
+          "bound": 1.6779204472963264e-13
+        },
+        "qfinal": {
+          "defect": 4.440892098500626e-16,
+          "bound": 2.4586249540468394e-13
+        },
+        "d_initial": {
+          "defect": 1.1102230246251565e-16,
+          "bound": 1.4210854715202004e-14
+        },
+        "phi0": {
+          "defect": 1.5432100042289676e-14,
+          "bound": 5.122298274075318e-10
+        },
+        "psi0": {
+          "defect": 1.5210055437364645e-14,
+          "bound": 3.0738266063687193e-10
+        },
+        "phi1": {
+          "defect": 2.5202062658991053e-14,
+          "bound": 5.122752595795291e-10
+        },
+        "psi1": {
+          "defect": 1.6708856520608606e-14,
+          "bound": 3.0740991994007033e-10
+        },
+        "phi2": {
+          "defect": 3.2307490016592055e-14,
+          "bound": 5.122810211375366e-10
+        },
+        "psi2": {
+          "defect": 2.7700064464397656e-14,
+          "bound": 3.074133768748748e-10
+        },
+        "resident_phi": {
+          "defect": 3.2307490016592055e-14,
+          "bound": 5.122810211375366e-10
+        },
+        "resident_psi": {
+          "defect": 2.7700064464397656e-14,
+          "bound": 3.074133768748748e-10
+        }
+      },
+      "canonical_quantities": 14,
+      "all_quantities_byte_exact_prior_independent_capture": [
+        {
+          "quantity": "qfinal",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "d_final",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "d_initial",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "q0",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "phi0",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "psi0",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "q1",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "phi1",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "psi1",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "q2",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "phi2",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "psi2",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "resident_phi",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "resident_psi",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        }
+      ],
+      "checkpoint": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/decay/accepted-checkpoint.npz",
+        "bytes": 83945,
+        "sha256": "fbbbf3f9699b2a63ed0dd61d3d3abd7558e06a4077bed1ca612f4cb4405b1c89",
+        "version": 9,
+        "arrays": 144,
+        "clock": {
+          "macro_step": 1,
+          "time": "0x1.a36e2eb1c432dp-14"
+        },
+        "restart_identity": "a2af476740598e1147c2464e79e1f42627002f5c78700e26e289e9ba9f895b33"
+      },
+      "histories": [
+        {
+          "name": "observed-stage-0-phi",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "observed-stage-0-psi",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "observed-stage-1-phi",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "observed-stage-1-psi",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "observed-stage-2-phi",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "observed-stage-2-psi",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "receiver-stage-0",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "receiver-stage-1",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "receiver-stage-2",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        }
+      ],
+      "binaries": [
+        {
+          "DSO": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/private/generated/bda9e094ff3d579a1ace016f5cde1e99f204196bba2646241533355e9d489834.so",
+            "bytes": 1488496,
+            "sha256": "6c52ded830a6cb3f9ec3e86458bbe80729f7fb10254cf4a4edeec2fbd06c9a6d"
+          },
+          "sidecar": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/private/generated/bda9e094ff3d579a1ace016f5cde1e99f204196bba2646241533355e9d489834.so.pops-artifact.json",
+            "bytes": 490,
+            "sha256": "d9f969fd1d4d789f3ba29ed5d3991140bacd7f240b6fa178b01a771b4beb51aa"
+          }
+        },
+        {
+          "DSO": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/private/jit/ef868915ee8cb94a220532cdbd931553ac0c35263773480c970c18aa266dbf6f.so",
+            "bytes": 356104,
+            "sha256": "39fbc4f2e1371361b544968f4133f2870514eb1fa47928f9ea19f723f7d361b1"
+          },
+          "sidecar": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/private/jit/ef868915ee8cb94a220532cdbd931553ac0c35263773480c970c18aa266dbf6f.so.pops-artifact.json",
+            "bytes": 591,
+            "sha256": "13d7a516b10036b7c2867a9d9a2f5c825f87cabc9dcfc6792bf636f60b9b57e8"
+          },
+          "actual_model_source": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/private/jit/ef868915ee8cb94a220532cdbd931553ac0c35263773480c970c18aa266dbf6f.so.pops-model.cpp",
+            "bytes": 10135,
+            "sha256": "adac7ffd7b24a58ef89dcdc5d439e32b2bc7cbd5356296ecad3509b8e14953c6"
+          },
+          "actual_model_compile_receipt": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/private/jit/ef868915ee8cb94a220532cdbd931553ac0c35263773480c970c18aa266dbf6f.so.pops-model-compile.json",
+            "bytes": 2328,
+            "sha256": "72c3b9b5d51a447d68f585d5f92f8b99216212a9d354e249662122b5d2555cf2"
+          }
+        },
+        {
+          "DSO": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/private/jit/c184f044965405f38fb65c3dc78c48e85fabba6108bcbf1cdb155c1a7d2b6ac3.so",
+            "bytes": 381656,
+            "sha256": "4518e91aa823c2b192823ba868bc15dd9850182552ab98112f45f60d070167b2"
+          },
+          "sidecar": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/private/jit/c184f044965405f38fb65c3dc78c48e85fabba6108bcbf1cdb155c1a7d2b6ac3.so.pops-artifact.json",
+            "bytes": 591,
+            "sha256": "eede4c6df3f9c2cf22dba4894dda83aa9b7068a16ccb4a9fd3054a7c38362b37"
+          },
+          "actual_model_source": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/private/jit/c184f044965405f38fb65c3dc78c48e85fabba6108bcbf1cdb155c1a7d2b6ac3.so.pops-model.cpp",
+            "bytes": 15573,
+            "sha256": "f74ee7f31a3e1bcd282c3c7b8d2f51c65640df3294e2ab564d3dbe00f9eba52f"
+          },
+          "actual_model_compile_receipt": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/private/jit/c184f044965405f38fb65c3dc78c48e85fabba6108bcbf1cdb155c1a7d2b6ac3.so.pops-model-compile.json",
+            "bytes": 2328,
+            "sha256": "d07ea34c4de2ce9ba8e20cbd7d2d5d85e0a361269fef425b11fa185c1676294d"
+          }
+        }
+      ],
+      "actual_program_CPP": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/decay/program0.cpp",
+        "bytes": 99690,
+        "sha256": "0886335268b82846a3461049618e527504edab54a3b83d1a347c47e2ae00069b"
+      },
+      "expanded_CPP": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/private/generated/bda9e094ff3d579a1ace016f5cde1e99f204196bba2646241533355e9d489834.cpp",
+        "bytes": 1485118,
+        "sha256": "143933fd5f767ed45dabd47a4870ac9bab52e18f6e3680ba7bdff06f8fd9edeb"
+      },
+      "saved_program_exact_subset_of_expanded": true,
+      "rate_witness_each_of_three_stages": "1.1",
+      "accepted_clock": [
+        0.0001,
+        1
+      ],
+      "CG_solver_controls_preserved": true
+    },
+    {
+      "variant": "representative",
+      "case": "test_public_three_stage_screened_fields[representative]",
+      "capture": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/representative/capture-receipt.json",
+        "bytes": 1598434,
+        "sha256": "a25638f4688f1045bdf4d41f8a9dd96f0446c8a5d2428579615d34bab5e8e510"
+      },
+      "actual_arrays": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/representative/actual-arrays.npz",
+        "bytes": 24926,
+        "sha256": "38164289fcf45b1aeefdd2b1fea6a7ced8b9792ec334ebc2d002c88cdce4de2f"
+      },
+      "bind_arrays": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/representative/actual-bind-inputs.npz",
+        "bytes": 3584,
+        "sha256": "c637495c5620b1369ec8b93bf66c5fa14bf84f203ab21085dd7e1e2f653228a9"
+      },
+      "budget": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/pre-execution-independent-budget.json",
+        "bytes": 1377,
+        "sha256": "bed47b146393f5b94bb37ee6a57684985951b769773ee0f956ed34dd84129cd3"
+      },
+      "independent_math": {
+        "q0": {
+          "defect": 4.440892098500626e-16,
+          "bound": 1.4210854715202004e-14
+        },
+        "q1": {
+          "defect": 4.440892098500626e-16,
+          "bound": 1.5050694438145373e-13
+        },
+        "q2": {
+          "defect": 4.440892098500626e-16,
+          "bound": 1.677908088212615e-13
+        },
+        "qfinal": {
+          "defect": 6.661338147750939e-16,
+          "bound": 2.458583115919689e-13
+        },
+        "d_initial": {
+          "defect": 1.1102230246251565e-16,
+          "bound": 1.4210854715202004e-14
+        },
+        "phi0": {
+          "defect": 1.5432100042289676e-14,
+          "bound": 5.122298274075318e-10
+        },
+        "psi0": {
+          "defect": 1.5210055437364645e-14,
+          "bound": 3.0738266063687193e-10
+        },
+        "phi1": {
+          "defect": 2.6978419498391304e-14,
+          "bound": 5.122752594374205e-10
+        },
+        "psi1": {
+          "defect": 1.3433698597964394e-14,
+          "bound": 3.0740991985480523e-10
+        },
+        "phi2": {
+          "defect": 1.6653345369377348e-14,
+          "bound": 5.122810207255672e-10
+        },
+        "psi2": {
+          "defect": 2.1316282072803006e-14,
+          "bound": 3.0741337662769315e-10
+        },
+        "resident_phi": {
+          "defect": 1.6653345369377348e-14,
+          "bound": 5.122810207255672e-10
+        },
+        "resident_psi": {
+          "defect": 2.1316282072803006e-14,
+          "bound": 3.0741337662769315e-10
+        }
+      },
+      "canonical_quantities": 14,
+      "all_quantities_byte_exact_prior_independent_capture": [
+        {
+          "quantity": "qfinal",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "d_final",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "d_initial",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "q0",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "phi0",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "psi0",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "q1",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "phi1",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "psi1",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "q2",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "phi2",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "psi2",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "resident_phi",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        },
+        {
+          "quantity": "resident_psi",
+          "shape": [
+            1,
+            12,
+            16
+          ],
+          "byte_exact_prior_independent_capture": true
+        }
+      ],
+      "checkpoint": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/representative/accepted-checkpoint.npz",
+        "bytes": 82790,
+        "sha256": "efca1c095a5604dc2cafca636c1579a072da68ad56a6597e8737b3877376c8e8",
+        "version": 9,
+        "arrays": 144,
+        "clock": {
+          "macro_step": 1,
+          "time": "0x1.a36e2eb1c432dp-14"
+        },
+        "restart_identity": "024e5a504f587982a55b80236805eb5822fcf3f3a54d322c511a509ba4b96fb4"
+      },
+      "histories": [
+        {
+          "name": "observed-stage-0-phi",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "observed-stage-0-psi",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "observed-stage-1-phi",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "observed-stage-1-psi",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "observed-stage-2-phi",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "observed-stage-2-psi",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "receiver-stage-0",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "receiver-stage-1",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        },
+        {
+          "name": "receiver-stage-2",
+          "fill": 1,
+          "depth": 2,
+          "all_saved_slots_byte_match": true
+        }
+      ],
+      "binaries": [
+        {
+          "DSO": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/private/generated/fc2d2f560e54f14fea2f0e9dfdf086c3f26ec2ad69eadb7d8e10145d76c052ea.so",
+            "bytes": 1488496,
+            "sha256": "842aa7c5c078a0ea00da5976783020d6d33c0f5285a5b73744532ac06c0230b3"
+          },
+          "sidecar": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/private/generated/fc2d2f560e54f14fea2f0e9dfdf086c3f26ec2ad69eadb7d8e10145d76c052ea.so.pops-artifact.json",
+            "bytes": 490,
+            "sha256": "4b27b14260eca66ebbfc26afb7aaab17cf140cc0afcc4cd2f07a64eeb22e0f83"
+          }
+        },
+        {
+          "DSO": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/private/jit/ef868915ee8cb94a220532cdbd931553ac0c35263773480c970c18aa266dbf6f.so",
+            "bytes": 356104,
+            "sha256": "39fbc4f2e1371361b544968f4133f2870514eb1fa47928f9ea19f723f7d361b1"
+          },
+          "sidecar": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/private/jit/ef868915ee8cb94a220532cdbd931553ac0c35263773480c970c18aa266dbf6f.so.pops-artifact.json",
+            "bytes": 591,
+            "sha256": "7d036c1b045d22984d0cb2b9906aed9fbbc156d8925006690834cc400f4f7f9f"
+          },
+          "actual_model_source": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/private/jit/ef868915ee8cb94a220532cdbd931553ac0c35263773480c970c18aa266dbf6f.so.pops-model.cpp",
+            "bytes": 10135,
+            "sha256": "adac7ffd7b24a58ef89dcdc5d439e32b2bc7cbd5356296ecad3509b8e14953c6"
+          },
+          "actual_model_compile_receipt": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/private/jit/ef868915ee8cb94a220532cdbd931553ac0c35263773480c970c18aa266dbf6f.so.pops-model-compile.json",
+            "bytes": 2322,
+            "sha256": "ac765022a3f132323099147c437cf8742d3eb45e57be4cc5c9012be2ca4b0ec7"
+          }
+        },
+        {
+          "DSO": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/private/jit/7b4627d53bbfef64f0fd81e9027cdbc62f827cd7ce3b70a21c763f77b62f9fad.so",
+            "bytes": 381656,
+            "sha256": "8e24c9e199841d48821dfa113cb7e5ef90bf8bf01b2b5f3e4ab29e6613d09b6e"
+          },
+          "sidecar": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/private/jit/7b4627d53bbfef64f0fd81e9027cdbc62f827cd7ce3b70a21c763f77b62f9fad.so.pops-artifact.json",
+            "bytes": 591,
+            "sha256": "62bd48e3933a92b575381f5efa396ebd0f2faafee23384bb4031a94e9ba0c2ba"
+          },
+          "actual_model_source": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/private/jit/7b4627d53bbfef64f0fd81e9027cdbc62f827cd7ce3b70a21c763f77b62f9fad.so.pops-model.cpp",
+            "bytes": 15573,
+            "sha256": "da72492d095fa68175337f8b1df2e3841be10c7a011b680ea1135170593b6308"
+          },
+          "actual_model_compile_receipt": {
+            "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/private/jit/7b4627d53bbfef64f0fd81e9027cdbc62f827cd7ce3b70a21c763f77b62f9fad.so.pops-model-compile.json",
+            "bytes": 2322,
+            "sha256": "50954f81e6911d40c5a057335ab16a62fe7cf04a152d76ee71aad13d35b64f07"
+          }
+        }
+      ],
+      "actual_program_CPP": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/representative/program0.cpp",
+        "bytes": 99692,
+        "sha256": "474566dfa14f8991f2bb43f06e97a9b4a7015f73e9418ca0bdc014fafdeccec0"
+      },
+      "expanded_CPP": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/private/generated/fc2d2f560e54f14fea2f0e9dfdf086c3f26ec2ad69eadb7d8e10145d76c052ea.cpp",
+        "bytes": 1485111,
+        "sha256": "0e4a1579a27c52c54a02e71318ccb94730c0aa904d6a091e5908f0dedaf9feca"
+      },
+      "saved_program_exact_subset_of_expanded": true,
+      "rate_witness_each_of_three_stages": "0.8",
+      "accepted_clock": [
+        0.0001,
+        1
+      ],
+      "CG_solver_controls_preserved": true
+    }
+  ],
+  "physical_captured_pins": [
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/rename/accepted-checkpoint.npz",
+      "bytes": 82242,
+      "sha256": "a29179a48cd7222365532b0f006159f00fd6b4e3a88ea51ad3039c84e40b22c8"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/rename/actual-arrays.npz",
+      "bytes": 24926,
+      "sha256": "38164289fcf45b1aeefdd2b1fea6a7ced8b9792ec334ebc2d002c88cdce4de2f"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/rename/actual-bind-inputs.npz",
+      "bytes": 3584,
+      "sha256": "c637495c5620b1369ec8b93bf66c5fa14bf84f203ab21085dd7e1e2f653228a9"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/rename/actual-report.json",
+      "bytes": 1153,
+      "sha256": "1c591c41d8b9712737028ac5bd2144f2004048dc373a99b36bcf32f9bfe5829b"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/rename/author-test-comparison.json",
+      "bytes": 3013,
+      "sha256": "f60548cafe4054c532b829c223effd33e6958b242c42396fe4a6d13ced25091a"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/rename/capture-receipt.json",
+      "bytes": 1599497,
+      "sha256": "7c3951240257b8d37dbc7eedd1cbebbefadad2b6eab0b88fce3d49feb9fe73ff"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/rename/model0.cpp",
+      "bytes": 10100,
+      "sha256": "40f78540351ec8e311e7087309866103aff555c621c643c45972ae4110d03ced"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/rename/model1.cpp",
+      "bytes": 15544,
+      "sha256": "d7ea4e37f195593d5d4c232e63b36b3dc5e878fe1097c587dcebb1037712430a"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen1/rename/program0.cpp",
+      "bytes": 99950,
+      "sha256": "6bb21498f6f0263c5ebf0b89da0ac22f5b27d0b51b8de6222945fd241c85f580"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/decay/accepted-checkpoint.npz",
+      "bytes": 83945,
+      "sha256": "fbbbf3f9699b2a63ed0dd61d3d3abd7558e06a4077bed1ca612f4cb4405b1c89"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/decay/actual-arrays.npz",
+      "bytes": 24926,
+      "sha256": "2d81629a87bdbdd0ca117ee06d019374e209ec794b12cdccb5678c1aa66f3ec7"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/decay/actual-bind-inputs.npz",
+      "bytes": 3584,
+      "sha256": "c637495c5620b1369ec8b93bf66c5fa14bf84f203ab21085dd7e1e2f653228a9"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/decay/actual-report.json",
+      "bytes": 1153,
+      "sha256": "cfcbfd5ee9b985cc13d5487e4556cd693f4cfd148e5eed9df86e10680c3eab70"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/decay/author-test-comparison.json",
+      "bytes": 3011,
+      "sha256": "7178ac4cf93a335e5344dac03097ff87a4faaaf9cbfb4204576240eb5f2c5609"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/decay/capture-receipt.json",
+      "bytes": 1598430,
+      "sha256": "0e53e82feee4dcec293436b939a96e283cb611b887b525abe6e63d0b339b2a23"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/decay/model0.cpp",
+      "bytes": 10135,
+      "sha256": "adac7ffd7b24a58ef89dcdc5d439e32b2bc7cbd5356296ecad3509b8e14953c6"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/decay/model1.cpp",
+      "bytes": 15573,
+      "sha256": "f74ee7f31a3e1bcd282c3c7b8d2f51c65640df3294e2ab564d3dbe00f9eba52f"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/test_public_three_stage_screen2/decay/program0.cpp",
+      "bytes": 99690,
+      "sha256": "0886335268b82846a3461049618e527504edab54a3b83d1a347c47e2ae00069b"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/representative/accepted-checkpoint.npz",
+      "bytes": 82790,
+      "sha256": "efca1c095a5604dc2cafca636c1579a072da68ad56a6597e8737b3877376c8e8"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/representative/actual-arrays.npz",
+      "bytes": 24926,
+      "sha256": "38164289fcf45b1aeefdd2b1fea6a7ced8b9792ec334ebc2d002c88cdce4de2f"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/representative/actual-bind-inputs.npz",
+      "bytes": 3584,
+      "sha256": "c637495c5620b1369ec8b93bf66c5fa14bf84f203ab21085dd7e1e2f653228a9"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/representative/actual-report.json",
+      "bytes": 1153,
+      "sha256": "c3b4fd1b383f9125b37432bea7697f0bd3d6f80aff251943534f78dc77a74a39"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/representative/author-test-comparison.json",
+      "bytes": 3013,
+      "sha256": "f60548cafe4054c532b829c223effd33e6958b242c42396fe4a6d13ced25091a"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/representative/capture-receipt.json",
+      "bytes": 1598434,
+      "sha256": "a25638f4688f1045bdf4d41f8a9dd96f0446c8a5d2428579615d34bab5e8e510"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/representative/model0.cpp",
+      "bytes": 10135,
+      "sha256": "adac7ffd7b24a58ef89dcdc5d439e32b2bc7cbd5356296ecad3509b8e14953c6"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/representative/model1.cpp",
+      "bytes": 15573,
+      "sha256": "da72492d095fa68175337f8b1df2e3841be10c7a011b680ea1135170593b6308"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp/three-stage-screened-fields0/representative/program0.cpp",
+      "bytes": 99692,
+      "sha256": "474566dfa14f8991f2bb43f06e97a9b4a7015f73e9418ca0bdc014fafdeccec0"
+    }
+  ],
+  "prior_independent_receipts": [
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/independent-reception-ready.json",
+      "bytes": 3672,
+      "sha256": "9573299df4fd52b3e192fecc50936247a80f3a284d443c94364871d163045cf6"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/variants/variant-reception-ready.json",
+      "bytes": 2809,
+      "sha256": "2516af9a674cfc2414a48e0dcf14db7be6a93fc8c62fdf1306a8079588c22883"
+    }
+  ],
+  "unchanged_oracle": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-independent-oracle-20261009/representative-oracle-ready.json",
+    "bytes": 8297,
+    "sha256": "28ca67fc888d78ae3f57cc417759b4b9624692c9499d5d1ecacb1fc793b6b81e"
+  },
+  "unchanged_original_budget": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-independent-oracle-20261009/pre-Native-tolerances.json",
+    "bytes": 1377,
+    "sha256": "bed47b146393f5b94bb37ee6a57684985951b769773ee0f956ed34dd84129cd3"
+  },
+  "pops_modules_loaded": [],
+  "limits": [
+    "Three genuine new public tests pass CPUworld1; this is local runtime evidence, not GitHub CI or GPU/MPI2/longtime/refinement qualification.",
+    "Native remains compiled Source8c1f; e27d is metadata/CI/test-label Source and is not relabeled as a newly compiled Native build. Core1221 and installed/wheel1175 remain exact.",
+    "No persisted CG reports or per-stage publication clocks; no complete frontend-to-binary graph; conditional FE coefficient1 only, not unconditional positivity/entropy.",
+    "Original failed public-three cohort is preserved separately; this new3/3 capture does not rewrite its2PASS/1SourcegrammarFAIL."
+  ],
+  "scope": "Independent offline non-author mathematical and physical reception; own frozen NumPy/scalar-FV oracle only; no Native/PoPS/case-writer import/run, Main/env/build/install/SSH operation."
+}

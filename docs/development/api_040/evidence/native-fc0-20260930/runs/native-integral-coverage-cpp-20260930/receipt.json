@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "scope": "native C++ local CPU Kokkos OpenMP, MPICH TCP: 19 serial PreparedDiffusion, 6 serial transaction entries, MPI3 exchange aggregate and 2 MPI2 transaction aggregates; not installed Python or GPU",
+  "source_commit_at_capture": "e76eb44d43ed47578617cae238f885ba5aa8f8b3",
+  "execution_environment": {
+    "FI_PROVIDER": "tcp",
+    "OMP_NUM_THREADS": "1",
+    "POPS_THREADS": "1",
+    "OMP_PROC_BIND": "false"
+  },
+  "files": {
+    "build-mpi/bin/test_program_context_contract": "a8279ba7a1e0d9faa0d5e6e8d5dd7daf9b0007b7fb42977454c948eee8675999",
+    "build-mpi/bin/test_program_runtime": "9038627373ed742c7a558483ef7e681ad061354d3e64e2f8ea6144f231132c24",
+    "build-mpi/bin/test_prepared_diffusion": "b61bdd67ff52a9ea0d1cb25a62c0ba06b782b7713bf1dfe180ab159f0ddd4448",
+    "build-mpi/bin/test_mpi_exchange_batches": "1296f6ed66be94b3012501efaba7c00ef50515a9c9853bd6318510ec15e50c0a",
+    "include/pops/runtime/program/amr_program_context_history_checkpoint_public.inc": "11dd270a2520736d1c5e4419423c267f0b82d000a5294bac46557bad1e7660a7",
+    "include/pops/numerics/diffusion/prepared_diffusion.hpp": "91840da9cffb5d767c6cabdb2c33cea2a80f14e7c7124f67443cc520d29aa1c1",
+    "python/pops/codegen/program_emit_ops.py": "1ccf260e434467a1a33b01309c9bc46ae7495635ed1b5292efda9ca13f3ba689",
+    "tests/cpp/unit/runtime/test_program_context_contract.cpp": "3a2786b51ab8c2e176c4df101c503f94ca33029f99216ba58f225cc22dbc9b1f",
+    "tests/cpp/integration/runtime/test_program_runtime.cpp": "df6b185477f92f067014ddd1ba46dd5f1a2199977b7830ffdbb4184ed456648e",
+    "tests/cpp/unit/runtime/test_prepared_diffusion.cpp": "a67a05d0bac2483b36d2014e43e9850da9e4447641738806e3efd011d1a12655",
+    "tests/cpp/integration/mpi/test_mpi_exchange_batches.cpp": "c5f9d28a8fa029b8905fe675037be63a65a3b366753baa03ce51f5d22ddd0b53",
+    "tests/CMakeLists.txt": "129d8f3389c13ae8cb7ad03d37c6d3e4e9ebf4333a3e5b97214b6a4f01d19c63",
+    "build-coverage-preflight-native-cpp-20260930.log": "d734d95c73ea056ea53477c54cff52664b86fa63f8d5a6eb49f4a8c18b2769cd",
+    "coverage-preflight-diffusion-mpi3-20260930.log": "a5a846d7b00653b04f19cf5817c422e5b553dbcbef210d8c8309db9fb130787d",
+    "mpi-provider-tcp-diffusion-probe-20260930.log": "ddf51104cfcc8acda2ecb3828673c382532486fc050fd5eaf61eca55e2347229",
+    "coverage-preflight-diffusion-mpi3-tcp-20260930.log": "84e413b209579a63f193a1e160d431411219e808fdd8add2c581a08538eceeb9",
+    "coverage-preflight-diffusion-mpi3-tcp-20260930.xml": "567d7a1aa3afbdfb43f6031ebd367837d9622ec07e8e0b7d407457c7101a9110",
+    "integral-transaction-native-tcp-20260930.log": "85626365b5db83e22e05eb975bdab00f388f4aee6c6ecfdd454ab3954f83b9af",
+    "integral-transaction-native-tcp-20260930.xml": "09ebff0f102755d19073159a65c98ee159970e77c4aedd6f8b399bb79d61ccc2",
+    "transaction-last-test.log": "766fafa6f7dd3b92d00433f4b50822d1f8876cd68992782cfc0730adc7cc1ed5"
+  },
+  "files_map_sha256": "48d52e3d87650bc2d73b6b0aac8f386730539a6a2228cc4ed2aea6bc147248d2",
+  "unforced_provider_failure": "Retained interrupted CTest log; first cases pass GTest bodies but MPICH default-provider MPI_Finalize exits nonzero with OFI I/O error. No scientific oracle changed."
+}

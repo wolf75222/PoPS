@@ -1,0 +1,156 @@
+{
+  "reviewer": "sol61_capacity_review independent nonauthor",
+  "timestamp_utc": "2026-10-08T21:16:10.496445+00:00",
+  "verdict": "SOURCE_ACCEPT_V3_WITH_RUNTIME_QUALIFICATION_PENDING",
+  "physical_manifest": "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/physical-manifest-v3.json",
+  "overlay_sources_digest": "611ed7b58c120fe33a170e0f6a2ef83933356abe45203f8d708be5c00424f00c",
+  "closes": [
+    {
+      "defect": "C1",
+      "evidence": "module_metadata.hpp:263-289 requires valid DSO handle and exact pops.program.owned-clock-manifest@1 before count/table/primary callbacks. Typed enum v1 is validated and carried into exact install collective contract (system_io.cpp:957). docs explicit mandatory compatibility change and regeneration requirement."
+    },
+    {
+      "defect": "C2",
+      "evidence": "explicit_program.py _uniform_clock_exports supplies exact discriminator and actual installer macro clock. Both C++ native_loader hand fixtures supply contract. Additional dual-target field RHS fixtures tests/cpp/support/field_rhs_value_program_fixture.hpp and include/pops/runtime/nd_proof/field_rhs_aux_incidence_program_fixture.hpp export same discriminator with unchanged actual test.field-rhs-v2.clock."
+    }
+  ],
+  "fixture_inventory": {
+    "Uniform_hand_DSO_paths": [
+      "tests/cpp/integration/native_loader/test_program_abi_symbols.cpp",
+      "tests/cpp/integration/native_loader/test_program_loader.cpp",
+      "tests/python/support/explicit_program.py",
+      "tests/cpp/support/field_rhs_value_program_fixture.hpp",
+      "include/pops/runtime/nd_proof/field_rhs_aux_incidence_program_fixture.hpp"
+    ],
+    "excluded": [
+      "tests/cpp/support/synthetic_loader_fixture.hpp AMR installer only",
+      "tests/cpp/integration/amr/test_amr_hierarchy_field_scratch.cpp AMR only",
+      "tests/cpp/support/explicit_system_program.hpp raw in-process install, no DSO",
+      "tests/python/unit/time/test_time_ops_polish.py deliberately wrong ABI package rejected before manifest",
+      "historical failed emitted CPP under evidence is archived data, not current fixtures"
+    ]
+  },
+  "independent_tests": {
+    "cpp_header_helpers": "4/4 pass, including previous 192 exact codec maxima / 1536 dirty observations, size_t edge arithmetic, signed zero aggregate slot cache and newly unsupported typed enum rejection",
+    "python_pure_helpers": "15/15 pass actual V3 isolated source helper suite via pops env with PYTHONPATH unset; no Native package imported",
+    "checks": {
+      "scope": "Independent V3 header/codec helpers only; no Native runtime build or installation",
+      "source_sha256": "b1c899c85e1c38260ac94fdcf8f385aa9dd6b80434077b8f44eaecb7ad06fd2d",
+      "checks": [
+        {
+          "phase": "compile",
+          "argv": [
+            "rtk",
+            "proxy",
+            "/usr/bin/clang++",
+            "-I/Users/romaindespoulain/dev/tmp/sol61-uniform-aux-capacity-authority-29e9143c-20261008/production-v3-overlay/include",
+            "-DKOKKOS_DEPENDENCE",
+            "-DPOPS_HAS_FFTW",
+            "-DPOPS_HAS_HDF5",
+            "-DPOPS_HAS_KOKKOS",
+            "-DPOPS_HAS_MPI",
+            "-DPOPS_HAS_PARALLEL_HDF5",
+            "-DPOPS_MPI_ABI=\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\"",
+            "-DPOPS_NATIVE_DIM=2",
+            "-D_FORTIFY_SOURCE=2",
+            "-I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/support",
+            "-I/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-Bcpp-20261007-89d64f8e7a0a/build/tests",
+            "-I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include",
+            "-I/Users/romaindespoulain/miniforge3/envs/pops/include",
+            "-isystem",
+            "/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-Bcpp-20261007-89d64f8e7a0a/build/_deps/googletest-src/googletest/include",
+            "-isystem",
+            "/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-Bcpp-20261007-89d64f8e7a0a/build/_deps/googletest-src/googletest",
+            "-O3",
+            "-DNDEBUG",
+            "-std=c++20",
+            "-arch",
+            "arm64",
+            "-iquote/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-Bcpp-20261007-89d64f8e7a0a/build/_deps/googletest-src/googletest/include",
+            "-I/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-Bcpp-20261007-89d64f8e7a0a/build/_deps/googletest-src/googletest/include",
+            "-O0",
+            "-Xpreprocessor",
+            "-fopenmp",
+            "-I/Users/romaindespoulain/miniforge3/envs/pops/include",
+            "-c",
+            "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/counterreview.cpp",
+            "-o",
+            "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/counterreview-v3.o"
+          ],
+          "exit": 0,
+          "seconds": 5.772333860397339,
+          "log_sha256": "e50ce240c1c495fc72bac7937b4f382be860e164430525a857d72424ded3474f"
+        },
+        {
+          "phase": "link",
+          "argv": [
+            "rtk",
+            "proxy",
+            "/usr/bin/clang++",
+            "-O3",
+            "-DNDEBUG",
+            "-arch",
+            "arm64",
+            "-Wl,-search_paths_first",
+            "-Wl,-headerpad_max_install_names",
+            "-DKOKKOS_DEPENDENCE",
+            "-Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops/lib",
+            "-Wl,-commons,use_dylibs",
+            "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/counterreview-v3.o",
+            "-o",
+            "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/counterreview-v3",
+            "-Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops/lib",
+            "/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-Bcpp-20261007-89d64f8e7a0a/build/lib/libgtest.a",
+            "/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-Bcpp-20261007-89d64f8e7a0a/build/tests/libpops_gtest_main.a",
+            "/Users/romaindespoulain/miniforge3/envs/pops/lib/libkokkoscontainers.5.2.0.dylib",
+            "/Users/romaindespoulain/miniforge3/envs/pops/lib/libkokkosalgorithms.a",
+            "/Users/romaindespoulain/miniforge3/envs/pops/lib/libkokkossimd.a",
+            "/Users/romaindespoulain/miniforge3/envs/pops/lib/libkokkoscore.5.2.0.dylib",
+            "/Users/romaindespoulain/miniforge3/envs/pops/lib/libomp.dylib",
+            "/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib",
+            "/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib",
+            "/Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib",
+            "/Users/romaindespoulain/miniforge3/envs/pops/lib/libhdf5.dylib",
+            "/Users/romaindespoulain/miniforge3/envs/pops/lib/libcrypto.dylib",
+            "/Users/romaindespoulain/miniforge3/envs/pops/lib/libcurl.dylib",
+            "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libpthread.tbd",
+            "/Users/romaindespoulain/miniforge3/envs/pops/lib/libsz.dylib",
+            "/Users/romaindespoulain/miniforge3/envs/pops/lib/libz.dylib",
+            "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libdl.tbd",
+            "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libm.tbd",
+            "/Users/romaindespoulain/miniforge3/envs/pops/lib/libfftw3.dylib"
+          ],
+          "exit": 0,
+          "seconds": 0.09811925888061523,
+          "log_sha256": "9db19ec4b2a3e9a3a4d08dd82da880d68de94b093d0118e8d34694fec7a33552"
+        },
+        {
+          "phase": "run",
+          "argv": [
+            "rtk",
+            "proxy",
+            "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/counterreview-v3",
+            "--gtest_filter=IndependentCapacityReview.*",
+            "--gtest_output=xml:/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/counterreview-v3.xml"
+          ],
+          "exit": 0,
+          "seconds": 0.8322598934173584,
+          "log_sha256": "83ba6d64222c3156964b3127a1c31451082a1c1650281238a2cf4753facf1263"
+        }
+      ]
+    }
+  },
+  "new_test_review": "Eight real isolated DSO negative test cases structurally reject missing/null/empty/future/near contract plus missing count/identity/primary; first five verify callback invocation count==0. Reviewed source only; not run by this reviewer.",
+  "no_new_blocking_source_defects": true,
+  "qualification_limits": [
+    "Root must rebuild official Native against actual integrated source/header signature",
+    "Actual loader/System transaction and Python Native calls unrun here",
+    "MPI/GPU/science and exact-head CI not claimed"
+  ],
+  "patch_pin": {
+    "patch": "/Users/romaindespoulain/dev/tmp/sol61-uniform-aux-capacity-authority-29e9143c-20261008/production-capacity-v3.patch",
+    "sha256": "a08d2cff5fc5e02d199c7238b96cfe83f475af9a8763695dce07428cec10a868",
+    "author_ready_sha256": "0a2a115140778afe23a77ada31c869ccae82873a4972580ddec21f7fb4e26c3b",
+    "qualification": "independent earlier physical overlay review; final patch pins recorded from author and patch SHA independently verified below"
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "source_commit": "0cd16d012b3932b64a01a43b942afc15debedd29",
+  "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "python": "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+  "package_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py",
+  "package_version": "1.1.0",
+  "native_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+  "native_sha256": "1afb920397c7fca0d683444c8c21b3fbc908847bdd7e8906457e6dd384c44c27",
+  "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=62398f3c13c193eb48db07518735fe755e6d108821adffc37acccd8fcea290eb;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+  "doctor": {
+    "interpreteur": [
+      true,
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python (3.12) ; extension /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so"
+    ],
+    "numpy": [
+      true,
+      "2.5.1"
+    ],
+    "kokkos": [
+      true,
+      "Kokkos module (thread/device resources selected before initialization)"
+    ],
+    "compilateur": [
+      true,
+      "/usr/bin/clang++ [baked by the _pops build] ; -std=c++20 accepted"
+    ],
+    "include": [
+      true,
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include"
+    ],
+    "headers_sync": [
+      true,
+      "headers == module build (sig 62398f3c13c1...)"
+    ],
+    "kokkos_root": [
+      true,
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040"
+    ],
+    "threads": [
+      true,
+      "OMP_NUM_THREADS=1 ; first System created=False"
+    ]
+  },
+  "verified_source_files": 1089,
+  "source_files_sha256": "2a76df2abd417e114cd22ed104575efac76b5fa7048abdd11a8b374196b430cc",
+  "scope": "installed production PoPS, local CPU Kokkos, MPI-enabled Dim=2",
+  "sys_path": [
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/scripts",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python312.zip",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/lib-dynload",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages"
+  ]
+}

@@ -1,0 +1,210 @@
+{
+  "base": "98804c6849c9966e05b5397126bab983a5fa0227",
+  "scope": "ONE existing C++ fixture only; no production/SDK/header/runtime/environment change",
+  "patch": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/pending-proof-canonical-state-fixture-v2.patch",
+  "patch_sha256": "918418df0c230f97a032aa5f23cfdb1b9529904e3dbb5f5aa0fc9a482d0416e6",
+  "candidate_source_sha256": "2aacc583aaff8f12aad97eca909e93aa0344824b1d6edf9e231bfaa212aefad6",
+  "cause": "Actual original988 serial fault2 clears all proof records on rank0, returns no retained proof, then empty-expression fallback ignores predictor ledger because key.state=tracer/state disagrees with installed canonical state route=tests.spatial-proof/tracer/state@1. Materialization accepted without proofs; consume returned false, EXPECT_THROW failed, then ledger rollback inactive exception. MPI2 original passes because rank-local retained proof presence differs. This is NOT absent rank1: damage already onrank0, nor norm2: fixture never callsnorm2.",
+  "correction": "Single installed state_identity shared by block route, boundary, and predictor ledgers. All8damages and positivecase retained, rank0 target unchanged. All original throw/rollback/value checks retained, fault2 now additionally authenticates exact original serial fluxidentity refusal or MPI collective wrapper. SCOPED_TRACE identifieseachfault.",
+  "actual_experiments": "Instrumented unchanged988 diagnostic: world1fail onlyfault2; world2pass all9faultvalues onbothranks. Initialcanonicalstatecandidate passes1/2; finaldurablecausev2 passes1/2 withdistinctrankXML and currentbinary/source hashgates. Each newexperiment compiles1TU only, links physicallycopiedadmitted988 objects/archives/libs.",
+  "final_xml": [
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/candidate-v2-world1-rank0.xml",
+      "sha256": "642fcd6fecb4849c6fb8eabf6b5a7325aecb6f713f85aa2858a58bd0a6533060",
+      "attributes": {
+        "tests": "1",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "0.023",
+        "timestamp": "2026-10-09T02:01:15.837",
+        "name": "AllTests"
+      }
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/candidate-v2-world2-rank0.xml",
+      "sha256": "68df0781fc739dec11d078c80ef48c00445b7f5985f17d6503938ce999aee0a7",
+      "attributes": {
+        "tests": "1",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "0.026",
+        "timestamp": "2026-10-09T02:01:16.020",
+        "name": "AllTests"
+      }
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/candidate-v2-world2-rank1.xml",
+      "sha256": "d01e26ecbeb2c46130d342c411a7b5c96e47dcc4b266c4b541d99e7b2901fca3",
+      "attributes": {
+        "tests": "1",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "0.026",
+        "timestamp": "2026-10-09T02:01:16.020",
+        "name": "AllTests"
+      }
+    }
+  ],
+  "final_ready": {
+    "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/candidate-v2.cpp",
+    "source_sha256": "2aacc583aaff8f12aad97eca909e93aa0344824b1d6edf9e231bfaa212aefad6",
+    "binary": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/candidate-v2",
+    "binary_sha256": "cc15af605f3b476d26aaace940d54cf31012ee01f9a085fc0f1a7fc7857035df",
+    "object_sha256": "7d4e4388502dfd1b453d28825d96b903798b2ac074924198d39b7fc437d924f5"
+  },
+  "linked_input_count": 25,
+  "linked_inputs": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_layout_transfer.cpp.o": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/0/amr_layout_transfer.cpp.o",
+      "sha256": "f9bd7bbeb0727fa423ae531263a18a1f5b08c040d0359c876817e1816ae70a60"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/1/amr_field_solver_builtin.cpp.o",
+      "sha256": "4894afb2750ac6ad2c151552d3dc5403fcc18c1f630778b2ecd3e2f6406dd610"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_component.cpp.o": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/2/amr_field_solver_component.cpp.o",
+      "sha256": "bf82a9679da0ee4e4d9c8fe1e49860b583ffac6c0fd7e2271f9bca66490a408c"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/3/amr_system.cpp.o",
+      "sha256": "462a5b558cb93fa4d35c76bfd2784e4e62b5a9a764c4f8dbd0236e92ea36dd90"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-Bcpp-20261007-89d64f8e7a0a/build/lib/libgtest.a": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/5/libgtest.a",
+      "sha256": "9225d577fcfe4c234015dceecaa038f15217419aa114e45eb61d1a972034a584"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-Bcpp-20261007-89d64f8e7a0a/build/tests/libpops_gtest_main.a": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/6/libpops_gtest_main.a",
+      "sha256": "3b29a35c13b6de619b705210a960d1041cb27c5d2aa56714019e26b8c9715b18"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/libpops_runtime_system_abi.a": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/7/libpops_runtime_system_abi.a",
+      "sha256": "c5948403ebbee031ddfe0ad27f7dd0a0e074e80bcaa60dbe87f4ab3788f5b75f"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/libpops_runtime_core.a": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/8/libpops_runtime_core.a",
+      "sha256": "4601bf18a85e685b6b8a78767369dc1ba8c6fd06d47f22335c28534e991c3e34"
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/libkokkoscontainers.5.2.0.dylib": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/9/libkokkoscontainers.5.2.0.dylib",
+      "sha256": "c0c8db330d9d203b8591dec23fa24f76219780fa1edafbd44ec60eec65ab61a2"
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/libkokkosalgorithms.a": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/10/libkokkosalgorithms.a",
+      "sha256": "f536894ca4589d0c1728686d9ea0747fcdf4e1a56201b5eeaf3feda1adaa7028"
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/libkokkossimd.a": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/11/libkokkossimd.a",
+      "sha256": "b6ee62fd760116aafd49a2239173ec36705ff00df11e271a0724c71f3bf7bf32"
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/libkokkoscore.5.2.0.dylib": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/12/libkokkoscore.5.2.0.dylib",
+      "sha256": "32ee292f9fc0341397c585aa08992d2120429c9221a3ca6e06e34d008201ffc3"
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/libomp.dylib": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/13/libomp.dylib",
+      "sha256": "844796bbd71a7492d78776fad75a306fbb1206e521c1d4ca593e5c1b83d338f1"
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/14/libmpicxx.dylib",
+      "sha256": "f86a1c41429720377bf19bfe446579dc9eb97d7636ebacc4be1b44351f629963"
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/15/libmpi.dylib",
+      "sha256": "45c64151fa98d5071d5f3ccaaf00667be137d1258c803625434f4609efff4be7"
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/16/libpmpi.dylib",
+      "sha256": "40c8476c0b9e6507c0d0eac8e393a3489121e62a7ab409bb60668a9efcb2d905"
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/libhdf5.dylib": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/17/libhdf5.dylib",
+      "sha256": "ca024fb0a462cf0b0c9c9e485298ddaea06cc69d3521e7b149cc7aad1b36ea5a"
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/libcrypto.dylib": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/18/libcrypto.dylib",
+      "sha256": "350780cccbc70716e6ba36b0bce2e54436660700c93660c9e0f7f899be788da9"
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/libcurl.dylib": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/19/libcurl.dylib",
+      "sha256": "c20d9d4ae09433aaec8400ce4d21b4a5d1742321d346cd506befd71980855f65"
+    },
+    "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libpthread.tbd": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/20/libpthread.tbd",
+      "sha256": "20cfce043f11a083e2eb6111efe3579919a8082fa4cc912a7bd839af2010ec57"
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/libsz.dylib": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/21/libsz.dylib",
+      "sha256": "418c7d818ef8e54de445302bbc017a75394088a972ba152c5541bab12b418585"
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/libz.dylib": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/22/libz.dylib",
+      "sha256": "8020844faf07e3a0a3058cf2eb8cc859ee3981297cdb3f3620db0714e2813b77"
+    },
+    "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libdl.tbd": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/23/libdl.tbd",
+      "sha256": "20cfce043f11a083e2eb6111efe3579919a8082fa4cc912a7bd839af2010ec57"
+    },
+    "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libm.tbd": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/24/libm.tbd",
+      "sha256": "20cfce043f11a083e2eb6111efe3579919a8082fa4cc912a7bd839af2010ec57"
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/libfftw3.dylib": {
+      "copy": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-pending-proof-fixture-98804-20261009/linked/25/libfftw3.dylib",
+      "sha256": "4ff65098b93a5374006cdf1b0af91594aed526935b028268b95e8fad96ecd7d7"
+    }
+  },
+  "header_manifest_sha256": "d4895206ad6df44d10f6542360d4e3cd57d3206439e6916846b9bd61a7765b58",
+  "forward_apply_exact": true,
+  "Main_apply_check_exit": 0,
+  "Main_apply_check_stderr": "",
+  "Main_HEAD_at_readonly_apply_check": "98804c6849c9966e05b5397126bab983a5fa0227",
+  "Main_dirty_lines_at_readonly_apply_check": 1,
+  "evidence_sha256": {
+    "diagnostic-world2-rank1.xml": "5ce1250c47c8bce94ad51d369bf3cb1085000b9cedea03a5b389c004e54d98e4",
+    "diagnostic-world2-rank0.xml": "5ce1250c47c8bce94ad51d369bf3cb1085000b9cedea03a5b389c004e54d98e4",
+    "candidate-build.json": "de36beee36b1e969467151d5293a967095ba2b6426f4b611276516060913c7a1",
+    "candidate-ready.json": "b129b8a810e23826e184792638147e4cbd3d24c412727b1d229182520be06963",
+    "plan.json": "503b35089040cd860383db719b4d29803e7262245b7e8c7a37d28278f1e7c25d",
+    "candidate-v2-ready.json": "8b56a8bf2376a152ccfc7dfc2e804b8b0662e6809c43413429c105ed9594d4be",
+    "diagnostic-world1.log": "871b870b75ef4c7e04b4725624e72cbc2fbab24d73ff532595ac475ff9fcce92",
+    "candidate.cpp": "a0491d8a609b994415162a21fcc61ab7bdde6ab58a4226a503759b8b36e7de66",
+    "diagnostic-world2.log": "dc3257fd3700e5f1e69b707d81c43ab0e3f59eb1b777870538aa046d3ddcfc6a",
+    "candidate-v2-world1-rank0.xml": "642fcd6fecb4849c6fb8eabf6b5a7325aecb6f713f85aa2858a58bd0a6533060",
+    "candidate-world2-rank1.xml": "b04760f4ce8a2e2e59cb095e94c7306957d5edaee3ab444d233a64b4093c7fe3",
+    "candidate-world2-rank0.xml": "b04760f4ce8a2e2e59cb095e94c7306957d5edaee3ab444d233a64b4093c7fe3",
+    "linked-inputs.json": "459c739f19eab191b87607cdfb6228fdaff53117fdc1ff67c6eab54a378090ee",
+    "candidate-commands.json": "2076b9112db83b9ce0cbef4acb95cd14b8f193deb53316359ec214ed362082bd",
+    "candidate-v2-build.json": "77af58208bc225c57d06f230e97bc73fdc4655b26f380dc9f652847e86ffd4ac",
+    "diagnostic-build1.log": "9db19ec4b2a3e9a3a4d08dd82da880d68de94b093d0118e8d34694fec7a33552",
+    "baseline-original.cpp": "d6644a5805d2bb29aca820d5192848f149352774c2931e43b41e9cb2fabbbbf9",
+    "diagnostic-build0.log": "53f8e6e4023eacda4ed1f7c01dadbdc34f54dd72be284c80202be388ef7eef61",
+    "build_and_run.py": "76e4d9712e6e911e764fba8d66b93fc2b2ddcd7043f67c67cbe44b5d6d05cf67",
+    "candidate-v2.cpp": "2aacc583aaff8f12aad97eca909e93aa0344824b1d6edf9e231bfaa212aefad6",
+    "candidate-v2-world2.log": "a81982f4df0866efe398fb21c2a61ef2b48023fc210ba292a17ac6506b62967a",
+    "candidate-v2-world2-rank1.xml": "d01e26ecbeb2c46130d342c411a7b5c96e47dcc4b266c4b541d99e7b2901fca3",
+    "diagnostic-commands.json": "16f6de0408897572ecfd7f10e204ac1e4f56e3758099216adeca9aa68ad246ad",
+    "candidate-world1-rank0.xml": "42db06a25c2e5149768968d7bad2bbbfcd7c16b2f70d3dff2ce827e46e8ebbbe",
+    "candidate-v2-world2-rank0.xml": "68df0781fc739dec11d078c80ef48c00445b7f5985f17d6503938ce999aee0a7",
+    "diagnostic-ready.json": "d2d1e44bb8bd1334ac301000684b534ef292a41d2df79198e834e1ea54d77af6",
+    "pending-proof-canonical-state-fixture-v2.patch": "918418df0c230f97a032aa5f23cfdb1b9529904e3dbb5f5aa0fc9a482d0416e6",
+    "candidate-v2-world1.log": "1daa7dec90618ca608df49eaa8bf9f36f8526ebf3d878e82a2e0a99264e16e6d",
+    "candidate-v2-build0.log": "c4fc951806bcc10c89358c942c2325eee535417c21eaa0a32528464804ce4d18",
+    "candidate-v2-build1.log": "9db19ec4b2a3e9a3a4d08dd82da880d68de94b093d0118e8d34694fec7a33552",
+    "diagnostic-build.json": "ccadd3ea4e47be87c75285ae021e541289eba485905d30acf1fd8871b6be9105",
+    "candidate-build0.log": "6e6de0b2aecd524129d056ee62fb47a9ce644fe5bf87c9d39b8c4363a24b4971",
+    "diagnostic-world1-rank0.xml": "f9334f4d1f727f3fd5c7d49847c7dfee0c582ea64aebd51936eb3a7597091283",
+    "snapshot-header-pins.json": "d4895206ad6df44d10f6542360d4e3cd57d3206439e6916846b9bd61a7765b58",
+    "candidate-build1.log": "9db19ec4b2a3e9a3a4d08dd82da880d68de94b093d0118e8d34694fec7a33552",
+    "diagnostic.cpp": "41da0304607d4e8115331a3ba218ecf17b206d807b72f8df814ed8289b3d582b",
+    "candidate-world2.log": "8fa5e39bbd606a5e0772c74859428ec9fd7d5a387b1072186a41b6b7bbb2f865",
+    "candidate-world1.log": "f9e62bade3442be8070e1a650ef22d70d1dd5d0dad27ed6224a0d0a00be95a48",
+    "candidate-v2-commands.json": "6428f3b51bffa55af3d74df380918ad35176a173d5c9704c0457b2d917437b6d"
+  },
+  "limits": "Targeted1existingcase only per1/2ranks; no broadfullsuite rerun/CI/nativeextensionqualification/GPU/3D claim. Main and environment readonly; actual25inputs copied beforeRootnewSDK/build so externalexperiments dependonly frozen988snapshot. XML rankassociation via distinctPMI_RANK paths and recordedlaunch, oldGTest harness no explicitrankproperty.",
+  "Main_environment_mutated": false
+}

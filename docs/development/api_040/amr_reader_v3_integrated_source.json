@@ -1,0 +1,58 @@
+{
+  "actual_codec_correction": {
+    "counts": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 208
+    },
+    "historical_readers_unchanged": true,
+    "source_commit": "aa2656ab",
+    "xml": {
+      "bytes": 36101,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/amr-reader-v3-actual-codec-integrated.xml",
+      "sha256": "7473e1117457263d8bd48147dfb09ba4e1b07f9cddbed41f5dbc11e0e64d92c3"
+    }
+  },
+  "actual_reader_refusal": {
+    "bytes": 1933,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-amr12-root-reception-serial/candidate-first-refusal.json",
+    "sha256": "947cccbb2e504389929cd8c42e6bcd8cc46e2cf9c2109da7ebae98a5d72df3b5"
+  },
+  "counts": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 186
+  },
+  "final_reader_correction": {
+    "errors": 0,
+    "failures": 0,
+    "passed": 357,
+    "scope": "offline Source reader/candidate/adversaries; no native execution",
+    "seconds": 8.02,
+    "skips": 0,
+    "source_commit": "05159edd06dddd05ed23105d50a12bb65217e95e",
+    "tests": 357,
+    "xml": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/amr-reader-v3-final-integrated-05159edd.xml",
+      "sha256": "b5737da599e9486e6c9ee58e07e4e675c3d6793dc27f945c0f002df8e1ea5520"
+    }
+  },
+  "native_extension_loaded": false,
+  "schema": "root.api040.amr-reader-v3-source@1",
+  "scientific_reception": false,
+  "scientific_reception_followup": "sdkbb416_amr12_scientific_reception.json",
+  "second_actual_reader_refusal": {
+    "bytes": 1368,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-amr12-root-reception-serial/candidate-second-refusal.json",
+    "sha256": "3ebf4313ae08052393e088283831001f3710bcdabac1aa5b38e22880cdc005f8"
+  },
+  "source_commit": "34695109",
+  "source_only": true,
+  "xml": {
+    "bytes": 32196,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/amr-reader-v3-integrated-34695109.xml",
+    "sha256": "f9b8290435aeed6e892aef9313e91ee848f9abfce915be19a77c4b974adba139"
+  }
+}

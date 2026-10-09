@@ -1,0 +1,142 @@
+{
+  "after": {
+    "identity.json": {
+      "bytes": 2917,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/after/identity.json",
+      "sha256": "3e448c93e31dcbad8b6f4b2558f23f7d13205d8669dbe9ab0818cc665209280c"
+    },
+    "source-files.json": {
+      "bytes": 132419,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/after/source-files.json",
+      "sha256": "bb592911dad61f6bfb15bd0dda602235d8ea2c9dbd57cbd983bab63db3f51b84"
+    }
+  },
+  "before_after_identity_and_source_bytes_equal": true,
+  "counts": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 1
+  },
+  "duration_seconds": 76.9397764171008,
+  "native_scientific_acceptance": false,
+  "qualification": "native pytest representative passed; independent saved-state reception and full variants pending",
+  "raw": {
+    "identity.json": {
+      "bytes": 2917,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/identity.json",
+      "sha256": "3e448c93e31dcbad8b6f4b2558f23f7d13205d8669dbe9ab0818cc665209280c"
+    },
+    "pytest.log": {
+      "bytes": 1257,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest.log",
+      "sha256": "dc6545c3a675e5c3c23830ab005ef64ce98224f51d64bef57fb16cb3e2de7392"
+    },
+    "pytest.xml": {
+      "bytes": 961,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest.xml",
+      "sha256": "735bfe80150b081f4193c5180af3503f5828b565d00f7e5e02d80db6c8e8db7e"
+    },
+    "result.json": {
+      "bytes": 1722,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/result.json",
+      "sha256": "0660c2dba7ff2973806e6be37253d634700004330895b9ee96f84b89d140ab48"
+    },
+    "source-files.json": {
+      "bytes": 132419,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/source-files.json",
+      "sha256": "bb592911dad61f6bfb15bd0dda602235d8ea2c9dbd57cbd983bab63db3f51b84"
+    }
+  },
+  "returncode": 0,
+  "saved_artifacts": {
+    "accepted-checkpoint.npz": {
+      "bytes": 31554,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/accepted-checkpoint.npz",
+      "sha256": "17abad0205c65b9bd901512005f75401419c1c8dba20f4b392a434cc1f2993ee"
+    },
+    "accepted-level0.npz": {
+      "bytes": 4244,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/accepted-level0.npz",
+      "sha256": "72e866d550f262c84c9314df83a16875d8916b52f3350bac80ae8c81c56f102c"
+    },
+    "accepted-level1.npz": {
+      "bytes": 12116,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/accepted-level1.npz",
+      "sha256": "5c3fbc9d20fd49ef0b2d758c33ceaabecdf06ea5ccef0cdd4954a8ac7cd19dee"
+    },
+    "carrier-registry.json": {
+      "bytes": 19610,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/carrier-registry.json",
+      "sha256": "542e0c80f5dba31de0c596dbd6377afda8a895bb1cc327a58a7310fb59903f4f"
+    },
+    "continuous-checkpoint.npz": {
+      "bytes": 31825,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/continuous-checkpoint.npz",
+      "sha256": "fa41db0b0ee8a3dc90dce89fd0fee771b108c556b684c87e075a9bc62508dd66"
+    },
+    "continuous-level0.npz": {
+      "bytes": 4244,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/continuous-level0.npz",
+      "sha256": "7a11df02ea7358b8849b1cb4feee99b3823b263721e5ee51bac490a361c83202"
+    },
+    "continuous-level1.npz": {
+      "bytes": 12116,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/continuous-level1.npz",
+      "sha256": "c0031ecd9001ef22c5a16378af3012f304c60fb3b2c5b7207b9f3daada651947"
+    },
+    "initial-level0.npz": {
+      "bytes": 2348,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/initial-level0.npz",
+      "sha256": "c5b6df01eb2e22e5382a15361b117aa61c4940ddbec048bcdb47cddeb615b7af"
+    },
+    "initial-level1.npz": {
+      "bytes": 7148,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/initial-level1.npz",
+      "sha256": "7db22eafa0edc82f67037d58f2a310903e5e8185317c35317b4c1fb205e5bc9e"
+    },
+    "program-2.cpp": {
+      "bytes": 73001,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/program-2.cpp",
+      "sha256": "1fe452ee233d1ca4e3fa0d825bc99e051beb428684bab9eae71e4b420f16e0c8"
+    },
+    "program-2.ir.json": {
+      "bytes": 334270,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/program-2.ir.json",
+      "sha256": "212ce623cd17a1f45d1c81c1337f061e01dd9b376c30d6e3c8231ccc9a6ade9f"
+    },
+    "receipt.json": {
+      "bytes": 49261,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/receipt.json",
+      "sha256": "6d024a987fe2074e6cfd22e779b678fadbc4692253e1363db21b789f44cc3318"
+    },
+    "reloaded-level0.npz": {
+      "bytes": 4244,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/reloaded-level0.npz",
+      "sha256": "72e866d550f262c84c9314df83a16875d8916b52f3350bac80ae8c81c56f102c"
+    },
+    "reloaded-level1.npz": {
+      "bytes": 12116,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/reloaded-level1.npz",
+      "sha256": "5c3fbc9d20fd49ef0b2d758c33ceaabecdf06ea5ccef0cdd4954a8ac7cd19dee"
+    },
+    "replay-checkpoint.npz": {
+      "bytes": 31822,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/replay-checkpoint.npz",
+      "sha256": "9a8dcc7ad278b41e7d50d7addbdb451d56f358e5eaa027907a8e759c40028c4c"
+    },
+    "replay-level0.npz": {
+      "bytes": 4244,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/replay-level0.npz",
+      "sha256": "7a11df02ea7358b8849b1cb4feee99b3823b263721e5ee51bac490a361c83202"
+    },
+    "replay-level1.npz": {
+      "bytes": 12116,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-relay-amr12-representative-serial-dim2/pytest-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/replay-level1.npz",
+      "sha256": "c0031ecd9001ef22c5a16378af3012f304c60fb3b2c5b7207b9f3daada651947"
+    }
+  },
+  "schema": "root.api040.amr-tag-selection-representative@1",
+  "source_commit": "fc670393ce346557583a64dac82908541483fef8",
+  "verified_installed_source_files": 1132
+}

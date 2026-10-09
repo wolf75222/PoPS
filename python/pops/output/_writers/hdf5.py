@@ -562,6 +562,10 @@ def _writer_plan(
             "valid_cells": valid,
             "cell_volumes": volumes,
         }
+        if geometry.node_coordinates is not None:
+            nodes = "geometry/%04d/node_coordinates" % index
+            arrays[nodes] = geometry.node_coordinates
+            datasets["geometries"]["%s#%d" % geometry.key]["node_coordinates"] = nodes
     for index, _field in enumerate(fields):
         name = "fields/%04d/values" % index
         global_row = snapshot_data["fields"][index]

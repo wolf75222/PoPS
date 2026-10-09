@@ -1,0 +1,11 @@
+--- a/tests/python/native_dimensions.json
++++ b/tests/python/native_dimensions.json
+@@ -1,6 +1,8 @@
+ {
+   "default": 2,
+   "files": {
++    "tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py": 1,
++    "tests/python/integration/runtime/test_m10_self_consistent_sg.py": 1,
+     "tests/python/integration/runtime/test_public_drift_diffusion_matrix.py": 1,
+     "tests/python/integration/runtime/test_uniform_cp9_dim1_runtime.py": 1,
+     "tests/python/integration/runtime/test_uniform_cp9_dim3_runtime.py": 3

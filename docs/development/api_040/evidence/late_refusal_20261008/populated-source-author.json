@@ -1,0 +1,74 @@
+{
+  "Native_loaded": [],
+  "Source_base": "e01eb5b8b39b20762639be1e7dde45d12542b770",
+  "Source_validation": {
+    "actual_cases": 4,
+    "generated_new_CPP_numeric_limiter_checked": true,
+    "operations": "validate resolve actual detach ProgramModelGraph authority SSP certificate emit; original Euler/twoRK2 spellings and new populated Euler",
+    "run_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-public-populated-history-late-refusal-candidate-v1-29e-20261008/source-runs/20261008T202117155142Z/receipt.json",
+    "xml": "/Users/romaindespoulain/dev/tmp/PoPS-public-populated-history-late-refusal-candidate-v1-29e-20261008/source-runs/20261008T202117155142Z/pytest.xml"
+  },
+  "declared_plan_sha256": "ef7b25a1a01f04082e71aece05900fd12c8c6402865115720e67e3d8d20ba0e3",
+  "duration_JSON_only_difference": "/_meta/ci_20261008_late_refusal/basis",
+  "files": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-populated-history-late-refusal-candidate-v1-29e-20261008/run_source_panel.py": {
+      "bytes": 1156,
+      "sha256": "82fbbfce2ba94c709ca58f081bfdcc59dfda44d379eef480e9d0b5ce69d39a9f"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-populated-history-late-refusal-candidate-v1-29e-20261008/source-runs/20261008T202117155142Z/pytest.xml": {
+      "bytes": 1149,
+      "sha256": "09a197e8cd8793cd06910cfbcaf3cd913ec6b7600de17cbc53cd2e3d7fb6c91c"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-populated-history-late-refusal-candidate-v1-29e-20261008/source-runs/20261008T202117155142Z/receipt.json": {
+      "bytes": 671,
+      "sha256": "31ed17d9e8bd7ec15f3ddba3bf8d7232a725f0a272a3b483fef05588dd1412a5"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-populated-history-late-refusal-candidate-v1-29e-20261008/source-runs/20261008T202117155142Z/tmp/test_public_author_resolve_det0/program.cpp": {
+      "bytes": 33992,
+      "sha256": "9303c9b20d246ecdf8e79cc17f15fcf35360b07db51fc325a89821f3ed2503e5"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-populated-history-late-refusal-candidate-v1-29e-20261008/source-runs/20261008T202117155142Z/tmp/test_public_author_resolve_det1/program.cpp": {
+      "bytes": 38675,
+      "sha256": "9e8ae1266db7ebb86b4070828b5e75c35210acfb78de0aa635727e1902770ebe"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-populated-history-late-refusal-candidate-v1-29e-20261008/source-runs/20261008T202117155142Z/tmp/test_public_author_resolve_det2/program.cpp": {
+      "bytes": 38688,
+      "sha256": "dd0bc1f147757208a0607dc9b7c22ef06a7665fa0e19109893ba3e8ea7e9d787"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-populated-history-late-refusal-candidate-v1-29e-20261008/source-runs/20261008T202117155142Z/tmp/test_public_author_resolve_det3/limiter-expression.txt": {
+      "bytes": 202,
+      "sha256": "897ca18c99e6c13fa7aab750ffde939df038e62b58266af71580f2f57b822766"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-populated-history-late-refusal-candidate-v1-29e-20261008/source-runs/20261008T202117155142Z/tmp/test_public_author_resolve_det3/program.cpp": {
+      "bytes": 34825,
+      "sha256": "ee909418be98e8335a217f157afcd59aca23fba19f27f83c8ceb80aaf8b5a9e7"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-populated-history-late-refusal-candidate-v1-29e-20261008/source-tests/test_populated_source.py": {
+      "bytes": 2642,
+      "sha256": "6d19cab3422d816ac37b0816c5a389c1d3b68bd22fc74b821432328dc3618a0a"
+    },
+    "tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py": {
+      "baseline_sha256": "740335fa944d79b4764676a36ad5d650938116b8118a75238b4a8680225c794a",
+      "bytes": 21992,
+      "candidate_sha256": "b2c7c89a7280656a4b4eb02607155c0285e31bbaa26c5678494a1559eab8580b"
+    },
+    "tests/python/support/diffusion_field_late_refusal_oracle.py": {
+      "baseline_sha256": "fe4922ae73c2ef2048194768db0c8a9ef50fab5a93ba0a10e42e2cf110d7ab20",
+      "bytes": 4791,
+      "candidate_sha256": "23c6821833b3ad6b93ce6a06cae3deee49c4db8cdf6151286ae1869beba95d0f"
+    },
+    "tests/python/support/public_diffusion_field_late_refusal_case.py": {
+      "baseline_sha256": "b3aad8c9e9808ba12e8a70d35167677482be1dc4c83f35bc661bb46b793f539f",
+      "bytes": 9467,
+      "candidate_sha256": "4c071dc2d401b3d8e8bf39d8f7f03249fddd1054cf0a2368a633f35a64b35477"
+    },
+    "tests/python/test_durations.json": {
+      "baseline_sha256": "88aa1c818fa4adc1b0fd7d1dffc4859b50e427fb7956ade733477c9b7df6cfc3",
+      "bytes": 327598,
+      "candidate_sha256": "796c2559d268433eca8db9f33af327ee67990dfe5be1cf6d828098cef29177f0"
+    }
+  },
+  "main_modified": false,
+  "patch_sha256": "ef3b3e403f3feb67099793db0da640429acf708df7e04d7505465f03fb9632fb",
+  "status": "SOURCE_PREPARED_FOR_ROOT_REVIEW_AND_FUTURE_NATIVE_GO"
+}

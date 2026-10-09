@@ -1,0 +1,179 @@
+{
+  "reviewer": "sol61_capacity_review independent nonauthor",
+  "timestamp_utc": "2026-10-08T21:13:52.349526+00:00",
+  "scope": "Source-only counterreview of exact physical V2; no Main modifications, environment/install edits, Native/runtime build, ROMEO, or science qualification",
+  "candidate_patch_sha256": "a6e4b8c8761fd2cee0cfacd8453faa7946932a4d87962ed36466839f24a52325",
+  "verdict": "BLOCKED_V2_CONTRACT_AND_HAND_FIXTURE_GAPS",
+  "blocking_defects": [
+    {
+      "id": "C1",
+      "severity": "P1",
+      "file": "include/pops/runtime/program/module_metadata.hpp",
+      "line": 262,
+      "finding": "Mandatory Uniform clock manifest count/identity/primary exports change installation contract without a typed explicit version discriminator. Reader must require exact owned-clock-manifest contract before calling count/table/primary callbacks. Old or incompatible packages must fail closed explicitly."
+    },
+    {
+      "id": "C2",
+      "severity": "P1",
+      "file": "tests/python/support/explicit_program.py",
+      "line": 263,
+      "finding": "Handwritten Uniform DSO fixture emits no mandatory count/identity/primary clock exports. It configures real ProgramContext primary pops.test.clock.macro at line 278; new System install reader always requires exports at system_io.cpp:849. V2 patches only two C++ hand fixtures, leaving this used Python bridge broken."
+    }
+  ],
+  "source_findings": [
+    {
+      "check": "future capacity equals actual POPSAUX2/3 codec worst image",
+      "result": "PASS",
+      "evidence": "counterreview.cpp ExactCodecMaximumOverMixedHistoriesAndUtf8; 192 exact maximum images and 1536 accepted observation subsets across Dim=1,2,3, 16 null/non-null accepted masks and ASCII/UTF-8/113-byte/500-byte histories. No accepted point inserted into current registry."
+    },
+    {
+      "check": "point wire arithmetic and size_t edges",
+      "result": "PASS",
+      "evidence": "67-byte point with 3-byte UTF-8 clock proves 64-byte fixed wire part; MAX-9+9 passes and MAX-9+10 throws. Checked sum guards extension and future increments. Future_point-present cannot underflow because max clock includes every existing accepted point."
+    },
+    {
+      "check": "pending accepted observation / strict durable pending input",
+      "result": "PASS_SOURCE_HELPER",
+      "evidence": "Current observation removes input and unpublished derived entries, preserves only accepted non-input invalidations, rejects foreign/duplicate dirty IDs. Durable capture first refuses staged dirty input and registry active publication; invalidation codec rejects unpublished noninput."
+    },
+    {
+      "check": "accepted restore cache owns exact payload",
+      "result": "PASS_SOURCE_HELPER",
+      "evidence": "Independent aggregate component slots verify exact cache bytes, signed zero, independent ownership after source payload mutation and rejection of short payload. Cold inputs intentionally remain absent with no invented provenance."
+    },
+    {
+      "check": "System restore publication atomicity",
+      "result": "PASS_SOURCE_INSPECTION",
+      "evidence": "system_aux.cpp:914 candidate_inputs is allocated privately before candidate registry/carrier validation; line 951 static no-throw swap guard and line 959 cache swap publish with carrier, registry and dirty journal. Exceptions before publish leave live cache untouched."
+    },
+    {
+      "check": "full attempt journal retains pending cache",
+      "result": "PASS_SOURCE_INSPECTION",
+      "evidence": "system_impl.hpp:320/321 full install transaction snapshot copies staged input cache/dirty providers, restore_noexcept swaps them at 450/451. AcceptedSnapshot independently captures cache/journal at 697/698 and restores 739/740. These snapshots are distinct from durable accepted cache reconstruction."
+    },
+    {
+      "check": "installed DSO owns table, mirror and generation",
+      "result": "PASS_SOURCE_INSPECTION",
+      "evidence": "system_io.cpp reader before install entry, table enters exact collective contract, copied candidate available to ProgramContext prelude then authenticated owner/generation republished after exact step witness; checkpoint_program_auxiliary_capacity checks artifact flag, nonempty hash, owner==hash, nonzero exact install generation, and mirrored table+primary equality."
+    },
+    {
+      "check": "generic compiler math / opaque identifiers",
+      "result": "PASS_SOURCE_INSPECTION",
+      "evidence": "New capacity code depends only on codec bytes, provider kinds, owned clock data and checked arithmetic. No identifier/formula recognition or caller-supplied guessed table. Clock names remain temporal immutable graph data, qualify to canonical IDs, and do not select math."
+    }
+  ],
+  "test_results": {
+    "scope": "Independent header/codec helper only; no Native runtime build or installation",
+    "checks": [
+      {
+        "phase": "compile",
+        "argv": [
+          "rtk",
+          "proxy",
+          "/usr/bin/clang++",
+          "-I/Users/romaindespoulain/dev/tmp/sol61-uniform-aux-capacity-authority-29e9143c-20261008/production-overlay/include",
+          "-DKOKKOS_DEPENDENCE",
+          "-DPOPS_HAS_FFTW",
+          "-DPOPS_HAS_HDF5",
+          "-DPOPS_HAS_KOKKOS",
+          "-DPOPS_HAS_MPI",
+          "-DPOPS_HAS_PARALLEL_HDF5",
+          "-DPOPS_MPI_ABI=\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\"",
+          "-DPOPS_NATIVE_DIM=2",
+          "-D_FORTIFY_SOURCE=2",
+          "-I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/support",
+          "-I/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-Bcpp-20261007-89d64f8e7a0a/build/tests",
+          "-I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include",
+          "-I/Users/romaindespoulain/miniforge3/envs/pops/include",
+          "-isystem",
+          "/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-Bcpp-20261007-89d64f8e7a0a/build/_deps/googletest-src/googletest/include",
+          "-isystem",
+          "/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-Bcpp-20261007-89d64f8e7a0a/build/_deps/googletest-src/googletest",
+          "-O3",
+          "-DNDEBUG",
+          "-std=c++20",
+          "-arch",
+          "arm64",
+          "-iquote/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-Bcpp-20261007-89d64f8e7a0a/build/_deps/googletest-src/googletest/include",
+          "-I/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-Bcpp-20261007-89d64f8e7a0a/build/_deps/googletest-src/googletest/include",
+          "-O0",
+          "-Xpreprocessor",
+          "-fopenmp",
+          "-I/Users/romaindespoulain/miniforge3/envs/pops/include",
+          "-c",
+          "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/counterreview.cpp",
+          "-o",
+          "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/counterreview.o"
+        ],
+        "exit": 0,
+        "seconds": 8.84819483757019,
+        "log_sha256": "e50ce240c1c495fc72bac7937b4f382be860e164430525a857d72424ded3474f"
+      },
+      {
+        "phase": "link",
+        "argv": [
+          "rtk",
+          "proxy",
+          "/usr/bin/clang++",
+          "-O3",
+          "-DNDEBUG",
+          "-arch",
+          "arm64",
+          "-Wl,-search_paths_first",
+          "-Wl,-headerpad_max_install_names",
+          "-DKOKKOS_DEPENDENCE",
+          "-Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops/lib",
+          "-Wl,-commons,use_dylibs",
+          "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/counterreview.o",
+          "-o",
+          "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/counterreview",
+          "-Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops/lib",
+          "/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-Bcpp-20261007-89d64f8e7a0a/build/lib/libgtest.a",
+          "/Users/romaindespoulain/dev/tmp/PoPS-api040-field-rhs-v2-Bcpp-20261007-89d64f8e7a0a/build/tests/libpops_gtest_main.a",
+          "/Users/romaindespoulain/miniforge3/envs/pops/lib/libkokkoscontainers.5.2.0.dylib",
+          "/Users/romaindespoulain/miniforge3/envs/pops/lib/libkokkosalgorithms.a",
+          "/Users/romaindespoulain/miniforge3/envs/pops/lib/libkokkossimd.a",
+          "/Users/romaindespoulain/miniforge3/envs/pops/lib/libkokkoscore.5.2.0.dylib",
+          "/Users/romaindespoulain/miniforge3/envs/pops/lib/libomp.dylib",
+          "/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib",
+          "/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib",
+          "/Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib",
+          "/Users/romaindespoulain/miniforge3/envs/pops/lib/libhdf5.dylib",
+          "/Users/romaindespoulain/miniforge3/envs/pops/lib/libcrypto.dylib",
+          "/Users/romaindespoulain/miniforge3/envs/pops/lib/libcurl.dylib",
+          "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libpthread.tbd",
+          "/Users/romaindespoulain/miniforge3/envs/pops/lib/libsz.dylib",
+          "/Users/romaindespoulain/miniforge3/envs/pops/lib/libz.dylib",
+          "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libdl.tbd",
+          "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libm.tbd",
+          "/Users/romaindespoulain/miniforge3/envs/pops/lib/libfftw3.dylib"
+        ],
+        "exit": 0,
+        "seconds": 0.2627601623535156,
+        "log_sha256": "9db19ec4b2a3e9a3a4d08dd82da880d68de94b093d0118e8d34694fec7a33552"
+      },
+      {
+        "phase": "run",
+        "argv": [
+          "rtk",
+          "proxy",
+          "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/counterreview",
+          "--gtest_filter=IndependentCapacityReview.*",
+          "--gtest_output=xml:/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/counterreview.xml"
+        ],
+        "exit": 0,
+        "seconds": 0.8891220092773438,
+        "log_sha256": "8ead2f445a54615ce837da91ded2ca9eb101d189a340e75d3783273f3ae8b540"
+      }
+    ]
+  },
+  "physical_manifest": "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/physical-manifest.json",
+  "not_qualified": [
+    "actual rebuilt Native module binding/System execution",
+    "real dynamic loader runtime suite",
+    "MPI/GPU or scientific run",
+    "GitHub CI exact final head"
+  ],
+  "first_failures": "No independent helper test failure; compile/link/run first attempt passed. Author historical failures remain untouched.",
+  "supplemental_contract_review": "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/supplemental-review-v3.json"
+}

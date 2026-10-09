@@ -1,0 +1,9 @@
+# Independent static FAC reference and scoped candidate layout audit
+
+Exact author ae2c5a58a00c93328afe3f4943e546713036f20b, GPT-6.1 Sol. Source only.
+
+Actual static solve calls composite_forcing_norm_ before measuring warm initial residual. The helper sets the separate residual_operator_view to zero, applies level residual/ghost preparation and interface flux mismatch, then measures the composite norm. It leaves phi untouched. Therefore static R(0) for -Delta phi+8phi-8m with homogeneous Neumann is16 initially and16.25 at the one-step endpoint; warm phi=2 or exact phi does not shrink this reference. Existing relative stopping cutoff1.23e-11..1.25e-11 is valid without adding an absolute floor. This conclusion is scoped to the static affine route, not dynamic Newton/nonlinear boundary branches. Independent acceptance OriginalF1e-10 remains unchanged; no achieved runtime convergence claim.
+
+Candidate oracle76a8 demands Field/State patch keys and owners equal. Source confirms this for THIS builtin fixture: AmrSystem constructs hierarchy EllipticBuildRequest from engine layout.patches/distribution and state.local_rank; FAC Level allocates phi from exactly those arguments. The Field ghost allocation is independent unitghosts and is not equated to BlockSpec State ghosts. A generic arbitrary provider need not share those layouts; this fixture profile must not be reused for such a provider without its own support authority. A proposed generalized coverage/replication draft was discarded, no production or oracle change. Metadata is still a runtime-authenticated observation, not independent reconstruction of provider hashes.
+
+Author3 tests passed3.63s; coherent3+2 independent source-contract probes5 passed4.55s, zero skips. No Native/JIT/full build/ENV/Main mutation. Historical SDK13 failures and the distinction between consumed endpoint candidate and retained stage warm cache are preserved.

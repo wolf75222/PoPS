@@ -60,6 +60,36 @@ class _AmrSystemIO(_AmrSystem):
             getattr(self, "_history_persistence", None) or {},
         )
 
+    def _prepare_checkpoint_candidate(self) -> Any:
+        if self._s._step_transaction_depth() == 0:
+            return None  # Initial/end consumers retain the strict ordinary accepted-state route.
+        factory = getattr(self._s, "_prepare_checkpoint_capture", None)
+        if not callable(factory):
+            raise RuntimeError("AMR checkpoint candidate capture requires a rebuilt native backend")
+        capture = factory()
+        if capture.contract != "pops.amr.prepared-checkpoint-capture@1":
+            raise TypeError("AMR candidate capture has an unsupported native contract")
+        return capture
+
+    def _validate_prepared_checkpoint_capture(self, capture: Any) -> None:
+        self._s._validate_prepared_checkpoint_capture(capture)
+
+    def _validate_committed_checkpoint_capture(self, capture: Any) -> None:
+        self._s._validate_committed_checkpoint_capture(capture)
+
+    def _checkpoint_candidate_precreated_inode(
+        self, path: Any, *, precreated_descriptor: int | None, prepared_capture: Any
+    ) -> Any:
+        from pops.runtime._amr_checkpoint_v3 import write_v3
+
+        self._validate_prepared_checkpoint_capture(prepared_capture)
+        return write_v3(
+            self, self._s, path, self._regrid_every,
+            getattr(self, "_history_persistence", None) or {},
+            precreated_inode=True, precreated_descriptor=precreated_descriptor,
+            prepared_capture=prepared_capture,
+        )
+
     def _checkpoint_precreated_inode(self, path: Any, *, precreated_descriptor: int | None) -> Any:
         """Internal RuntimeInstance seam preserving its transaction-created inode authority."""
         from pops.runtime._amr_checkpoint_v3 import write_v3

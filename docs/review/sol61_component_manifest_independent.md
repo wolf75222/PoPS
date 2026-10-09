@@ -1,0 +1,11 @@
+# Independent component manifest review
+
+Author freeze: 3871b1e20ee8259bce2d552b3f0a6258fb068439; parent 63efb0661a968079a059cbaa83f12319f09fd4ac. Source verdict: accepted, no production change requested.
+
+The existing exact component_model_metadata validates CompiledModel/CompiledProblem, including the single named program route. The repaired callers use it without invoking detached arguments(). Whole CompiledSimulationArtifact still uses the strict aggregate builder and complete partition, with no first-model selection. Unknown dimension, runtime entrypoints, ghost depth and Field outputs are not manufactured. Parent schema 2 already accepted ghost_depth=None and absent facts: no wire widening/version bump is required. Component report is inert compile metadata, not a prepared storage proof.
+
+Independent tests cover exact handles, foreign/subclass refusal, unique named Problem route, JSON/schema roundtrip, detached arguments refusal, and aggregate storage facts in both declaration orders with distinct names. Aggregate fixtures isolate platform discovery only; component compiler fixtures are explicitly Source-only. No Native library, simulation, ENV mutation or ABI qualification.
+
+Command (from review checkout): env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/bin/python -m pytest --noconftest -p no:cacheprovider -o 'pythonpath=python .' tests/review/test_sol61_component_manifest_independent.py tests/review/test_sol61_component_manifest_route.py tests/python/unit/codegen/test_compiled_model_boundary.py tests/python/unit/codegen/test_artifact_model_metadata_protocol.py -k 'not compiled_auxiliary_metadata' -q --tb=short --junitxml=/tmp/sol61-component-manifest-independent-final.xml
+
+Result: 26 passed, 2 explicitly Native-compilation-dependent nodes deselected, 10.21 seconds. Historical genuine caller TypeError receipt remains unchanged at sol61-v3-compiledmodel-manifest-source-red; the new component caller now succeeds on real Source handle classes. An exploratory independent assertion incorrectly indexed the manifest envelope; it was corrected to the report field after successful roundtrip, not a production defect.

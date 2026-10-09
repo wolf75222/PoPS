@@ -14,7 +14,7 @@ from typing import Any
 
 from .expr import (
     Expr, _wrap,
-    Const, Var, Add, Sub, Mul, Div, Pow, Neg, Sqrt, Abs, Sign,
+    Const, Var, Add, Sub, Mul, Div, Pow, Neg, Sqrt, Exp, Abs, Sign,
 )
 from pops.identity.scalar import (
     exact_decimal_add,
@@ -270,6 +270,8 @@ def diff(expr: Any, var: Any, defs: Any = None, *, native_derivative_route: str 
             return _s_neg(go(e.a))
         if isinstance(e, Sqrt):
             return _s_div(go(e.a), _s_mul(Const(2), Sqrt(e.a)))
+        if isinstance(e, Exp):
+            return _s_mul(Exp(e.a), go(e.a))
         if isinstance(e, Abs):
             # d|u| = (u / |u|) u' -- exact derivative away from the fold u = 0 (the smooth floors
             # max(x, eps) = ((x+eps) + |x-eps|)/2 of the 'robust' models give there exactly

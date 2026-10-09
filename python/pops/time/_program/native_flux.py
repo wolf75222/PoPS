@@ -27,7 +27,7 @@ def physical_rate_native_functions(op, args):
             roots.append(module.operator_registry().get(dependency.registered_operator_name).body)
         return native_functions(expand_primitive_recipes(roots, module.primitive_recipes()))
     for occurrence in view.occurrences:
-        if occurrence.kind not in {"flux", "source"}:
+        if occurrence.kind not in {"flux", "source", "nonconservative"}:
             continue
         payload = occurrence.payload
         registry_name = getattr(payload, "reg_name", None)

@@ -256,6 +256,17 @@ def _local_rate_signature(signature: Signature) -> None:
              "output must be Rate() of the first StateSpace input")
 
 
+def _grid_rate_signature(signature: Signature) -> None:
+    _require(bool(signature.inputs) and
+             all(isinstance(item, (StateSpace, FieldSpace)) for item in signature.inputs),
+             "expected typed StateSpace or FieldSpace inputs")
+    _require(isinstance(signature.output, RateSpace), "grid output must be a RateSpace")
+    _require(signature.inputs.count(signature.output.base_space) == 1,
+             "grid output must be tangent to one exact input StateSpace")
+    _require(len(set(signature.inputs)) == len(signature.inputs),
+             "grid inputs must not repeat a space")
+
+
 def _field_signature(signature: Signature) -> None:
     _require(
         bool(signature.inputs)
@@ -349,7 +360,7 @@ OPERATOR_SIGNATURE_CONTRACTS = MappingProxyType({
     "local_source": SignatureContract(
         "(State[, Fields]) -> Rate(State)", _state_rate_signature),
     "grid_operator": SignatureContract(
-        "(State[, Fields]) -> Rate(State)", _state_rate_signature),
+        "(State|Fields, ...) -> Rate(one input State)", _grid_rate_signature),
     "field_operator": SignatureContract(
         "(State, ...) -> Fields", _field_signature),
     "local_linear_operator": SignatureContract(

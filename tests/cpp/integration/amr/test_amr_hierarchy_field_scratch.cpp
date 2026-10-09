@@ -347,6 +347,32 @@ TEST(AmrHierarchyFieldScratch, SolverOwnershipAndExactLevelSlotsReuseWithoutAlia
   EXPECT_FALSE(levels[0]->shares_storage_with(*levels[1]));
 }
 
+TEST(AmrHierarchyFieldScratch, RetainedInputsPreserveBytesAndVoteBeforeAnyReset) {
+  auto fixture = prepare_fixture();
+  auto& context = *fixture.context;
+  const int rank = context.prepared_execution_lane().rank();
+  const int size = context.prepared_execution_lane().size();
+  context.for_each_program_resource_level([&](int) {
+    auto& produced = context.hierarchy_field_scratch(701, 850, 2, 3, 0);
+    produced.set_val(pops::Real(23));
+    auto& retained = context.hierarchy_field_scratch(701, 850, 2, 3, 0, false);
+    EXPECT_EQ(&produced, &retained);
+    expect_value(retained, pops::Real(23));
+    EXPECT_THROW(context.hierarchy_field_scratch(701, 851, 2, 3, 0, false), std::exception);
+    expect_value(retained, pops::Real(23));
+    EXPECT_THROW(context.hierarchy_field_scratch(701, 850, 2, rank == 0 ? 2 : 3, 0, false),
+                 std::exception);
+    expect_value(retained, pops::Real(23));
+    if (size > 1) {
+      EXPECT_THROW(context.hierarchy_field_scratch(701, 850, 2, 3, 0, rank == 0), std::exception);
+      expect_value(retained, pops::Real(23));
+    }
+    auto& next = context.hierarchy_field_scratch(701, 850, 2, 3, 0);
+    EXPECT_EQ(&next, &retained);
+    expect_value(next, pops::Real(0));
+  });
+}
+
 TEST(AmrHierarchyFieldScratch, RankLocalUnknownSolveAndShapeRejectWithoutResetThenRetry) {
   auto fixture = prepare_fixture();
   auto& context = *fixture.context;

@@ -1,0 +1,16 @@
+{
+  "schema_version": 2,
+  "status": "passed",
+  "returncode": 0,
+  "timeout": false,
+  "seconds": 27.105596875073388,
+  "ranks": 2,
+  "threads": 1,
+  "dimension": 1,
+  "authentication_before": 0,
+  "authentication_after": 0,
+  "same_installation": true,
+  "test_sources_unchanged": true,
+  "rank_test_parity": true,
+  "native_sha256": "84b7d44400c40218d91c90d5cdfaa31a0860f6205eaa1a9fd5c4f709af3bac6c"
+}

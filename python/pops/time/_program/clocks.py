@@ -28,6 +28,33 @@ class _ProgramClocks(_ProgramBase):
         self._next_stage_identity += 1
         return point
 
+    def requested_dt(self) -> Any:
+        """Read the numerical step request as a runtime Scalar, without evaluating it in Python."""
+        self._guard_mutable("read the requested duration")
+        return self._new("scalar", "requested_dt", (), {}, "requested_dt", None)
+
+    def reached_duration(self, duration: Any) -> Any:
+        """Declare the effective duration returned by this Program's candidate.
+
+        All commits share this computed frontier. Earlier stages retain their
+        requested-step coordinates. Version 1 permits one uniform cadence 1/1
+        invocation with no spatial interval exchanges; unsupported compositions
+        fail during preparation, rather than relabelling their measures.
+        """
+        from pops.time._program.value_validation import require_top_level
+        self._guard_mutable("declare a computed temporal frontier")
+        duration = self._canonical_value(duration)
+        require_top_level(self, duration, "reached_duration")
+        if duration.vtype != "scalar":
+            raise TypeError("reached_duration requires a Scalar from this Program")
+        if self._recording:
+            raise ValueError("reached_duration requires the top-level Program region")
+        if any(value.op == "reached_duration" for value in self._values):
+            raise ValueError("reached_duration may be declared only once")
+        return self._new("scalar", "reached_duration", (duration,),
+                         {"schema_version": 1, "interval_rule": "no_spatial_exchanges"},
+                         "reached_duration", duration.block)
+
     def synchronize(
         self, value: Any, *, at: Any, relation: Any, name: Any = None
     ) -> Any:

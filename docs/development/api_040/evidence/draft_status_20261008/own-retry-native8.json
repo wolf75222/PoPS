@@ -1,0 +1,48 @@
+{
+  "schema": "pops.root.Python-science-reception@1",
+  "utc": "2026-10-08T14:44:17.864708+00:00",
+  "Source": "6d898599a3f66fa9aa3c049ba0f3114f1960b6dc",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "Native": "a9367a4af3c9989ea03ebcaf66b76b8e20f5dd5bcd5bdf16b6b1172e942b5ca2",
+  "groups": [
+    {
+      "producer": "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/own-retry-actual-reception/complete-receipt.json",
+      "producer_sha256": "a7a195465c1cd2f6a95a35600622982a6cf73c9a675a839cd3d5d90adea1811f",
+      "manifest": "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/own-retry-actual-reception/evidence-manifest.json",
+      "manifest_sha256": "d6244eff4ef8303358c626863d8ae937c0c3515e0c2a0990c3ec4d155e5cebfb",
+      "entries_root_rehashed_bytes_modes": 122,
+      "independent": "/Users/romaindespoulain/dev/tmp/PoPS-independent-Python-science-af8-reception3-20261008/own-retry-reception.json",
+      "independent_sha256": "b2c5b1485005749b9b551e136de64c440724564137a571a372859706d9a1c7fe",
+      "counts": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "producer": "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/native8-actual-reception/complete-receipt.json",
+      "producer_sha256": "8465c37ffa97d3a06cdac74e124460ead5e3041cca7836cceb2e58bcc0b74a7c",
+      "manifest": "/Users/romaindespoulain/dev/tmp/PoPS-af8-installed-science-preparation-6d898599-20261008/native8-actual-reception/evidence-manifest.json",
+      "manifest_sha256": "3538309b29f9cb7550dc6f24c976f05d9a2385d7b808b898329d5281a5c9dea8",
+      "entries_root_rehashed_bytes_modes": 238,
+      "independent": "/Users/romaindespoulain/dev/tmp/PoPS-independent-Python-science-af8-reception3-20261008/native8-reception.json",
+      "independent_sha256": "e6941bda9558fa3239eac1c4572e8b4ce9d94f281f85f622062ca1cfc6ebc7a2",
+      "counts": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    }
+  ],
+  "scope": "Original own sealed retry plus exact eight original affected nonregression cases on actual rebuilt installed CPU package",
+  "unsupported_producer_declaration": "Native8 original_failfast_x=true unsupported: actual command has no-x; no failfast qualification or rerun",
+  "no_root_new_test_build_or_import": true,
+  "limits": [
+    "Scientific buffers and CP payloads independently received; source/package inventory excludes directories and does not qualify mtimes",
+    "Own IMEX history/cache empty; Native adaptive/history populated scope follows independent receipt; do not universally extend it",
+    "OMP2 observation belongs only to recorded OwnRetry/manual fixtures, not everytest orfirstPDE",
+    "No scientificMPI2/GPU/Native1/3/convergence/full94/CI acceptance"
+  ]
+}

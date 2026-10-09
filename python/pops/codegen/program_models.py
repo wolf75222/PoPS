@@ -41,6 +41,9 @@ class ProgramModelGraph:
         "_authorities_by_owner",
         "_models_by_block",
         "_rhs_coherence_neighbours",
+        "_numerics_by_block",
+        "_resolved_provider_sources",
+        "_resolved_program_field_sources",
     )
 
     def __init__(
@@ -52,6 +55,9 @@ class ProgramModelGraph:
         authorities_by_owner: Mapping[Any, Any],
         models_by_block: Mapping[str, Any] | None = None,
         rhs_coherence_neighbours: Mapping[str, frozenset[str]] | None = None,
+        numerics_by_block: Mapping[str, Any] | None = None,
+        resolved_provider_sources: Mapping[str, Any] | None = None,
+        program_field_plans: Mapping[str, Any] | None = None,
     ) -> None:
         if not models_by_owner:
             raise ValueError("ProgramModelGraph requires at least one model owner")
@@ -86,6 +92,18 @@ class ProgramModelGraph:
         if set(routed_models) != set(owners_by_block):
             raise ValueError("ProgramModelGraph block model routes must match owner block routes")
         self._models_by_block = MappingProxyType(routed_models)
+        self._resolved_provider_sources = MappingProxyType(dict(resolved_provider_sources or {}))
+        from .program_field_plan import ResolvedProgramFieldPlan
+        field_sources = {}
+        for name, plan in (program_field_plans or {}).items():
+            if type(plan) is not ResolvedProgramFieldPlan or name != plan.name:
+                raise TypeError("Program Field authority requires exact resolved Field plans")
+            plan.__post_init__()
+            field_sources[name] = (plan, plan.identity.token)
+        self._resolved_program_field_sources = MappingProxyType(field_sources)
+        self._numerics_by_block = MappingProxyType(dict(numerics_by_block or {}))
+        if self._numerics_by_block and set(self._numerics_by_block) != set(owners_by_block):
+            raise ValueError("ProgramModelGraph numerical routes must cover exactly its block owners")
         if rhs_coherence_neighbours is not None:
             if set(rhs_coherence_neighbours) != set(owners_by_block):
                 raise ValueError("ProgramModelGraph RHS connectivity must cover exactly its blocks")
@@ -96,7 +114,7 @@ class ProgramModelGraph:
             MappingProxyType({name: frozenset(peers) for name, peers in rhs_coherence_neighbours.items()}))
 
     @classmethod
-    def from_resolved_blocks(cls, blocks: Any) -> ProgramModelGraph:
+    def from_resolved_blocks(cls, blocks: Any, *, program_field_plans: Mapping[str, Any] | None = None) -> ProgramModelGraph:
         """Lower every distinct exact ``ResolvedBlock`` model and capture total owner routing."""
         from pops.codegen._plans import ResolvedBlock
         from pops.codegen.module_lowering import lower_and_validate
@@ -148,6 +166,7 @@ class ProgramModelGraph:
                     facade=block.model,
                     state_space=block.state_spaces[0],
                     resolved_operations=operation_plan,
+                    numerics=block.numerics,
                 )
                 lowered_by_authority[authority_key] = lowered
             emit_model, source_module = lowered
@@ -164,13 +183,68 @@ class ProgramModelGraph:
             block_models[block.name] = emit_model
         from pops.codegen._rhs_coherence import resolved_rhs_neighbours
         return cls(
+            program_field_plans=program_field_plans,
             models_by_owner=models,
             source_modules_by_owner=modules,
             owners_by_block=routes,
             authorities_by_owner=authorities,
             models_by_block=block_models,
             rhs_coherence_neighbours=resolved_rhs_neighbours(blocks),
+            numerics_by_block={block.name: block.numerics for block in blocks},
+            resolved_provider_sources={block.name: (
+                block.instance_owner_qid, block.resolved_operations,
+                block.resolved_operations.identity.token,
+            ) for block in blocks if block.resolved_operations is not None},
         )
+
+    def resolved_provider_pack_for_block(self, block: Any) -> Any:
+        """accepted-static-provider-read@1: reauthenticate actual resolved producers."""
+        from pops.identity import canonical_bytes
+        from pops.model.provider_pack import ProviderPack
+        from ._resolved_operation_ownership import require_block_plan_owner
+
+        owner = self.owner_for_block(block)
+        try:
+            instance, plan, identity = self._resolved_provider_sources[block.local_id]
+        except KeyError:
+            raise ValueError("static provider proof requires its resolved block source plan") from None
+        if instance != str(block.instance_owner_path.canonical()) or plan.identity.token != identity:
+            raise ValueError("static provider source plan changed its issued block/identity authority")
+        # Cached identity equality alone cannot authenticate a mutated payload.
+        from .resolved_operations import ResolvedOperationPlan
+        ResolvedOperationPlan.from_data(plan.to_data())
+        require_block_plan_owner(plan, instance, where="static provider proof", required=True)
+        module = self.source_module_for_owner(owner)
+        actual = plan.require_provider_packs(module).auxiliary
+        from .program_emit_kernels import _model_impl
+        emitted = _model_impl(self.model_for_block(block))._auxiliary_provider_pack
+        if type(actual) is not ProviderPack or type(emitted) is not ProviderPack \
+                or canonical_bytes(actual.to_data()) != canonical_bytes(emitted.to_data()):
+            raise ValueError("static provider source differs from the actual emitted ProviderPack")
+        return actual
+
+    def resolved_program_field_plan(self, handle: Any, program: Any) -> Any:
+        """stageproviderread@1: issued registered equation authority, never a recipe key."""
+        from .program_field_plan import _canonical
+        expected = _canonical(handle._resolved().canonical_identity())
+        matches = [(plan, token) for plan, token in self._resolved_program_field_sources.values()
+                   if _canonical(plan.handle.canonical_identity()) == expected]
+        if len(matches) != 1:
+            raise ValueError("stage provider read needs exact resolved physical Field authority")
+        plan, issued_identity = matches[0]
+        if plan.identity.token != issued_identity:
+            raise ValueError("stage provider physical Field plan changed its issued identity")
+        plan.validate_program(program)  # rehashes current payload and checks the actual solve graph
+        if plan.identity.token != issued_identity:
+            raise ValueError("stage provider physical Field plan changed after authentication")
+        return plan
+
+    def numerics_for_block(self, block: Any) -> Any:
+        self.owner_for_block(block)
+        try:
+            return self._numerics_by_block[block.local_id]
+        except KeyError:
+            raise ValueError("Program numerical realization requires resolved block method authority") from None
 
     @property
     def rhs_coherence_neighbours(self) -> Mapping[str, frozenset[str]] | None:

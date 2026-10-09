@@ -1,0 +1,98 @@
+--- stage-and-dispatch-r4-root.py
++++ stage-and-dispatch-r5-root.py
+@@ -5,26 +5,26 @@
+ import subprocess
+ 
+ HERE = Path(__file__).resolve().parent
+-LOCAL = HERE / 'root-reviewed-resume-r4'
++LOCAL = HERE / 'root-reviewed-resume-r5'
+ REMOTE = '/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009'
+ SOURCE = '98804c6849c9966e05b5397126bab983a5fa0227'
+ SDK = 'de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a'
+-names = ['runtime_context_r4.sh', 'read-r4-pins.py', 'resume_probe_r4.sh',
+-         'build_native_r4.sh', 'phase_quota_r4.py', 'capture_kokkos_profile_r4.py',
+-         'capture_gpu_native_r4.py', 'native_install_rpath_r4.py', 'launch_phase_r4.py', 'phase_rank_runner_r4.py',
+-         'build_phase_r4.sbatch', 'runtime_phase_r4.sbatch', 'run_campaign_r4.sh']
++names = ['runtime_context_r5.sh', 'read-r5-pins.py', 'resume_probe_r5.sh',
++         'build_native_r5.sh', 'phase_quota_r5.py', 'capture_kokkos_profile_r5.py',
++         'capture_gpu_native_r5.py', 'native_install_rpath_r5.py', 'launch_phase_r5.py', 'phase_rank_runner_r5.py',
++         'build_phase_r5.sbatch', 'runtime_phase_r5.sbatch', 'run_campaign_r5.sh']
+ assert all((LOCAL / name).is_file() for name in names)
+-preflight = json.loads((HERE / 'actual-r4-readonly-preflight.json').read_text())
++preflight = json.loads((HERE / 'actual-r5-readonly-preflight.json').read_text())
+ assert preflight['exit'] == 0
+ fresh = json.loads(preflight['stdout'])
+ assert 0 <= (datetime.datetime.now(datetime.timezone.utc) - datetime.datetime.fromisoformat(fresh['utc'])).total_seconds() < 900
+ assert all(r['exit'] == 0 for r in fresh['commands'])
+ assert not next(row for row in fresh['commands'] if row['argv'][0] == 'squeue')['stdout'].strip()
+ assert fresh['probe']['sha256'] == '7e0eec5471ae93f8635f5b1f1dc9791f7e67c8767358571bd1358da575936e95'
+-admission = json.loads((LOCAL / 'r4-admission.template.json').read_text())
++admission = json.loads((LOCAL / 'r5-admission.template.json').read_text())
+ assert admission['Source'] == SOURCE and admission['SDK'] == SDK
+ operations = []
+-precheck = "from pathlib import Path; import json,os; r=Path(" + repr(REMOTE) + "); assert r.stat().st_uid==100267 and r.stat().st_mode&0o777==0o700; assert not (r/'results/official-build-entered.json').exists(); assert not (r/'results/official-build-entered-r4.json').exists(); assert not (r/'results/r4').exists(); assert not (r/'cache/pytest/r4').exists(); assert not [p for p in (r/'results').iterdir() if 'r4' in p.name], 'R4 exclusive results already exist'; plan=json.loads((r/'plan.json').read_text()); assert plan['source_freeze']['commit']=='98804c6849c9966e05b5397126bab983a5fa0227' and plan['source_freeze']['header_signature']=='de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a';  n=" + repr(names + ['r4-admission.json', 'root-r4-staged-envelope.json']) + "; assert not [x for x in n if (r/x).exists()], 'Additive R4 refuses overwriting earlier files'; print('private additive paths available')"
++precheck = "from pathlib import Path; import json,os; r=Path(" + repr(REMOTE) + "); assert r.stat().st_uid==100267 and r.stat().st_mode&0o777==0o700; assert not (r/'results/official-build-entered.json').exists(); assert not (r/'results/official-build-entered-r5.json').exists(); assert not (r/'results/official-build-entered-r4.json').exists(); assert not (r/'results/r5').exists(); assert not (r/'cache/pytest/r5').exists(); assert not [p for p in (r/'results').iterdir() if 'r5' in p.name], 'R5 exclusive results already exist'; plan=json.loads((r/'plan.json').read_text()); assert plan['source_freeze']['commit']=='98804c6849c9966e05b5397126bab983a5fa0227' and plan['source_freeze']['header_signature']=='de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a';  n=" + repr(names + ['r5-admission.json', 'root-r5-staged-envelope.json']) + "; assert not [x for x in n if (r/x).exists()], 'Additive R5 refuses overwriting earlier files'; print('private additive paths available')"
+ result = subprocess.run(['ssh', 'romeo', '/usr/bin/python3 -'], input=precheck, text=True, capture_output=True)
+ operations.append({'stage': 'fresh-additive-precheck', 'exit': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr})
+ assert result.returncode == 0, result.stderr
+@@ -34,17 +34,17 @@
+     'remaining_growth_bytes_before_native': 2147483648,
+     'remaining_growth_bytes_before_runtime': 805306368,
+     'remaining_growth_scope': 'Forecast only, not a personal consumption cap or a measured Native allocation. Environment/setup/Kokkos/probe already exist; 2GiB estimates remaining official native objects/wheel/install, JIT and scientific outputs; 768MiB estimates the runtime portion. Administrative hard quota and actual grace checked freshly before every phase; a forecast is not a capacity guarantee.',
+-    'actual_readonly_preflight_sha256': hashlib.sha256((HERE / 'actual-r4-readonly-preflight.json').read_bytes()).hexdigest(),
++    'actual_readonly_preflight_sha256': hashlib.sha256((HERE / 'actual-r5-readonly-preflight.json').read_bytes()).hexdigest(),
+     'physical_compiler_libraries': fresh['compiler_libraries'],
+-    'root_source_review': {'shell_delta': 'bb03890bb49473a983762d777511c0b9b278b966d315c711d1737f63b0d5e286', 'install_delta': '4a6d69485143615088fcc25572e0bd4aad921452a6d36cf38bf01cf130680fa8', 'install_peer': 'fb22031586c27b0db2e58a3e227d3f210763773d884f4599dce492e9b7fb48d9', 'loader_peer': '9fc7bd216ac3251f088fb3193dabf8ca6ff90211e45a957dd691bd7234c77149', 'loader_cause': '338bbdcf203fc955e4cad665fa27e25214eb888a243e674461b8fcfd787c5f2a'},
++    'root_source_review': {'shell_delta': 'bb03890bb49473a983762d777511c0b9b278b966d315c711d1737f63b0d5e286', 'install_delta': '4a6d69485143615088fcc25572e0bd4aad921452a6d36cf38bf01cf130680fa8', 'install_peer': 'fb22031586c27b0db2e58a3e227d3f210763773d884f4599dce492e9b7fb48d9', 'loader_peer': '9fc7bd216ac3251f088fb3193dabf8ca6ff90211e45a957dd691bd7234c77149', 'loader_cause': '338bbdcf203fc955e4cad665fa27e25214eb888a243e674461b8fcfd787c5f2a', 'r5_peer': 'ac7955559983f9a2cc92e906c98a14b31fc3be3165f8e6d91a82117651ae39c3', 'r5_kokkos_environment_delta': 'a696ace1f8dde9822b0ff3e58e0746d61dfb50aa446de5d8c489a49ea14ad647'},
+ })
+-with (LOCAL / 'r4-admission.json').open('x') as f:
++with (LOCAL / 'r5-admission.json').open('x') as f:
+     json.dump(admission, f, indent=2, sort_keys=True); f.write('\n')
+-names.append('r4-admission.json')
++names.append('r5-admission.json')
+ pins = {name: hashlib.sha256((LOCAL / name).read_bytes()).hexdigest() for name in names}
+-(LOCAL / 'root-r4-staged-envelope.json').write_text(json.dumps({'Source': SOURCE, 'SDK': SDK, 'files': pins, 'scope': 'Exact additive Root-reviewed R3 scripts and explicit admitted forecast; Source988 only, no GPU Native or science qualification.'}, indent=2) + '\n')
+-pins['root-r4-staged-envelope.json'] = hashlib.sha256((LOCAL / 'root-r4-staged-envelope.json').read_bytes()).hexdigest()
+-names.append('root-r4-staged-envelope.json')
++(LOCAL / 'root-r5-staged-envelope.json').write_text(json.dumps({'Source': SOURCE, 'SDK': SDK, 'files': pins, 'scope': 'Exact additive Root-reviewed R5 scripts and explicit admitted forecast; Source988 only, no GPU Native or science qualification.'}, indent=2) + '\n')
++pins['root-r5-staged-envelope.json'] = hashlib.sha256((LOCAL / 'root-r5-staged-envelope.json').read_bytes()).hexdigest()
++names.append('root-r5-staged-envelope.json')
+ copy = ['scp', *[str(LOCAL / name) for name in names], 'romeo:' + REMOTE + '/']
+ result = subprocess.run(copy, text=True, capture_output=True)
+ operations.append({'argv': copy, 'exit': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr})
+@@ -60,27 +60,27 @@
+ for name,expected in pins.items():
+  p=root/name;assert hashlib.sha256(p.read_bytes()).hexdigest()==expected,name;p.chmod(0o600)
+ plan=json.loads((root/'plan.json').read_text());assert plan['source_freeze']['commit']==SOURCE_LITERAL and plan['source_freeze']['header_signature']==SDK_LITERAL
+-assert not(root/'results/official-build-entered.json').exists() and not(root/'results/official-build-entered-r4.json').exists()
+-assert not(root/'results/r4').exists() and not(root/'cache/pytest/r4').exists()
++assert not(root/'results/official-build-entered.json').exists() and not(root/'results/official-build-entered-r5.json').exists() and not(root/'results/official-build-entered-r4.json').exists()
++assert not(root/'results/r5').exists() and not(root/'cache/pytest/r5').exists()
+ q=record(['squeue','-u','rmdraux','-h','-o','%i|%j|%T|%R']);assert q.returncode==0 and not q.stdout.strip()
+-q=record(['/usr/bin/python3',str(root/'quota_guard_resume.py'),str(root),'root-before-r4-dispatch','2147483648']);assert q.returncode==0,q.stderr
++q=record(['/usr/bin/python3',str(root/'quota_guard_resume.py'),str(root),'root-before-r5-dispatch','2147483648']);assert q.returncode==0,q.stderr
+ env=os.environ.copy();env['FUTURE_GPU_ROOT']=str(root)
+ # Authenticate existing bytes without executing the ARM/CUDA probe on login.
+-a=json.loads((root/'r4-admission.json').read_text())
++a=json.loads((root/'r5-admission.json').read_text())
+ for name,expected in a['required_existing_files'].items():assert hashlib.sha256((root/name).read_bytes()).hexdigest()==expected,name
+ assert hashlib.sha256((root/'profile-probe-build/managed_cuda_probe').read_bytes()).hexdigest()==a['probe_binary_sha256']
+ cuda=Path(a['cuda_cudart']['resolved']);assert hashlib.sha256(cuda.read_bytes()).hexdigest()==a['cuda_cudart']['sha256']
+ jobs=[]
+-for kind,script,dependency in [('build','build_phase_r4.sbatch',None),('runtime','runtime_phase_r4.sbatch','build')]:
+- argv=['sbatch','--parsable','--job-name=pops988-r4-'+kind,'--export=ALL,FUTURE_GPU_ROOT='+str(root),'--output='+str(root/'results'/ (kind+'-%j-r4.log')),'--error='+str(root/'results'/ (kind+'-%j-r4.log'))]
++for kind,script,dependency in [('build','build_phase_r5.sbatch',None),('runtime','runtime_phase_r5.sbatch','build')]:
++ argv=['sbatch','--parsable','--job-name=pops988-r5-'+kind,'--export=ALL,FUTURE_GPU_ROOT='+str(root),'--output='+str(root/'results'/ (kind+'-%j-r5.log')),'--error='+str(root/'results'/ (kind+'-%j-r5.log'))]
+  if dependency:argv.append('--dependency=afterok:'+str(jobs[0]['job']))
+  argv.append(str(root/script));p=record(argv);assert p.returncode==0,p.stderr;job=int(p.stdout.strip().split(';')[0]);jobs.append({'kind':kind,'job':job,'script_sha256':pins[script],'dependency':None if dependency is None else 'afterok:'+str(jobs[0]['job'])})
+ state=record(['squeue','-j',','.join(str(j['job'])for j in jobs),'-h','-o','%i|%j|%T|%R']);assert state.returncode==0
+ print(json.dumps({'utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'Source':SOURCE_LITERAL,'SDK':SDK_LITERAL,'pins':pins,'jobs':jobs,'commands':commands,'scope':'Actual additive stage, physical prechecks and Slurm submissions; no GPU Native or scientific success inferred.'}))
+ '''.replace('ROOT_LITERAL', repr(REMOTE)).replace('PINS_LITERAL', repr(pins)).replace('SOURCE_LITERAL', repr(SOURCE)).replace('SDK_LITERAL', repr(SDK))
+ result = subprocess.run(['ssh', 'romeo', '/usr/bin/python3 -'], input=program, text=True, capture_output=True)
+-operations.append({'stage': 'actual-r4-dispatch', 'exit': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr})
+-(HERE / 'actual-root-r4-stage-and-dispatch.json').write_text(json.dumps({'utc': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'operations': operations, 'Source': SOURCE, 'SDK': SDK}, indent=2) + '\n')
++operations.append({'stage': 'actual-r5-dispatch', 'exit': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr})
++(HERE / 'actual-root-r5-stage-and-dispatch.json').write_text(json.dumps({'utc': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'operations': operations, 'Source': SOURCE, 'SDK': SDK}, indent=2) + '\n')
+ if result.returncode:
+     print(json.dumps({'exit': result.returncode, 'stderr': result.stderr[-1800:], 'stdout': result.stdout[-1800:]}))
+     raise SystemExit(result.returncode)

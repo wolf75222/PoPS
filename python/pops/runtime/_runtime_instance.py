@@ -25,8 +25,11 @@ from pops.output._consumer_contracts import (
     ScheduleCursor,
     SkipSampleReported,
 )
+from ._state_storage_observation import AcceptedStateStorageObservation
 from ._consumer_planning import next_consumer_deadline, plan_accepted_side_effects
-from ._consumer_transaction import ConsumerTransaction, ConsumerTransactionReport
+from ._consumer_transaction import (
+    ConsumerCursorAuthority, ConsumerTransaction, ConsumerTransactionReport,
+)
 from ._output_publisher import preflight_consumer_publication
 from ._runtime_component_manifests import component_manifests_for_install
 from ._runtime_consumers import (
@@ -444,6 +447,7 @@ class RuntimeInstance:
         "_executor",
         "_checkpoint_resource_budget",
         "_consumer_cursors",
+        "_consumer_cursor_authority",
         "_consumer_reports",
         "_consumer_finalize_pending",
         "_consumer_recoveries",
@@ -494,9 +498,11 @@ class RuntimeInstance:
                 "RuntimeInstance executor lacks its authenticated checkpoint resource authority"
             )
         # Copy the immutable executor authority into the wrapper during the bind transaction. No
-        # restart or checkpoint seam may install, infer or replace it later.
+        # restart or checkpoint seam may infer or replace it later. Only explicit accepted-boundary
+        # resource configuration may replace the authority after the bind transaction.
         self._checkpoint_resource_budget = resource_budget
         self._consumer_cursors = ConsumerCursorSet()
+        self._consumer_cursor_authority = ConsumerCursorAuthority(self._consumer_cursors)
         self._consumer_reports = ()
         self._consumer_finalize_pending: tuple[_PendingConsumerFinalization, ...] = ()
         self._consumer_recoveries: dict[str, _ConsumerRecoveryOwner] = {}
@@ -627,6 +633,30 @@ class RuntimeInstance:
         return getattr(self._executor, "last_run_identity", None)
 
     @property
+    def last_run_manifest(self) -> Any:
+        return getattr(self._executor, "last_run_manifest", None)
+
+    def configure_checkpoint_diagnostics(self, *, capacity_per_rank: int) -> None:
+        """Choose rank-local diagnostic archive bytes at an accepted boundary, collectively.
+
+        Includes codec headers, opaque names and exact value bits. The resource contract is
+        pops.program-diagnostics.checkpoint-capacity@1; it changes no physical/numerical control.
+        Call on every owner rank before capture/restart. Defaults inventory compiler-retained
+        literal diagnostic names; external/raw records may require a larger explicit capacity.
+        """
+        from ._checkpoint_resource_budget import configure_checkpoint_diagnostic_capacity
+        configure_checkpoint_diagnostic_capacity(self, capacity_per_rank)
+
+    def _checkpoint_initial_temporal_state(self) -> Any:
+        """Read accepted executor authority for the public checkpoint reseal.
+
+        The facade owns consumers and the outer envelope, while its executor
+        owns the controller and qualified clock cursors. This named route
+        retains that ownership through a checkpoint before the first run.
+        """
+        return getattr(self._executor, "_temporal_restart_state", None)
+
+    @property
     def last_restart_identity(self) -> Any:
         return getattr(self._executor, "last_restart_identity", None)
 
@@ -676,6 +706,25 @@ class RuntimeInstance:
 
     def macro_step(self) -> int:
         return int(self._executor.macro_step())
+
+    def observe_accepted_state_storage(self) -> AcceptedStateStorageObservation:
+        """Collectively observe all actual accepted Uniform storage, including ghosts.
+
+        Every rank calls this bulk readonly effect. The immutable result retains its
+        local shard and the complete POPSCAR1 image; no halo preparation occurs.
+        """
+        provider = getattr(type(self._executor), "observe_accepted_state_storage", None)
+        if provider is None:
+            raise TypeError("runtime executor lacks accepted-state-storage-observation@1")
+        return provider(self._executor)
+
+    def integral_state(self, state) -> float:
+        """Read one installed Program's persistent scalar integral from native accepted state."""
+        from pops.time._program.integrals import IntegralState
+
+        if type(state) is not IntegralState:
+            raise TypeError("integral_state requires an exact Program IntegralState handle")
+        return float(self._executor._program_integral(state.identity))
 
     def block_names(self) -> tuple[str, ...]:
         return tuple(self._executor.block_names())
@@ -751,12 +800,15 @@ class RuntimeInstance:
 
     def local_boxes(self, block: str) -> tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]:
         """Return rank-owned boxes as exact-rank half-open ``(lower, upper)`` bounds."""
-        provider = getattr(self._executor, "local_boxes", None)
+        executor = self._executor
+        if callable(getattr(executor, "executor_for_block", None)):
+            executor = self._executor_for_block(block)
+        provider = getattr(executor, "local_boxes", None)
         if not callable(provider):
             raise NotImplementedError(
                 "this runtime provider does not expose rank-owned local boxes"
             )
-        dimension = len(self.spatial_shape())
+        dimension = len(self._executor_spatial_shape(executor))
         result: list[tuple[tuple[int, ...], tuple[int, ...]]] = []
         for raw_box in cast(Iterable[Iterable[Iterable[Any]]], provider(block)):
             bounds = tuple(tuple(axis for axis in bound) for bound in raw_box)
@@ -777,15 +829,19 @@ class RuntimeInstance:
         """Return the native state owned by one box from :meth:`local_boxes`."""
         if isinstance(box_index, bool) or not isinstance(box_index, int) or box_index < 0:
             raise TypeError("local_state box_index must be a non-negative integer")
-        provider = getattr(self._executor, "local_state", None)
+        executor = self._executor
+        if callable(getattr(executor, "executor_for_block", None)):
+            executor = self._executor_for_block(block)
+        provider = getattr(executor, "local_state", None)
         if not callable(provider):
             raise NotImplementedError(
                 "this runtime provider does not expose rank-owned local state"
             )
         return provider(block, box_index)
 
-    def spatial_shape(self) -> tuple[int, ...]:
-        provider: Any = getattr(self._executor, "spatial_shape", None)
+    @staticmethod
+    def _executor_spatial_shape(executor: Any) -> tuple[int, ...]:
+        provider: Any = getattr(executor, "spatial_shape", None)
         if not callable(provider):
             raise NotImplementedError("runtime provider does not expose its exact spatial shape")
         shape = _require_exact_ints(provider(), where="native runtime spatial shape")
@@ -794,6 +850,9 @@ class RuntimeInstance:
         ):
             raise TypeError("native runtime spatial shape must contain exact positive integers")
         return shape
+
+    def spatial_shape(self) -> tuple[int, ...]:
+        return self._executor_spatial_shape(self._executor)
 
     def n_levels(self) -> int:
         provider: Any = getattr(self._executor, "n_levels", None)
@@ -870,6 +929,20 @@ class RuntimeInstance:
 
     def history_ncomp(self, name: str) -> int:
         return int(self._executor.history_ncomp(name))
+
+    def history_slot_dt(self, name: str, level_or_slot: int, slot: int | None = None) -> float:
+        """Return the accepted interval associated with a stored history sample.
+
+        This is the same native clock authority persisted by checkpoint/restart;
+        diagnostic timestamps must not infer an adaptive interval from a requested maximum.
+        """
+        if callable(getattr(self._executor, "history_levels", None)):
+            if slot is None:
+                raise TypeError("AMR history_slot_dt requires (name, level, slot)")
+            return float(self._executor.history_slot_dt(name, level_or_slot, slot))
+        if slot is not None and level_or_slot != 0:
+            raise IndexError("Uniform history has only implicit level zero")
+        return float(self._executor.history_slot_dt(name, level_or_slot if slot is None else slot))
 
     def history_levels(self, name: str) -> tuple[int, ...]:
         provider = getattr(self._executor, "history_levels", None)
@@ -1008,10 +1081,12 @@ class RuntimeInstance:
         *,
         at_start: bool = False,
         at_end: bool = False,
+        outer_rollback_authoritative: bool = False,
     ) -> tuple[ConsumerTransaction, ...]:
+        cursor_snapshot = self._consumer_cursor_authority.cursors
         plans = tuple(
             plan_accepted_side_effects(
-                self._runtime_plan, self._consumer_graph, moment, self._consumer_cursors
+                self._runtime_plan, self._consumer_graph, moment, cursor_snapshot
             )
             for moment in self._moments(at_start=at_start, at_end=at_end)
         )
@@ -1036,15 +1111,27 @@ class RuntimeInstance:
                     "a checkpoint transaction cannot predict restart cursors when another "
                     "effect may skip its sample"
                 )
-            predicted = self._consumer_cursors
+            predicted = cursor_snapshot
             for effect in all_effects:
                 predicted = predicted.replace(effect.cursor_after)
             self._checkpoint_cursor_override = predicted
 
         staged = []
         try:
+            publisher = self._publisher
+            if (
+                outer_rollback_authoritative
+                and checkpoint_effects
+                and callable(getattr(self._executor, "_prepare_checkpoint_candidate", None))
+                and isinstance(publisher, RuntimeConsumerPublisher)
+            ):
+                # Native accepted diagnostics belong to the same outer candidate as the final
+                # checkpoint. FailRun and preparation Retry share this rollback authority.
+                publisher = publisher.checkpoint_candidate_preparation()
             for plan in plans:
-                staged.append(ConsumerTransaction(plan, self._consumer_cursors, self._publisher))
+                staged.append(ConsumerTransaction(
+                    plan, cursor_snapshot, publisher,
+                    self._consumer_cursor_authority))
         except BaseException as error:
             cleanup_error = self._abort_consumers(tuple(staged))
             if cleanup_error is not None:
@@ -1131,10 +1218,7 @@ class RuntimeInstance:
         transactions: tuple[ConsumerTransaction, ...],
     ) -> tuple[tuple[Any, ...], ConsumerCursorSet, tuple[Any, ...]]:
         reports = tuple(transaction.accept() for transaction in transactions)
-        cursors = self._consumer_cursors
-        for transaction in transactions:
-            for cursor in transaction.cursor_updates:
-                cursors = cursors.replace(cursor)
+        cursors = self._consumer_cursor_authority.cursors
         return reports, cursors, self._consumer_reports + reports
 
     @staticmethod
@@ -1236,7 +1320,7 @@ class RuntimeInstance:
                 raise cleanup_error from error
             raise
         sealed_reports = self._seal_consumer_reports(transactions, reports)
-        self._consumer_cursors = cursors
+        self._consumer_cursors = self._consumer_cursor_authority.cursors
         report_offset = len(self._consumer_reports)
         self._consumer_reports = self._consumer_reports + sealed_reports
         self._retry_consumer_finalizers()
@@ -1276,8 +1360,11 @@ class RuntimeInstance:
     def _restore_step_envelope(self, snapshot: dict[str, Any]) -> None:
         native = self._executor
         self._attempt = snapshot["attempt"]
-        self._consumer_cursors = snapshot["consumer_cursors"]
-        self._consumer_reports = snapshot["consumer_reports"]
+        # Each compensated root restores only its own reserved cursor. A disjoint
+        # accepted root may have advanced since this step snapshot was taken.
+        self._consumer_cursors = self._consumer_cursor_authority.cursors
+        # The failing step has not appended its reports yet. Keep reports from
+        # disjoint accepted roots and finalizer retries that ran meanwhile.
         self._checkpoint_cursor_override = snapshot["checkpoint_cursor_override"]
         if hasattr(native, "_temporal_restart_state"):
             restored_temporal = snapshot["temporal_restart_state"]
@@ -1433,7 +1520,8 @@ class RuntimeInstance:
             phase = "effect"
             self._attempt += attempts
             transactions = self._stage_consumers(
-                at_end=bool(at_end() if callable(at_end) else at_end)
+                at_end=bool(at_end() if callable(at_end) else at_end),
+                outer_rollback_authoritative=native_active,
             )
             phase = "commit"
             commit()
@@ -1444,7 +1532,7 @@ class RuntimeInstance:
             native_active = False
             phase = "native_finalized"
             sealed_reports = self._seal_consumer_reports(transactions, reports)
-            self._consumer_cursors = cursors
+            self._consumer_cursors = self._consumer_cursor_authority.cursors
             self._consumer_reports = self._consumer_reports + sealed_reports
             self._retry_consumer_finalizers()
             return result
@@ -1475,8 +1563,8 @@ class RuntimeInstance:
                         )
                     except BaseException:
                         pass
-                self._consumer_cursors = cursors
-                self._consumer_reports = snapshot["consumer_reports"] + tuple(accepted_reports)
+                self._consumer_cursors = self._consumer_cursor_authority.cursors
+                self._consumer_reports = self._consumer_reports + tuple(accepted_reports)
                 return result
             failure_report = getattr(native, "_last_step_transaction_report", None)
             cleanup_error = self._abort_consumers(transactions)
@@ -1660,7 +1748,7 @@ class RuntimeInstance:
             if callable(begin_post_commit):
                 begin_post_commit(manifest.run_identity)
             self._fire_consumers(at_start=True)
-            while native.time() < t_end and steps < max_steps:
+            while prepared_run.pending(native, t_end=t_end) and steps < max_steps:
                 deadline = next_consumer_deadline(self._consumer_graph, self._moments())
                 run_end = float(t_end)
                 _validate_external_grid_deadline(prepared_run, deadline, run_end)
@@ -1680,11 +1768,11 @@ class RuntimeInstance:
                     prepared_run,
                     t_end=step_end,
                     deadline=deadline if deadline_is_active else None,
-                    at_end=lambda: not (native.time() < t_end),
+                    at_end=lambda: not prepared_run.pending(native, t_end=t_end),
                 )
                 rejected_steps += int(step_report.attempts) - 1
                 steps += 1
-            if native.time() < t_end:
+            if prepared_run.pending(native, t_end=t_end):
                 raise RuntimeError(
                     "max_steps exhausted before t_end: "
                     f"accepted {steps} step(s), reached t={native.time()!r}, "
@@ -1809,7 +1897,18 @@ class RuntimeInstance:
             safe_console_completed(console_session, report)
         return report
 
-    def _checkpoint_payload(self, path: Any, *, transaction_receipt: Any = None) -> Any:
+    def _prepare_checkpoint_candidate(self) -> Any:
+        prepare = getattr(self._executor, "_prepare_checkpoint_candidate", None)
+        return prepare() if callable(prepare) else None
+
+    def _validate_prepared_checkpoint_candidate(self, capture: Any) -> None:
+        self._executor._validate_prepared_checkpoint_capture(capture)
+
+    def _validate_committed_checkpoint_candidate(self, capture: Any) -> None:
+        self._executor._validate_committed_checkpoint_capture(capture)
+
+    def _checkpoint_payload(self, path: Any, *, transaction_receipt: Any = None,
+                            prepared_capture: Any = None) -> Any:
         from pops.output._checkpoint_collective import (
             canonical_checkpoint_path,
             checkpoint_topology,
@@ -1849,7 +1948,11 @@ class RuntimeInstance:
         seam_kind = None
         seam_error = None
         try:
-            precreated_capture = getattr(self._executor, "_checkpoint_precreated_inode", None)
+            method = ("_checkpoint_precreated_inode" if prepared_capture is None
+                      else "_checkpoint_candidate_precreated_inode")
+            precreated_capture = getattr(self._executor, method, None)
+            if prepared_capture is not None and not callable(precreated_capture):
+                raise RuntimeError("prepared checkpoint candidate lacks its native inode capture seam")
             seam_kind = "precreated-inode" if callable(precreated_capture) else "path-only"
         except BaseException as error:
             seam_error = error
@@ -1922,9 +2025,10 @@ class RuntimeInstance:
             if seam_kind == "precreated-inode":
                 if not callable(precreated_capture):
                     raise RuntimeError("checkpoint capture seam lost its precreated-inode callable")
-                target = canonical_checkpoint_path(
-                    precreated_capture(str(expected), precreated_descriptor=precreated_descriptor)
-                )
+                arguments = dict(precreated_descriptor=precreated_descriptor)
+                if prepared_capture is not None:
+                    arguments["prepared_capture"] = prepared_capture
+                target = canonical_checkpoint_path(precreated_capture(str(expected), **arguments))
             else:
                 target = canonical_checkpoint_path(self._executor.checkpoint(str(expected)))
             if target != expected:
@@ -2297,6 +2401,7 @@ class RuntimeInstance:
         cursors: ConsumerCursorSet,
         *,
         bit_identical: bool,
+        state_storage: str = "full",
         hierarchy_mode: str = "restore_recorded_hierarchy",
         hierarchy_identity: str | None = None,
     ) -> Any:
@@ -2319,37 +2424,51 @@ class RuntimeInstance:
         stored = decode_checkpoint_bytes(payload, require_checkpoint_resource_budget(self))
         from ._checkpoint_manifest import checkpoint_run_identity
 
-        def snapshot_run_authorities(executor: Any) -> tuple[tuple[Any, tuple[Any, ...]], ...]:
+        def snapshot_run_authorities(executor: Any) -> tuple[tuple[Any, tuple[Any, ...], tuple[str, ...]], ...]:
             names = (
                 "_last_run_manifest",
                 "_last_run_identity",
                 "_restart_lineage_identity",
             )
             snapshots = []
+            seen_owners: set[int] = set()
 
-            def capture(current: Any) -> None:
+            from pops.identity import Identity
+
+            def capture(current: Any, path: tuple[str, ...]) -> None:
+                if id(current) in seen_owners:
+                    raise TypeError("restart executor owner graph contains a cycle or shared owner")
+                seen_owners.add(id(current))
                 if any(not hasattr(current, name) for name in names):
                     raise TypeError(
                         "restart executor lacks a restorable authenticated run-identity envelope"
                     )
-                snapshots.append((current, tuple(getattr(current, name) for name in names)))
+                values = tuple(getattr(current, name) for name in names)
+                for identity in values[1:]:
+                    if identity is not None and (
+                        type(identity) is not Identity or identity.domain != "run"
+                    ):
+                        raise TypeError("restart prior authority requires exact domain-'run' Identity")
+                snapshots.append((current, values, path))
                 children = getattr(current, "_engines", None)
                 if children is not None:
                     if not isinstance(children, Mapping):
                         raise TypeError("restart executor child engines must be a mapping")
-                    for child in children.values():
-                        capture(child)
+                    if any(type(key) is not str for key in children):
+                        raise TypeError("restart executor layout keys must be exact strings")
+                    for key in sorted(children):
+                        capture(children[key], (*path, key))
 
-            capture(executor)
+            capture(executor, ())
             return tuple(snapshots)
 
-        def restore_run_authorities(snapshot: tuple[tuple[Any, tuple[Any, ...]], ...]) -> None:
+        def restore_run_authorities(snapshot: tuple[tuple[Any, tuple[Any, ...], tuple[str, ...]], ...]) -> None:
             names = (
                 "_last_run_manifest",
                 "_last_run_identity",
                 "_restart_lineage_identity",
             )
-            for current, values in snapshot:
+            for current, values, _path in snapshot:
                 if len(values) != len(names):
                     raise RuntimeError("restart run-identity envelope snapshot is malformed")
                 for name, value in zip(names, values, strict=True):
@@ -2357,7 +2476,7 @@ class RuntimeInstance:
 
         outer_snapshot: dict[str, Any] = {}
 
-        def prepare_outer_state() -> None:
+        def prepare_outer_state() -> Any:
             source_run_identity = checkpoint_run_identity(stored)
             restore_run_identity = getattr(self._executor, "_restore_checkpoint_run_identity", None)
             if not callable(restore_run_identity):
@@ -2371,19 +2490,44 @@ class RuntimeInstance:
             geometry_cache = getattr(self._snapshot_builder, "_geometry_cache", None)
             if not isinstance(geometry_cache, dict):
                 raise TypeError("RuntimeInstance restart requires an exact mutable geometry cache")
+            cursor_snapshot, cursor_revision = self._consumer_cursor_authority.snapshot()
             prepared_snapshot = {
                 "hierarchy_mode": selected_hierarchy_mode,
                 "source_run_identity": source_run_identity,
                 "restore_run_identity": restore_run_identity,
                 "canonical_diagnostics": canonical_diagnostics,
-                "consumer_cursors": self._consumer_cursors,
+                "consumer_cursors": cursor_snapshot,
+                "cursor_revision": cursor_revision,
                 "diagnostics": self._publisher.diagnostic_restart_state(),
                 "geometry_cache_owner": geometry_cache,
                 "geometry_cache": dict(geometry_cache),
                 "run_authorities": snapshot_run_authorities(self._executor),
             }
+            from pops.identity import make_identity
+
+            from pops.identity import Identity
+
+            if source_run_identity is not None and (
+                type(source_run_identity) is not Identity or source_run_identity.domain != "run"
+            ):
+                raise TypeError("restart source authority requires exact domain-'run' Identity")
+            owner_authorities = [
+                {
+                    "owner_path": path,
+                    "previous_owner_run": None if values[1] is None else values[1].to_data(),
+                    "previous_owner_lineage": None if values[2] is None else values[2].to_data(),
+                }
+                for _current, values, path in prepared_snapshot["run_authorities"]
+            ]
+            epoch = make_identity("run", {
+                "continuation": "checkpoint_restart_epoch@1",
+                "source_run_identity": None if source_run_identity is None else source_run_identity.to_data(),
+                "owner_authorities": owner_authorities,
+            })
+            prepared_snapshot["continuation_epoch"] = epoch
             outer_snapshot.clear()
             outer_snapshot.update(prepared_snapshot)
+            return epoch.token
 
         def restore_outer_state(native_result: Any) -> None:
             selected_hierarchy_mode = outer_snapshot["hierarchy_mode"]
@@ -2411,7 +2555,7 @@ class RuntimeInstance:
                     raise RuntimeError(
                         "RegridOnRestart executor returned no transformed-topology receipt"
                     )
-                restored_run_identity = make_identity(
+                restored_run_identity = None if source_run_identity is None else make_identity(
                     "run",
                     {
                         "continuation": "regrid_on_restart",
@@ -2421,17 +2565,44 @@ class RuntimeInstance:
                         "regrid_receipt": _regrid_receipt_identity_data(receipt),
                     },
                 )
+            outer_snapshot["cursor_published_revision"] = self._consumer_cursor_authority.reset(
+                cursors, expected_revision=outer_snapshot["cursor_revision"])
             self._snapshot_builder.invalidate_geometry_cache()
-            self._consumer_cursors = cursors
+            self._consumer_cursors = self._consumer_cursor_authority.cursors
             self._publisher.restore_diagnostic_restart_state(
                 outer_snapshot["canonical_diagnostics"]
             )
             restore_run_identity(restored_run_identity)
+            # A successful rewind is a new continuation, not permission to reopen a closed run.
+            # Keep the authenticated source run as last_run_identity; only future run requests
+            # receive this owner-history lineage. The outer snapshot restores it on failure.
+            from pops.identity import make_identity
+
+            epoch = outer_snapshot["continuation_epoch"]
+            if selected_hierarchy_mode == "regrid_on_restart":
+                epoch = make_identity(
+                    "run",
+                    {
+                        "continuation": "checkpoint_regrid_epoch@1",
+                        "owner_epoch": epoch.to_data(),
+                        "source_run_identity": (None if restored_run_identity is None
+                                                else restored_run_identity.to_data()),
+                    },
+                )
+            for current, _values, _path in outer_snapshot["run_authorities"]:
+                current._restart_lineage_identity = epoch
 
         def rollback_outer_state() -> None:
             failures = []
             try:
-                self._consumer_cursors = outer_snapshot["consumer_cursors"]
+                published_revision = outer_snapshot.get("cursor_published_revision")
+                if published_revision is not None:
+                    self._consumer_cursor_authority.reset(
+                        outer_snapshot["consumer_cursors"],
+                        expected_revision=published_revision)
+                elif self._consumer_cursor_authority.revision != outer_snapshot["cursor_revision"]:
+                    raise RuntimeError("publication cursor changed during checkpoint restoration")
+                self._consumer_cursors = self._consumer_cursor_authority.cursors
                 geometry_cache = outer_snapshot["geometry_cache_owner"]
                 geometry_cache.clear()
                 geometry_cache.update(outer_snapshot["geometry_cache"])
@@ -2456,6 +2627,7 @@ class RuntimeInstance:
             self._executor,
             payload,
             bit_identical=policy,
+            state_storage=state_storage,
             hierarchy_mode=selected_hierarchy_mode,
             hierarchy_identity=hierarchy_identity,
             phase_prefix="native restart",
@@ -2465,10 +2637,17 @@ class RuntimeInstance:
         )
         return result.restart_identity if selected_hierarchy_mode == "regrid_on_restart" else result
 
-    def restart(self, path: Any) -> Any:
+    def restart(self, path: Any, *, state_storage: str = "full") -> Any:
+        if type(state_storage) is not str or state_storage not in ("full", "valid_only_legacy8"):
+            raise ValueError("restart state_storage must be full or valid_only_legacy8")
         operation = self._restart_operation()
         reopened = operation.reopen(self, path)
-        return operation.restore(self, reopened)
+        if state_storage == "full":
+            return operation.restore(self, reopened)
+        from pops.output._restart_provider import RestartV3
+        if type(operation) is not RestartV3:
+            raise TypeError("legacy Uniform state-storage restart requires RestartV3")
+        return operation.restore(self, reopened, state_storage=state_storage)
 
     def __str__(self) -> str:
         return "RuntimeInstance(layouts=%d, blocks=%d, consumers=%d)" % (

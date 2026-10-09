@@ -1,0 +1,20 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 3 items
+
+tests/python/integration/runtime/test_m23_hall_fourier_runtime.py::test_hall_fourier_signed_phase_norm_permutations_and_zero_limit PASSED [ 33%]
+tests/python/integration/runtime/test_coupled_gradient_exchange_runtime.py::test_matrix_flux_occurrences_and_rollback[order0] PASSED [ 66%]
+tests/python/integration/runtime/test_coupled_gradient_exchange_runtime.py::test_matrix_flux_occurrences_and_rollback[order1] PASSED [100%]
+
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_coupled_gradient_exchange_runtime.py::test_matrix_flux_occurrences_and_rollback[order0]
+tests/python/integration/runtime/test_coupled_gradient_exchange_runtime.py::test_matrix_flux_occurrences_and_rollback[order1]
+  tests/python/integration/runtime/test_coupled_gradient_exchange_runtime.py:89: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.parametrize("order", ((0,1,2), (2,0,1)))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m23-native-mpi2/rank0.xml -
+======================== 3 passed, 2 warnings in 54.39s ========================

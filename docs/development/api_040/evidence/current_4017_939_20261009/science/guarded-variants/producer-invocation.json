@@ -1,0 +1,22 @@
+{
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "Native": {
+    "bytes": 14468728,
+    "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "sha256": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941"
+  },
+  "SDK": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/docs/development/api_040/run_installed_checks.py",
+    "--output",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run",
+    "--test",
+    "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py::test_public_guarded_field_coefficient_diffusion[renamed]",
+    "--test",
+    "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py::test_public_guarded_field_coefficient_diffusion[changed_expression]"
+  ],
+  "phase": "guarded-variants",
+  "start_utc": "2026-10-09T00:32:06.548300+00:00",
+  "scope": "Actual new installed cohort; retained Source988 commands supply test selection only, no receipt or result inheritance."
+}

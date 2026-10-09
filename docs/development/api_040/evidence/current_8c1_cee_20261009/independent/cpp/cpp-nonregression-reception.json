@@ -1,0 +1,962 @@
+{
+  "verdict": "ACCEPT_SELECTED_CPP_NONREGRESSION_EXECUTION_WITH_LIMITS",
+  "compiled_Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "current_metadata_Source": "e27d065a5eb7c086ced60b751a2468f729361ff0",
+  "metadata_delta_exact_five_paths": [
+    ".github/workflows/ci.yml",
+    "scripts/ci_pytest_timings.py",
+    "tests/python/architecture/test_ci_impacted_selection.py",
+    "tests/python/support/stage_fields_public_fixture.py",
+    "tests/python/test_durations.json"
+  ],
+  "build_configuration": {
+    "Release": true,
+    "optimization": "O3 DNDEBUG",
+    "MPI": true,
+    "Kokkos": true,
+    "native_dimension": 2
+  },
+  "binary_targets": [
+    {
+      "target": "test_tensor_fac_conservative_interface",
+      "binary": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/bin/test_tensor_fac_conservative_interface",
+        "bytes": 2047608,
+        "sha256": "a71bbe625aa95442db23800ce2104408f7ff3e3bdf44ad7cdd21852e48822825"
+      },
+      "test_TU": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/unit/elliptic/test_tensor_fac_conservative_interface.cpp",
+        "bytes": 23479,
+        "sha256": "3fe3f75fffba8f7a5fb0941ff402879e251873edb854af973543a401b49a1818"
+      },
+      "test_body_source_unchanged_from_compiled_commit": true
+    },
+    {
+      "target": "test_amr_tensor_fac_provider",
+      "binary": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/bin/test_amr_tensor_fac_provider",
+        "bytes": 21023808,
+        "sha256": "d4f42545f8f7e1015bc5549ec70bbdcaaad08e99b555c50fe177a9813ee02435"
+      },
+      "test_TU": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/unit/runtime/test_amr_tensor_fac_provider.cpp",
+        "bytes": 23222,
+        "sha256": "052407e16b5a5f772f36decc0ba4a37535072662369b074c149e181e9071634a"
+      },
+      "test_body_source_unchanged_from_compiled_commit": true
+    },
+    {
+      "target": "test_mpi_composite_fac_partitioned_nd",
+      "binary": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/bin/test_mpi_composite_fac_partitioned_nd",
+        "bytes": 4288552,
+        "sha256": "ff2361d5682aae0fe4bb8a9e9549fa71fed03d524d404af4177824bccab2fee3"
+      },
+      "test_TU": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/integration/mpi/test_mpi_composite_fac_partitioned_nd.cpp",
+        "bytes": 36761,
+        "sha256": "9cd49097cc89c02f06ef89a01e80f8ebc3c1bc1c00d341015c700257dc41d2f9"
+      },
+      "test_body_source_unchanged_from_compiled_commit": true
+    },
+    {
+      "target": "test_amr_program_field_publication",
+      "binary": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/bin/test_amr_program_field_publication",
+        "bytes": 24979424,
+        "sha256": "e05e66344ca75e38d6d640712edbe30570761749a12fe4f3dbba9dcbc627e97b"
+      },
+      "test_TU": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/integration/amr/test_amr_program_field_publication.cpp",
+        "bytes": 11007,
+        "sha256": "99f315ab34240114b2d8e87242f6a75d857a8272e2bb01e86d43b90b85000941"
+      },
+      "test_body_source_unchanged_from_compiled_commit": true
+    },
+    {
+      "target": "test_field_nullspace",
+      "binary": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/bin/test_field_nullspace",
+        "bytes": 2504200,
+        "sha256": "fff71cd6010fac9ba848437e03852fc3b0e6e32a8feeb39891e22650d23b9cb9"
+      },
+      "test_TU": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/unit/elliptic/test_field_nullspace.cpp",
+        "bytes": 38210,
+        "sha256": "49364fd16d032b3355d58be1a64bfaef00e764168c1ea9264afda1ab9bcb7f4f"
+      },
+      "test_body_source_unchanged_from_compiled_commit": true
+    },
+    {
+      "target": "test_mpi_field_nullspace_preflight",
+      "binary": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/bin/test_mpi_field_nullspace_preflight",
+        "bytes": 1540784,
+        "sha256": "dc1ac93adbf6ea74675989a2acfc72e83e1a0ea19ac33328f1b7372e6ac2bf0c"
+      },
+      "test_TU": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/integration/mpi/test_mpi_field_nullspace_preflight.cpp",
+        "bytes": 26996,
+        "sha256": "6c31307300561d1f0dc062dbc0f6e20fdf7ad88c1e407f61e19227269cb85714"
+      },
+      "test_body_source_unchanged_from_compiled_commit": true
+    }
+  ],
+  "observed_ninja_output_records": 35,
+  "observed_CXX_object_outputs": 24,
+  "objects": [
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/src/CMakeFiles/pops_runtime_core_objects.dir/runtime/program/step_transaction.cpp.o",
+        "bytes": 5392,
+        "sha256": "43d60716e6f2e54b0436475e26d4b8f86c17e8aa6e04a7447dd5fbb558458f81"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/program/step_transaction.cpp",
+        "bytes": 1052,
+        "sha256": "dbba877c35860c60edd2a9930e7bc248d0fd6db242006f63ae706aa800d94948"
+      },
+      "command_sha256": "1070f5677eebc068be5140c6e9842e9a9acad251056410c52b5052129a0f79f5",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o src/CMakeFiles/pops_runtime_core_objects.dir/runtime/program/step_transaction.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/program/step_transaction.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/src/CMakeFiles/pops_runtime_core_objects.dir/runtime/prepared_embedded_boundary.cpp.o",
+        "bytes": 1052448,
+        "sha256": "f39c5e339a40f6d717bce08d9061ee0a01a8a778c04e4366c05131ad8467b3a8"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/prepared_embedded_boundary.cpp",
+        "bytes": 31667,
+        "sha256": "170dc2c88bcb703f63c8f767abb072d58026838c255ff6c7d828781253732f82"
+      },
+      "command_sha256": "4d3e53511f87bc76baf4fc48fd19d04f78efe889202da8cfbd3ea13e88b832cf",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o src/CMakeFiles/pops_runtime_core_objects.dir/runtime/prepared_embedded_boundary.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/prepared_embedded_boundary.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests/CMakeFiles/pops_gtest_main.dir/cpp/support/gtest_main.cpp.o",
+        "bytes": 27544,
+        "sha256": "5019c660679381fde12a85ec175cf84fe1cd7e00031280e387d66572148e2062"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/support/gtest_main.cpp",
+        "bytes": 1675,
+        "sha256": "e49fa309013f918d46208ed36a45c7653b6b247939f7611e2f4481fe4e14eb97"
+      },
+      "command_sha256": "85086a5543087605a2fbbdf2430e10d138254e231cc4d7e61dbbd4d543d7e396",
+      "command": "/usr/bin/clang++ -I/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -I/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests -I/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest -O3 -DNDEBUG -std=c++20 -arch arm64 -iquote/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -I/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -o tests/CMakeFiles/pops_gtest_main.dir/cpp/support/gtest_main.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/support/gtest_main.cpp",
+      "role": "Plain GoogleTest host harness, not a PoPS numerical kernel or Native-module compile.",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-build/googletest/CMakeFiles/gtest.dir/src/gtest-all.cc.o",
+        "bytes": 608336,
+        "sha256": "d2560b6f5607cc0f847d62ee4f63cfbf82e050804ece0ff1b2b50c8963b411ae"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/src/gtest-all.cc",
+        "bytes": 2201,
+        "sha256": "972d3016860f9aa6452e078cf77406290fb7003b66fd6c0744a030bd1c323606"
+      },
+      "command_sha256": "54b298af23c5e452bc36d6f047f048759a9dfac621d7a3c42ae3d74dac7ea9e4",
+      "command": "/usr/bin/clang++ -I/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -I/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest -O3 -DNDEBUG -std=c++20 -arch arm64  -DGTEST_HAS_PTHREAD=1   -o _deps/googletest-build/googletest/CMakeFiles/gtest.dir/src/gtest-all.cc.o -c /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/src/gtest-all.cc"
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system.cpp.o",
+        "bytes": 1174904,
+        "sha256": "a0bd200e579e762f2366ce15da9bf42876b99b39305de05a964bd9f5f7bd0c58"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system.cpp",
+        "bytes": 54764,
+        "sha256": "ef16aa212d5971b0bf82183f691017bf969d2ce2a0b6d9f8ce73774a05c74e35"
+      },
+      "command_sha256": "2dd7cff90054016774bf20fca24f0ce81712da1dca0a34d63c0ae4064b12f911",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests/CMakeFiles/test_tensor_fac_conservative_interface.dir/cpp/unit/elliptic/test_tensor_fac_conservative_interface.cpp.o",
+        "bytes": 1885416,
+        "sha256": "5b31e4f651874ae2b44e49d553b3b9c6a7fc56cc8c7c8bc24ce924dc9677707d"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/unit/elliptic/test_tensor_fac_conservative_interface.cpp",
+        "bytes": 23479,
+        "sha256": "3fe3f75fffba8f7a5fb0941ff402879e251873edb854af973543a401b49a1818"
+      },
+      "command_sha256": "c74073d9737718ddae99817d24d09557f2bff3ef2a0f8011255f3751c7e719dc",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/support -I/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -I/Users/romaindespoulain/miniforge3/envs/pops/include -isystem /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -isystem /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest -O3 -DNDEBUG -std=c++20 -arch arm64 -iquote/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -I/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o tests/CMakeFiles/test_tensor_fac_conservative_interface.dir/cpp/unit/elliptic/test_tensor_fac_conservative_interface.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/unit/elliptic/test_tensor_fac_conservative_interface.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_aux.cpp.o",
+        "bytes": 844640,
+        "sha256": "665849e4ee4dc080ad803b1ed18799fcd7c8cfab5c8b399a6248192f173e6b0a"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_aux.cpp",
+        "bytes": 53697,
+        "sha256": "3c41907d4013ac3a7c6706e1a8550bc63af36779690731b1f591f36fe4fe7794"
+      },
+      "command_sha256": "29f0a4f4809142a8ca7667015f94f13d753559a58a0ec809dd830fc3c090b571",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_aux.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_aux.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests/CMakeFiles/test_field_nullspace.dir/cpp/unit/elliptic/test_field_nullspace.cpp.o",
+        "bytes": 2481760,
+        "sha256": "ff992e362891842d5d7538eceb3db1b3e63eea3f7b1c768b9ce84ea3bcccb1ee"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/unit/elliptic/test_field_nullspace.cpp",
+        "bytes": 38210,
+        "sha256": "49364fd16d032b3355d58be1a64bfaef00e764168c1ea9264afda1ab9bcb7f4f"
+      },
+      "command_sha256": "c60c1df2c42d2db72ad6cc28b729deed1bf98332e8e167610b3c3156dda5ede0",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/support -I/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -I/Users/romaindespoulain/miniforge3/envs/pops/include -isystem /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -isystem /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest -O3 -DNDEBUG -std=c++20 -arch arm64 -iquote/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -I/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o tests/CMakeFiles/test_field_nullspace.dir/cpp/unit/elliptic/test_field_nullspace.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/unit/elliptic/test_field_nullspace.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_install.cpp.o",
+        "bytes": 3100952,
+        "sha256": "2efc590cf41e117925d3e851ab56e662934d81ded0eebb3b5edd33d2bc3eab0a"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_install.cpp",
+        "bytes": 160545,
+        "sha256": "6b191eee3e55b6f838dd69341ab543fe7dc0d71e7874ad8dc5ba1d377b9490df"
+      },
+      "command_sha256": "69fe5c1876f2b06c72a6beead9b917de2274d31ca04f87847f68320be84712f9",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_install.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_install.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_fields.cpp.o",
+        "bytes": 1546016,
+        "sha256": "9b7480047533debf4a058501ae99afd0da07fd2e8ec3a996ffc2b54a4014491a"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_fields.cpp",
+        "bytes": 97296,
+        "sha256": "45a5b7a96ea60a4ee5438c6643e4d6bfa0c67ac002c48eaaa184a7c5f4f90efc"
+      },
+      "command_sha256": "ff88a273811de808e6203353f136d414f9bfad361f47038ca84346af3016445e",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_fields.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_fields.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_embedded_boundary.cpp.o",
+        "bytes": 120096,
+        "sha256": "9673b3a110313e1b88fe2a6c8f13fce33a70699c0fac3e472afc42a660b1f791"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_embedded_boundary.cpp",
+        "bytes": 8385,
+        "sha256": "a57e98a0d421882619716b4a06726790a961cb1984baa3f7b96aef90dff846b3"
+      },
+      "command_sha256": "dd3307a16d28c8dd5b25f61cf38cd2063d859efbf68fa46247180345ac062d40",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_embedded_boundary.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_embedded_boundary.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_field_plans.cpp.o",
+        "bytes": 170632,
+        "sha256": "4be3af73a07229e8e48b7b01bd0a994a363956ba109099a9a0f8cbdb6c6b4327"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_field_plans.cpp",
+        "bytes": 28469,
+        "sha256": "12a2a23908945d187230f71d790c1686b3494c6a3c04f027c029a49c2211862a"
+      },
+      "command_sha256": "c2e744a121a34df2ae675dd7bb5f493d891af791e72c0e2848eca6f718249d9f",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_field_plans.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_field_plans.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests/CMakeFiles/test_mpi_composite_fac_partitioned_nd.dir/cpp/integration/mpi/test_mpi_composite_fac_partitioned_nd.cpp.o",
+        "bytes": 4786168,
+        "sha256": "e9197f91e6942af471bd5ded91e95341ce8dae3c3c2b24f3f73ef09286bd1a69"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/integration/mpi/test_mpi_composite_fac_partitioned_nd.cpp",
+        "bytes": 36761,
+        "sha256": "9cd49097cc89c02f06ef89a01e80f8ebc3c1bc1c00d341015c700257dc41d2f9"
+      },
+      "command_sha256": "f7908d32b88e30990eaa898acc0bac01a7428cdf1a2a07809da52b855fa9aa08",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/support -I/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -I/Users/romaindespoulain/miniforge3/envs/pops/include -isystem /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -isystem /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest -O3 -DNDEBUG -std=c++20 -arch arm64 -iquote/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -I/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o tests/CMakeFiles/test_mpi_composite_fac_partitioned_nd.dir/cpp/integration/mpi/test_mpi_composite_fac_partitioned_nd.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/integration/mpi/test_mpi_composite_fac_partitioned_nd.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_layout_transfer.cpp.o",
+        "bytes": 351224,
+        "sha256": "81970c74a9db0d83823cc18273675d961a8fa5e5ad48f93773ecd3ffd3233141"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_layout_transfer.cpp",
+        "bytes": 47778,
+        "sha256": "e5481853a313c75f778b40eb0be398ce6c00c077a53dbc52a189d8c733e11566"
+      },
+      "command_sha256": "80e30b08e70b5b734abc4d2490e5c1689e424071c2285ec033ea029aced560fe",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_layout_transfer.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_layout_transfer.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests/CMakeFiles/test_mpi_field_nullspace_preflight.dir/cpp/integration/mpi/test_mpi_field_nullspace_preflight.cpp.o",
+        "bytes": 1292192,
+        "sha256": "923dd8d48fbbc48a9b95041ff12ecd82b8133eff31007be94276b1a3119af808"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/integration/mpi/test_mpi_field_nullspace_preflight.cpp",
+        "bytes": 26996,
+        "sha256": "6c31307300561d1f0dc062dbc0f6e20fdf7ad88c1e407f61e19227269cb85714"
+      },
+      "command_sha256": "063c61c54ada752be7469127dd7dd8a3a87f77bef24634a52fae7630a8a15608",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/support -I/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -I/Users/romaindespoulain/miniforge3/envs/pops/include -isystem /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -isystem /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest -O3 -DNDEBUG -std=c++20 -arch arm64 -iquote/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -I/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o tests/CMakeFiles/test_mpi_field_nullspace_preflight.dir/cpp/integration/mpi/test_mpi_field_nullspace_preflight.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/integration/mpi/test_mpi_field_nullspace_preflight.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_io.cpp.o",
+        "bytes": 512960,
+        "sha256": "d2da618cbc99e74f4a09783d7995e56f23bdb4f5e4f5e4c5a11798ca1c1eb159"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_io.cpp",
+        "bytes": 65264,
+        "sha256": "024d6cd21029478033623db0ad6e998076d82d06ddbc00a2af228182e626669c"
+      },
+      "command_sha256": "4110b99230e3df1d27fc24603ef1ebd5e50c4d2ff420402b029126d1c90c99ed",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_io.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_io.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_profiling.cpp.o",
+        "bytes": 15272,
+        "sha256": "1ea4b54f9150cb6421853388b09b40d705a882768f1dc18b0a078160573d570f"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_profiling.cpp",
+        "bytes": 1741,
+        "sha256": "3aa3d00ee843ab2961193f72980b502d52a38852b4af0675597d6a2ff8c3ac95"
+      },
+      "command_sha256": "7160250c30c3d1b8bc610d83f0aca9213b5e3a844acda4c28a91208137f6e9b3",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_profiling.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_profiling.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_program.cpp.o",
+        "bytes": 687528,
+        "sha256": "3071d60c552c21363b51a44ec8ebcfed66cd9ae964c09cabd5e7f9cad437c031"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_program.cpp",
+        "bytes": 87163,
+        "sha256": "b472d105ea9ee04a09bad2b3e3a06949448058d2d1d294b8521c65c39e57437b"
+      },
+      "command_sha256": "2a42c56c454fe779c624c2155d48e720bf26c6d7c59e196b618e3d44eb6d7bfd",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_program.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_program.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_layout_transfer.cpp.o",
+        "bytes": 418400,
+        "sha256": "573fda8add097fdbca59fb69ef9231a37a54fa428daa2cbbbeb7a9a8e0bc932b"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_layout_transfer.cpp",
+        "bytes": 83284,
+        "sha256": "c4f84bbac8c16fa55a502e8d9a849f2c20788c25ad1e8caef5c45b2a45a1e457"
+      },
+      "command_sha256": "d9f261eda52f8538c08474e0bb27b480724237abe77f3c2e418c3e3af54842ec",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_layout_transfer.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_layout_transfer.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o",
+        "bytes": 1779824,
+        "sha256": "deba9e002eaee398adc2e8256e3d5e8427faed3c02687808bc485f5c8f882362"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_field_solver_builtin.cpp",
+        "bytes": 16130,
+        "sha256": "236c5c29c4ee5effa35d20f36d7298e232fdf2f866f6fc74cf3e1d80194e4367"
+      },
+      "command_sha256": "4899c5b16c01498e9c54cf0fb33a2db8e45dab431b2f3015c85a2f56c0d68c68",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_field_solver_builtin.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_component.cpp.o",
+        "bytes": 324384,
+        "sha256": "022e860e1ba20d637cd4b900595c75f2e50ddc8247dfea79f07e74f08458e4a7"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_field_solver_component.cpp",
+        "bytes": 18237,
+        "sha256": "698e2e05b5eb6ce98becc71efbbca669e0bf1db3d5027c316d592ae84835e698"
+      },
+      "command_sha256": "a7ab343638a4b07562de7b1ed2fc8263eff506c1de186cbcf8a4fa8bc8b3e3b3",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_component.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_field_solver_component.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o",
+        "bytes": 8650544,
+        "sha256": "6426f1967e3755d214da5722e5df955480e5c028c7f8943f9a0ee3c1546bc510"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_system.cpp",
+        "bytes": 1350271,
+        "sha256": "91626d2c8118440584ee1a83d47ade9df32149f7c07d080f45420a369efbe6fb"
+      },
+      "command_sha256": "c0c801787952eb817bd5cad75d15547647ce91a683a5ff82074af6b1136b15af",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_system.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests/CMakeFiles/test_amr_tensor_fac_provider.dir/cpp/unit/runtime/test_amr_tensor_fac_provider.cpp.o",
+        "bytes": 12187456,
+        "sha256": "0c93bebbb36cc1c7f28e8d561d96e97273f2e2d2c7eb33d1ee3d91c87eb5423b"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/unit/runtime/test_amr_tensor_fac_provider.cpp",
+        "bytes": 23222,
+        "sha256": "052407e16b5a5f772f36decc0ba4a37535072662369b074c149e181e9071634a"
+      },
+      "command_sha256": "71ff1259f96f9fea39db552eb79ef1aeff738352c19cc720c461e6b6952949cc",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/support -I/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -I/Users/romaindespoulain/miniforge3/envs/pops/include -isystem /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -isystem /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest -O3 -DNDEBUG -std=c++20 -arch arm64 -iquote/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -I/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -O0 -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o tests/CMakeFiles/test_amr_tensor_fac_provider.dir/cpp/unit/runtime/test_amr_tensor_fac_provider.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/unit/runtime/test_amr_tensor_fac_provider.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    },
+    {
+      "object": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests/CMakeFiles/test_amr_program_field_publication.dir/cpp/integration/amr/test_amr_program_field_publication.cpp.o",
+        "bytes": 16633608,
+        "sha256": "f058bd458c2e2a4893d63dd604b380a57b327243d51ea570a7a22b9212140bd5"
+      },
+      "source": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/integration/amr/test_amr_program_field_publication.cpp",
+        "bytes": 11007,
+        "sha256": "99f315ab34240114b2d8e87242f6a75d857a8272e2bb01e86d43b90b85000941"
+      },
+      "command_sha256": "82e17d48c9440465b21d6210d769e9d6a2b9eaa92f15e70398d0134a401dcfbf",
+      "command": "/usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -D_FORTIFY_SOURCE=2 -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/support -I/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -I/Users/romaindespoulain/miniforge3/envs/pops/include -isystem /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -isystem /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest -O3 -DNDEBUG -std=c++20 -arch arm64 -iquote/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -I/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include -O0 -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -o tests/CMakeFiles/test_amr_program_field_publication.dir/cpp/integration/amr/test_amr_program_field_publication.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/integration/amr/test_amr_program_field_publication.cpp",
+      "actual_source_bytes_equal_compiled_commit": true
+    }
+  ],
+  "world1": {
+    "producer": {
+      "compiled_Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+      "current_metadata_Source": "e27d065a5eb7c086ced60b751a2468f729361ff0",
+      "exit": 0,
+      "seconds": 3.6206100000053993,
+      "counts": {
+        "tests": 26,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "log_sha256": "0ec3dab862e071c44910836324b08f373c53fb7c47a6e8a89e42a386fa3c5f6c",
+      "xml_sha256": "fb929ea8c10f383127e23fd907550a289c23bff3744451424f43f4ccf5e272b2",
+      "binaries_unchanged": true,
+      "scope": "Actual process and registered test closures. Separate from GPU, Python scientific suite and GitHub CI."
+    },
+    "counts": {
+      "tests": 26,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "inventory_exact_26": [
+      {
+        "name": "HierarchyTensorExactRank.CoarseGmresNativeOptionsKeepExactWireTypes",
+        "classname": "HierarchyTensorExactRank.CoarseGmresNativeOptionsKeepExactWireTypes",
+        "seconds": "0.661074",
+        "passed": true
+      },
+      {
+        "name": "HierarchyTensorExactRank.PolarCoarsePreconditionerRequiresExactWireAndArithmeticGMRES",
+        "classname": "HierarchyTensorExactRank.PolarCoarsePreconditionerRequiresExactWireAndArithmeticGMRES",
+        "seconds": "0.0521881",
+        "passed": true
+      },
+      {
+        "name": "HierarchyTensorExactRank.FineFluxCouplingKeepsExactWireAndTypedContracts",
+        "classname": "HierarchyTensorExactRank.FineFluxCouplingKeepsExactWireAndTypedContracts",
+        "seconds": "0.0523361",
+        "passed": true
+      },
+      {
+        "name": "HierarchyTensorExactRank.OneTwoAndThreeDimensionalRequestsPrepare",
+        "classname": "HierarchyTensorExactRank.OneTwoAndThreeDimensionalRequestsPrepare",
+        "seconds": "0.071644",
+        "passed": true
+      },
+      {
+        "name": "HierarchyTensorExactRank.FacAcceptsRankedAndPartiallyRefinedAxes",
+        "classname": "HierarchyTensorExactRank.FacAcceptsRankedAndPartiallyRefinedAxes",
+        "seconds": "0.0564124",
+        "passed": true
+      },
+      {
+        "name": "HierarchyTensorExactRank.OneTwoAndThreeDimensionalPublicationIsTransactional",
+        "classname": "HierarchyTensorExactRank.OneTwoAndThreeDimensionalPublicationIsTransactional",
+        "seconds": "0.0700906",
+        "passed": true
+      },
+      {
+        "name": "HierarchyTensorExactRank.DirectFacUsesTheSameOperatorInOneTwoAndThreeDimensions",
+        "classname": "HierarchyTensorExactRank.DirectFacUsesTheSameOperatorInOneTwoAndThreeDimensions",
+        "seconds": "0.0627976",
+        "passed": true
+      },
+      {
+        "name": "HierarchyTensorExactRank.ExactRankProvidesTheBuiltinFullTensorFacKernel",
+        "classname": "HierarchyTensorExactRank.ExactRankProvidesTheBuiltinFullTensorFacKernel",
+        "seconds": "0.0567906",
+        "passed": true
+      },
+      {
+        "name": "HierarchyTensorExactRank.ExactRankPublishesOnlyAfterSolveOutcomeAccept",
+        "classname": "HierarchyTensorExactRank.ExactRankPublishesOnlyAfterSolveOutcomeAccept",
+        "seconds": "0.0583721",
+        "passed": true
+      },
+      {
+        "name": "HierarchyTensorExactRank.BuiltinExactRankFacSolvesARealCrossTensorMms",
+        "classname": "HierarchyTensorExactRank.BuiltinExactRankFacSolvesARealCrossTensorMms",
+        "seconds": "0.518496",
+        "passed": true
+      },
+      {
+        "name": "HierarchyTensorExactRank.ContractsAuthenticateRankGeometryAndOwnership",
+        "classname": "HierarchyTensorExactRank.ContractsAuthenticateRankGeometryAndOwnership",
+        "seconds": "0.0583144",
+        "passed": true
+      },
+      {
+        "name": "test_field_nullspace.canonicalizes_generic_boundary_facts_and_rejects_forged_sequences",
+        "classname": "test_field_nullspace.canonicalizes_generic_boundary_facts_and_rejects_forged_sequences",
+        "seconds": "0.327313",
+        "passed": true
+      },
+      {
+        "name": "test_field_nullspace.exact_ranked_boundary_adapter_covers_1d_2d_and_3d",
+        "classname": "test_field_nullspace.exact_ranked_boundary_adapter_covers_1d_2d_and_3d",
+        "seconds": "0.0186638",
+        "passed": true
+      },
+      {
+        "name": "test_field_nullspace.exact_ranked_nullspace_execution_covers_1d_2d_and_3d",
+        "classname": "test_field_nullspace.exact_ranked_nullspace_execution_covers_1d_2d_and_3d",
+        "seconds": "0.0316847",
+        "passed": true
+      },
+      {
+        "name": "test_field_nullspace.overlapping_independent_bases_cover_1d_2d_and_3d",
+        "classname": "test_field_nullspace.overlapping_independent_bases_cover_1d_2d_and_3d",
+        "seconds": "0.0250998",
+        "passed": true
+      },
+      {
+        "name": "test_field_nullspace.exact_ranked_level_local_contract_covers_1d_2d_and_3d",
+        "classname": "test_field_nullspace.exact_ranked_level_local_contract_covers_1d_2d_and_3d",
+        "seconds": "0.0251678",
+        "passed": true
+      },
+      {
+        "name": "test_field_nullspace.active_mask_projects_only_marked_cells",
+        "classname": "test_field_nullspace.active_mask_projects_only_marked_cells",
+        "seconds": "0.0238413",
+        "passed": true
+      },
+      {
+        "name": "test_field_nullspace.labelled_topology_preserves_target_component_and_rejects_bad_labels",
+        "classname": "test_field_nullspace.labelled_topology_preserves_target_component_and_rejects_bad_labels",
+        "seconds": "0.0246244",
+        "passed": true
+      },
+      {
+        "name": "test_field_nullspace.rejects_a_gauge_that_references_an_unknown_basis",
+        "classname": "test_field_nullspace.rejects_a_gauge_that_references_an_unknown_basis",
+        "seconds": "0.024576",
+        "passed": true
+      },
+      {
+        "name": "test_field_nullspace.validates_native_collective_capacities_before_size_arithmetic",
+        "classname": "test_field_nullspace.validates_native_collective_capacities_before_size_arithmetic",
+        "seconds": "0.0179017",
+        "passed": true
+      },
+      {
+        "name": "test_field_nullspace.validates_hierarchy_level_capacity_without_materializing_levels",
+        "classname": "test_field_nullspace.validates_hierarchy_level_capacity_without_materializing_levels",
+        "seconds": "0.0168203",
+        "passed": true
+      },
+      {
+        "name": "test_field_nullspace.shared_constant_mode_preserves_individual_means",
+        "classname": "test_field_nullspace.shared_constant_mode_preserves_individual_means",
+        "seconds": "0.0243216",
+        "passed": true
+      },
+      {
+        "name": "test_field_nullspace.general_fields_complete_predeclared_refinement_matrix",
+        "classname": "test_field_nullspace.general_fields_complete_predeclared_refinement_matrix",
+        "seconds": "0.0584773",
+        "passed": true
+      },
+      {
+        "name": "test_field_nullspace.general_field_preflight_refuses_rank_local_storage_before_exchange",
+        "classname": "test_field_nullspace.general_field_preflight_refuses_rank_local_storage_before_exchange",
+        "seconds": "0.0238225",
+        "passed": true
+      },
+      {
+        "name": "test_field_nullspace.three_field_cross_diffusion_uses_complete_matrix_and_strict_spd",
+        "classname": "test_field_nullspace.three_field_cross_diffusion_uses_complete_matrix_and_strict_spd",
+        "seconds": "0.023849",
+        "passed": true
+      },
+      {
+        "name": "AmrProgramFieldPublication.ThreeFieldsReachPreparedSourcesAtEveryLevelAndRollback",
+        "classname": "AmrProgramFieldPublication.ThreeFieldsReachPreparedSourcesAtEveryLevelAndRollback",
+        "seconds": "0.562208",
+        "passed": true
+      }
+    ],
+    "suite_counts": {
+      "HierarchyTensorExactRank": 11,
+      "test_field_nullspace": 14,
+      "AmrProgramFieldPublication": 1
+    }
+  },
+  "MPI2": {
+    "producer": {
+      "Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+      "exit": 0,
+      "seconds": 593.1150089579969,
+      "disk_after": {
+        "total": 494384795648,
+        "used": 493975027712,
+        "free": 409767936
+      },
+      "log_sha256": "89e19579a370bebffeb2c2a8506774ad71ee8e7aad108faee96f10e62ebe02e2",
+      "ctest_xml_exists": true,
+      "scope": "Actual process closure; inspect test inventory/results before acceptance. No GPU/CUDA or convergence claim."
+    },
+    "CTest_groups": [
+      {
+        "name": "test_mpi_composite_fac_partitioned_nd_np2",
+        "classname": "test_mpi_composite_fac_partitioned_nd_np2",
+        "seconds": "386.972",
+        "passed": true
+      },
+      {
+        "name": "test_mpi_field_nullspace_preflight_np2",
+        "classname": "test_mpi_field_nullspace_preflight_np2",
+        "seconds": "0.695719",
+        "passed": true
+      },
+      {
+        "name": "test_tensor_fac_conservative_interface_np2",
+        "classname": "test_tensor_fac_conservative_interface_np2",
+        "seconds": "6.65813",
+        "passed": true
+      }
+    ],
+    "rank_GTest_results": [
+      {
+        "group": "test_mpi_composite_fac_partitioned_nd_np2",
+        "rank": 0,
+        "xml": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/test-results/gtest/test_mpi_composite_fac_partitioned_nd_np2.rank0.xml",
+          "bytes": 899,
+          "sha256": "96837eee65afe78cd210db4a17cc5a5c56bdef37f994f2993e00cbe9a08210bb"
+        },
+        "cases": [
+          {
+            "name": "RunsPartitionedDimensionalMatrix",
+            "classname": "test_mpi_composite_fac_partitioned_nd",
+            "seconds": "386.424",
+            "passed": true
+          }
+        ]
+      },
+      {
+        "group": "test_mpi_composite_fac_partitioned_nd_np2",
+        "rank": 1,
+        "xml": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/test-results/gtest/test_mpi_composite_fac_partitioned_nd_np2.rank1.xml",
+          "bytes": 899,
+          "sha256": "a3c46ecafb28066c65c8a26871308c940b7119d5553411445cb6a7ab1f6e675e"
+        },
+        "cases": [
+          {
+            "name": "RunsPartitionedDimensionalMatrix",
+            "classname": "test_mpi_composite_fac_partitioned_nd",
+            "seconds": "386.424",
+            "passed": true
+          }
+        ]
+      },
+      {
+        "group": "test_mpi_field_nullspace_preflight_np2",
+        "rank": 0,
+        "xml": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/test-results/gtest/test_mpi_field_nullspace_preflight_np2.rank0.xml",
+          "bytes": 894,
+          "sha256": "785bef0d87a67d148401f11ca1f709ba2f8bc6b47efa77237e227336878f1ee9"
+        },
+        "cases": [
+          {
+            "name": "ExactRankedDriftFailsCoherentlyIn1D2DAnd3D",
+            "classname": "test_mpi_field_nullspace_preflight",
+            "seconds": "0.071",
+            "passed": true
+          }
+        ]
+      },
+      {
+        "group": "test_mpi_field_nullspace_preflight_np2",
+        "rank": 1,
+        "xml": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/test-results/gtest/test_mpi_field_nullspace_preflight_np2.rank1.xml",
+          "bytes": 894,
+          "sha256": "5c16e1e74a2dc5a80dc1f5cef82b8c3542023061d83089aff9397fc047fa837b"
+        },
+        "cases": [
+          {
+            "name": "ExactRankedDriftFailsCoherentlyIn1D2DAnd3D",
+            "classname": "test_mpi_field_nullspace_preflight",
+            "seconds": "0.071",
+            "passed": true
+          }
+        ]
+      },
+      {
+        "group": "test_tensor_fac_conservative_interface_np2",
+        "rank": 0,
+        "xml": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/test-results/gtest/test_tensor_fac_conservative_interface_np2.rank0.xml",
+          "bytes": 3388,
+          "sha256": "4e5eaf6a941c8e2f353350a708eca32598535efe51e5e01663516f4105a3765f"
+        },
+        "cases": [
+          {
+            "name": "ClosedJumpHasTwelveLegacyImbalanceAndZeroFineFluxBalance",
+            "classname": "TensorFacConservativeInterface",
+            "seconds": "0.024",
+            "passed": true
+          },
+          {
+            "name": "PeriodicOriginsAnisotropicChildrenAndMappedCrossTermsConserve",
+            "classname": "TensorFacConservativeInterface",
+            "seconds": "0.027",
+            "passed": true
+          },
+          {
+            "name": "RetainsNonsymmetricCrossDerivativeAndIsLinear",
+            "classname": "TensorFacConservativeInterface",
+            "seconds": "0.015",
+            "passed": true
+          },
+          {
+            "name": "ManufacturedSelectedImageIsTheSolveFixedPoint",
+            "classname": "TensorFacConservativeInterface",
+            "seconds": "0.01",
+            "passed": true
+          },
+          {
+            "name": "ThreeLevelsConvergeToTheirSelectedConservativeImage",
+            "classname": "TensorFacConservativeInterface",
+            "seconds": "6.189",
+            "passed": true
+          },
+          {
+            "name": "ConstructionAuthenticatesCouplingAcrossRanks",
+            "classname": "TensorFacConservativeInterface",
+            "seconds": "0.002",
+            "passed": true
+          },
+          {
+            "name": "RejectsAsymmetricControlsReplicasAndInvalidCoefficientsCollectively",
+            "classname": "TensorFacConservativeInterface",
+            "seconds": "0.01",
+            "passed": true
+          },
+          {
+            "name": "RepeatedResidualApplicationsReusePreparedDeviceStorage",
+            "classname": "TensorFacConservativeInterface",
+            "seconds": "0.004",
+            "passed": true
+          }
+        ]
+      },
+      {
+        "group": "test_tensor_fac_conservative_interface_np2",
+        "rank": 1,
+        "xml": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/test-results/gtest/test_tensor_fac_conservative_interface_np2.rank1.xml",
+          "bytes": 3388,
+          "sha256": "3d041de574e4324d810f7edcfba37c2ddcee72846fc93f0701ce6ef2753db2b9"
+        },
+        "cases": [
+          {
+            "name": "ClosedJumpHasTwelveLegacyImbalanceAndZeroFineFluxBalance",
+            "classname": "TensorFacConservativeInterface",
+            "seconds": "0.026",
+            "passed": true
+          },
+          {
+            "name": "PeriodicOriginsAnisotropicChildrenAndMappedCrossTermsConserve",
+            "classname": "TensorFacConservativeInterface",
+            "seconds": "0.027",
+            "passed": true
+          },
+          {
+            "name": "RetainsNonsymmetricCrossDerivativeAndIsLinear",
+            "classname": "TensorFacConservativeInterface",
+            "seconds": "0.015",
+            "passed": true
+          },
+          {
+            "name": "ManufacturedSelectedImageIsTheSolveFixedPoint",
+            "classname": "TensorFacConservativeInterface",
+            "seconds": "0.01",
+            "passed": true
+          },
+          {
+            "name": "ThreeLevelsConvergeToTheirSelectedConservativeImage",
+            "classname": "TensorFacConservativeInterface",
+            "seconds": "6.189",
+            "passed": true
+          },
+          {
+            "name": "ConstructionAuthenticatesCouplingAcrossRanks",
+            "classname": "TensorFacConservativeInterface",
+            "seconds": "0.002",
+            "passed": true
+          },
+          {
+            "name": "RejectsAsymmetricControlsReplicasAndInvalidCoefficientsCollectively",
+            "classname": "TensorFacConservativeInterface",
+            "seconds": "0.01",
+            "passed": true
+          },
+          {
+            "name": "RepeatedResidualApplicationsReusePreparedDeviceStorage",
+            "classname": "TensorFacConservativeInterface",
+            "seconds": "0.004",
+            "passed": true
+          }
+        ]
+      }
+    ],
+    "distinct_selected_cases_per_rank": 10,
+    "rank_case_executions": 20
+  },
+  "physical_pins": [
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/phase-result.json",
+      "bytes": 436,
+      "sha256": "4c4462f50774f4a5008aba6394d319d0f37e308e78f1ebfd378f5a5634314e99"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/phase.log",
+      "bytes": 18801,
+      "sha256": "89e19579a370bebffeb2c2a8506774ad71ee8e7aad108faee96f10e62ebe02e2"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/ctest.xml",
+      "bytes": 4515,
+      "sha256": "79c253ef03b5910d3437e9488031fc1e17fd7903c6580e58e681b1ebbd4dd592"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/actual-commands.sh",
+      "bytes": 1553,
+      "sha256": "219fa9714295d8a64f30cd12682c0777d8fa2b498a7873702f5cf2c909404749"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/invocation.json",
+      "bytes": 2133,
+      "sha256": "029963a2b8b5b2fecebc2fd32d97e8262a162f1eff2f42eabaabbe553efd0a2b"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/remaining-world1-e27d/phase-result.json",
+      "bytes": 591,
+      "sha256": "ca85490ce22760cce9dce5ed4a2f8be2035c1665d9d3db61e59226045d30bcb1"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/remaining-world1-e27d/phase.log",
+      "bytes": 6824,
+      "sha256": "0ec3dab862e071c44910836324b08f373c53fb7c47a6e8a89e42a386fa3c5f6c"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/remaining-world1-e27d/ctest.xml",
+      "bytes": 26553,
+      "sha256": "fb929ea8c10f383127e23fd907550a289c23bff3744451424f43f4ccf5e272b2"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/remaining-world1-e27d/actual-commands.sh",
+      "bytes": 634,
+      "sha256": "3112daedc6c089b6f80d3a9fb7b841605099e652bf9258a2cbcf24c38e18f7ea"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/remaining-world1-e27d/invocation.json",
+      "bytes": 1942,
+      "sha256": "283f48f73697233e8725f2c8c682e4e2414148024016468f107d15c9b530e603"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/CMakeCache.txt",
+      "bytes": 34392,
+      "sha256": "46621ac520993057b2648ed66155465c7e53dd5254acb650d5a2265d4b8b10e7"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/compile_commands.json",
+      "bytes": 542827,
+      "sha256": "4daa17bad7c0a8ea885e07fb9e7abfa362325887c71c0d91791251ecbf49efc3"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/build.ninja",
+      "bytes": 2488033,
+      "sha256": "800af2b66bf1d819b33cfc178c36256da26841174f4fa6b041832a53f3bf1370"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/.ninja_log",
+      "bytes": 4189,
+      "sha256": "1b76522796b72335880cf608776977f55ed321b744cd45ed170b8243e31fe3da"
+    }
+  ],
+  "pops_modules_loaded": [],
+  "limits": [
+    "Six selected binary targets only, not full C++ catalog, GitHub CI or aggregate94closure.",
+    "World1 registration has26tests; MPI2 has3CTestgroups and10GoogleTestcases perrank,20rankexecutions. These distinct granularities are preserved; no invented combined36globaltest count.",
+    "Standalone C++ template tests include exact-ranked1D/2D/3D constructions as named in inventory; installed Native module remains dimension2. No new3DNative/GPU or physical PDE refinement/convergence qualification.",
+    "No fresh numerical oracle for every C++ body; actual existing assertions, source-preservation and real execution outputs authenticated.",
+    "Ninja output actions and retained objects/binaries do not prove uncached compiler frontend execution for every action."
+  ],
+  "scope": "Independent offline non-author reception of existing actual process/XML/physical-source/binary evidence; no Native/PoPS import/run, build/install, Main/env or SSH mutation."
+}

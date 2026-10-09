@@ -1,0 +1,211 @@
+{
+  "GPU_Native7_built": false,
+  "HeaderSignature_context": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "RootGO_reviewed_pins_verified": true,
+  "Source_context": "6d898599a3f66fa9aa3c049ba0f3114f1960b6dc; original and outside-Main candidate pinned separately",
+  "actual_scope": "one runtime translation unit pair under reviewed FP flags; no Main Source application, Native module build/import, or scientific qualification inferred",
+  "all_original_bytes_modes_literal_links_verified": true,
+  "baseline": {
+    "Native_GPU7_built": false,
+    "compile_exit": 1,
+    "cudafe1_cpp_files": [
+      "keep/amr_layout_transfer.cudafe1.cpp"
+    ],
+    "end_utc": "2026-10-08T15:03:54.181832+00:00",
+    "evidence_gate_passed": true,
+    "facts": {
+      "baseline_failures": {
+        "1361": true,
+        "232": true,
+        "992": true
+      },
+      "compile_exit_is_zero": false,
+      "compile_failed": true,
+      "nonempty_kept_cudafe1_cpp_available": true,
+      "nonempty_kept_ii_available": true,
+      "object_is_actual_compiler_output": true,
+      "object_is_nonempty_regular_ELF64_LE_AArch64_ET_REL": false,
+      "xtrace_derived_inner_argv_available": true
+    },
+    "ii_files": [
+      "keep/amr_layout_transfer.cpp1.ii",
+      "keep/amr_layout_transfer.cpp4.ii"
+    ],
+    "inner_argv_capture_scope": "xtrace-derived; no kernel/syscall instrumentation",
+    "inner_nvcc_commands": 1,
+    "keep_files": 11,
+    "launch_error": null,
+    "object": {
+      "ELF64_LE_AArch64_relocatable": false,
+      "ELF_class": null,
+      "ELF_data_encoding": null,
+      "ELF_magic": false,
+      "bytes": 0,
+      "compiler_output_path": "/gpfs/scratch/rmdraux/PoPS-api040-cuda-braced-probe-6d898599-20261008-v1/outputs/baseline/amr_layout_transfer.cpp.o",
+      "e_machine": null,
+      "e_type": null,
+      "exists": false,
+      "path": "/gpfs/scratch/rmdraux/PoPS-api040-cuda-braced-probe-6d898599-20261008-v1/outputs/baseline/amr_layout_transfer.cpp.o",
+      "regular_file": false,
+      "sha256": null
+    },
+    "scientific_qualified": false,
+    "start_utc": "2026-10-08T15:03:33.660151+00:00",
+    "variant": "baseline"
+  },
+  "baseline_and_candidate_inner_compile_argv_equal_except_variant_paths": true,
+  "borrowed_compiler_files_verified_unchanged": 4,
+  "borrowed_headers_verified_unchanged": 1619,
+  "candidate": {
+    "Native_GPU7_built": false,
+    "compile_exit": 0,
+    "cudafe1_cpp_files": [
+      "keep/amr_layout_transfer.cudafe1.cpp"
+    ],
+    "end_utc": "2026-10-08T15:04:15.446774+00:00",
+    "evidence_gate_passed": true,
+    "facts": {
+      "baseline_failures": {
+        "1361": false,
+        "232": false,
+        "992": false
+      },
+      "compile_exit_is_zero": true,
+      "compile_failed": false,
+      "nonempty_kept_cudafe1_cpp_available": true,
+      "nonempty_kept_ii_available": true,
+      "object_is_actual_compiler_output": true,
+      "object_is_nonempty_regular_ELF64_LE_AArch64_ET_REL": true,
+      "xtrace_derived_inner_argv_available": true
+    },
+    "ii_files": [
+      "keep/amr_layout_transfer.cpp1.ii",
+      "keep/amr_layout_transfer.cpp4.ii"
+    ],
+    "inner_argv_capture_scope": "xtrace-derived; no kernel/syscall instrumentation",
+    "inner_nvcc_commands": 2,
+    "keep_files": 11,
+    "launch_error": null,
+    "object": {
+      "ELF64_LE_AArch64_relocatable": true,
+      "ELF_class": 2,
+      "ELF_data_encoding": 1,
+      "ELF_magic": true,
+      "bytes": 903032,
+      "compiler_output_path": "/gpfs/scratch/rmdraux/PoPS-api040-cuda-braced-probe-6d898599-20261008-v1/outputs/candidate/amr_layout_transfer.cpp.o",
+      "e_machine": 183,
+      "e_type": 1,
+      "exists": true,
+      "path": "/gpfs/scratch/rmdraux/PoPS-api040-cuda-braced-probe-6d898599-20261008-v1/outputs/candidate/amr_layout_transfer.cpp.o",
+      "regular_file": true,
+      "sha256": "5b2ed0915d30176d2c0f8f333eebbe36e3446623b5b89e52cbea89842f5703b3"
+    },
+    "scientific_qualified": false,
+    "start_utc": "2026-10-08T15:03:54.185090+00:00",
+    "variant": "candidate"
+  },
+  "inner_argv_scope": "Bash xtrace derived expanded command, independently reparsed; no kernel/syscall instrumentation",
+  "job": "737830",
+  "new_compiler_execution_by_reader": false,
+  "new_job_submission_by_reader": false,
+  "new_remote_writes_by_reader": false,
+  "payload_original_files_verified": 403,
+  "received_members": 551,
+  "regular_bytes": 96441149,
+  "retained_emission_excerpts": {
+    "baseline": {
+      "excerpts": [
+        {
+          "following_lines": [
+            "# 233",
+            "if (mask && ((((mask->ncomp() != 1) || (mask->layout() != state.layout())) || (mask->distribution() != state.distribution())) || (mask->local_rank() != state.local_rank()))) { ",
+            "# 236"
+          ],
+          "original_line": 300385,
+          "preceding_line": "# 232",
+          "term": "for (const auto *mask : ({",
+          "text": "for (const auto *mask : ({(view.coverage), (view.activity), (view.relative_measure)})) { "
+        },
+        {
+          "following_lines": [
+            "# 995",
+            "integer(result, value); }  ",
+            "# 996"
+          ],
+          "original_line": 301577,
+          "preceding_line": "# 992",
+          "term": "for (auto value : ({",
+          "text": "for (auto value : ({(((spec).budget).destination_cells), (((spec).budget).intersection_probes), (((spec).budget).canonical_jobs), (((spec).budget).transported_elements), (((spec).budget).prepared_bytes)})) { "
+        },
+        {
+          "following_lines": [
+            "# 1362",
+            "{ ",
+            "# 1363"
+          ],
+          "original_line": 302186,
+          "preceding_line": "# 1361",
+          "term": "for (const auto *field : ({",
+          "text": "for (const auto *field : ({(level.state), (level.coverage), (level.activity), (level.relative_measure)})) "
+        }
+      ],
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-private-cuda-probe-737830-reception-20261008/received-originals/outputs/baseline/keep/amr_layout_transfer.cudafe1.cpp",
+      "sha256": "9aebbaaf80c26f89dc16b1730301d7db70a6e55e844124ad93af48488582e1c4"
+    },
+    "candidate": {
+      "excerpts": [
+        {
+          "following_lines": [
+            "# 235",
+            "for (const auto *mask : measure_fields) { ",
+            "# 236"
+          ],
+          "original_line": 300385,
+          "preceding_line": "# 233",
+          "term": "const std::array< const MultiFab< Dim>  *, 3>  measure_fields",
+          "text": "const std::array< const MultiFab< Dim>  *, 3>  measure_fields{((view.coverage)), ((view.activity)), ((view.relative_measure))}; "
+        },
+        {
+          "following_lines": [
+            "# 998",
+            "for (auto value : budget_values) { ",
+            "# 999"
+          ],
+          "original_line": 301579,
+          "preceding_line": "# 995",
+          "term": "const std::array< std::size_t, 5>  budget_values",
+          "text": "const std::array< std::size_t, 5>  budget_values{((((spec).budget).destination_cells)), ((((spec).budget).intersection_probes)), ((((spec).budget).canonical_jobs)), ((((spec).budget).transported_elements)), ((((spec).budget).prepared_bytes))}; "
+        },
+        {
+          "following_lines": [
+            "# 1367",
+            "for (const auto *field : capacity_fields) { ",
+            "# 1368"
+          ],
+          "original_line": 302190,
+          "preceding_line": "# 1365",
+          "term": "const std::array< const MultiFab< Dim>  *, 4>  capacity_fields",
+          "text": "const std::array< const MultiFab< Dim>  *, 4>  capacity_fields{((level.state)), ((level.coverage)), ((level.activity)), ((level.relative_measure))}; "
+        }
+      ],
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-private-cuda-probe-737830-reception-20261008/received-originals/outputs/candidate/keep/amr_layout_transfer.cudafe1.cpp",
+      "sha256": "4116b98b23fe150586a8d325284f13d1b9d0b82af64d1be059c6744ad26b046a"
+    }
+  },
+  "sacct": {
+    "argv": [
+      "sacct",
+      "-j",
+      "737830",
+      "-nP",
+      "-o",
+      "JobID,State,ExitCode,Elapsed,AllocCPUS,AllocTRES,NodeList"
+    ],
+    "exit": 0,
+    "stderr": "",
+    "stdout": "737830|COMPLETED|0:0|00:00:49|8|billing=8,cpu=8,gres/gpu=1,mem=96G,node=1|romeo-a049\n737830.batch|COMPLETED|0:0|00:00:49|8|cpu=8,gres/gpu=1,mem=96G,node=1|romeo-a049\n737830.extern|COMPLETED|0:0|00:00:49|8|billing=8,cpu=8,gres/gpu=1,mem=96G,node=1|romeo-a049\n"
+  },
+  "schema": "sol61.cuda737830-independent-whole-reception@1",
+  "scientific_PDE_CPP_qualified": false,
+  "source_header_files_verified": 394
+}

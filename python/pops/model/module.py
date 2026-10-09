@@ -27,9 +27,15 @@ class Module(ModuleFreezable):
     The physics facade populates this registry; direct authoring through spaces,
     explicit parameter declarations, auxiliary fields, and operators is equivalent.
     """
-    def __init__(self, name: Any, *, owner: Any = None) -> None:
+    def __init__(self, name: Any, *, owner: Any = None, frame: Any = None) -> None:
         if not isinstance(name, str) or not name:
             raise ValueError("Module name must be a non-empty string")
+        if frame is not None:
+            from pops.domain.cartesian import CartesianDomainFrame
+            from pops.domain.rectangle import RectangleFrame
+            if type(frame) not in (CartesianDomainFrame, RectangleFrame):
+                raise TypeError("Module frame requires an exact CartesianDomainFrame")
+        self.frame = frame
         self.name = name
         candidate_owner = (OwnerPath.coerce(owner) if owner is not None
                            else OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, self.name))
@@ -46,6 +52,7 @@ class Module(ModuleFreezable):
         self._state_handles = {}
         self._field_handles = {}
         self._aux_handles = {}
+        self._global_quantities = {}
         self._param_registry = ParamRegistry(owner=self.owner_path, mutation_guard=self._guard_mutable)
         self._registry = OperatorRegistry(
             owner=self.owner_path, mutation_guard=self._guard_mutable)
@@ -55,6 +62,7 @@ class Module(ModuleFreezable):
         self._eigenvalues = None
         self._constitutive = None
         self._primitive_recipes = MappingProxyType({})
+        self._primitive_coordinates = ()
         self._application_sequence = 0
         # Canonical detached source of the signed pair consumed by HLL.  This is metadata, not a
         # numerics selection: Einfeldt/Davis remain Riemann-provider strategies and are therefore
@@ -100,6 +108,11 @@ class Module(ModuleFreezable):
                     sampling: Any = "unspecified", value_shape: Any = None,
                     domain: Any = "real") -> Any:
         """Declare and return a :class:`StateSpace`."""
+        if self.frame is not None:
+            if frame == "model":
+                frame = self.frame.canonical_id
+            elif frame != self.frame.canonical_id:
+                raise ValueError("StateSpace frame differs from its declared Module frame")
         space = StateSpace(
             name, components, roles, layout, storage, representation=representation,
             centering=centering, units=units, frame=frame, clock=clock,
@@ -190,12 +203,16 @@ class Module(ModuleFreezable):
         handle, never a name or a slot; ProviderPack later resolves the exact
         owner-qualified component and native storage address.
         """
-        from pops.fields.aux import DerivedAux, InputAux
+        from pops.fields.aux import AnalyticAux, DerivedAux, InputAux
 
-        if not isinstance(producer, (InputAux, DerivedAux)):
-            raise TypeError("Module.aux_provider requires InputAux or DerivedAux")
+        if not isinstance(producer, (InputAux, DerivedAux, AnalyticAux)):
+            raise TypeError("Module.aux_provider requires InputAux, DerivedAux or AnalyticAux")
         self._guard_mutable("register an auxiliary provider")
         target = self.aux_handle(producer.target)
+        if isinstance(producer, AnalyticAux):
+            declared_frame = self._aux[target.local_id].frame
+            if declared_frame != producer.frame.canonical_id:
+                raise ValueError("AnalyticAux frame differs from its target auxiliary space")
         if target != producer.target:
             raise ValueError(
                 "auxiliary producer target %s is not the registry-issued Module handle"
@@ -292,13 +309,13 @@ class Module(ModuleFreezable):
     @staticmethod
     def _normalize_expression_output(result: Any, output: Any, *, directional: bool = True) -> Any:
         from collections.abc import Mapping
-        from pops._ir.expr import Expr, _wrap
+        from pops._ir.expr import is_scalar_expression, _wrap
         from pops._ir.symbolic import freeze_symbolic_metadata
         from .bundles import ProductSpace, RateBundle
         from numbers import Number
 
         def vector(value: Any, width: int) -> tuple[Any, ...]:
-            values = (value,) if isinstance(value, (Expr, Number)) else tuple(value)
+            values = (value,) if is_scalar_expression(value) or isinstance(value, Number) else tuple(value)
             if len(values) != width:
                 raise ValueError("captured operator output does not match its declared component shape")
             return tuple(_wrap(value) for value in values)
@@ -331,9 +348,28 @@ class Module(ModuleFreezable):
             raise ValueError("primitive recipes are already declared on this Module")
         self._primitive_recipes = validated
 
+    def primitive_coordinates(self) -> tuple:
+        """Immutable authored joint coordinate maps, independent of runtime storage."""
+        return self._primitive_coordinates
+
+    def _set_primitive_coordinates(self, records: tuple) -> None:
+        self._guard_mutable("declare joint primitive coordinates")
+        from .primitive_coordinates import PrimitiveCoordinates
+        if any(not isinstance(row, PrimitiveCoordinates) for row in records):
+            raise TypeError("primitive coordinates require typed immutable declarations")
+        self._primitive_coordinates = tuple(records)
+
     def primitive_recipes(self) -> Any:
         """The immutable expression recipes; absence leaves opaque recovery explicit."""
-        return self._primitive_recipes
+        if not self._primitive_coordinates:
+            return self._primitive_recipes
+        from pops._ir import Var
+        recipes = dict(self._primitive_recipes)
+        for row in self._primitive_coordinates:
+            for coordinate, body in zip(row.coordinates, row.forward, strict=True):
+                if isinstance(coordinate, Var) and coordinate.kind == "prim":
+                    recipes.setdefault(coordinate.name, body)
+        return MappingProxyType(recipes)
 
     def apply(self, operator: Any, *arguments: Any, context: Any = None) -> Any:
         """Instantiate a captured expression operator and retain one joint application identity."""
@@ -356,7 +392,8 @@ class Module(ModuleFreezable):
         inputs = []
         bindings = {}
         for space, argument in zip(declaration.signature.inputs, arguments, strict=True):
-            values = (argument,) if isinstance(argument, Expr) else tuple(argument)
+            values = (argument,) if (isinstance(argument, Expr) or
+                                    callable(getattr(argument, "__pops_scalar_plan__", None))) else tuple(argument)
             if len(values) != len(space.components):
                 raise ValueError("application input component shape differs from its signature")
             values = tuple(_wrap(value) for value in values)
@@ -494,11 +531,14 @@ class Module(ModuleFreezable):
             contract = self._rate_contracts[rate]
         except KeyError:
             raise ValueError("rate handle is not registered by this Module") from None
-        return {
+        result = {
             "state": contract["state"],
             "flux": contract["flux"],
             "sources": tuple(contract["sources"]),
         }
+        if contract.get("nonconservative_products"):
+            result["nonconservative_products"] = tuple(contract["nonconservative_products"])
+        return result
 
     def eigenvalues(self, **directions: Any) -> Any:
         """Declare the per-direction wave speeds (eigenvalues) the Riemann solver needs, as lists of
@@ -711,6 +751,16 @@ class Module(ModuleFreezable):
         """Return the registry-issued handle of a declared auxiliary field."""
         return self._descriptor_handle(aux, self._aux, self._aux_handles, "aux field")
 
+    def global_quantity(self, name, *, units):
+        """Declare a scalar physical input; Program supplies its scoped value."""
+        self._guard_mutable("declare a global quantity")
+        from .global_quantity import GlobalQuantityHandle
+        if name in self._global_quantities:
+            raise ValueError("global quantity %r is already declared" % name)
+        handle = GlobalQuantityHandle(name, owner=self.owner_path, units=units)
+        self._global_quantities[name] = handle
+        return handle
+
     def declaration_index(self) -> DeclarationIndex:
         """Read-only union of the Module's authoritative family registries."""
         candidates = [
@@ -718,6 +768,7 @@ class Module(ModuleFreezable):
             *self._field_handles.values(),
             *self._param_registry.handles(),
             *self._aux_handles.values(),
+            *self._global_quantities.values(),
             *self._operator_bindings,
             *self._registry.declaration_index().records(),
         ]

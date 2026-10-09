@@ -1,0 +1,32 @@
+Test project /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi
+    Start 1206: ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+1/8 Test #1206: ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock ...........   Passed    8.00 sec
+    Start 1207: ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+2/8 Test #1207: ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox ...   Passed    0.60 sec
+    Start 1233: ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges
+3/8 Test #1233: ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges ......   Passed    0.97 sec
+    Start 1236: ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent
+4/8 Test #1236: ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent .....   Passed    0.06 sec
+    Start 1237: ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption
+5/8 Test #1237: ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption ....   Passed    0.06 sec
+    Start 1238: ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation
+6/8 Test #1238: ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation ...............   Passed    0.06 sec
+    Start 1366: test_program_runtime_np2
+7/8 Test #1366: test_program_runtime_np2 .............................................................   Passed    0.70 sec
+    Start 1367: test_program_context_contract_np2
+8/8 Test #1367: test_program_context_contract_np2 ....................................................   Passed    0.35 sec
+
+100% tests passed out of 8
+
+Label Time Summary:
+backend                                     =   2.10 sec*proc (2 tests)
+cpp-target:test_program_context_contract    =   1.86 sec*proc (5 tests)
+cpp-target:test_program_runtime             =  10.00 sec*proc (3 tests)
+fast                                        =   1.16 sec*proc (4 tests)
+integration                                 =   8.60 sec*proc (2 tests)
+medium                                      =  10.70 sec*proc (4 tests)
+mpi                                         =   2.10 sec*proc (2 tests)
+runtime                                     =   9.76 sec*proc (6 tests)
+unit                                        =   1.16 sec*proc (4 tests)
+
+Total Test time (real) =  10.86 sec

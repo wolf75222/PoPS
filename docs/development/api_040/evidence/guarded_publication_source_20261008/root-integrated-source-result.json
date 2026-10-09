@@ -1,0 +1,23 @@
+{
+  "exit": 0,
+  "Source_modules": {
+    "pops": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/__init__.py",
+    "pops.codegen.program_accepted_ssp": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/codegen/program_accepted_ssp.py",
+    "pops.codegen.program_field_publication": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/codegen/program_field_publication.py",
+    "pops.codegen.program_emit_ops": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/codegen/program_emit_ops.py"
+  },
+  "Native_loaded": [],
+  "args": [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-q",
+    "-p",
+    "no:cacheprovider",
+    "tests/python/unit/codegen/test_diffusion_frozen_input_quadrature.py",
+    "tests/python/architecture/test_ci_shard_binpack.py",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-root-integrated-guarded-publication-CPP-source-retry2-20261008/tmp",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-root-integrated-guarded-publication-CPP-source-retry2-20261008/pytest.xml"
+  ],
+  "log_sha256": "cbb81dd93490b7b5921ac575f3a06280be837de82e5f89bbce2b520cc6985934"
+}

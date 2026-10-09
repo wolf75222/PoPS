@@ -175,8 +175,15 @@ class ResolvedOperationPlan:
         expected = provider_evidence(packs)
         if claims is not None:
             expected["program_field_publications"] = data(claims)
+        from .provider_instances import EVIDENCE, require_instance_contract
+        instance = require_instance_contract(self, module)
+        if instance is not None:
+            expected[EVIDENCE] = data(instance)
         if data(self.provider_evidence) != expected:
             _reject("resolved-plan", "provider_plan_drift", "resolved provider access plan changed")
+        if instance is not None:
+            from dataclasses import replace
+            packs = replace(packs, native_instance=instance)
         return packs
 
     def require_native(self, identity: str, *, module: Any,
@@ -194,6 +201,8 @@ class ResolvedOperationPlan:
         from ._resolved_operation_authority import require_operation_authority
 
         require_operation_authority(self, operation, module)
+        from .nonconservative_lowering import require_path_numerical_authority
+        require_path_numerical_authority(operation, module)
         current = dict(native_realizations or {})
         if native_realizations is None:
             for definition in module.operator_registry():

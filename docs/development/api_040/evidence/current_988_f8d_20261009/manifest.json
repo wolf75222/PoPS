@@ -1,0 +1,226 @@
+{
+  "Source": "98804c6849c9966e05b5397126bab983a5fa0227",
+  "files": {
+    "actual-capacity-checkpoint-scope.json": {
+      "bytes": 1897,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-public10-offline-reception-20261009/actual-capacity-checkpoint-scope.json",
+      "sha256": "7607804878e33f213e36d7d54c0d0095e062a8a4b4bcc41c5b703fe8624c7866"
+    },
+    "guarded-baseline-identity.json": {
+      "bytes": 2904,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/guarded-baseline/identity.json",
+      "sha256": "8adf7de1646ec4995a964afbd1339d05897de6cdc94006bc0c38bdca093ced03"
+    },
+    "guarded-baseline-invocation.json": {
+      "bytes": 3174,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/guarded-baseline/invocation.json",
+      "sha256": "6b42cb33fa0bf9bcfd3ecba965aeef1e3e8f693787ba3f6aee1bfb6669f641a0"
+    },
+    "guarded-baseline-pytest.xml": {
+      "bytes": 694,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/guarded-baseline/pytest.xml",
+      "sha256": "9a394b31b401989a47df52fbe6183254b57bc672b45b60676b3fd118fb0f082a"
+    },
+    "guarded-baseline-result.json": {
+      "bytes": 1067,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/guarded-baseline/result.json",
+      "sha256": "a5922ab70543bc38e9a8a507f1f24d96ab828bb94a7cb8dfeadfb9860364f670"
+    },
+    "guarded-three-reception.json": {
+      "bytes": 54729,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-guarded-independent-reception-20261009/all-three-reception.json",
+      "sha256": "1b798e1590534ce9bbec5c725fae90c9713169e730d9fbf9748a1e868da1a6ad"
+    },
+    "guarded-variants-identity.json": {
+      "bytes": 2904,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/guarded-variants/identity.json",
+      "sha256": "8adf7de1646ec4995a964afbd1339d05897de6cdc94006bc0c38bdca093ced03"
+    },
+    "guarded-variants-invocation.json": {
+      "bytes": 3492,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/guarded-variants/invocation.json",
+      "sha256": "1b905eec8461e98696dbe3553b5db6927a8daf441995e26a1ae398e168ed4c6b"
+    },
+    "guarded-variants-pytest.xml": {
+      "bytes": 1154,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/guarded-variants/pytest.xml",
+      "sha256": "611510210d4c9ef62a287cafdac57ec39bd16ce6934927c8303e38be8deeff9e"
+    },
+    "guarded-variants-result.json": {
+      "bytes": 1219,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/guarded-variants/result.json",
+      "sha256": "0bbabaaa1e800e49fc1917d5981d7cd038ea550a9993f74049d7798dc4fdb614"
+    },
+    "mpi2-compact-reception-v2.json": {
+      "bytes": 5795,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-mpi2-offline-reception-20261009/mpi2-compact-reception-v2.json",
+      "sha256": "ef79c2a9878bc516e0c7a5f64d46652b16e5e053c98a256f22bb093b92aa183d"
+    },
+    "mpi2-public-rollback-and-guarded-launcher-receipt.json": {
+      "bytes": 2394,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/mpi2-public-rollback-and-guarded-launcher-receipt.json",
+      "sha256": "381d0521e85902a84cea6ce7ea64cc909a136931e9c236457908ebdfeccf40b0"
+    },
+    "mpi2-public-rollback-and-guarded-rank0.identity-check.json": {
+      "bytes": 1309,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/mpi2-public-rollback-and-guarded/rank0.identity-check.json",
+      "sha256": "e5d0e42f97889aa0dfbba90459ca977e974e9a319e48ee4c5c9b2768bfbbd7db"
+    },
+    "mpi2-public-rollback-and-guarded-rank0.identity.json": {
+      "bytes": 555,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/mpi2-public-rollback-and-guarded/rank0.identity.json",
+      "sha256": "71cdc21397af6595b0379b675e1254833d292c147e8a138df5dea41daa69a988"
+    },
+    "mpi2-public-rollback-and-guarded-rank0.xml": {
+      "bytes": 10402,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/mpi2-public-rollback-and-guarded/rank0.xml",
+      "sha256": "c10eae8371407307f024d134b67b3754b2da686c6c4954c041ff149555887444"
+    },
+    "mpi2-public-rollback-and-guarded-rank1.identity-check.json": {
+      "bytes": 1309,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/mpi2-public-rollback-and-guarded/rank1.identity-check.json",
+      "sha256": "e5d0e42f97889aa0dfbba90459ca977e974e9a319e48ee4c5c9b2768bfbbd7db"
+    },
+    "mpi2-public-rollback-and-guarded-rank1.identity.json": {
+      "bytes": 555,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/mpi2-public-rollback-and-guarded/rank1.identity.json",
+      "sha256": "553e25060ab679dcec77997ecc1cc5858d28caeed521ef821a5a7347457ef5ed"
+    },
+    "mpi2-public-rollback-and-guarded-rank1.xml": {
+      "bytes": 10402,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/mpi2-public-rollback-and-guarded/rank1.xml",
+      "sha256": "a3842f886bd17f20040e122c2a986f5fd04a0023282581c44792a7bf78827b88"
+    },
+    "mpi2-representative-launcher-receipt.json": {
+      "bytes": 2212,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/mpi2-representative-launcher-receipt.json",
+      "sha256": "7ab69aad60f2dc1c85907b20ba2bd6f63e10f3759d20fe47fa7876c37cbb2ba0"
+    },
+    "mpi2-representative-rank0.identity-check.json": {
+      "bytes": 1309,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/mpi2-representative/rank0.identity-check.json",
+      "sha256": "e5d0e42f97889aa0dfbba90459ca977e974e9a319e48ee4c5c9b2768bfbbd7db"
+    },
+    "mpi2-representative-rank0.identity.json": {
+      "bytes": 555,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/mpi2-representative/rank0.identity.json",
+      "sha256": "71cdc21397af6595b0379b675e1254833d292c147e8a138df5dea41daa69a988"
+    },
+    "mpi2-representative-rank0.xml": {
+      "bytes": 1123,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/mpi2-representative/rank0.xml",
+      "sha256": "e361de4ee37edd6a0fec4b04462b48ea7825955658f0c98f8387b3114b7ae0e9"
+    },
+    "mpi2-representative-rank1.identity-check.json": {
+      "bytes": 1309,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/mpi2-representative/rank1.identity-check.json",
+      "sha256": "e5d0e42f97889aa0dfbba90459ca977e974e9a319e48ee4c5c9b2768bfbbd7db"
+    },
+    "mpi2-representative-rank1.identity.json": {
+      "bytes": 555,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/mpi2-representative/rank1.identity.json",
+      "sha256": "553e25060ab679dcec77997ecc1cc5858d28caeed521ef821a5a7347457ef5ed"
+    },
+    "mpi2-representative-rank1.xml": {
+      "bytes": 1123,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/mpi2-representative/rank1.xml",
+      "sha256": "8b80c9edb30801b272cd08fa3215276a35464678c677a0a6dcf5dae36646f482"
+    },
+    "native-build-admission.json": {
+      "bytes": 21766,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/native-build-admission.json",
+      "sha256": "7859326f684e3fbbae28fe801f4e73beaee2bd03f12cef24ffad6ecc1d281e0d"
+    },
+    "native-build-physical-reception.json": {
+      "bytes": 17321,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-typed-provider-support-reception-20261009/native-build-physical-reception.json",
+      "sha256": "f84f5f3997bd54c23134a04a922e15e2c788a748b19fb35d1e42dd7b360d6fb9"
+    },
+    "native8-reception.json": {
+      "bytes": 25875,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-original-offline-reception-20261009/native8-reception.json",
+      "sha256": "9bdcac5df8bad62a6d658fe0a4d48a7ce2dabde80776ec9e5ae906bbb403a0aa"
+    },
+    "original-current10-reception-summary.json": {
+      "bytes": 3805,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-original-offline-reception-20261009/original-current10-reception-summary.json",
+      "sha256": "58d3a149bf74abc8c9ff3ba47ada2f9c0ac83c57b1497e7f25a6c71ddf54b668"
+    },
+    "original-pde-identity.json": {
+      "bytes": 2904,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/original-pde/identity.json",
+      "sha256": "8adf7de1646ec4995a964afbd1339d05897de6cdc94006bc0c38bdca093ced03"
+    },
+    "original-pde-invocation.json": {
+      "bytes": 3138,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/original-pde/invocation.json",
+      "sha256": "05ba74bd40042bcaf91a76bb82024d327d1cf8c8911fee893c4f1549ca150cdc"
+    },
+    "original-pde-pytest.xml": {
+      "bytes": 681,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/original-pde/pytest.xml",
+      "sha256": "0a137fe1127335cb437a4e7f4cdd4af77d3a775a285fde6cda5d3082d588f2db"
+    },
+    "original-pde-reception.json": {
+      "bytes": 23009,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-original-offline-reception-20261009/original-pde-reception.json",
+      "sha256": "0d3025e335311ac68387fc676b9cdf5c066f747265fd4d406db4e1da2453a1cc"
+    },
+    "original-pde-result.json": {
+      "bytes": 1048,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/original-pde/result.json",
+      "sha256": "12fe4018b87e44a004c5ffbb9816cb31c775db89aa7e0c622ec0ac3042fdfabe"
+    },
+    "original-retry-and-native8-identity.json": {
+      "bytes": 2904,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/original-retry-and-native8/identity.json",
+      "sha256": "8adf7de1646ec4995a964afbd1339d05897de6cdc94006bc0c38bdca093ced03"
+    },
+    "original-retry-and-native8-invocation.json": {
+      "bytes": 5514,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/original-retry-and-native8/invocation.json",
+      "sha256": "1e375e10b503891f1e7613ed3a128828aabb82907c332e71e99e725078b33805"
+    },
+    "original-retry-and-native8-pytest.xml": {
+      "bytes": 2353,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/original-retry-and-native8/pytest.xml",
+      "sha256": "c5d22cef3777775b37619364d1fe3f52148d5103a0250c4e31295c723e950a3c"
+    },
+    "original-retry-and-native8-result.json": {
+      "bytes": 2186,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/original-retry-and-native8/result.json",
+      "sha256": "447b1a63a10aedd4b3e68b8aebdc13371920cc319db5a78dd0ab81bea1bcf0b4"
+    },
+    "own-retry-reception.json": {
+      "bytes": 9593,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-original-offline-reception-20261009/own-retry-reception.json",
+      "sha256": "0617647f5a02f5838ca3f04c8555723cd244c9389051c99fde65e7844011a992"
+    },
+    "public-methods-rollback-capacity-identity.json": {
+      "bytes": 2904,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/public-methods-rollback-capacity/identity.json",
+      "sha256": "8adf7de1646ec4995a964afbd1339d05897de6cdc94006bc0c38bdca093ced03"
+    },
+    "public-methods-rollback-capacity-invocation.json": {
+      "bytes": 3608,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/public-methods-rollback-capacity/invocation.json",
+      "sha256": "33866b3372100c469325f9a45cca39e71b7910630b2fe0762307a2ca4b570fca"
+    },
+    "public-methods-rollback-capacity-pytest.xml": {
+      "bytes": 4788,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/public-methods-rollback-capacity/pytest.xml",
+      "sha256": "a63901b5cead84be1dd84658894e78d47f2be39cd25fb363d4cfe4518434be19"
+    },
+    "public-methods-rollback-capacity-result.json": {
+      "bytes": 1278,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/public-methods-rollback-capacity/result.json",
+      "sha256": "7811f37de374f4740b2d579a68ac8b1ae2cb3379f778a9e85b49e9defa0ed70b"
+    },
+    "public10-reception.json": {
+      "bytes": 436935,
+      "origin": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-public10-offline-reception-20261009/public10-reception.json",
+      "sha256": "164c5f04f68c9b1ebb1766d4aec9dc341071cc910a8c4d4e10c43c68054f6d7c"
+    }
+  },
+  "scope": "Exact copied scoped receipts; large Native binaries, DSO/CP data and raw traces remain in authenticated original locations, not reconstructed from hashes."
+}

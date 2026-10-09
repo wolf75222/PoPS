@@ -5,6 +5,7 @@
 #include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/physics/composition/exact_brick_contract.hpp>
+#include <pops/physics/composition/no_source.hpp>
 
 #include <array>
 #include <cstddef>
@@ -101,19 +102,6 @@ consteval int declared_dimension() {
 }
 
 }  // namespace source_detail
-
-/// Neutral source. The auxiliary rank is deduced from the exact pointwise carrier.
-struct NoSource {
-  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
-    return {"pops.physics.source.none", 1};
-  }
-  void serialize_exact_parameters(ExactContractBuilder&) const {}
-
-  template <class State, class Providers>
-  POPS_HD State apply(const State&, const Providers&) const {
-    return State{};
-  }
-};
 
 /// Electrostatic force `(q/m) rho (-grad phi)` on every momentum axis of `Dim`.
 ///

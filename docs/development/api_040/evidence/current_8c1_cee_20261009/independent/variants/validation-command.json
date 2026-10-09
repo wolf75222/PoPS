@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "rtk",
+    "proxy",
+    "python3",
+    "-B",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/variants/receive_variants.py"
+  ],
+  "observed_tool_chunk_id": "162ea8",
+  "exit_code": 0,
+  "wall_time_seconds": 0.172091666,
+  "scope": "Offline receiver only; no Native execution.",
+  "preserved_receiver_development_observation": {
+    "chunk_id": "4f75b4",
+    "cause": "Generic numeric checkpoint equality initially included integer byte-offset indexes into identity-containing serialized strings. Exactly two offsets differ with renamed identifiers; physical numerical arrays and all2304numericalexchanges independently match.",
+    "Native_failure": false
+  }
+}

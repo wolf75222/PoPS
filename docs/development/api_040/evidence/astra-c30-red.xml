@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="4" skipped="0" tests="8" time="3.503" timestamp="2026-09-29T00:01:07.241230+02:00" hostname="macbookpro.home"><testcase classname="tests.python.unit.problem.test_deep_freeze_storage" name="test_case_freeze_detaches_stale_registry_views_and_keeps_hash_stable" time="0.014" /><testcase classname="tests.python.unit.problem.test_deep_freeze_storage" name="test_plain_mutable_extension_record_cannot_cross_compiled_boundary" time="0.000" /><testcase classname="tests.python.unit.problem.test_deep_freeze_storage" name="test_validated_method_rejects_deletion_before_resolve[reconstruction]" time="0.924"><failure message="Failed: DID NOT RAISE RuntimeError">attribute = 'reconstruction'
+
+    @pytest.mark.parametrize("attribute", ("reconstruction", "positivity_floor", "_frozen"))
+    def test_validated_method_rejects_deletion_before_resolve(attribute):
+        case, _, method = _validated_transport()
+        before = _resolve_transport(case)
+        snapshot_hash = case.snapshot.hash
+    
+&gt;       with pytest.raises(RuntimeError, match="frozen.*cannot delete"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE RuntimeError
+
+tests/python/unit/problem/test_deep_freeze_storage.py:97: Failed</failure></testcase><testcase classname="tests.python.unit.problem.test_deep_freeze_storage" name="test_validated_method_rejects_deletion_before_resolve[positivity_floor]" time="0.488"><failure message="Failed: DID NOT RAISE RuntimeError">attribute = 'positivity_floor'
+
+    @pytest.mark.parametrize("attribute", ("reconstruction", "positivity_floor", "_frozen"))
+    def test_validated_method_rejects_deletion_before_resolve(attribute):
+        case, _, method = _validated_transport()
+        before = _resolve_transport(case)
+        snapshot_hash = case.snapshot.hash
+    
+&gt;       with pytest.raises(RuntimeError, match="frozen.*cannot delete"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE RuntimeError
+
+tests/python/unit/problem/test_deep_freeze_storage.py:97: Failed</failure></testcase><testcase classname="tests.python.unit.problem.test_deep_freeze_storage" name="test_validated_method_rejects_deletion_before_resolve[_frozen]" time="0.494"><failure message="Failed: DID NOT RAISE RuntimeError">attribute = '_frozen'
+
+    @pytest.mark.parametrize("attribute", ("reconstruction", "positivity_floor", "_frozen"))
+    def test_validated_method_rejects_deletion_before_resolve(attribute):
+        case, _, method = _validated_transport()
+        before = _resolve_transport(case)
+        snapshot_hash = case.snapshot.hash
+    
+&gt;       with pytest.raises(RuntimeError, match="frozen.*cannot delete"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE RuntimeError
+
+tests/python/unit/problem/test_deep_freeze_storage.py:97: Failed</failure></testcase><testcase classname="tests.python.unit.problem.test_deep_freeze_storage" name="test_validated_numerical_plan_rejects_family_deletion" time="0.110"><failure message="Failed: DID NOT RAISE RuntimeError">def test_validated_numerical_plan_rejects_family_deletion():
+        case, numerics, _ = _validated_transport()
+&gt;       with pytest.raises(RuntimeError, match="frozen.*cannot delete"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE RuntimeError
+
+tests/python/unit/problem/test_deep_freeze_storage.py:110: Failed</failure></testcase><testcase classname="tests.python.unit.problem.test_deep_freeze_storage" name="test_frozen_method_copy_remains_a_detached_mutable_authoring_value" time="0.888" /><testcase classname="tests.python.unit.problem.test_deep_freeze_storage" name="test_compile_rejects_tampered_resolved_method_before_native_selection" time="0.534" /></testsuite></testsuites>

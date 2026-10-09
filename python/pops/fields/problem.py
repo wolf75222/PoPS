@@ -6,6 +6,8 @@ bound separately; a species contributing to its load does not own the field stor
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any
 
 from pops.descriptors import Descriptor
@@ -147,6 +149,7 @@ class FieldStorageBinding:
 
     unknowns: tuple[Handle, ...]
     layout: Handle
+    observation_axes: tuple[int, ...] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.unknowns, tuple) or not self.unknowns or any(
@@ -154,6 +157,10 @@ class FieldStorageBinding:
             raise TypeError("FieldStorageBinding requires an exact tuple of field Handles")
         if len(set(self.unknowns)) != len(self.unknowns):
             raise FieldProblemError("field.storage.duplicate_unknown", "field storage repeats an unknown")
+        if self.observation_axes is not None and (type(self.observation_axes) is not tuple
+                or any(type(axis) is not int or axis < 0 for axis in self.observation_axes)
+                or len(set(self.observation_axes)) != len(self.observation_axes)):
+            raise TypeError("FieldStorageBinding observation axes must be an exact distinct nonnegative tuple")
         if not isinstance(self.layout, Handle) or self.layout.kind != "layout":
             raise TypeError("FieldStorageBinding layout must be a typed LayoutHandle")
 
@@ -170,12 +177,16 @@ class FieldStorageBinding:
     def resolve_references(self, resolver: Any) -> FieldStorageBinding:
         return FieldStorageBinding(
             tuple(resolve_handle(row, resolver, where="field storage unknown") for row in self.unknowns),
-            resolve_handle(self.layout, resolver, where="field storage layout"),
+            resolve_handle(self.layout, resolver, where="field storage layout"), self.observation_axes,
         )
 
     def to_data(self) -> dict[str, Any]:
-        return {"schema_version": 1, "unknowns": [row.canonical_identity()
+        data = {"schema_version": 1, "unknowns": [row.canonical_identity()
                 for row in self.unknowns], "layout": self.layout.canonical_identity()}
+        if self.observation_axes is not None:
+            data["schema_version"] = 2
+            data["observation_axes"] = list(self.observation_axes)
+        return data
 
 
 class FieldProblem(Descriptor):
@@ -190,7 +201,8 @@ class FieldProblem(Descriptor):
     def __init__(self, name: str, *, unknowns: tuple[Handle, ...],
                  equations: tuple[Equation, ...], boundaries: tuple[FieldBoundary, ...] = (),
                  gauge: SharedMeanGauge | ConstantModeGauge | None = None, branch: Any = None,
-                 outputs: tuple[Any, ...] = ()) -> None:
+                 outputs: tuple[Any, ...] = (), unknown_spaces: Mapping | None = None,
+                 coordinate_units: tuple[Any, ...] = ()) -> None:
         if type(name) is not str or not name:
             raise TypeError("FieldProblem name must be a nonempty string")
         if not isinstance(unknowns, tuple) or not unknowns or any(
@@ -209,6 +221,27 @@ class FieldProblem(Descriptor):
         if gauge is not None and (not isinstance(gauge, (SharedMeanGauge, ConstantModeGauge))
                                   or gauge.unknowns != unknowns):
             raise FieldProblemError("field.gauge.joint_required", "a joint field problem requires one shared gauge over its exact unknown tuple")
+        from pops.model import FieldSpace, PhysicalDimension
+        if unknown_spaces is None:
+            spaces = {}
+        elif not isinstance(unknown_spaces, Mapping) or set(unknown_spaces) != set(unknowns):
+            raise FieldProblemError("field.observation.spaces", "declared observation spaces must cover the exact unknown tuple")
+        else:
+            spaces = dict(unknown_spaces)
+        for unknown, space in spaces.items():
+            if type(space) is not FieldSpace or len(space.components) != 1 \
+                    or space.centering != "cell" or space.sampling != "cell" \
+                    or space.representation != "field" or space.support is None \
+                    or any(unit is None for unit in space.units):
+                raise FieldProblemError("field.observation.space", "a solved scalar requires an explicit cell-sampled FieldSpace, support and units")
+        if type(coordinate_units) is not tuple or any(type(unit) is not PhysicalDimension for unit in coordinate_units):
+            raise TypeError("field coordinate_units must be a tuple of exact PhysicalDimension values")
+        if coordinate_units and (not spaces or len(coordinate_units) != len(next(iter(spaces.values())).support.coordinates)):
+            raise FieldProblemError("field.observation.coordinates", "gradient coordinate units require declared observation spaces and their physical support-coordinate order")
+        if spaces and len({space.support for space in spaces.values()}) != 1:
+            raise FieldProblemError("field.observation.support", "one joint field tuple requires a common declared physical support")
+        self.unknown_spaces = MappingProxyType(spaces)
+        self.coordinate_units = coordinate_units
         self._name = name
         self._unknowns = unknowns
         self._equations = equations
@@ -258,12 +291,17 @@ class FieldProblem(Descriptor):
         return True
 
     def to_data(self) -> dict[str, Any]:
-        return {"schema_version": 1, "unknowns": [row.canonical_identity() for row in self.unknowns],
+        data = {"schema_version": 1, "unknowns": [row.canonical_identity() for row in self.unknowns],
                 "equations": [strict_field_data(row) for row in self.equations],
                 "boundaries": [row.to_data() for row in self.boundaries],
                 "gauge": None if self.gauge is None else self.gauge.to_data(),
                 "branch": strict_field_data(self.branch),
                 "outputs": [strict_field_data(row) for row in self.outputs]}
+        if self.unknown_spaces:
+            data["schema_version"] = 2
+            data["observation_spaces"] = [self.unknown_spaces[row].to_data() for row in self.unknowns]
+            data["coordinate_units"] = [unit.to_data() for unit in self.coordinate_units]
+        return data
 
     def options(self) -> dict[str, Any]:
         return {"name": self.name, "unknown_count": len(self.unknowns),
@@ -278,7 +316,10 @@ class FieldProblem(Descriptor):
             boundaries=tuple(resolve_value(self.boundaries, resolver, where="FieldProblem boundaries")),
             gauge=resolve_value(self.gauge, resolver, where="FieldProblem gauge"),
             branch=resolve_value(self.branch, resolver, where="FieldProblem branch"),
-            outputs=tuple(resolve_value(self.outputs, resolver, where="FieldProblem outputs")))
+            outputs=tuple(resolve_value(self.outputs, resolver, where="FieldProblem outputs")),
+            unknown_spaces=None if not self.unknown_spaces else {
+                resolve_handle(row, resolver, where="FieldProblem observation unknown"): self.unknown_spaces[row]
+                for row in self.unknowns}, coordinate_units=self.coordinate_units)
 
     semantic_data = to_data
     artifact_data = to_data

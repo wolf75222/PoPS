@@ -1,0 +1,2072 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)"
+	tests="98"
+	failures="0"
+	disabled="0"
+	skipped="2"
+	hostname=""
+	time="24"
+	timestamp="2026-09-29T01:30:08"
+	>
+	<testcase name="PreparedResourceCache.ReusesStorageWithoutAliasingNodesBlocksOrLevels" classname="PreparedResourceCache.ReusesStorageWithoutAliasingNodesBlocksOrLevels" time="0.608291" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_resource_cache;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedResourceCache.ReusesStorageWithoutAliasingNodesBlocksOrLevels
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedResourceCache
+[ RUN      ] PreparedResourceCache.ReusesStorageWithoutAliasingNodesBlocksOrLevels
+[       OK ] PreparedResourceCache.ReusesStorageWithoutAliasingNodesBlocksOrLevels (12 ms)
+[----------] 1 test from PreparedResourceCache (12 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (12 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedResourceCache.RankLocalInvalidationAndPreflightFailureAreCollective" classname="PreparedResourceCache.RankLocalInvalidationAndPreflightFailureAreCollective" time="0.0322962" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_resource_cache;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedResourceCache.RankLocalInvalidationAndPreflightFailureAreCollective
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedResourceCache
+[ RUN      ] PreparedResourceCache.RankLocalInvalidationAndPreflightFailureAreCollective
+[       OK ] PreparedResourceCache.RankLocalInvalidationAndPreflightFailureAreCollective (8 ms)
+[----------] 1 test from PreparedResourceCache (8 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (8 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedResourceCache.FailedConstructionPreservesAcceptedBufferOnEveryRank" classname="PreparedResourceCache.FailedConstructionPreservesAcceptedBufferOnEveryRank" time="0.0328506" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_resource_cache;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedResourceCache.FailedConstructionPreservesAcceptedBufferOnEveryRank
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedResourceCache
+[ RUN      ] PreparedResourceCache.FailedConstructionPreservesAcceptedBufferOnEveryRank
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] PreparedResourceCache.FailedConstructionPreservesAcceptedBufferOnEveryRank (9 ms)
+[----------] 1 test from PreparedResourceCache (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedResourceCache.FailedInitialConstructionRemainsCollectivelyRetryable" classname="PreparedResourceCache.FailedInitialConstructionRemainsCollectivelyRetryable" time="0.0330565" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_resource_cache;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedResourceCache.FailedInitialConstructionRemainsCollectivelyRetryable
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedResourceCache
+[ RUN      ] PreparedResourceCache.FailedInitialConstructionRemainsCollectivelyRetryable
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] PreparedResourceCache.FailedInitialConstructionRemainsCollectivelyRetryable (8 ms)
+[----------] 1 test from PreparedResourceCache (8 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (8 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_weno_convergence.preserves_constants" classname="test_weno_convergence.preserves_constants" time="0.319679" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_weno_convergence;fast;numerics;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_weno_convergence.preserves_constants
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_weno_convergence
+[ RUN      ] test_weno_convergence.preserves_constants
+[       OK ] test_weno_convergence.preserves_constants (0 ms)
+[----------] 1 test from test_weno_convergence (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_weno_convergence.finite_extreme_stencils_and_step_faces" classname="test_weno_convergence.finite_extreme_stencils_and_step_faces" time="0.0253022" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_weno_convergence;fast;numerics;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_weno_convergence.finite_extreme_stencils_and_step_faces
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_weno_convergence
+[ RUN      ] test_weno_convergence.finite_extreme_stencils_and_step_faces
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_weno_convergence.finite_extreme_stencils_and_step_faces (1 ms)
+[----------] 1 test from test_weno_convergence (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_weno_convergence.invalid_stencil_or_epsilon_remains_nonfinite" classname="test_weno_convergence.invalid_stencil_or_epsilon_remains_nonfinite" time="0.0254219" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_weno_convergence;fast;numerics;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_weno_convergence.invalid_stencil_or_epsilon_remains_nonfinite
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_weno_convergence
+[ RUN      ] test_weno_convergence.invalid_stencil_or_epsilon_remains_nonfinite
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_weno_convergence.invalid_stencil_or_epsilon_remains_nonfinite (1 ms)
+[----------] 1 test from test_weno_convergence (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_weno_convergence.reconstruction_protocol_is_independent_of_storage_radius" classname="test_weno_convergence.reconstruction_protocol_is_independent_of_storage_radius" time="0.0233096" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_weno_convergence;fast;numerics;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_weno_convergence.reconstruction_protocol_is_independent_of_storage_radius
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_weno_convergence
+[ RUN      ] test_weno_convergence.reconstruction_protocol_is_independent_of_storage_radius
+[       OK ] test_weno_convergence.reconstruction_protocol_is_independent_of_storage_radius (0 ms)
+[----------] 1 test from test_weno_convergence (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_muscl_limiters.mc_and_superbee_match_reference_formulas" classname="test_muscl_limiters.mc_and_superbee_match_reference_formulas" time="0.0230585" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_weno_convergence;fast;numerics;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_muscl_limiters.mc_and_superbee_match_reference_formulas
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_muscl_limiters
+[ RUN      ] test_muscl_limiters.mc_and_superbee_match_reference_formulas
+[       OK ] test_muscl_limiters.mc_and_superbee_match_reference_formulas (0 ms)
+[----------] 1 test from test_muscl_limiters (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_muscl_limiters.minmod_and_vanleer_handle_extreme_finite_differences" classname="test_muscl_limiters.minmod_and_vanleer_handle_extreme_finite_differences" time="0.0240136" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_weno_convergence;fast;numerics;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_muscl_limiters.minmod_and_vanleer_handle_extreme_finite_differences
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_muscl_limiters
+[ RUN      ] test_muscl_limiters.minmod_and_vanleer_handle_extreme_finite_differences
+[       OK ] test_muscl_limiters.minmod_and_vanleer_handle_extreme_finite_differences (0 ms)
+[----------] 1 test from test_muscl_limiters (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_muscl_limiters.mc_and_superbee_do_not_mask_invalid_inputs_or_tiny_slopes" classname="test_muscl_limiters.mc_and_superbee_do_not_mask_invalid_inputs_or_tiny_slopes" time="0.0243855" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_weno_convergence;fast;numerics;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_muscl_limiters.mc_and_superbee_do_not_mask_invalid_inputs_or_tiny_slopes
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_muscl_limiters
+[ RUN      ] test_muscl_limiters.mc_and_superbee_do_not_mask_invalid_inputs_or_tiny_slopes
+[       OK ] test_muscl_limiters.mc_and_superbee_do_not_mask_invalid_inputs_or_tiny_slopes (0 ms)
+[----------] 1 test from test_muscl_limiters (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_muscl_limiters.scalar_upwind_euler_tvd_and_mean_at_half_cfl" classname="test_muscl_limiters.scalar_upwind_euler_tvd_and_mean_at_half_cfl" time="0.028951" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_weno_convergence;fast;numerics;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_muscl_limiters.scalar_upwind_euler_tvd_and_mean_at_half_cfl
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_muscl_limiters
+[ RUN      ] test_muscl_limiters.scalar_upwind_euler_tvd_and_mean_at_half_cfl
+[       OK ] test_muscl_limiters.scalar_upwind_euler_tvd_and_mean_at_half_cfl (3 ms)
+[----------] 1 test from test_muscl_limiters (3 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (3 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_muscl_limiters.zero_opposite_sign_symmetry_and_homogeneity" classname="test_muscl_limiters.zero_opposite_sign_symmetry_and_homogeneity" time="0.0245527" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_weno_convergence;fast;numerics;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_muscl_limiters.zero_opposite_sign_symmetry_and_homogeneity
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_muscl_limiters
+[ RUN      ] test_muscl_limiters.zero_opposite_sign_symmetry_and_homogeneity
+[       OK ] test_muscl_limiters.zero_opposite_sign_symmetry_and_homogeneity (0 ms)
+[----------] 1 test from test_muscl_limiters (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_muscl_limiters.sweby_tvd_bounds_and_finite_extremes" classname="test_muscl_limiters.sweby_tvd_bounds_and_finite_extremes" time="0.0227195" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_weno_convergence;fast;numerics;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_muscl_limiters.sweby_tvd_bounds_and_finite_extremes
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_muscl_limiters
+[ RUN      ] test_muscl_limiters.sweby_tvd_bounds_and_finite_extremes
+[       OK ] test_muscl_limiters.sweby_tvd_bounds_and_finite_extremes (0 ms)
+[----------] 1 test from test_muscl_limiters (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_muscl_limiter_qualification.mc_and_superbee_are_second_order_on_smooth_periodic_cell_averages" classname="test_muscl_limiter_qualification.mc_and_superbee_are_second_order_on_smooth_periodic_cell_averages" time="0.0255725" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_weno_convergence;fast;numerics;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_muscl_limiter_qualification.mc_and_superbee_are_second_order_on_smooth_periodic_cell_averages
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_muscl_limiter_qualification
+[ RUN      ] test_muscl_limiter_qualification.mc_and_superbee_are_second_order_on_smooth_periodic_cell_averages
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_muscl_limiter_qualification.mc_and_superbee_are_second_order_on_smooth_periodic_cell_averages (1 ms)
+[----------] 1 test from test_muscl_limiter_qualification (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_muscl_limiter_qualification.discontinuities_create_no_extremum_and_expose_interface_dissipation_budget" classname="test_muscl_limiter_qualification.discontinuities_create_no_extremum_and_expose_interface_dissipation_budget" time="0.0315067" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_weno_convergence;fast;numerics;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_muscl_limiter_qualification.discontinuities_create_no_extremum_and_expose_interface_dissipation_budget
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_muscl_limiter_qualification
+[ RUN      ] test_muscl_limiter_qualification.discontinuities_create_no_extremum_and_expose_interface_dissipation_budget
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_muscl_limiter_qualification.discontinuities_create_no_extremum_and_expose_interface_dissipation_budget (1 ms)
+[----------] 1 test from test_muscl_limiter_qualification (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_weno_convergence.external_sampled_policy_controls_offsets_and_orientation" classname="test_weno_convergence.external_sampled_policy_controls_offsets_and_orientation" time="0.0342047" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_weno_convergence;fast;numerics;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_weno_convergence.external_sampled_policy_controls_offsets_and_orientation
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_weno_convergence
+[ RUN      ] test_weno_convergence.external_sampled_policy_controls_offsets_and_orientation
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_weno_convergence.external_sampled_policy_controls_offsets_and_orientation (1 ms)
+[----------] 1 test from test_weno_convergence (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_weno_convergence.primitive_sampled_policy_converts_only_the_selected_branch" classname="test_weno_convergence.primitive_sampled_policy_converts_only_the_selected_branch" time="0.0254366" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_weno_convergence;fast;numerics;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_weno_convergence.primitive_sampled_policy_converts_only_the_selected_branch
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_weno_convergence
+[ RUN      ] test_weno_convergence.primitive_sampled_policy_converts_only_the_selected_branch
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_weno_convergence.primitive_sampled_policy_converts_only_the_selected_branch (1 ms)
+[----------] 1 test from test_weno_convergence (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_weno_convergence.sampled_policy_ghost_requirement_is_checked_exactly_in_1d_2d_3d" classname="test_weno_convergence.sampled_policy_ghost_requirement_is_checked_exactly_in_1d_2d_3d" time="0.0267289" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_weno_convergence;fast;numerics;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_weno_convergence.sampled_policy_ghost_requirement_is_checked_exactly_in_1d_2d_3d
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_weno_convergence
+[ RUN      ] test_weno_convergence.sampled_policy_ghost_requirement_is_checked_exactly_in_1d_2d_3d
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_weno_convergence.sampled_policy_ghost_requirement_is_checked_exactly_in_1d_2d_3d (1 ms)
+[----------] 1 test from test_weno_convergence (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_weno_convergence.fifth_order_on_smooth_function" classname="test_weno_convergence.fifth_order_on_smooth_function" time="0.0230242" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_weno_convergence;fast;numerics;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_weno_convergence.fifth_order_on_smooth_function
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_weno_convergence
+[ RUN      ] test_weno_convergence.fifth_order_on_smooth_function
+N=  32  err_inf=4.818e-06  ordre=0.00
+N=  64  err_inf=1.516e-07  ordre=4.99
+N= 128  err_inf=4.747e-09  ordre=5.00
+N= 256  err_inf=1.484e-10  ordre=5.00
+N= 512  err_inf=4.643e-12  ordre=5.00
+[       OK ] test_weno_convergence.fifth_order_on_smooth_function (0 ms)
+[----------] 1 test from test_weno_convergence (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_weno_convergence.epsilon_default_bit_identical_and_override_live" classname="test_weno_convergence.epsilon_default_bit_identical_and_override_live" time="0.0235283" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_weno_convergence;fast;numerics;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_weno_convergence.epsilon_default_bit_identical_and_override_live
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_weno_convergence
+[ RUN      ] test_weno_convergence.epsilon_default_bit_identical_and_override_live
+[       OK ] test_weno_convergence.epsilon_default_bit_identical_and_override_live (0 ms)
+[----------] 1 test from test_weno_convergence (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_system_contract.RefusesMappedPeriodicityBeforeRankedFillPatchConstruction" classname="test_amr_system_contract.RefusesMappedPeriodicityBeforeRankedFillPatchConstruction" time="2.70306" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_system_contract;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_system_contract.RefusesMappedPeriodicityBeforeRankedFillPatchConstruction
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_system_contract
+[ RUN      ] test_amr_system_contract.RefusesMappedPeriodicityBeforeRankedFillPatchConstruction
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_system_contract.RefusesMappedPeriodicityBeforeRankedFillPatchConstruction (3 ms)
+[----------] 1 test from test_amr_system_contract (3 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (3 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_system_contract.DirectAndPreparedCompiledInstallationsHaveExactRankedParity" classname="test_amr_system_contract.DirectAndPreparedCompiledInstallationsHaveExactRankedParity" time="0.198073" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_system_contract;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_system_contract.DirectAndPreparedCompiledInstallationsHaveExactRankedParity
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_system_contract
+[ RUN      ] test_amr_system_contract.DirectAndPreparedCompiledInstallationsHaveExactRankedParity
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_system_contract.DirectAndPreparedCompiledInstallationsHaveExactRankedParity (11 ms)
+[----------] 1 test from test_amr_system_contract (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_system_contract.RectangularGeometryPreservesIndependentAxisPeriodicity" classname="test_amr_system_contract.RectangularGeometryPreservesIndependentAxisPeriodicity" time="0.192164" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_system_contract;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_system_contract.RectangularGeometryPreservesIndependentAxisPeriodicity
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_system_contract
+[ RUN      ] test_amr_system_contract.RectangularGeometryPreservesIndependentAxisPeriodicity
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_system_contract.RectangularGeometryPreservesIndependentAxisPeriodicity (10 ms)
+[----------] 1 test from test_amr_system_contract (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_system_contract.PrimitiveBoundaryMatchesQualifiedConservativeOracle" classname="test_amr_system_contract.PrimitiveBoundaryMatchesQualifiedConservativeOracle" time="0.194362" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_system_contract;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_system_contract.PrimitiveBoundaryMatchesQualifiedConservativeOracle
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_system_contract
+[ RUN      ] test_amr_system_contract.PrimitiveBoundaryMatchesQualifiedConservativeOracle
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_system_contract.PrimitiveBoundaryMatchesQualifiedConservativeOracle (11 ms)
+[----------] 1 test from test_amr_system_contract (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_system_contract.TwoBlockFacadeRegridsConservativelyAndSharesPreparedBz" classname="test_amr_system_contract.TwoBlockFacadeRegridsConservativelyAndSharesPreparedBz" time="0.349567" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_system_contract;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_system_contract.TwoBlockFacadeRegridsConservativelyAndSharesPreparedBz
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_system_contract
+[ RUN      ] test_amr_system_contract.TwoBlockFacadeRegridsConservativelyAndSharesPreparedBz
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_system_contract.TwoBlockFacadeRegridsConservativelyAndSharesPreparedBz (171 ms)
+[----------] 1 test from test_amr_system_contract (171 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (171 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_system_contract.TemporalFacadeRequiresInstalledWholeSystemProgram" classname="test_amr_system_contract.TemporalFacadeRequiresInstalledWholeSystemProgram" time="0.192647" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_system_contract;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_system_contract.TemporalFacadeRequiresInstalledWholeSystemProgram
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_system_contract
+[ RUN      ] test_amr_system_contract.TemporalFacadeRequiresInstalledWholeSystemProgram
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_system_contract.TemporalFacadeRequiresInstalledWholeSystemProgram (8 ms)
+[----------] 1 test from test_amr_system_contract (8 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (8 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_system_contract.PreparedBzRotatesTransverseMomentumInDim2" classname="test_amr_system_contract.PreparedBzRotatesTransverseMomentumInDim2" time="0.246806" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_system_contract;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_system_contract.PreparedBzRotatesTransverseMomentumInDim2
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_system_contract
+[ RUN      ] test_amr_system_contract.PreparedBzRotatesTransverseMomentumInDim2
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_system_contract.PreparedBzRotatesTransverseMomentumInDim2 (71 ms)
+[----------] 1 test from test_amr_system_contract (71 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (71 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_system_contract.PreparedBzHasZeroLongitudinalCrossProductInDim1" classname="test_amr_system_contract.PreparedBzHasZeroLongitudinalCrossProductInDim1" time="0.183791" status="notrun">
+		<skipped message="SKIP_REGULAR_EXPRESSION_MATCHED"/>
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_system_contract;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_system_contract.PreparedBzHasZeroLongitudinalCrossProductInDim1
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_system_contract
+[ RUN      ] test_amr_system_contract.PreparedBzHasZeroLongitudinalCrossProductInDim1
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/integration/amr/test_amr_system_contract.cpp:1254: Skipped
+the longitudinal zero-cross-product trajectory is an explicit Dim=1 proof
+
+[  SKIPPED ] test_amr_system_contract.PreparedBzHasZeroLongitudinalCrossProductInDim1 (1 ms)
+[----------] 1 test from test_amr_system_contract (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 0 tests.
+[  SKIPPED ] 1 test, listed below:
+[  SKIPPED ] test_amr_system_contract.PreparedBzHasZeroLongitudinalCrossProductInDim1
+</system-out>
+	</testcase>
+	<testcase name="test_amr_system_contract.BootstrapRestrictionSynchronizesOnlyCoveredCoarseCells" classname="test_amr_system_contract.BootstrapRestrictionSynchronizesOnlyCoveredCoarseCells" time="0.193093" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_system_contract;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_system_contract.BootstrapRestrictionSynchronizesOnlyCoveredCoarseCells
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_system_contract
+[ RUN      ] test_amr_system_contract.BootstrapRestrictionSynchronizesOnlyCoveredCoarseCells
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_system_contract.BootstrapRestrictionSynchronizesOnlyCoveredCoarseCells (14 ms)
+[----------] 1 test from test_amr_system_contract (14 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (14 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_system_contract.RebuildDistributionModesPreserveReplicaAndPartitionContracts" classname="test_amr_system_contract.RebuildDistributionModesPreserveReplicaAndPartitionContracts" time="0.193591" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_system_contract;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_system_contract.RebuildDistributionModesPreserveReplicaAndPartitionContracts
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_system_contract
+[ RUN      ] test_amr_system_contract.RebuildDistributionModesPreserveReplicaAndPartitionContracts
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_system_contract.RebuildDistributionModesPreserveReplicaAndPartitionContracts (12 ms)
+[----------] 1 test from test_amr_system_contract (12 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (12 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_system_contract.RestartAuxiliaryReplacementRequiresExactCompleteImage" classname="test_amr_system_contract.RestartAuxiliaryReplacementRequiresExactCompleteImage" time="0.26977" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_system_contract;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_system_contract.RestartAuxiliaryReplacementRequiresExactCompleteImage
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_system_contract
+[ RUN      ] test_amr_system_contract.RestartAuxiliaryReplacementRequiresExactCompleteImage
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_system_contract.RestartAuxiliaryReplacementRequiresExactCompleteImage (86 ms)
+[----------] 1 test from test_amr_system_contract (86 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (86 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_system_contract.InitialCoarseTilingConsumesCapsAndPreservesExplicitBoxes" classname="test_amr_system_contract.InitialCoarseTilingConsumesCapsAndPreservesExplicitBoxes" time="0.199115" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_system_contract;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_system_contract.InitialCoarseTilingConsumesCapsAndPreservesExplicitBoxes
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_system_contract
+[ RUN      ] test_amr_system_contract.InitialCoarseTilingConsumesCapsAndPreservesExplicitBoxes
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_system_contract.InitialCoarseTilingConsumesCapsAndPreservesExplicitBoxes (13 ms)
+[----------] 1 test from test_amr_system_contract (13 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (13 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_system_contract.VariableDtStrideUsesOneExactPublicWindow" classname="test_amr_system_contract.VariableDtStrideUsesOneExactPublicWindow" time="0.201284" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_system_contract;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_system_contract.VariableDtStrideUsesOneExactPublicWindow
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_system_contract
+[ RUN      ] test_amr_system_contract.VariableDtStrideUsesOneExactPublicWindow
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_system_contract.VariableDtStrideUsesOneExactPublicWindow (13 ms)
+[----------] 1 test from test_amr_system_contract (13 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (13 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_system_contract.CadenceRestoreRejectsClockDriftWithoutMutation" classname="test_amr_system_contract.CadenceRestoreRejectsClockDriftWithoutMutation" time="0.182397" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_system_contract;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_system_contract.CadenceRestoreRejectsClockDriftWithoutMutation
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_system_contract
+[ RUN      ] test_amr_system_contract.CadenceRestoreRejectsClockDriftWithoutMutation
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_system_contract.CadenceRestoreRejectsClockDriftWithoutMutation (1 ms)
+[----------] 1 test from test_amr_system_contract (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_system_contract.AcceptedClockSerializationPreservesNonAssociativeEndpoint" classname="test_amr_system_contract.AcceptedClockSerializationPreservesNonAssociativeEndpoint" time="0.200343" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_system_contract;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_system_contract.AcceptedClockSerializationPreservesNonAssociativeEndpoint
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_system_contract
+[ RUN      ] test_amr_system_contract.AcceptedClockSerializationPreservesNonAssociativeEndpoint
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_system_contract.AcceptedClockSerializationPreservesNonAssociativeEndpoint (17 ms)
+[----------] 1 test from test_amr_system_contract (17 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (17 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synchronized_continuation.stable_candidates_across_two_resumes" classname="test_amr_synchronized_continuation.stable_candidates_across_two_resumes" time="3.15766" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_synchronized_continuation;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_synchronized_continuation.stable_candidates_across_two_resumes
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_synchronized_continuation
+[ RUN      ] test_amr_synchronized_continuation.stable_candidates_across_two_resumes
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_synchronized_continuation.stable_candidates_across_two_resumes (19 ms)
+[----------] 1 test from test_amr_synchronized_continuation (19 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (19 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synchronized_continuation.collective_failure_abort_publication_rollback_and_retry" classname="test_amr_synchronized_continuation.collective_failure_abort_publication_rollback_and_retry" time="0.0633425" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_synchronized_continuation;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_synchronized_continuation.collective_failure_abort_publication_rollback_and_retry
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_synchronized_continuation
+[ RUN      ] test_amr_synchronized_continuation.collective_failure_abort_publication_rollback_and_retry
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_synchronized_continuation.collective_failure_abort_publication_rollback_and_retry (22 ms)
+[----------] 1 test from test_amr_synchronized_continuation (22 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (22 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synchronized_continuation.exact_clock_and_collective_operation_authority" classname="test_amr_synchronized_continuation.exact_clock_and_collective_operation_authority" time="0.0510203" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_synchronized_continuation;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_synchronized_continuation.exact_clock_and_collective_operation_authority
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_synchronized_continuation
+[ RUN      ] test_amr_synchronized_continuation.exact_clock_and_collective_operation_authority
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_synchronized_continuation.exact_clock_and_collective_operation_authority (10 ms)
+[----------] 1 test from test_amr_synchronized_continuation (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synchronized_continuation.AttemptAuthoritySurvivesPreparedEngineReplacement" classname="test_amr_synchronized_continuation.AttemptAuthoritySurvivesPreparedEngineReplacement" time="0.057002" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_synchronized_continuation;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_synchronized_continuation.AttemptAuthoritySurvivesPreparedEngineReplacement
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_synchronized_continuation
+[ RUN      ] test_amr_synchronized_continuation.AttemptAuthoritySurvivesPreparedEngineReplacement
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_synchronized_continuation.AttemptAuthoritySurvivesPreparedEngineReplacement (10 ms)
+[----------] 1 test from test_amr_synchronized_continuation (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synchronized_continuation.AttemptAuthorityRejectsCorruptActiveAsymmetricAndOverflow" classname="test_amr_synchronized_continuation.AttemptAuthorityRejectsCorruptActiveAsymmetricAndOverflow" time="0.0506315" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_synchronized_continuation;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_synchronized_continuation.AttemptAuthorityRejectsCorruptActiveAsymmetricAndOverflow
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_synchronized_continuation
+[ RUN      ] test_amr_synchronized_continuation.AttemptAuthorityRejectsCorruptActiveAsymmetricAndOverflow
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_synchronized_continuation.AttemptAuthorityRejectsCorruptActiveAsymmetricAndOverflow (9 ms)
+[----------] 1 test from test_amr_synchronized_continuation (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synchronized_continuation.rank_local_callback_reentry_is_rejected_before_collectives" classname="test_amr_synchronized_continuation.rank_local_callback_reentry_is_rejected_before_collectives" time="0.0525034" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_synchronized_continuation;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_synchronized_continuation.rank_local_callback_reentry_is_rejected_before_collectives
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_synchronized_continuation
+[ RUN      ] test_amr_synchronized_continuation.rank_local_callback_reentry_is_rejected_before_collectives
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_amr_synchronized_continuation.rank_local_callback_reentry_is_rejected_before_collectives (10 ms)
+[----------] 1 test from test_amr_synchronized_continuation (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_program_reflux_ledger.CanonicalMetricLedgerAndAcceptedCheckpointAreExactInOneTwoAndThreeDimensions" classname="test_program_reflux_ledger.CanonicalMetricLedgerAndAcceptedCheckpointAreExactInOneTwoAndThreeDimensions" time="0.777104" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;checkpoint;cpp-target:test_program_reflux_ledger;integration;medium;nd"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_program_reflux_ledger.CanonicalMetricLedgerAndAcceptedCheckpointAreExactInOneTwoAndThreeDimensions
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_program_reflux_ledger
+[ RUN      ] test_program_reflux_ledger.CanonicalMetricLedgerAndAcceptedCheckpointAreExactInOneTwoAndThreeDimensions
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_program_reflux_ledger.CanonicalMetricLedgerAndAcceptedCheckpointAreExactInOneTwoAndThreeDimensions (6 ms)
+[----------] 1 test from test_program_reflux_ledger (6 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_program_reflux_ledger.SingleWindowDensityAvoidsAnExtraTemporalRounding" classname="test_program_reflux_ledger.SingleWindowDensityAvoidsAnExtraTemporalRounding" time="0.0307045" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;checkpoint;cpp-target:test_program_reflux_ledger;integration;medium;nd"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_program_reflux_ledger.SingleWindowDensityAvoidsAnExtraTemporalRounding
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_program_reflux_ledger
+[ RUN      ] test_program_reflux_ledger.SingleWindowDensityAvoidsAnExtraTemporalRounding
+[       OK ] test_program_reflux_ledger.SingleWindowDensityAvoidsAnExtraTemporalRounding (0 ms)
+[----------] 1 test from test_program_reflux_ledger (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_program_reflux_ledger.HistoryPublicationIdentityUsesPhysicalWindowsAndExactWire" classname="test_program_reflux_ledger.HistoryPublicationIdentityUsesPhysicalWindowsAndExactWire" time="0.0329803" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;checkpoint;cpp-target:test_program_reflux_ledger;integration;medium;nd"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_program_reflux_ledger.HistoryPublicationIdentityUsesPhysicalWindowsAndExactWire
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_program_reflux_ledger
+[ RUN      ] test_program_reflux_ledger.HistoryPublicationIdentityUsesPhysicalWindowsAndExactWire
+[       OK ] test_program_reflux_ledger.HistoryPublicationIdentityUsesPhysicalWindowsAndExactWire (0 ms)
+[----------] 1 test from test_program_reflux_ledger (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_program_reflux_ledger.InvalidCheckpointAndDuplicateFacesRejectBeforeMutation" classname="test_program_reflux_ledger.InvalidCheckpointAndDuplicateFacesRejectBeforeMutation" time="0.0315772" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;checkpoint;cpp-target:test_program_reflux_ledger;integration;medium;nd"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_program_reflux_ledger.InvalidCheckpointAndDuplicateFacesRejectBeforeMutation
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_program_reflux_ledger
+[ RUN      ] test_program_reflux_ledger.InvalidCheckpointAndDuplicateFacesRejectBeforeMutation
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] test_program_reflux_ledger.InvalidCheckpointAndDuplicateFacesRejectBeforeMutation (1 ms)
+[----------] 1 test from test_program_reflux_ledger (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_program_reflux_ledger.CommittedAttemptWireAndCapacityIncludeEmptyLedgerAuthority" classname="test_program_reflux_ledger.CommittedAttemptWireAndCapacityIncludeEmptyLedgerAuthority" time="0.0377244" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;checkpoint;cpp-target:test_program_reflux_ledger;integration;medium;nd"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_program_reflux_ledger.CommittedAttemptWireAndCapacityIncludeEmptyLedgerAuthority
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_program_reflux_ledger
+[ RUN      ] test_program_reflux_ledger.CommittedAttemptWireAndCapacityIncludeEmptyLedgerAuthority
+[       OK ] test_program_reflux_ledger.CommittedAttemptWireAndCapacityIncludeEmptyLedgerAuthority (8 ms)
+[----------] 1 test from test_program_reflux_ledger (8 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (8 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.BalanceDueWindowUsesTheOuterAcceptedStepAndCleansUpOnFailure" classname="ProgramRuntime.BalanceDueWindowUsesTheOuterAcceptedStepAndCleansUpOnFailure" time="0.590123" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.BalanceDueWindowUsesTheOuterAcceptedStepAndCleansUpOnFailure
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.BalanceDueWindowUsesTheOuterAcceptedStepAndCleansUpOnFailure
+[       OK ] ProgramRuntime.BalanceDueWindowUsesTheOuterAcceptedStepAndCleansUpOnFailure (0 ms)
+[----------] 1 test from ProgramRuntime (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.AutomaticBalanceDueMarkerIsAttemptLocalMonotoneAndReplaySafe" classname="ProgramRuntime.AutomaticBalanceDueMarkerIsAttemptLocalMonotoneAndReplaySafe" time="0.592851" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.AutomaticBalanceDueMarkerIsAttemptLocalMonotoneAndReplaySafe
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.AutomaticBalanceDueMarkerIsAttemptLocalMonotoneAndReplaySafe
+[       OK ] ProgramRuntime.AutomaticBalanceDueMarkerIsAttemptLocalMonotoneAndReplaySafe (0 ms)
+[----------] 1 test from ProgramRuntime (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.SelectedAutomaticBalanceTermsRequireCompleteQualifiedEvidence" classname="ProgramRuntime.SelectedAutomaticBalanceTermsRequireCompleteQualifiedEvidence" time="0.593432" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.SelectedAutomaticBalanceTermsRequireCompleteQualifiedEvidence
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.SelectedAutomaticBalanceTermsRequireCompleteQualifiedEvidence
+[       OK ] ProgramRuntime.SelectedAutomaticBalanceTermsRequireCompleteQualifiedEvidence (0 ms)
+[----------] 1 test from ProgramRuntime (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.SelectiveReplayCompilesBalanceOffAndRestoresTheGuard" classname="ProgramRuntime.SelectiveReplayCompilesBalanceOffAndRestoresTheGuard" time="0.587862" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.SelectiveReplayCompilesBalanceOffAndRestoresTheGuard
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.SelectiveReplayCompilesBalanceOffAndRestoresTheGuard
+[       OK ] ProgramRuntime.SelectiveReplayCompilesBalanceOffAndRestoresTheGuard (0 ms)
+[----------] 1 test from ProgramRuntime (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.ReplayAuthorityRequiresAnArtifactAndAnExactRingDepthPair" classname="ProgramRuntime.ReplayAuthorityRequiresAnArtifactAndAnExactRingDepthPair" time="0.580366" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.ReplayAuthorityRequiresAnArtifactAndAnExactRingDepthPair
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.ReplayAuthorityRequiresAnArtifactAndAnExactRingDepthPair
+[       OK ] ProgramRuntime.ReplayAuthorityRequiresAnArtifactAndAnExactRingDepthPair (0 ms)
+[----------] 1 test from ProgramRuntime (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly" classname="ProgramRuntime.ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly" time="0.580197" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly
+[       OK ] ProgramRuntime.ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly (0 ms)
+[----------] 1 test from ProgramRuntime (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.FacadeTemporalOperationsRequireProgramBeforeMutation" classname="ProgramRuntime.FacadeTemporalOperationsRequireProgramBeforeMutation" time="0.601389" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.FacadeTemporalOperationsRequireProgramBeforeMutation
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.FacadeTemporalOperationsRequireProgramBeforeMutation
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.FacadeTemporalOperationsRequireProgramBeforeMutation (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.GlobalCadencePublishesExactSubstepAndStrideWindowTimes" classname="ProgramRuntime.GlobalCadencePublishesExactSubstepAndStrideWindowTimes" time="0.594648" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.GlobalCadencePublishesExactSubstepAndStrideWindowTimes
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.GlobalCadencePublishesExactSubstepAndStrideWindowTimes
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.GlobalCadencePublishesExactSubstepAndStrideWindowTimes (9 ms)
+[----------] 1 test from ProgramRuntime (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.StrideHeldStepsPublishTheExactZeroBalance" classname="ProgramRuntime.StrideHeldStepsPublishTheExactZeroBalance" time="0.585272" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.StrideHeldStepsPublishTheExactZeroBalance
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.StrideHeldStepsPublishTheExactZeroBalance
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.StrideHeldStepsPublishTheExactZeroBalance (9 ms)
+[----------] 1 test from ProgramRuntime (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.CadenceUsesThePreparedFacadeEndpointWhenFloatingPointAdditionIsNonAssociative" classname="ProgramRuntime.CadenceUsesThePreparedFacadeEndpointWhenFloatingPointAdditionIsNonAssociative" time="0.589535" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.CadenceUsesThePreparedFacadeEndpointWhenFloatingPointAdditionIsNonAssociative
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.CadenceUsesThePreparedFacadeEndpointWhenFloatingPointAdditionIsNonAssociative
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.CadenceUsesThePreparedFacadeEndpointWhenFloatingPointAdditionIsNonAssociative (9 ms)
+[----------] 1 test from ProgramRuntime (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.CadenceWindowRestartAndRejectedDueStepAreTransactional" classname="ProgramRuntime.CadenceWindowRestartAndRejectedDueStepAreTransactional" time="0.605628" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.CadenceWindowRestartAndRejectedDueStepAreTransactional
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.CadenceWindowRestartAndRejectedDueStepAreTransactional
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.CadenceWindowRestartAndRejectedDueStepAreTransactional (13 ms)
+[----------] 1 test from ProgramRuntime (13 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (13 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.CadenceRestoreCommitsOnlyForTheExactAcceptedClockPair" classname="ProgramRuntime.CadenceRestoreCommitsOnlyForTheExactAcceptedClockPair" time="0.592032" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.CadenceRestoreCommitsOnlyForTheExactAcceptedClockPair
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.CadenceRestoreCommitsOnlyForTheExactAcceptedClockPair
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.CadenceRestoreCommitsOnlyForTheExactAcceptedClockPair (10 ms)
+[----------] 1 test from ProgramRuntime (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.CadenceRejectsDtAbsorbedByThePhysicalClock" classname="ProgramRuntime.CadenceRejectsDtAbsorbedByThePhysicalClock" time="0.597859" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.CadenceRejectsDtAbsorbedByThePhysicalClock
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.CadenceRejectsDtAbsorbedByThePhysicalClock
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.CadenceRejectsDtAbsorbedByThePhysicalClock (9 ms)
+[----------] 1 test from ProgramRuntime (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.CadenceFailsBeforeMutationWhenSubstepsCollapseTheRepresentableInterval" classname="ProgramRuntime.CadenceFailsBeforeMutationWhenSubstepsCollapseTheRepresentableInterval" time="0.595024" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.CadenceFailsBeforeMutationWhenSubstepsCollapseTheRepresentableInterval
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.CadenceFailsBeforeMutationWhenSubstepsCollapseTheRepresentableInterval
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.CadenceFailsBeforeMutationWhenSubstepsCollapseTheRepresentableInterval (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource" classname="ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource" time="0.587526" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource (9 ms)
+[----------] 1 test from ProgramRuntime (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep" classname="ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep" time="0.628446" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication" classname="ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication" time="0.593255" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication (9 ms)
+[----------] 1 test from ProgramRuntime (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption" classname="ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption" time="0.676103" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching" classname="ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching" time="0.622031" status="notrun">
+		<skipped message="SKIP_REGULAR_EXPRESSION_MATCHED"/>
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/integration/runtime/test_program_runtime.cpp:1148: Skipped
+requires two MPI ranks to disagree about the field requirement
+
+[  SKIPPED ] ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching (1 ms)
+[----------] 1 test from ProgramRuntime (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 0 tests.
+[  SKIPPED ] 1 test, listed below:
+[  SKIPPED ] ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsKernels" classname="ProgramRuntime.ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsKernels" time="0.598236" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsKernels
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsKernels
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsKernels (13 ms)
+[----------] 1 test from ProgramRuntime (14 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (14 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.ForwardEulerProgramContextHonorsEmbeddedBoundaryResidualMetrics" classname="ProgramRuntime.ForwardEulerProgramContextHonorsEmbeddedBoundaryResidualMetrics" time="0.628501" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.ForwardEulerProgramContextHonorsEmbeddedBoundaryResidualMetrics
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.ForwardEulerProgramContextHonorsEmbeddedBoundaryResidualMetrics
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.ForwardEulerProgramContextHonorsEmbeddedBoundaryResidualMetrics (13 ms)
+[----------] 1 test from ProgramRuntime (13 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (13 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.SourceOnlyProgramStagePreservesEmbeddedBoundaryInactiveCells" classname="ProgramRuntime.SourceOnlyProgramStagePreservesEmbeddedBoundaryInactiveCells" time="0.603433" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.SourceOnlyProgramStagePreservesEmbeddedBoundaryInactiveCells
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.SourceOnlyProgramStagePreservesEmbeddedBoundaryInactiveCells
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.SourceOnlyProgramStagePreservesEmbeddedBoundaryInactiveCells (11 ms)
+[----------] 1 test from ProgramRuntime (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.UnqualifiedGeneratedOperatorsRefuseActiveEmbeddedBoundaries" classname="ProgramRuntime.UnqualifiedGeneratedOperatorsRefuseActiveEmbeddedBoundaries" time="0.595618" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.UnqualifiedGeneratedOperatorsRefuseActiveEmbeddedBoundaries
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.UnqualifiedGeneratedOperatorsRefuseActiveEmbeddedBoundaries
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.UnqualifiedGeneratedOperatorsRefuseActiveEmbeddedBoundaries (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.TerminalSourcePublicationAcceptsPreparedRecoveryCandidate" classname="ProgramRuntime.TerminalSourcePublicationAcceptsPreparedRecoveryCandidate" time="0.594221" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.TerminalSourcePublicationAcceptsPreparedRecoveryCandidate
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.TerminalSourcePublicationAcceptsPreparedRecoveryCandidate
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.TerminalSourcePublicationAcceptsPreparedRecoveryCandidate (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.TerminalSourceRecoveryRefusalPreventsPartialMultiBlockCommit" classname="ProgramRuntime.TerminalSourceRecoveryRefusalPreventsPartialMultiBlockCommit" time="0.611219" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.TerminalSourceRecoveryRefusalPreventsPartialMultiBlockCommit
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.TerminalSourceRecoveryRefusalPreventsPartialMultiBlockCommit
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.TerminalSourceRecoveryRefusalPreventsPartialMultiBlockCommit (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.ExplicitSourceProgramPreservesEmbeddedBoundaryInactiveCells" classname="ProgramRuntime.ExplicitSourceProgramPreservesEmbeddedBoundaryInactiveCells" time="0.600185" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.ExplicitSourceProgramPreservesEmbeddedBoundaryInactiveCells
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.ExplicitSourceProgramPreservesEmbeddedBoundaryInactiveCells
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.ExplicitSourceProgramPreservesEmbeddedBoundaryInactiveCells (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.PreparedMaximumSpeedProviderIsGeometryIndependent" classname="ProgramRuntime.PreparedMaximumSpeedProviderIsGeometryIndependent" time="0.58658" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.PreparedMaximumSpeedProviderIsGeometryIndependent
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.PreparedMaximumSpeedProviderIsGeometryIndependent
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.PreparedMaximumSpeedProviderIsGeometryIndependent (9 ms)
+[----------] 1 test from ProgramRuntime (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.DiffusiveCflAddsPreparedParabolicFrequencyToTransport" classname="ProgramRuntime.DiffusiveCflAddsPreparedParabolicFrequencyToTransport" time="0.620887" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.DiffusiveCflAddsPreparedParabolicFrequencyToTransport
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.DiffusiveCflAddsPreparedParabolicFrequencyToTransport
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.DiffusiveCflAddsPreparedParabolicFrequencyToTransport (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.CutCellPreparesFractionalMeasureAndSharesTheModelSpeedProvider" classname="ProgramRuntime.CutCellPreparesFractionalMeasureAndSharesTheModelSpeedProvider" time="0.586386" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.CutCellPreparesFractionalMeasureAndSharesTheModelSpeedProvider
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.CutCellPreparesFractionalMeasureAndSharesTheModelSpeedProvider
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.CutCellPreparesFractionalMeasureAndSharesTheModelSpeedProvider (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure" classname="ProgramRuntime.PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure" time="0.598477" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.PreparedEmbeddedBoundaryMaskSeparatesActiveAndInactiveCells" classname="ProgramRuntime.PreparedEmbeddedBoundaryMaskSeparatesActiveAndInactiveCells" time="0.586056" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.PreparedEmbeddedBoundaryMaskSeparatesActiveAndInactiveCells
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.PreparedEmbeddedBoundaryMaskSeparatesActiveAndInactiveCells
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.PreparedEmbeddedBoundaryMaskSeparatesActiveAndInactiveCells (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.PointwiseStatusUsesPreparedEmbeddedBoundaryMask" classname="ProgramRuntime.PointwiseStatusUsesPreparedEmbeddedBoundaryMask" time="0.595989" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.PointwiseStatusUsesPreparedEmbeddedBoundaryMask
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.PointwiseStatusUsesPreparedEmbeddedBoundaryMask
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.PointwiseStatusUsesPreparedEmbeddedBoundaryMask (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.Ssprk3ProgramAlgebraPreservesInactiveBits" classname="ProgramRuntime.Ssprk3ProgramAlgebraPreservesInactiveBits" time="0.610881" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.Ssprk3ProgramAlgebraPreservesInactiveBits
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.Ssprk3ProgramAlgebraPreservesInactiveBits
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.Ssprk3ProgramAlgebraPreservesInactiveBits (11 ms)
+[----------] 1 test from ProgramRuntime (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.EmbeddedBoundaryCapabilitiesUsePreparedExactRankProviders" classname="ProgramRuntime.EmbeddedBoundaryCapabilitiesUsePreparedExactRankProviders" time="0.593598" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.EmbeddedBoundaryCapabilitiesUsePreparedExactRankProviders
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.EmbeddedBoundaryCapabilitiesUsePreparedExactRankProviders
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.EmbeddedBoundaryCapabilitiesUsePreparedExactRankProviders (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.PointwiseProjectionPreservesEmbeddedBoundaryInactiveCells" classname="ProgramRuntime.PointwiseProjectionPreservesEmbeddedBoundaryInactiveCells" time="0.629067" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.PointwiseProjectionPreservesEmbeddedBoundaryInactiveCells
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.PointwiseProjectionPreservesEmbeddedBoundaryInactiveCells
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.PointwiseProjectionPreservesEmbeddedBoundaryInactiveCells (15 ms)
+[----------] 1 test from ProgramRuntime (15 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (15 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate" classname="ProgramRuntime.ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate" time="0.595078" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPublication" classname="ProgramRuntime.ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPublication" time="0.590415" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPublication
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPublication
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPublication (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.GeneratedUniformBlockSuppliesProjectionRoutesOnlyForCapableModels" classname="ProgramRuntime.GeneratedUniformBlockSuppliesProjectionRoutesOnlyForCapableModels" time="0.610041" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.GeneratedUniformBlockSuppliesProjectionRoutesOnlyForCapableModels
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.GeneratedUniformBlockSuppliesProjectionRoutesOnlyForCapableModels
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.GeneratedUniformBlockSuppliesProjectionRoutesOnlyForCapableModels (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.GeneratedUniformProjectionPreservesEmbeddedBoundaryInactiveCells" classname="ProgramRuntime.GeneratedUniformProjectionPreservesEmbeddedBoundaryInactiveCells" time="0.59622" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.GeneratedUniformProjectionPreservesEmbeddedBoundaryInactiveCells
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.GeneratedUniformProjectionPreservesEmbeddedBoundaryInactiveCells
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.GeneratedUniformProjectionPreservesEmbeddedBoundaryInactiveCells (11 ms)
+[----------] 1 test from ProgramRuntime (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional" classname="ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional" time="0.592115" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional (9 ms)
+[----------] 1 test from ProgramRuntime (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.SystemProjectionRefusesForeignFieldContractsBeforeProviderInvocation" classname="ProgramRuntime.SystemProjectionRefusesForeignFieldContractsBeforeProviderInvocation" time="0.593592" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.SystemProjectionRefusesForeignFieldContractsBeforeProviderInvocation
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.SystemProjectionRefusesForeignFieldContractsBeforeProviderInvocation
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.SystemProjectionRefusesForeignFieldContractsBeforeProviderInvocation (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.EmbeddedBoundaryRejectsUnqualifiedBoundaryLinearizationEntryPoints" classname="ProgramRuntime.EmbeddedBoundaryRejectsUnqualifiedBoundaryLinearizationEntryPoints" time="0.585917" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.EmbeddedBoundaryRejectsUnqualifiedBoundaryLinearizationEntryPoints
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.EmbeddedBoundaryRejectsUnqualifiedBoundaryLinearizationEntryPoints
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.EmbeddedBoundaryRejectsUnqualifiedBoundaryLinearizationEntryPoints (1 ms)
+[----------] 1 test from ProgramRuntime (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal" classname="ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal" time="0.592007" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal (11 ms)
+[----------] 1 test from ProgramRuntime (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally" classname="ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally" time="0.599079" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally (16 ms)
+[----------] 1 test from ProgramRuntime (17 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (17 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.AnalyticMappedInitialFailureDoesNotPublishTheCandidate" classname="ProgramRuntime.AnalyticMappedInitialFailureDoesNotPublishTheCandidate" time="0.601403" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.AnalyticMappedInitialFailureDoesNotPublishTheCandidate
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.AnalyticMappedInitialFailureDoesNotPublishTheCandidate
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.AnalyticMappedInitialFailureDoesNotPublishTheCandidate (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.AnalyticInitialStatePublishesInTheFinalTypedRuntime" classname="ProgramRuntime.AnalyticInitialStatePublishesInTheFinalTypedRuntime" time="0.583645" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.AnalyticInitialStatePublishesInTheFinalTypedRuntime
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.AnalyticInitialStatePublishesInTheFinalTypedRuntime
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.AnalyticInitialStatePublishesInTheFinalTypedRuntime (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock" classname="ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock" time="0.593627" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock (9 ms)
+[----------] 1 test from ProgramRuntime (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox" classname="ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox" time="0.632843" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+[       OK ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_prepared_resource_cache_np2" classname="test_prepared_resource_cache_np2" time="0.050763" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;cpp-target:test_prepared_resource_cache;medium;mpi"/>
+		</properties>
+		<system-out>[==========] Running 4 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 4 tests from PreparedResourceCache
+[ RUN      ] PreparedResourceCache.ReusesStorageWithoutAliasingNodesBlocksOrLevels
+[==========] Running 4 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 4 tests from PreparedResourceCache
+[ RUN      ] PreparedResourceCache.ReusesStorageWithoutAliasingNodesBlocksOrLevels
+[       OK ] PreparedResourceCache.ReusesStorageWithoutAliasingNodesBlocksOrLevels (10 ms)
+[ RUN      ] PreparedResourceCache.RankLocalInvalidationAndPreflightFailureAreCollective
+[       OK ] PreparedResourceCache.ReusesStorageWithoutAliasingNodesBlocksOrLevels (12 ms)
+[ RUN      ] PreparedResourceCache.RankLocalInvalidationAndPreflightFailureAreCollective
+[       OK ] PreparedResourceCache.RankLocalInvalidationAndPreflightFailureAreCollective (0 ms)
+[ RUN      ] PreparedResourceCache.FailedConstructionPreservesAcceptedBufferOnEveryRank
+[       OK ] PreparedResourceCac...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synchronized_continuation_np2" classname="test_amr_synchronized_continuation_np2" time="0.106905" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;cpp-target:test_amr_synchronized_continuation;medium;mpi"/>
+		</properties>
+		<system-out>[==========] Running 6 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 6 tests from test_amr_synchronized_continuation
+[ RUN      ] test_amr_synchronized_continuation.stable_candidates_across_two_resumes
+[==========] Running 6 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 6 tests from test_amr_synchronized_continuation
+[ RUN      ] test_amr_synchronized_continuation.stable_candidates_across_two_resumes
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PROC_BIND=spread and OMP_PLACES=threads
+  For best performance with OpenMP 3.1 set OMP_PROC_BIND=true
+  For unit testing set OMP_PROC_BIND=false
+
+MPI detected: For OpenMP binding to work as intended, MPI ranks must be bound to exclusive CPU sets.
+
+Kokkos::OpenMP::initialize WARNING: OMP_PROC_BIND environment variable not set
+  In general, for best performance with OpenMP 4.0 or better set OMP_PR...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="test_program_runtime_np2" classname="test_program_runtime_np2" time="4.30361" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;cpp-target:test_program_runtime;medium;mpi"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally:ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional:ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock:ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox:ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal:ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource:ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep:ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication:ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption:ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+[==========] Running 10 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 10 tests from ProgramRuntime
+[ RUN      ] ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource
+Note: Google T...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+</testsuite>

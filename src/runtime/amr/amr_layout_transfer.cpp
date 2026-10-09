@@ -2,10 +2,13 @@
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/parallel/region_transfer.hpp>
+#include <pops/parallel/collective_exception.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
+#include <pops/runtime/dynamic/physical_support_transfer.hpp>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <exception>
@@ -60,11 +63,7 @@ void collective(const ExecutionLane& lane, const char* operation, Function&& fun
   } catch (...) {
     error = std::current_exception();
   }
-  if (all_reduce_max(error ? 1L : 0L, lane)) {
-    if (lane.size() == 1 && error)
-      std::rethrow_exception(error);
-    throw std::runtime_error(std::string(operation) + " failed on a lane rank");
-  }
+  collectively_rethrow_exception(error, lane, operation);
 }
 
 void agree(const ExecutionLane& lane, std::string_view key, const std::string& value) {
@@ -158,8 +157,18 @@ PopsExecutionContextV1 execution_view(const SystemLayoutTransferExecution& e) {
 void validate_execution(const SystemLayoutTransferExecution& execution,
                         const ExecutionLane& authority) {
   component::validate_execution_context(execution_view(execution));
-  if (execution.memory_space != POPS_MEMORY_SPACE_HOST_V1)
-    throw std::invalid_argument("AMR physical transfer requires declared host execution");
+  using MemorySpace = typename Fab<kNativeDimension>::memory_space;
+  const auto context = execution_view(execution);
+  if (execution.memory_space != component::physical_transfer_detail::memory_kind<MemorySpace>())
+    throw std::invalid_argument("AMR physical execution memory differs from native field storage");
+  if (execution.memory_space != POPS_MEMORY_SPACE_HOST_V1 &&
+      !component::physical_transfer_detail::supports_device_context(
+          context, static_cast<PopsMemorySpaceV1>(execution.memory_space)))
+    throw std::invalid_argument("AMR physical transfer requires a supported backend memory lane");
+  if constexpr (!component::physical_transfer_detail::borrows_native_stream<
+                    Kokkos::DefaultExecutionSpace>)
+    if (execution.stream_handle != 0)
+      throw std::invalid_argument("AMR physical execution cannot borrow a foreign native stream");
   if constexpr (!std::is_same_v<Real, double>)
     throw std::invalid_argument("AMR physical float64 provider requires native float64 storage");
 #ifdef POPS_HAS_MPI
@@ -221,7 +230,9 @@ std::vector<LevelContract<Dim>> endpoint_contract(const AmrTransferEndpoint<Dim>
     if (state.ncomp() <= 0 || state.rank_space().size() != static_cast<std::size_t>(lane.size()) ||
         state.rank_space().linear_rank(state.local_rank()) != static_cast<std::size_t>(lane.rank()))
       throw std::invalid_argument("AMR transfer endpoint differs from its execution rank space");
-    for (const auto* mask : {view.coverage, view.activity, view.relative_measure})
+    const std::array<const MultiFab<Dim>*, 3> measure_fields{
+        view.coverage, view.activity, view.relative_measure};
+    for (const auto* mask : measure_fields)
       if (mask && (mask->ncomp() != 1 || mask->layout() != state.layout() ||
                    mask->distribution() != state.distribution() ||
                    mask->local_rank() != state.local_rank()))
@@ -363,12 +374,12 @@ void write_fab(Fab<Dim>& fab, const std::vector<double>& values) {
 }
 
 template <int Dim>
-PopsConstFieldViewV1 source_abi(const std::vector<double>& values, const Box<Dim>& box,
-                                int components, const char* layout_identity,
-                                const char* patch_identity) {
+PopsConstFieldViewV1 source_abi(const double* values, PopsMemorySpaceV1 memory,
+                              const Box<Dim>& box, int components,
+                              const char* layout_identity, const char* patch_identity) {
   PopsConstFieldViewV1 view{};
   view.struct_size = sizeof(view);
-  view.data = values.data();
+  view.data = values;
   view.dimension = Dim;
   view.component_count = static_cast<std::size_t>(components);
   view.component_stride = static_cast<std::ptrdiff_t>(cells(box));
@@ -379,7 +390,7 @@ PopsConstFieldViewV1 source_abi(const std::vector<double>& values, const Box<Dim
     stride *= view.extents[axis];
   }
   view.scalar_type = POPS_SCALAR_FLOAT64_V1;
-  view.memory_space = POPS_MEMORY_SPACE_HOST_V1;
+  view.memory_space = memory;
   view.centering = POPS_FIELD_CENTERING_CELL_V1;
   view.ownership = POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1;
   view.layout_identity = layout_identity;
@@ -387,25 +398,103 @@ PopsConstFieldViewV1 source_abi(const std::vector<double>& values, const Box<Dim
   return view;
 }
 
-PopsFieldViewV1 scalar_abi(std::vector<double>& values, int dimension, const char* layout_identity,
-                           const char* patch_identity) {
+PopsFieldViewV1 scalar_abi(double* values, std::size_t components, PopsMemorySpaceV1 memory,
+                          int dimension, const char* layout_identity,
+                          const char* patch_identity) {
   PopsFieldViewV1 view{};
   view.struct_size = sizeof(view);
-  view.data = values.data();
+  view.data = values;
   view.dimension = dimension;
-  view.component_count = values.size();
+  view.component_count = components;
   view.component_stride = 1;
   for (int axis = 0; axis < 3; ++axis) {
     view.extents[axis] = 1;
     view.axis_strides[axis] = axis < dimension ? 1 : 0;
   }
   view.scalar_type = POPS_SCALAR_FLOAT64_V1;
-  view.memory_space = POPS_MEMORY_SPACE_HOST_V1;
+  view.memory_space = memory;
   view.centering = POPS_FIELD_CENTERING_CELL_V1;
   view.ownership = POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1;
   view.layout_identity = layout_identity;
   view.patch_identity = patch_identity;
   return view;
+}
+
+// Host packing remains the collective transport/staging contract. Non-Host provider arguments
+// own native allocations until the exact borrowed execution instance has completed every copy
+// and callback. No host pointer is relabelled as device/managed memory.
+template <class MemorySpace>
+class IntegralBuffers {
+ public:
+  using ExecutionSpace = Kokkos::DefaultExecutionSpace;
+  using View = Kokkos::View<double*, MemorySpace>;
+  static constexpr auto memory = component::physical_transfer_detail::memory_kind<MemorySpace>();
+
+  IntegralBuffers(const PopsExecutionContextV1& context, const std::vector<double>& source,
+                  std::vector<double>& destination)
+      : execution_(component::physical_transfer_detail::execution_instance<ExecutionSpace>(context)),
+        source_data_(source.data()), destination_data_(destination.data()) {
+    if constexpr (!std::is_same_v<MemorySpace, Kokkos::HostSpace>) {
+      using Host = Kokkos::View<const double*, Kokkos::HostSpace,
+                                Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+      try {
+        source_ = View(Kokkos::view_alloc(execution_, Kokkos::WithoutInitializing,
+                                         "pops_amr_integral_source"), source.size());
+        destination_ = View(Kokkos::view_alloc(execution_, Kokkos::WithoutInitializing,
+                                              "pops_amr_integral_destination"), destination.size());
+        Kokkos::deep_copy(execution_, source_, Host(source.data(), source.size()));
+        // Preserve the same borrowed destination contents as the Host invocation, including retry.
+        Kokkos::deep_copy(execution_, destination_, Host(destination.data(), destination.size()));
+        execution_.fence();
+      } catch (...) {
+        fence_noexcept();
+        throw;
+      }
+      source_data_ = source_.data();
+      destination_data_ = destination_.data();
+    }
+  }
+  ~IntegralBuffers() noexcept { fence_noexcept(); }
+  IntegralBuffers(const IntegralBuffers&) = delete;
+  IntegralBuffers& operator=(const IntegralBuffers&) = delete;
+
+  const double* source_data() const noexcept { return source_data_; }
+  double* destination_data() const noexcept { return destination_data_; }
+  void fence() const { execution_.fence(); }
+  void fence_noexcept() const noexcept {
+    try {
+      execution_.fence();
+    } catch (...) {
+    }
+  }
+  void capture_result(std::vector<double>& destination) const {
+    if constexpr (!std::is_same_v<MemorySpace, Kokkos::HostSpace>) {
+      using Host = Kokkos::View<double*, Kokkos::HostSpace,
+                                Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+      Kokkos::deep_copy(execution_, Host(destination.data(), destination.size()), destination_);
+      execution_.fence();
+    }
+  }
+
+ private:
+  ExecutionSpace execution_;
+  View source_, destination_;
+  const double* source_data_;
+  double* destination_data_;
+};
+
+template <class MemorySpace>
+std::size_t integral_backend_bytes(std::size_t source, std::size_t destination,
+                                  std::size_t weights) {
+  if constexpr (std::is_same_v<MemorySpace, Kokkos::HostSpace>)
+    return 0;
+  const auto limit = std::numeric_limits<std::size_t>::max();
+  auto bytes =
+      sizeof(IntegralBuffers<MemorySpace>) +
+      sizeof(component::physical_transfer_detail::OwnedWeights<Kokkos::DefaultExecutionSpace>);
+  for (const auto count : {source, destination, weights})
+    add(bytes, multiply(count, sizeof(double)), limit, "AMR integral backend bytes overflow");
+  return bytes;
 }
 
 }  // namespace
@@ -500,12 +589,20 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
          {&map.mapping_identity, &map.provider_identity, &map.provider_component_identity,
           &map.provider_manifest_identity, &map.source_block, &map.target_block})
       require_text(*id);
+    const bool scalar = map.mapped_field_components != 0;
+    if (scalar && (map.mapped_field_components != 1 || components != 1 ||
+                   map.program_invocation.empty() ||
+                   map.synchronization_identity != "pops://synchronization/program-point@1"))
+      throw std::invalid_argument("AMR scalar endpoint@1 requires a scalar Program-point candidate");
+    const std::string_view representation = scalar
+        ? "pops://representations/cell-field-observation@1"
+        : "pops://representations/cell-average@1";
     if (!map.physical_contract || map.source_layout_identity != source.layout_identity ||
         map.target_layout_identity != target.layout_identity ||
         source.layout_identity == target.layout_identity ||
         components != target_levels.front().components ||
-        map.source_representation != "pops://representations/cell-average@1" ||
-        map.target_representation != "pops://representations/cell-average@1" ||
+        map.source_representation != representation ||
+        map.target_representation != representation ||
         spec.quadrature_identity != "pops://measure/piecewise-constant-base-bins@1")
       throw std::invalid_argument(
           "AMR physical transfer authentication/representation is incomplete");
@@ -720,7 +817,7 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
     std::vector<Box<Dim>> carriers;
     std::vector<Index<Dim>> owners;
     std::vector<mesh::parallel::RegionTransferJob<Dim>> jobs;
-    std::size_t destinations = 0, probes = 0;
+    std::size_t destinations = 0, probes = 0, backend_peak_bytes = 0;
     for (std::size_t tl = 0; tl < target_levels.size(); ++tl) {
       const auto& target = target_levels[tl];
       for (std::size_t tp = 0; tp < target.layout.size(); ++tp) {
@@ -773,6 +870,14 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
                   "AMR transfer transport-element budget exceeded");
               budget_bytes(elements, 6 * sizeof(double));
               budget_bytes(static_cast<std::size_t>(components));
+              // Each callback/copy is fenced before the next contribution: only one backend
+              // source/result pair and one provider weight copy can be live at a time.
+              const auto backend = integral_backend_bytes<typename Fab<Dim>::memory_space>(
+                  elements, static_cast<std::size_t>(components), weight_count);
+              if (backend > backend_peak_bytes) {
+                budget_bytes(backend - backend_peak_bytes, 1);
+                backend_peak_bytes = backend;
+              }
               budget_bytes(1, sizeof(Contribution) +
                                   16 * sizeof(mesh::parallel::RegionTransferJob<Dim>) +
                                   2 * sizeof(Box<Dim>) + 2 * sizeof(Index<Dim>));
@@ -872,6 +977,10 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
     text(result, a.program_invocation);
     integer(result, a.operation);
     integer(result, a.physical_contract);
+    if (a.mapped_field_components != 0) {
+      text(result, "pops.amr.scalar-field-endpoint@1");
+      integer(result, a.mapped_field_components);
+    }
     for (int axis = 0; axis < Dim; ++axis) {
       integer(result, a.refinement_ratio[axis]);
       integer(result, a.physical_source_to_target[axis]);
@@ -883,9 +992,10 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
       for (double weight : spec.base_bin_weights[axis])
         real(result, weight);
     }
-    for (auto value :
-         {spec.budget.destination_cells, spec.budget.intersection_probes,
-          spec.budget.canonical_jobs, spec.budget.transported_elements, spec.budget.prepared_bytes})
+    const std::array<std::size_t, 5> budget_values{
+        spec.budget.destination_cells, spec.budget.intersection_probes,
+        spec.budget.canonical_jobs, spec.budget.transported_elements, spec.budget.prepared_bytes};
+    for (auto value : budget_values)
       integer(result, value);
     return result;
   }
@@ -1252,8 +1362,9 @@ AmrLayoutTransferBudget PreparedAmrLayoutTransfer<Dim>::capacity_budget(
         throw std::invalid_argument("AMR Transfer capacity endpoint is incomplete");
       for (const auto& box : level.state->layout().boxes())
         add(present, cells(box), limit, "AMR Transfer capacity valid-cell overflow");
-      for (const auto* field :
-           {level.state, level.coverage, level.activity, level.relative_measure}) {
+      const std::array<const MultiFab<Dim>*, 4> capacity_fields{
+          level.state, level.coverage, level.activity, level.relative_measure};
+      for (const auto* field : capacity_fields) {
         if (!field)
           continue;
         for (int axis = 0; axis < Dim; ++axis)
@@ -1284,6 +1395,10 @@ AmrLayoutTransferBudget PreparedAmrLayoutTransfer<Dim>::capacity_budget(
   charge(multiply(jobs, Dim), sizeof(double));
   charge(transported, 6 * sizeof(double));
   charge(multiply(jobs, static_cast<std::size_t>(components)), sizeof(double));
+  // One contribution's region is bounded by the complete resolved source cell capacity.
+  charge(integral_backend_bytes<typename Fab<Dim>::memory_space>(
+             multiply(source_cells, static_cast<std::size_t>(components)),
+             static_cast<std::size_t>(components), multiply(source_cells, Dim)), 1);
   charge(jobs, sizeof(typename Impl::Contribution) +
                    16 * sizeof(mesh::parallel::RegionTransferJob<Dim>) + 2 * sizeof(Box<Dim>) +
                    2 * sizeof(Index<Dim>));
@@ -1359,14 +1474,18 @@ AmrLayoutTransferReceipt PreparedAmrLayoutTransfer<Dim>::apply(
       if (contribution.owner != p_->target_levels.front().rank)
         continue;
       read_fab(p_->captured_source.fab_global(global), contribution.captured);
+      IntegralBuffers<typename Fab<Dim>::memory_space> buffers(
+          execution_view(p_->execution), contribution.captured, contribution.result);
       PopsTransferIntegralRequestV2 request{};
       request.struct_size = sizeof(request);
-      request.source = source_abi(contribution.captured, contribution.source_region, p_->components,
-                                  p_->spec.authentication.source_layout_identity.c_str(),
-                                  contribution.source_patch_identity.c_str());
-      request.destination = scalar_abi(contribution.result, Dim,
-                                       p_->spec.authentication.target_layout_identity.c_str(),
-                                       contribution.target_patch_identity.c_str());
+      request.source = source_abi(buffers.source_data(), buffers.memory,
+                                 contribution.source_region, p_->components,
+                                 p_->spec.authentication.source_layout_identity.c_str(),
+                                 contribution.source_patch_identity.c_str());
+      request.destination = scalar_abi(buffers.destination_data(), contribution.result.size(),
+                                      buffers.memory, Dim,
+                                      p_->spec.authentication.target_layout_identity.c_str(),
+                                      contribution.target_patch_identity.c_str());
       request.dimension = Dim;
       request.operation = static_cast<PopsTransferOperationV1>(p_->spec.authentication.operation);
       request.physical_contract_identity = p_->spec.physical_contract_identity.c_str();
@@ -1380,15 +1499,16 @@ AmrLayoutTransferReceipt PreparedAmrLayoutTransfer<Dim>::apply(
       try {
         code = component::apply_transfer_integral(*p_->provider_api, p_->provider_state.get(),
                                                   request, status);
-        Kokkos::fence();
+        buffers.fence();
       } catch (...) {
-        Kokkos::fence();
+        buffers.fence_noexcept();
         throw;
       }
       if (!component::component_status_is_well_formed(status) || code != 0 || status.code != 0 ||
           status.action != POPS_COMPONENT_CONTINUE_V1)
         throw std::runtime_error(status.reason ? status.reason
                                                : "AMR Transfer V2 integral provider failed");
+      buffers.capture_result(contribution.result);
       auto& stored = p_->target_storage.at(contribution.target_storage);
       const auto& box = p_->target_levels[stored.level].layout[stored.patch];
       const auto count = cells(box), location = offset(box, contribution.target_cell);

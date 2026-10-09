@@ -51,6 +51,15 @@ class _ReadableTemporalHandle:
     def _as_value(self) -> Any:
         return self._program._resolve_time_value(self)
 
+    def __getitem__(self, component: Any) -> Any:
+        return self._as_value()[component]
+
+    def __pow__(self, exponent: Any) -> Any:
+        return self._as_value() ** exponent
+
+    def __rtruediv__(self, other: Any) -> Any:
+        return other / self._as_value()
+
     def __add__(self, other: Any) -> Any:
         return self._as_value().__add__(other)
 

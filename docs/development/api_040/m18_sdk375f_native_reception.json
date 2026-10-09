@@ -1,0 +1,122 @@
+{
+  "schema": "pops.api040.m18-native-reception@1",
+  "status": "received",
+  "qualification": "moderate-five-node-twenty-interior-targets",
+  "exchange_reader": "sol61.m18-empty-exchange-reader@2",
+  "scientific_reception": "sol61.m18-offline-reception@2",
+  "sdk_signature": "375fbdebb4b68bb43164ba3fdfa32ead3beaa8d89606925609e96507eeed3eff",
+  "limitations": [
+    "system-generated-cpp-not-exposed",
+    "near-boundary-not-qualified",
+    "other-quadratures-not-qualified",
+    "complete-vlasov-poisson-bgk-not-qualified",
+    "amr-entropy-not-qualified",
+    "gpu-not-qualified"
+  ],
+  "backends": {
+    "serial": {
+      "ranks": 1,
+      "source_commit": "33dee906850d56eec542dd0a7d0b21954aa244d3",
+      "native_build_source_commit": "32235b93296fe6d4337194e17d0d45569dc63a08",
+      "native_sha256": "8dcdfacab20fffd876128c2ee4b06bd26f4c952f2d7ed6ce76fb028815bb6310",
+      "ownership": "distributed",
+      "metrics": {
+        "original_moment_residual": 4.548139642679416e-12,
+        "minimum_population": 0.07362741560528462,
+        "minimum_entropy_gap": 0.00011062088624547162,
+        "entropy_tangent_defect": 1.362028979184915e-18,
+        "multiplier_linf_error": 1.9384010022105436e-11,
+        "cells": 20
+      },
+      "outside_refusals": 2,
+      "safe_rebind": true,
+      "accepted_retry_same_outside_runtime": false,
+      "readonly_target_bitexact": true,
+      "countermodels_refused": 12,
+      "original_reverified_unchanged": true,
+      "countermodel_native_execution": false,
+      "files": {
+        "identity.json": {
+          "workspace_path": "outputs/installed-m18-entropy-serial-dim2-sdk375f-owner-codec-20261001/identity.json",
+          "sha256": "87e79b7f5d92552152abab1866b15c248395a1efc91b90834abb48f73c50e8b5"
+        },
+        "result.json": {
+          "workspace_path": "outputs/installed-m18-entropy-serial-dim2-sdk375f-owner-codec-20261001/result.json",
+          "sha256": "5ce92aa9293ac9c6ef0d14a40ae4a030c8cd6d09d425865f9e5626e162a8a744"
+        },
+        "root-native-owner-auth.json": {
+          "workspace_path": "outputs/installed-m18-entropy-serial-dim2-sdk375f-owner-codec-20261001/root-native-owner-auth.json",
+          "sha256": "6f8bf5c628b80e8ab189177a1500ec5a1b0e84fbd6c214ced40fa23488d53fc1"
+        },
+        "root-approval.json": {
+          "workspace_path": "outputs/installed-m18-entropy-serial-dim2-sdk375f-owner-codec-20261001/root-approval.json",
+          "sha256": "0617cf98cb22a27c512c6a373077b9d020cd5741a3f945ed8d810aa650cc3a63"
+        },
+        "owner-pins.json": {
+          "workspace_path": "outputs/installed-m18-entropy-serial-dim2-sdk375f-owner-codec-20261001/owner-pins.json",
+          "sha256": "6e047b1121882183ac3a5ca9cef63deeb3a430b579b0e175d1bafdb80f50b144"
+        },
+        "scientific-reception.json": {
+          "workspace_path": "outputs/installed-m18-entropy-serial-dim2-sdk375f-owner-codec-20261001/scientific-reception.json",
+          "sha256": "7d8946c8460c5614b7315489972a6fb52a9d18d5f9bad2b9003722b496559ee1"
+        },
+        "countermodel-reception.json": {
+          "workspace_path": "outputs/installed-m18-entropy-serial-dim2-sdk375f-owner-codec-20261001/countermodel-reception.json",
+          "sha256": "8879641909cfecce4dd3718bb01deea1244e5be25710316c1f8119b680a02891"
+        }
+      }
+    },
+    "mpi2": {
+      "ranks": 2,
+      "source_commit": "33dee906850d56eec542dd0a7d0b21954aa244d3",
+      "native_build_source_commit": "32235b93296fe6d4337194e17d0d45569dc63a08",
+      "native_sha256": "8dcdfacab20fffd876128c2ee4b06bd26f4c952f2d7ed6ce76fb028815bb6310",
+      "ownership": "distributed",
+      "metrics": {
+        "original_moment_residual": 4.548139642679416e-12,
+        "minimum_population": 0.07362741560528462,
+        "minimum_entropy_gap": 0.00011062088624547162,
+        "entropy_tangent_defect": 1.362028979184915e-18,
+        "multiplier_linf_error": 1.9384010022105436e-11,
+        "cells": 20
+      },
+      "outside_refusals": 2,
+      "safe_rebind": true,
+      "accepted_retry_same_outside_runtime": false,
+      "readonly_target_bitexact": true,
+      "countermodels_refused": 12,
+      "original_reverified_unchanged": true,
+      "countermodel_native_execution": false,
+      "files": {
+        "before/identity.json": {
+          "workspace_path": "outputs/installed-m18-entropy-mpi2-dim2-sdk375f-owner-codec-20261001/before/identity.json",
+          "sha256": "87e79b7f5d92552152abab1866b15c248395a1efc91b90834abb48f73c50e8b5"
+        },
+        "result.json": {
+          "workspace_path": "outputs/installed-m18-entropy-mpi2-dim2-sdk375f-owner-codec-20261001/result.json",
+          "sha256": "87c8446a672ea7b9c73cce4a06739a3a524ce703f50998ef9f93d06427646e07"
+        },
+        "root-native-owner-auth.json": {
+          "workspace_path": "outputs/installed-m18-entropy-mpi2-dim2-sdk375f-owner-codec-20261001/root-native-owner-auth.json",
+          "sha256": "e8bd8f3f618a2344ebbc67ea5cd6d12177cc40223c1c4f5e3c8161261064d143"
+        },
+        "root-approval.json": {
+          "workspace_path": "outputs/installed-m18-entropy-mpi2-dim2-sdk375f-owner-codec-20261001/root-approval.json",
+          "sha256": "ca8c4e2f8fc152104b525bfb18a055731457c5110d6bffb8af49e07a209070ec"
+        },
+        "owner-pins.json": {
+          "workspace_path": "outputs/installed-m18-entropy-mpi2-dim2-sdk375f-owner-codec-20261001/owner-pins.json",
+          "sha256": "6a3878b52b6435b2bd1494a2edeeff98758168934ef55e87e45858fb024730d6"
+        },
+        "scientific-reception.json": {
+          "workspace_path": "outputs/installed-m18-entropy-mpi2-dim2-sdk375f-owner-codec-20261001/scientific-reception.json",
+          "sha256": "07ab8f61465012c7736da875014d553da4c411377b43f2975f91f78b72ca3533"
+        },
+        "countermodel-reception.json": {
+          "workspace_path": "outputs/installed-m18-entropy-mpi2-dim2-sdk375f-owner-codec-20261001/countermodel-reception.json",
+          "sha256": "433277a68a0a5fe5711541ad276513906044a8c7a215608e78fdb13edf812a44"
+        }
+      }
+    }
+  }
+}

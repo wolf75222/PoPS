@@ -836,6 +836,7 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
   kernel_registry materialized_previous;
   field_plan_registry candidate_field_plans;
   std::string candidate_boundary_contract;
+  runtime::program::ProgramOwnedClockManifest candidate_auxiliary_clocks;
   std::exception_ptr boundary_preparation_error;
 
   // Baseline preparation and stage allocation finish collectively before the DSO entry is invoked.
@@ -845,6 +846,7 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
     if (p_->program_.artifact_field_boundary_stage_)
       throw std::logic_error(
           "System::install_program: a field-boundary artifact transaction is already active");
+    candidate_auxiliary_clocks = runtime::program::read_program_owned_clock_manifest(h, installed_hash);
     auto capture_authorities = [](const field_plan_registry& plans) {
       boundary_registry result;
       for (const auto& [slot, plan] : plans)
@@ -952,6 +954,12 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
             .scalar(plan.boundary_point->iteration);
       contract.sequence(plan.boundary_parameters);
     }
+    contract.text("pops.program.owned-clock-manifest")
+        .scalar(static_cast<std::uint32_t>(candidate_auxiliary_clocks.contract_version))
+        .text(candidate_auxiliary_clocks.owner_identity)
+        .text(candidate_auxiliary_clocks.primary_clock_identity)
+        .scalar(static_cast<std::uint64_t>(candidate_auxiliary_clocks.logical_clock_identities.size()));
+    for (const auto& clock : candidate_auxiliary_clocks.logical_clock_identities) contract.text(clock);
     candidate_boundary_contract = std::move(contract).release();
 
     // Pre-copy both materialization images while failure is still harmless.  After the plan-registry
@@ -1016,6 +1024,9 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
     boundary_registry_published = true;
 
     p_->program_.reset_artifact_candidate_state();
+    p_->program_.checkpoint_metadata_.uniform_auxiliary_clocks = candidate_auxiliary_clocks;
+    p_->program_.checkpoint_metadata_.logical_clock_identities = candidate_auxiliary_clocks.logical_clock_identities;
+    p_->program_.checkpoint_metadata_.primary_clock_identity = candidate_auxiliary_clocks.primary_clock_identity;
     // The generated prelude may resolve blocks and parameters before ctx.install() publishes the
     // closure. Install the candidate image first; install_unverified_step then revokes it, and the
     // authenticated image is republished only after the exact one-step witness succeeds.
@@ -1033,6 +1044,10 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
     p_->program_.operator_authorities_ = std::move(operator_authorities);
     p_->program_.history_replay_authorities_ = std::move(history_replay_authorities);
     p_->program_.installed_hash_ = installed_hash;
+    candidate_auxiliary_clocks.installation_generation = p_->program_.step_install_generation_;
+    p_->program_.checkpoint_metadata_.logical_clock_identities = candidate_auxiliary_clocks.logical_clock_identities;
+    p_->program_.checkpoint_metadata_.primary_clock_identity = candidate_auxiliary_clocks.primary_clock_identity;
+    p_->program_.checkpoint_metadata_.uniform_auxiliary_clocks = std::move(candidate_auxiliary_clocks);
     if (program_has_dt_bound) {
       System<Dim>* self = this;
       p_->program_.dt_bound_ = [self, dt_bound](Real cfl) -> Real { return dt_bound(self, cfl); };

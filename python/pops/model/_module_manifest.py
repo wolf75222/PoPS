@@ -24,7 +24,10 @@ from .ownership import OwnerPath
 from .provider_pack import ProviderPack
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
+GLOBAL_QUANTITIES_SCHEMA_VERSION = 11
+PHYSICAL_FRAME_SCHEMA_VERSION = 12
+SUPPORTED_SCHEMA_VERSIONS = (SCHEMA_VERSION, GLOBAL_QUANTITIES_SCHEMA_VERSION, PHYSICAL_FRAME_SCHEMA_VERSION)
 
 _WAVE_SPEED_PROVIDERS = frozenset({"explicit_pair", "jacobian", "pressure_derived"})
 
@@ -198,6 +201,8 @@ class ModuleManifest:
         "abi_requirements",
         "params_utilization",
         "expressions",
+        "global_quantities",
+        "physical_frame",
     )
 
     def __init__(
@@ -220,6 +225,8 @@ class ModuleManifest:
         abi_requirements: Any,
         params_utilization: Any = None,
         expressions: Any = None,
+        global_quantities: Any = None,
+        physical_frame: Any = None,
     ) -> None:
         if not isinstance(operators, OperatorRegistryManifest):
             raise TypeError("ModuleManifest operators must be an OperatorRegistryManifest")
@@ -245,9 +252,9 @@ class ModuleManifest:
         _validate_declaration_rows(params, owner=owner, kind="parameter", where="module params")
         _validate_declaration_rows(aux, owner=owner, kind="aux", where="module aux")
         if expressions is None:
-            expressions = {"operators": {}, "primitives": {}}
-        if not isinstance(expressions, Mapping) or set(expressions) != {"operators", "primitives"}:
-            raise TypeError("ModuleManifest expressions require operators and primitives mappings")
+            expressions = {"operators": {}, "primitives": {}, "primitive_coordinates": {}}
+        if not isinstance(expressions, Mapping) or set(expressions) != {"operators", "primitives", "primitive_coordinates"}:
+            raise TypeError("ModuleManifest expressions require operators, primitives and primitive_coordinates mappings")
         if any(not isinstance(value, Mapping) for value in expressions.values()):
             raise TypeError("ModuleManifest expression tables must be mappings")
         provider_pack = ProviderPack.from_data(provider_pack).to_data()
@@ -256,7 +263,46 @@ class ModuleManifest:
                 "ModuleManifest wave_speed_provider %r must be None or one of %s"
                 % (wave_speed_provider, ", ".join(sorted(_WAVE_SPEED_PROVIDERS)))
             )
-        object.__setattr__(self, "schema_version", SCHEMA_VERSION)
+        globals_ = {} if global_quantities is None else global_quantities
+        if not isinstance(globals_, Mapping):
+            raise TypeError("ModuleManifest global_quantities must be a mapping")
+        from pops._ir.quantity import PhysicalDimension
+        from .handles import Handle
+        for key, declaration in globals_.items():
+            require_manifest_name(key)
+            row = require_exact_keys(declaration, {"version", "scope", "units", "handle"},
+                                     where="global quantity")
+            handle = Handle.from_canonical_identity(row["handle"])
+            if (type(row["version"]) is not int or row["version"] != 1
+                    or row["scope"] != "global" or handle.owner_path != owner
+                    or handle.is_instance or handle.kind != "global_quantity" or handle.local_id != key):
+                raise ValueError("ModuleManifest global quantity declaration authority changed")
+            units = row["units"]
+            if (not isinstance(units, Mapping) or set(units) != {"kind", "powers"}
+                    or not isinstance(units["powers"], list)
+                    or any(not isinstance(power, list) or len(power) != 3
+                           or type(power[1]) is not int or type(power[2]) is not int
+                           for power in units["powers"])
+                    or PhysicalDimension.from_data(units).to_data() != units):
+                raise ValueError("ModuleManifest global quantity units must be canonical")
+        object.__setattr__(self, "global_quantities", _freeze_json(globals_, where="global quantities"))
+        if physical_frame is not None:
+            from pops.domain.cartesian import CartesianDomainFrame
+            from pops.domain.rectangle import RectangleFrame
+            if not isinstance(physical_frame, Mapping):
+                raise TypeError("Module physical frame must be a mapping")
+            providers = {"cartesian_box": CartesianDomainFrame,
+                         "rectangle_cartesian_2d": RectangleFrame}
+            provider = providers.get(physical_frame.get("frame_type"))
+            if provider is None:
+                raise ValueError("Module physical frame requires a registered Cartesian domain frame")
+            canonical_frame = provider.from_dict(physical_frame)
+            if canonical_frame.to_dict() != physical_frame:
+                raise ValueError("Module physical frame must be canonical")
+            if any(row["frame"] != canonical_frame.canonical_id for row in state_spaces.values()):
+                raise ValueError("Module StateSpaces differ from its physical frame authority")
+        object.__setattr__(self, "physical_frame", None if physical_frame is None else _freeze_json(physical_frame, where="Module physical frame"))
+        object.__setattr__(self, "schema_version", PHYSICAL_FRAME_SCHEMA_VERSION if physical_frame is not None else (GLOBAL_QUANTITIES_SCHEMA_VERSION if globals_ else SCHEMA_VERSION))
         object.__setattr__(self, "name", name)
         object.__setattr__(
             self, "owner_path", _freeze_json(owner.to_data(), where="module owner_path")
@@ -318,10 +364,11 @@ class ModuleManifest:
             abi_requirements=requirements,
             params_utilization=_thaw_json(self.params_utilization),
             expressions=_thaw_json(self.expressions),
+            global_quantities=_thaw_json(self.global_quantities),
         )
 
     def to_dict(self) -> Any:
-        return {
+        result = {
             "schema_version": self.schema_version,
             "name": self.name,
             "owner_path": _thaw_json(self.owner_path),
@@ -342,6 +389,11 @@ class ModuleManifest:
             "abi_requirements": _thaw_json(self.abi_requirements),
             "expressions": _thaw_json(self.expressions),
         }
+        if self.physical_frame is not None:
+            result["physical_frame"] = _thaw_json(self.physical_frame)
+        if self.global_quantities:
+            result["global_quantities"] = _thaw_json(self.global_quantities)
+        return result
 
     @classmethod
     def from_dict(cls, data: Any) -> ModuleManifest:
@@ -366,14 +418,20 @@ class ModuleManifest:
             "abi_requirements",
             "expressions",
         }
+        if isinstance(data, Mapping) and data.get("schema_version") == GLOBAL_QUANTITIES_SCHEMA_VERSION:
+            expected.add("global_quantities")
+        if isinstance(data, Mapping) and data.get("schema_version") == PHYSICAL_FRAME_SCHEMA_VERSION:
+            expected.add("physical_frame")
+            if "global_quantities" in data:
+                expected.add("global_quantities")
         row = require_exact_keys(data, expected, where="ModuleManifest")
         version = row["schema_version"]
         if isinstance(version, bool) or not isinstance(version, int):
             raise TypeError("ModuleManifest schema_version must be an integer")
-        if version != SCHEMA_VERSION:
+        if version not in SUPPORTED_SCHEMA_VERSIONS:
             raise ValueError(
-                "unsupported ModuleManifest schema_version %r (expected %d)"
-                % (version, SCHEMA_VERSION)
+                "unsupported ModuleManifest schema_version %r (expected one of %s)"
+                % (version, SUPPORTED_SCHEMA_VERSIONS)
             )
         owner = canonical_owner(row["owner_path"], where="ModuleManifest owner_path")
         operators = OperatorRegistryManifest.from_dict(
@@ -397,6 +455,8 @@ class ModuleManifest:
             abi_requirements=row["abi_requirements"],
             params_utilization=row["params_utilization"],
             expressions=row["expressions"],
+            global_quantities=row.get("global_quantities"),
+            physical_frame=row.get("physical_frame"),
         )
         if result.to_dict() != dict(row):
             raise ValueError("ModuleManifest is not in canonical form")

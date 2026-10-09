@@ -116,7 +116,7 @@ def test_provider_package_contains_data_and_common_kernel_only(tmp_path):
     assert 'PopsTransferApiV2' in source and '&apply, &integral' in source
     assert 'PopsTransferIntegralRequestV2' in source
     assert physical_map_identity(mapping) in source
-    assert 'apply_physical_support_integral(operation, request->source, request->destination, status)' in source
+    assert 'apply_physical_support_integral(operation, request->source, request->destination, status, &request->execution)' in source
     changed = replace(mapping, reductions=(replace(mapping.reductions[0], weights=(1, 1)),))
     assert physical_map_identity(changed) != physical_map_identity(mapping)
     assert 'for (' not in source and 'parallel_for' not in source

@@ -1,6 +1,6 @@
 /// Numerical observations belong to their exact prepared solve, independently of state owners.
 field_type& hierarchy_field_scratch(std::int64_t solve_key, std::int64_t value_id, int subslot,
-                                    int ncomp = 1, int ghost_depth = 1) const {
+                                    int ncomp = 1, int ghost_depth = 1, bool produce = true) const {
   const auto& lane = prepared_execution_lane();
   auto& solver = configured_hierarchy_field_solver_(solve_key);
   auto& resource = hierarchy_field_resources_.at(solve_key);
@@ -36,8 +36,12 @@ field_type& hierarchy_field_scratch(std::int64_t solve_key, std::int64_t value_i
         .scalar(resource.topology_epoch)
         .scalar(resource.generation)
         .bytes(resource.selection.exact_contract);
+    if (!produce)
+      authority.text("pops.hierarchy.field-scratch.retained-input@1");
     contract = std::move(authority).release();
     const auto found = resource.scratches.find(key);
+    if (!produce && found == resource.scratches.end())
+      throw std::invalid_argument("hierarchy field retained input has not been produced");
     if (found != resource.scratches.end()) {
       const auto& result = found->second;
       if (result.layout() != prototype->layout() ||
@@ -63,7 +67,7 @@ field_type& hierarchy_field_scratch(std::int64_t solve_key, std::int64_t value_i
     const auto found = resource.scratches.find(key);
     if (found == resource.scratches.end())
       staged.emplace(key, make_scratch_(*prototype, ncomp, ghosts));
-    else
+    else if (produce)
       found->second.set_val(Real(0));
   } catch (...) {
     error = std::current_exception();

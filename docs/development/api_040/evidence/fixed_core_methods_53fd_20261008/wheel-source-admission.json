@@ -1,0 +1,14 @@
+{
+  "schema": "pops.root.SSP3-installed-source-repack@1",
+  "date_utc": "2026-10-08T19:27:32.322179+00:00",
+  "Source": "53fd6ec25fd67351aefe0a5d2ac1101be7041a78",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "wheel": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-installed-build-53fd6ec2-20261008/wheel/pops-1.1.0-cp312-cp312-macosx_26_0_arm64.whl",
+  "wheel_sha256": "64174ea5855a9978c3ae7b61ed116be96217911a68b1a2fab434b059fca0bc90",
+  "installed_wheel_payloads": 1168,
+  "source_before_after_hashes_equal": 5703,
+  "new_CXX_link_actions": 0,
+  "new_glob_rows": 1,
+  "core_fingerprint": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "scope": "Actual officialwheel/install/recordeddoctor, no SSP scientific resultyet."
+}

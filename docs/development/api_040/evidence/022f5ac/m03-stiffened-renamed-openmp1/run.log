@@ -1,0 +1,225 @@
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.1.0 | resolved simulation launch
+================================================================
+  case                : api040_M03_stiffened
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 1
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : renamed_material
+  numerics renamed_material : finite_volume, variables=conservative, reconstruction=firstorder, riemann=rusanov, formal_order=1, ghost_depth=1, boundaries=1
+  layout 0            : Uniform; 100 x 100 cells; 1 level; [-0.5, 0.5] x [0, 1]
+  step strategy       : adaptive_cfl (cfl=0.25)
+  interval            : 0 -> 0.15 (max 100000 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 3e3aa88592c37d36
+  run identity        : 706971452c518f33
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 165 / 0
+  final time / step   : 0.15 / 165
+  elapsed             : 0.979070 s
+  run identity        : 706971452c518f33
+Traceback (most recent call last):
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/examples/migration/scientific/api040_m03_euler_eos.py", line 240, in <module>
+    raise RuntimeError(publication_failure.decode())
+RuntimeError: AssertionError: M03 predeclared criterion failed: {
+  "eos": "stiffened",
+  "gamma": 1.4,
+  "p_inf": 0.3,
+  "cells": [
+    100,
+    100
+  ],
+  "time": 0.15,
+  "accepted_steps": 165,
+  "density_l1": 0.031146938527343092,
+  "rho_min": 0.12528724308890202,
+  "internal_energy_density_min": 1.3032208495395383,
+  "pressure_min": 0.10128833981581525,
+  "mass_defect": 3.751206277380348e-06,
+  "energy_defect": 4.203378470490904e-05,
+  "momentum_balance_defect": 7.944883730820473e-06,
+  "transverse_momentum_max": 1.0005328775130579e-16,
+  "y_invariance_max": 8.881784197001252e-16,
+  "initial_max_error": 0.0,
+  "compile_seconds": 32.61188779096119,
+  "run_seconds": 1.1261718329042196,
+  "run_report": {
+    "accepted_steps": 165,
+    "rejected_steps": 0,
+    "final_time": 0.15,
+    "final_macro_step": 165,
+    "stop_reason": "target_time_reached",
+    "run_identity": {
+      "domain": "run",
+      "schema_version": 1,
+      "algorithm": "sha256",
+      "digest": {
+        "encoding": "hex",
+        "bytes": "706971452c518f33c25c1fd6b48db04c6f6380f16f60fe08e5da8d1d993c8b7b"
+      }
+    },
+    "bind_identity": {
+      "domain": "bind",
+      "schema_version": 1,
+      "algorithm": "sha256",
+      "digest": {
+        "encoding": "hex",
+        "bytes": "8887b1dc264c446241e9f02c22d52fac2c4f6747dcb26e34becc5e96035ed5d3"
+      }
+    },
+    "execution_identity": {
+      "domain": "execution-context",
+      "schema_version": 1,
+      "algorithm": "sha256",
+      "digest": {
+        "encoding": "hex",
+        "bytes": "60cb7f9078e144527fc6335fe2a35d83d2bc478f407802974c26591ec5b6b68a"
+      }
+    },
+    "artifact_identity": {
+      "domain": "artifact",
+      "schema_version": 1,
+      "algorithm": "sha256",
+      "digest": {
+        "encoding": "hex",
+        "bytes": "3e3aa88592c37d36b6565174a8bcd9d34699d8c660e2a2d9ddb0078f6d09d82d"
+      }
+    },
+    "field_providers": []
+  },
+  "mpi_ranks": 1,
+  "execution_context": {
+    "schema_version": 1,
+    "backend_identity": {
+      "domain": "runtime-backend-manifest",
+      "schema_version": 1,
+      "algorithm": "sha256",
+      "digest": {
+        "encoding": "hex",
+        "bytes": "4f0b25caa22b4aaf5fc10e81b5b07f6c30e9a311614a8e08ea1444c5ea167359"
+      }
+    },
+    "communicator": {
+      "kind": "communicator",
+      "identity": "MPI_COMM_WORLD"
+    },
+    "datatype": {
+      "kind": "datatype",
+      "identity": "float64"
+    },
+    "device": {
+      "kind": "device",
+      "identity": "cpu"
+    }
+  },
+  "runtime_backend": {
+    "schema_version": 1,
+    "backend": {
+      "value": "production",
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+    },
+    "target": {
+      "value": "system",
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+    },
+    "abi": {
+      "value": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=aa301ce673e78b6833d4cd25c3dfe283d3eb8e6506795f7a50dc5b88a6feff2f;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+    },
+    "precision": {
+      "storage": {
+        "value": "float64",
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "compute": {
+        "value": "float64",
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "accumulation": {
+        "value": "float64",
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "reduction": {
+        "value": "float64",
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      }
+    },
+    "device": {
+      "value": "cpu",
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+    },
+    "memory_spaces": {
+      "value": [
+        "host"
+      ],
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+    },
+    "communicator": {
+      "value": "MPI_COMM_WORLD",
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+    },
+    "capabilities": {
+      "centerings": {
+        "value": [
+          "cell"
+        ],
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "execution_backend": {
+        "value": "OpenMP",
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "generic_field_view": {
+        "value": true,
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "layouts": {
+        "value": [
+          "right",
+          "left",
+          "strided"
+        ],
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "ownership": {
+        "value": [
+          "borrowed",
+          "owned",
+          "shared"
+        ],
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "scalars": {
+        "value": [
+          "float64"
+        ],
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "shared_space": {
+        "value": "Host",
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "stream_identity": {
+        "value": "Kokkos::OpenMP::synchronous",
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      },
+      "supported_dimensions": {
+        "value": [
+          2
+        ],
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+      }
+    }
+  },
+  "saved_state": "state_100.npz",
+  "saved_state_sha256": "33ecdcd6367b383e1e7f4107e6a2107bfe3dae81792fc113576bd96a3b015efa"
+}

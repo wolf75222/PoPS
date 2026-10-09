@@ -76,7 +76,7 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
     ordered_blocks = sorted(blocks, key=blocks.get)
 
     def flux_basis_count(value: Any) -> int:
-        if value.op == "rhs":
+        if value.op in {"rhs", "principal_rate"}:
             return 1 if value.attrs.get("flux", True) else 0
         if value.op == "diffusive_rhs":
             from pops.codegen.program_emit_diffusion import diffusive_flux_basis_count
@@ -86,7 +86,7 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
 
     def contains_rhs(values: Any, block: Any, *, flux_only: bool = False) -> bool:
         for value in values:
-            if value.op in {"rhs", "diffusive_rhs"} and value.block == block and (
+            if value.op in {"rhs", "diffusive_rhs", "principal_rate"} and value.block == block and (
                 not flux_only or flux_basis_count(value) != 0
             ):
                 return True
@@ -373,12 +373,15 @@ def _emit_checkpoint_shape_metadata(program: Any) -> str:
         state_identity = (
             state_ref.qualified_id if state_ref is not None else "scalar-history:" + name
         )
-        space = getattr(program, "_history_spaces", {}).get(name)
-        space_identity = (
-            json.dumps(space.to_data(), sort_keys=True, separators=(",", ":"))
-            if space is not None
-            else "scalar-field"
-        )
+        # Match the exact IR16 storage authority registered by the live prelude.
+        # The scalar observation keeps its own space; its storage owner is not
+        # permission to replace it by that owner's physical State identity.
+        from pops.time._program.global_history_storage import descriptor
+        storage_descriptor = descriptor(program, name)
+        if storage_descriptor is not None:
+            state_identity = storage_descriptor
+        from pops.codegen.program_history_identity import history_space_identity
+        space_identity = history_space_identity(program, name)
         row = history_manifest[name]
         interpolation = json.dumps(row["interpolation"], sort_keys=True, separators=(",", ":"))
         component = getattr(program, "_histories_ncomp", {}).get(name)
@@ -433,6 +436,8 @@ def _emit_checkpoint_shape_metadata(program: Any) -> str:
         + integer_accessor("pops_program_checkpoint_history_components", 7)
         + f'extern "C" int pops_program_checkpoint_logical_clock_count() {{ return {len(clocks)}; }}\n'
         + string_accessor("pops_program_checkpoint_logical_clock_identity", 0, clocks)
+        + 'extern "C" const char* pops_program_checkpoint_primary_clock_identity() {\n'
+        + "  return %s;\n}\n" % json.dumps(temporal["primary_clock"])
         + 'extern "C" const char* pops_program_checkpoint_temporal_provider_identity() {\n'
         + (
             '  return "pops.amr.same-level-transport-euler-stage-flux@2";\n}\n'
@@ -570,6 +575,8 @@ def _emit_flux_temporal_family_install(program: Any) -> str:
             provider = 3 if named is not None else (0 if requested is None or "default" in requested else 1)
             rows.append((blocks[value.block], value.id, provider,
                          _rhs_flux_temporal_family(value, named)))
+        elif value.op == "principal_rate":
+            rows.append((blocks[value.block], value.id, 1, _rhs_flux_temporal_family(value)))
         elif value.op == "diffusive_rhs":
             constitutive, transport = _diffusive_flux_families(value)
             rows.append((blocks[value.block], value.id, 4, constitutive))
@@ -696,8 +703,8 @@ def _emit_amr_install(
         transform_refresh_guard = "    _require_local_transform_level_contract();\n"
     has_maps = any(value.op in ("layout_map_export", "layout_map_import")
                    for value in program._values)
-    from pops.codegen.program_emit_hierarchy_regions import hierarchy_region_solves
-    has_hierarchy_regions = bool(hierarchy_region_solves(program))
+    from pops.codegen.program_emit_hierarchy_regions import has_hierarchy_continuations
+    has_hierarchy_regions = has_hierarchy_continuations(program)
     has_continuations = has_maps or has_hierarchy_regions
     if has_maps and hierarchy_bodies is not None:
         raise NotImplementedError("AMR mapping and field barriers require one combined region schedule")
@@ -740,7 +747,7 @@ def _emit_amr_install(
         else:
             gather, solve, publish = hierarchy_bodies
             observe = None
-        spatial_solve = any(value.op == "solve_spatial_nonlinear" for value in program._values)
+        spatial_solve = any(value.op in ("solve_spatial_nonlinear", "solve_spatial_field") for value in program._values)
         direct_field_solve = any("hierarchy_field_identity" in value.attrs for value in program._values)
         hierarchy_solve_driver = (
             # The spatial solve checks out each prepared level itself for predictor

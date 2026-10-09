@@ -43,6 +43,9 @@ def _block_region(program: Any, block: Any, where: str, hint: Any = None) -> int
 
 def validate_program_regions(program: Any) -> None:
     """Fail if a value is foreign, fabricated, or escapes/crosses an undeclared region."""
+    from pops.fields._evolved_stage_contract import validate_evolved_partitions
+
+    validate_evolved_partitions(program)
     for value in program._values:
         if value.op == "solve_spatial_nonlinear":
             from pops.time._program.spatial_solve import validate_spatial_commit

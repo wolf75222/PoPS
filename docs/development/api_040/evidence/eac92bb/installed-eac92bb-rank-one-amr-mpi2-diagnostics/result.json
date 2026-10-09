@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "status": "failed",
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/mpiexec",
+    "-n",
+    "2",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/run_installed_mpi_checks.py",
+    "--worker",
+    "--output",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-eac92bb-rank-one-amr-mpi2-diagnostics",
+    "--ranks",
+    "2",
+    "--test",
+    "tests/python/integration/runtime/test_rank_one_owned_amr_invalid.py"
+  ],
+  "returncode": 1,
+  "timeout": false,
+  "seconds": 51.05444095795974,
+  "ranks": 2,
+  "threads": 1,
+  "authentication_before": 0,
+  "authentication_after": 0,
+  "same_installation": true,
+  "test_sources_unchanged": true,
+  "rank_test_parity": true,
+  "rank_results": [
+    {
+      "rank": 0,
+      "counts": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_rank_one_owned_amr_invalid",
+          "test_rank_one_owned_invalid_body_collectively_rolls_back"
+        ]
+      ],
+      "xml_sha256": "ee91e75b7bd1fe998826c58395ebc57ef5857dd43d35e121bd1c9f8be22ed92f",
+      "log_sha256": "9ba49e6d78e55733ff7e195d0ad41b80b16bb98fa5a4adf15ed28c6858bab6af"
+    },
+    {
+      "rank": 1,
+      "counts": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_rank_one_owned_amr_invalid",
+          "test_rank_one_owned_invalid_body_collectively_rolls_back"
+        ]
+      ],
+      "xml_sha256": "c9bba51ff89373985b08c6f8120f04eeb28ba4361426de6bcb48db180baaf371",
+      "log_sha256": "306c64e77f940cbec693200e63312b21621d21ced070fbcfe23a50777543d10d"
+    }
+  ],
+  "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb"
+}

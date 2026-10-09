@@ -1,0 +1,19 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 3 items
+
+tests/python/integration/runtime/test_api040_m26_finite_interaction_runtime.py::test_finite_interaction_two_densities_rebind_permutation_and_adjoint PASSED [ 33%]
+tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py::test_mixed_linear_three_grids_and_permutation_from_saved_c_and_mu PASSED [ 66%]
+tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py::test_one_iteration_gmres_collectively_refuses_without_accepted_publication PASSED [100%]
+
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py::test_mixed_linear_three_grids_and_permutation_from_saved_c_and_mu
+  /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/examples/migration/scientific/api040_m27_mixed_linear.py:183: RuntimeWarning: pops.set_threads() was called after native initialization; the request has no effect
+    pops.set_threads(int(os.environ.get("POPS_THREADS", "1")))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank0.xml -
+======================== 3 passed, 1 warning in 34.46s =========================

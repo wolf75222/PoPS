@@ -323,6 +323,15 @@ class PreparedBoundaryComponent final {
     return Session(std::move(candidate), std::move(state));
   }
 
+  const PopsAcceptedInitialGhostApiV1& accepted_initial_ghost_api() const {
+    static_assert(Operation == PreparedBoundaryOperation::GhostRegion);
+    const auto& initial = component_->table<PopsAcceptedInitialGhostApiV1>(
+        POPS_NATIVE_INTERFACE_ACCEPTED_INITIAL_GHOST_V1, 1);
+    const auto& ordinary = ghost_api();
+    component::require_initial_ghost_provider_lifecycle(initial, ordinary);
+    return initial;
+  }
+
   const PopsGhostBoundaryApiV1& ghost_api() const {
     static_assert(Operation == PreparedBoundaryOperation::GhostRegion);
     return component_->table<PopsGhostBoundaryApiV1>(POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1,
@@ -624,7 +633,7 @@ class PreparedBoundaryComponent final {
     if (spec_.region.dimension != Dim || state.ncomp() < 1 || point.clock.empty() ||
         point.tick < 0 || point.level < 0 || point.substep < 0 || point.stage < 0 ||
         point.stage_fraction.denominator <= 0 || point.stage_fraction.numerator < 0 ||
-        point.stage_fraction.numerator > point.stage_fraction.denominator || !(point.dt > 0.0) ||
+        point.stage_fraction.numerator > point.stage_fraction.denominator || point.dt < 0.0 ||
         !std::isfinite(point.dt) || !std::isfinite(point.physical_time) ||
         context.point.level != point.level || context.point.step != point.tick ||
         context.clock_identity == nullptr || *context.clock_identity != point.clock ||
@@ -638,6 +647,14 @@ class PreparedBoundaryComponent final {
       throw std::invalid_argument(
           "GhostBoundary requires one primary-state output and no direction dependencies");
 
+    const bool initial = point.dt == 0.0;
+    if (initial) {
+      const PopsLogicalTimeV1 exact_initial{sizeof(PopsLogicalTimeV1), point.clock.c_str(),
+          point.tick, point.level, point.substep, point.stage,
+          point.stage_fraction.numerator, point.stage_fraction.denominator, point.dt, point.physical_time};
+      component::validate_accepted_initial_ghost_point(exact_initial, 1);
+      (void)accepted_initial_ghost_api(); // Explicit additive capability, never V1 callback at dt0.
+    }
     auto& scratch = invocation_scratch_(session, state, geometry);
     for (auto& patch : scratch.patches)
       patch.active = false;
@@ -802,8 +819,10 @@ class PreparedBoundaryComponent final {
                                                scratch.parameters.data(),
                                                logical_time,
                                                session.patch_execution().view()};
-      const int code =
-          component::apply_ghost_boundary(session.ghost_api(), session.state(), request, status);
+      const int code = initial
+          ? component::apply_accepted_initial_ghost(accepted_initial_ghost_api(), session.state(),
+                PopsAcceptedInitialGhostRequestV1{sizeof(PopsAcceptedInitialGhostRequestV1), 1, request}, status)
+          : component::apply_ghost_boundary(session.ghost_api(), session.state(), request, status);
       require_success(code, status, "apply_region_batch");
       if (std::any_of(patch.output.begin(), patch.output.begin() + values,
                       [](double value) { return !std::isfinite(value); }))

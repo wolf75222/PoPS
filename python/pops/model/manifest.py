@@ -10,7 +10,9 @@ from ._manifest_builders import (
     coupling_operator_manifest,
     module_manifest_of,
 )
-from ._module_manifest import SCHEMA_VERSION, ModuleManifest
+from ._module_manifest import (
+    SCHEMA_VERSION, GLOBAL_QUANTITIES_SCHEMA_VERSION, PHYSICAL_FRAME_SCHEMA_VERSION, SUPPORTED_SCHEMA_VERSIONS, ModuleManifest,
+)
 from ._operator_manifest import OperatorManifestEntry, OperatorRegistryManifest
 
 __all__ = [
@@ -18,6 +20,9 @@ __all__ = [
     "OperatorManifestEntry",
     "OperatorRegistryManifest",
     "SCHEMA_VERSION",
+    "GLOBAL_QUANTITIES_SCHEMA_VERSION",
+    "PHYSICAL_FRAME_SCHEMA_VERSION",
+    "SUPPORTED_SCHEMA_VERSIONS",
     "build_module_manifest",
     "condensed_route_manifest",
     "coupling_operator_manifest",

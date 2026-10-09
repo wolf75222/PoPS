@@ -1,0 +1,76 @@
+{
+  "base": "05159edd06dddd05ed23105d50a12bb65217e95e",
+  "cases": [
+    {
+      "dt": [
+        1,
+        128
+      ],
+      "emitted_cpp_bytes": 13688,
+      "emitted_cpp_sha256": "07835f3c45ec405f2717cc8ef59e38b5e3e44cfd59cd868588189a33bb4742e1",
+      "ir_version": 5,
+      "native_cells": [
+        8,
+        32
+      ],
+      "nv": 8,
+      "nx": 32,
+      "reference_only": {
+        "continuum_l1": 0.0022893721705324927,
+        "discrete_error": 0.0,
+        "moments": [
+          2.0,
+          0.1640625,
+          0.65625
+        ]
+      }
+    },
+    {
+      "dt": [
+        1,
+        256
+      ],
+      "emitted_cpp_bytes": 13694,
+      "emitted_cpp_sha256": "8f98cbf295d2267901b96460283309b349590a30bebe6092a7f2c7c0614dd70c",
+      "ir_version": 5,
+      "native_cells": [
+        12,
+        64
+      ],
+      "nv": 12,
+      "nx": 64,
+      "reference_only": {
+        "continuum_l1": 0.0011663089621362962,
+        "discrete_error": 0.0,
+        "moments": [
+          2.0,
+          0.16550925925925924,
+          0.662037037037037
+        ]
+      }
+    }
+  ],
+  "measurement_inputs": {
+    "python/pops/model/provider_pack.py": "a643e0fbc8a7ae74673cad7e3a81960864016db61ec27947c9df77c44edd618b",
+    "tests/python/support/m19_freestreaming.py": "111927722a6163c82619d8b1c5af295ca48f9e57aec404d7386082bfbe38224c",
+    "tests/review/sol61_m19_freestreaming_oracle.py": "1de12ce2402fc552777317d7d9302e1d57e6066ff703fcc4d5ee46a0e5be2bb4"
+  },
+  "measurement_scope": "Historical Source-only snapshot on base 05159edd plus listed origin gels; hashes do not constrain later emitters",
+  "native_executed": false,
+  "origin_gels": [
+    "ce6ef7b24b0586ef148e4a0b955ae0e93326c6d0",
+    "de0b6a59077bec3441a491b3ba5fadfc2f7fc71a",
+    "de481435796558967bb058058f71a4670e573423"
+  ],
+  "pops_extension_present": false,
+  "production_delta": "8 additions python/pops/model/provider_pack.py only; exact declared empty FieldSpace",
+  "remeasure_after": [
+    "Hooke primary export integration",
+    "Newton typed convergence and central Native ABI8 integration",
+    "actual rebuilt SDK/package identities"
+  ],
+  "requires_remeasurement_before_native_qualification": true,
+  "schema": "sol61.m19.current-source-preparation@1",
+  "source_package_relative": "python/pops/__init__.py",
+  "status": "SOURCE_ONLY"
+}

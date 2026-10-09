@@ -386,6 +386,7 @@ def _install_adaptive_native_engine(plan: Any) -> Any:
     engine = AmrSystem(amr_config_from_layout(
         plan.layout,
         hierarchy=plan.resolved_hierarchy,
+        tagging=plan.resolved_tagging,
         native_layout=normalized_layout.native_spatial_layout,
     ))
     from pops.runtime._checkpoint_spatial import install_checkpoint_spatial_contract
@@ -396,9 +397,8 @@ def _install_adaptive_native_engine(plan: Any) -> Any:
         transition_ratios=normalized_layout.transition_ratios,
     )
     engine._execution_context = plan.execution_context
-    from pops.runtime._runtime_mesh_lowering import install_embedded_boundary
-
-    install_embedded_boundary(engine, normalized_layout)
+    # AMR embedded geometry needs the owned assembly lane AND generated block providers.
+    # The install seam binds it after those providers, before hierarchy materialization.
     from pops.runtime._runtime_authorities import install_runtime_authorities
 
     install_runtime_authorities(engine, plan)
@@ -463,6 +463,9 @@ def install_runtime_executor(install_plan: Any, runtime_plan: Any = None) -> Any
     from pops.runtime._runtime_planning import require_runtime_plan_bundle
 
     runtime_plan = require_runtime_plan_bundle(plan, runtime_plan)
+    from pops.runtime._mapped_field_capability import require_mapped_consumed_field_output
+
+    require_mapped_consumed_field_output(plan.artifact)
     _require_supported_runtime_actions(plan, runtime_plan)
     native_facts = _native_runtime_facts()
     _require_runtime_determinism(plan, runtime_plan, native_facts)

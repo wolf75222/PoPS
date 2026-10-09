@@ -313,6 +313,77 @@ Real for_each_cell_reduce_sum(const Box<Dim>& b, F f) {
   return for_each_cell_reduce_sum(execution, b, f);
 }
 
+/// Finite Neumaier summary. Joining keeps the low part through reduction trees.
+/// This improves accuracy; it is not an exact or bitwise reproducible sum.
+struct FiniteCompensatedSum {
+  Real high = Real{0};
+  Real low = Real{0};
+  bool invalid = false;
+
+  POPS_HD void add(Real value) {
+    if (invalid)
+      return;
+    const Real next = high + value;
+    if (!Kokkos::isfinite(value) || !Kokkos::isfinite(next)) {
+      invalid = true;
+      return;
+    }
+    const Real abs_high = high < Real{0} ? -high : high;
+    const Real abs_value = value < Real{0} ? -value : value;
+    const Real error = abs_high >= abs_value ? (high - next) + value : (value - next) + high;
+    low += error;
+    high = next;
+    invalid = !Kokkos::isfinite(low);
+  }
+
+  POPS_HD void join(const FiniteCompensatedSum& other) {
+    if (other.invalid) {
+      invalid = true;
+      return;
+    }
+    add(other.high);
+    add(other.low);
+  }
+
+  POPS_HD Real value() const { return high + low; }
+  POPS_HD bool finite() const { return !invalid && Kokkos::isfinite(value()); }
+};
+
+namespace detail {
+template <int Dim, class F>
+struct FiniteCompensatedCellReduction {
+  using value_type = FiniteCompensatedSum;
+  Index<Dim> lower;
+  Extent<Dim> extent;
+  F kernel;
+
+  POPS_HD void init(value_type& value) const { value = value_type{}; }
+  POPS_HD void join(value_type& destination, const value_type& source) const {
+    destination.join(source);
+  }
+  POPS_HD void operator()(std::int64_t ordinal, value_type& value) const {
+    value.add(kernel(cell_index_from_ordinal(lower, extent, ordinal)));
+  }
+};
+}  // namespace detail
+
+/// Separate compensated seam; historical SUM/MAX reductions remain unchanged.
+template <int Dim, class F>
+FiniteCompensatedSum for_each_cell_reduce_finite_sum(const Box<Dim>& b, F f) {
+  if (b.empty())
+    return {};
+  detail::require_iterable_box(b);
+  detail::ensure_kokkos_initialized();
+  const Kokkos::DefaultExecutionSpace execution{};
+  FiniteCompensatedSum result;
+  Kokkos::parallel_reduce(
+      "pops_reduce_finite_compensated_sum_index",
+      Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace, Kokkos::IndexType<std::int64_t>>(
+          execution, 0, b.numPts()),
+      detail::FiniteCompensatedCellReduction<Dim, F>{b.lo, b.extent(), f}, result);
+  return result;
+}
+
 /// MAX reduction on an explicit execution-space instance.
 template <class ExecutionSpace, int Dim, class F>
 Real for_each_cell_reduce_max(const ExecutionSpace& execution, const Box<Dim>& b, F f) {

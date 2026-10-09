@@ -1,0 +1,17 @@
+{
+  "Source": "2487866c9be76f0482f8f485c5d903f64a21bc80",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "actual": "Two accepted intervals, one rejected; time2DT/macro2/physicalhistory2/fill2 assertions completed; saved predictor slot0 fails unchanged two-interval oracle.",
+  "negative_log": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-adaptive-physical-slots-ed2-20261008/pytest.log",
+    "sha256": "246686f7fe44d3555a73c63e1cfca81eae39c680f97bff50590734e5e6151052"
+  },
+  "independent_saved_observation": {
+    "accepted_second_interval_max_error": 4.440892098500626e-16,
+    "predictor_first_interval_max_error": 4.440892098500626e-16,
+    "predictor_second_interval_max_error": 0.007304973357258104
+  },
+  "hypothesis": "store_history writes current scratch slot0, accepted rotation moves newest accepted sample to slot1; inspect API then fix only read slot, preserving all equations and bounds",
+  "status": "FAILED fixture observation; scientific adaptive reception withheld pending corrected full oracle",
+  "limits": "No CP or full populated-envelope rollback proof from these producer assertions."
+}

@@ -106,6 +106,12 @@ class _ProgramSerialization(_ProgramBase):
 
     @staticmethod
     def _serialize_node(value: Any, *, include_provenance: bool = True) -> dict[str, Any]:
+        if value.op == "spatial_interaction":
+            from .spatial_interaction import interaction_contract
+            interaction_contract(value)
+        if value.op == "solve_spatial_field" and value.attrs.get("contract") == "pops.spatial-field-residual@4":
+            from pops.fields._program_nonlinear_problem import validate_nonlinear_field_request
+            validate_nonlinear_field_request(value.prog, value)
         attrs = dict(value.attrs)
         if "schedule" in attrs:
             attrs["schedule"] = _serialize_schedule(attrs["schedule"])
@@ -147,7 +153,8 @@ class _ProgramSerialization(_ProgramBase):
                 ref = attrs.get(key)
                 attrs[key] = (_affine_ids(ref) if isinstance(ref, _Affine)
                               else (ref.id if isinstance(ref, ProgramValue) else None))
-        elif value.op in ("solve_local_nonlinear", "solve_spatial_nonlinear"):
+        elif value.op in ("solve_local_nonlinear", "solve_spatial_nonlinear") or (
+                value.op == "solve_coupled_implicit" and "residual_block" in attrs):
             attrs["residual_block"] = [
                 _ProgramSerialization._serialize_node(
                     node, include_provenance=include_provenance) for node in attrs["residual_block"]]
@@ -175,10 +182,16 @@ class _ProgramSerialization(_ProgramBase):
     def _serialize(self, *, include_provenance: bool = True) -> dict[str, Any]:
         if not isinstance(include_provenance, bool):
             raise TypeError("Program._serialize include_provenance must be bool")
+        from .global_history_storage import validate_issuances
+        validate_issuances(self)
         order = self._block_indices()
         result = {
             "name": self.name,
-            "version": 4,
+            # Version 6 extends persistent trace selectors to prepared constitutive faces.
+            # Keep existing transport-only program identities/restart authorities unchanged.
+            "version": 6 if any(
+                value.op == "diffusive_rhs" and any(row[1] == value.id
+                    for row in self._integral_transfers) for value in self._values) else 5,
             "clock": self.clock.to_data(),
             "nodes": [self._serialize_node(
                 value, include_provenance=include_provenance) for value in self._values],
@@ -194,6 +207,20 @@ class _ProgramSerialization(_ProgramBase):
             "block_order": [handle_data(block) for block in sorted(
                 order, key=lambda block: order[block])],
         }
+        if self._integral_states:
+            result["integral_states"] = [
+                {"name": name, "initial": initial}
+                for name, initial in sorted(self._integral_states.items())
+            ]
+            result["external_trace_transfers"] = [
+                {"state": name, "rate": rate_id, "axis": axis, "side": side,
+                 "component": component, "scale": scale}
+                for name, rate_id, axis, side, component, scale in self._integral_transfers
+            ]
+            if self._integral_units:
+                result["integral_units_v2"] = {
+                    name: units.to_data() for name, units in sorted(self._integral_units.items())
+                }
         post_sync_commits = getattr(self, "_post_sync_commits", {})
         if post_sync_commits:
             result["post_synchronization_commits"] = [
@@ -253,6 +280,69 @@ class _ProgramSerialization(_ProgramBase):
                 "nodes": [self._serialize_node(
                     node, include_provenance=include_provenance) for node in block],
                 "result": value.id}
+        # Preserve old identities unless a versioned extension is actually used.
+        # Version 8 receives original spatial-field solves and typed global
+        # integral captures; it takes precedence over vector pairing's version 7.
+        if self._integral_units:
+            result["version"] = 8
+        pending = list(self._values)
+        if self._dt_bound is not None:
+            pending.extend(self._dt_bound[0])
+        seen = set()
+        trace_rates = {row[1] for row in self._integral_transfers}
+        while pending:
+            node = pending.pop()
+            if id(node) in seen:
+                continue
+            seen.add(id(node))
+            if node.id in trace_rates and node.region != 0:
+                # Version25 authenticates region-owned accepted trace quadrature/carry semantics.
+                result["version"] = max(result["version"], 25)
+                result["external_trace_regions_v2"] = {
+                    "contract": "pops.accepted-trace-regions@2",
+                    "carry": "unit-affine",
+                    "duration": "exact-logical-child",
+                }
+            if node.attrs.get("contract") == "mapped-consumed-output@1" or node.op == "field_map_pack":
+                result["version"] = max(result["version"], 24)
+            if node.op == "affine_moment_update" and "basis" in node.attrs:
+                result["version"] = max(result["version"], 23)
+            if node.op == "solve_spatial_field" and "convergence" in node.attrs:
+                result["version"] = max(result["version"], 22)
+            if node.op == "spatial_interaction":
+                result["version"] = max(result["version"], 19 if node.attrs.get("contract") == "pops.spatial-interaction@3" else 18 if node.attrs.get("contract") == "pops.spatial-interaction@2" else 17)
+            if node.op in ("solve_spatial_field", "integral_candidate"):
+                result["version"] = max(result["version"],
+                    20 if node.op == "solve_spatial_field" and node.attrs.get("contract") == "pops.spatial-field-residual@4" else
+                    13 if node.op == "solve_spatial_field" and node.attrs.get("right_preconditioner") == "pops.amr.full-residual-basis-lu@1" else
+                    11 if node.op == "solve_spatial_field" and node.attrs.get("contract") == "pops.spatial-field-residual@3" else
+                    10 if node.op == "solve_spatial_field" and node.attrs.get("contract") == "pops.spatial-field-residual@2" else
+                    9 if node.op == "solve_spatial_field" and "right_preconditioner" in node.attrs else 8)
+            if node.op == "field_evolved_state" or (node.op == "solve_spatial_field" and "temporal_tau" in node.attrs.get("source_contract", {})):
+                result["version"] = max(result["version"], 12)
+            stage = (node.attrs.get("stage", {}) if node.op == "field_evolved_state" else
+                     node.attrs.get("source_contract", {}).get("evolved_stage", {}))
+            if stage.get("schema_version") == 2:
+                result["version"] = max(result["version"], 14)
+            if stage.get("schema_version") == 3:
+                from pops.fields._evolved_stage_contract import issued_previous
+                issued_previous(stage)
+                result["version"] = max(result["version"], 21)
+            if node.op == "pointwise_expression" and "field_product_seed" in node.attrs:
+                result["version"] = max(result["version"], 21)
+            if node.op == "field_evolved_state" and node.attrs.get("projection_contract") == "pops.evolved-original-field-stage@2":
+                result["version"] = max(result["version"], 15)
+            if node.op == "store_history" and "global_field_storage" in node.attrs:
+                from .global_history_storage import validate_storage_node
+                validate_storage_node(self, node)
+                result["version"] = max(result["version"], 16)
+            elif node.op == "reduce" and node.attrs.get("kind") == "dot_all":
+                result["version"] = max(result["version"], 7)
+            for key in ("cond_block", "body_block", "true_block", "false_block",
+                        "apply_block", "residual_block"):
+                block = node.attrs.get(key)
+                if isinstance(block, (tuple, list)):
+                    pending.extend(block)
         return result
 
     def _ir_hash(self) -> str:
@@ -270,6 +360,30 @@ class _ProgramSerialization(_ProgramBase):
         for value in self._values:
             if value.op == "state" and value.block not in order:
                 order[value.block] = len(order)
+        # Query-only states still need exact runtime block routes. Append them;
+        # preserve every existing top-level index and every already complete map.
+        from pops.time._program.dt_bound import readonly_dt_bound_nodes
+        for value in readonly_dt_bound_nodes(self):
+            if value.op == "state" and value.block not in order:
+                order[value.block] = len(order)
+        # An IR16 global observation can declare a storage-only TimeState
+        # without reading its physical State.n. Route its originally issued
+        # owner without creating SSA data or a synthetic physical commit.
+        from pops.time._program.global_history_storage import validate_issuances
+        validate_issuances(self)
+        for name in sorted(getattr(self, "_global_field_history_issuance", {})):
+            owner = self._history_blocks[name]
+            if owner not in order:
+                order[owner] = len(order)
+        # IR19 storage-only TimeStates retain an explicit route even without a
+        # physical State.n read. The private issue proof, not mutable node attrs,
+        # supplies this allocation authority; no input is added to the solve.
+        from .spatial_interaction import validate_closed_issuances
+        validate_closed_issuances(self)
+        for _node, issued in getattr(self, "_closed_field_interaction_issuance", {}).values():
+            owner = issued.metadata["owner_block"]
+            if owner not in order:
+                order[owner] = len(order)
         return order
 
 

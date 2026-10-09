@@ -1,0 +1,770 @@
+{
+  "schema_version": 2,
+  "case": "M02",
+  "variant": "shock",
+  "status": "passed",
+  "criteria": {
+    "integrated_l1_max": {
+      "100": 0.08,
+      "200": 0.06,
+      "400": 0.04
+    },
+    "integrated_l1_strictly_decreasing": true,
+    "boundary_mass_balance_tolerance": 1e-11,
+    "initial_tolerance": 1e-14,
+    "first_step_tolerance": 2e-13,
+    "time_tolerance": 1e-13,
+    "bound_tolerance": 2e-13,
+    "y_invariance_tolerance": 1e-12,
+    "monotonicity_tolerance": 1e-12,
+    "shock_position_error_in_cells": 1.5
+  },
+  "scope": "Dim=2 NxN; y-invariant Burgers; no Dim=1 qualification",
+  "equation": "u_t + (u*u/2)_x = 0",
+  "conserved_quantity": "u",
+  "method": "authored riemann.User Godunov; FirstOrder; ForwardEuler",
+  "numerical_stability": "max(abs(u_left),abs(u_right)) in x; zero in y",
+  "resolutions": [
+    100,
+    200,
+    400
+  ],
+  "t_end": 0.2,
+  "cfl": 0.4,
+  "first_step_dx_ratio": 0.01,
+  "package_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py",
+  "package_version": "1.1.0",
+  "native_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+  "native_sha256": "220b48d3264f413aa5ccd8bba58a8b0d1a6b31bf5bade6faac904b1b7ef8cc87",
+  "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=47299dd6ba34f1d97464e06e06fb2fe3c4aab75958eb516cc0e57732437c39f6;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+  "threads_requested": "1",
+  "example_sha256": "0475e8263311aab9239981b22b4a44a7479348a3e7cac7ef77a85b338700da9c",
+  "records": [
+    {
+      "cells": [
+        100,
+        100
+      ],
+      "time": 0.2,
+      "integrated_l1": 0.011581874069488506,
+      "mass_change": 0.09999999999999987,
+      "expected_mass_change": 0.1,
+      "boundary_mass_balance_defect": 1.3877787807814457e-16,
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "y_invariance": 3.3306690738754696e-16,
+      "monotonicity_defect": 0.0,
+      "initial_max_error": 0.0,
+      "first_step_max_error": 8.673617379884035e-19,
+      "first_step_time": 0.0002,
+      "first_step_report": {
+        "accepted_steps": 1,
+        "rejected_steps": 0,
+        "final_time": 0.0002,
+        "final_macro_step": 1,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "158b44d94011e3f6d4e2b6588d8e9bda7128db1af97c99c0980db84e5fd26098"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "5ff9a2aa6a72434b438ebe074072accf1206530e9e5723a1a3abfde63822143b"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "28584ae56c530313aa3e9cb7396b0628560c884e862d3aee7299587c2825f3bb"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "acbb519e427fdcdc1acd7fa532019636b0031a7fa9034a10c042b542256c8b77"
+          }
+        },
+        "field_providers": []
+      },
+      "accepted_steps": 51,
+      "run_report": {
+        "accepted_steps": 50,
+        "rejected_steps": 0,
+        "final_time": 0.2,
+        "final_macro_step": 51,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "bd3dcf573646563216ea6798828ca74e20d802417bb5ea6c95bbb7e4d7fef84c"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "5ff9a2aa6a72434b438ebe074072accf1206530e9e5723a1a3abfde63822143b"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "28584ae56c530313aa3e9cb7396b0628560c884e862d3aee7299587c2825f3bb"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "acbb519e427fdcdc1acd7fa532019636b0031a7fa9034a10c042b542256c8b77"
+          }
+        },
+        "field_providers": []
+      },
+      "compile_seconds": 29.318438374903053,
+      "run_seconds": 0.3148621250875294,
+      "mpi_ranks": 1,
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "c464ce567340784499d75f8885252fa1e9ec89f8f9b2e206553131fee9cc3e2f"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      },
+      "runtime_backend": {
+        "schema_version": 1,
+        "backend": {
+          "value": "production",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "target": {
+          "value": "system",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "abi": {
+          "value": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=47299dd6ba34f1d97464e06e06fb2fe3c4aab75958eb516cc0e57732437c39f6;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "precision": {
+          "storage": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "compute": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "accumulation": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "reduction": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          }
+        },
+        "device": {
+          "value": "cpu",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "memory_spaces": {
+          "value": [
+            "host"
+          ],
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "communicator": {
+          "value": "MPI_COMM_WORLD",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "capabilities": {
+          "centerings": {
+            "value": [
+              "cell"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "execution_backend": {
+            "value": "OpenMP",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "generic_field_view": {
+            "value": true,
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "layouts": {
+            "value": [
+              "right",
+              "left",
+              "strided"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "ownership": {
+            "value": [
+              "borrowed",
+              "owned",
+              "shared"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "scalars": {
+            "value": [
+              "float64"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "shared_space": {
+            "value": "Host",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "stream_identity": {
+            "value": "Kokkos::OpenMP::synchronous",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "supported_dimensions": {
+            "value": [
+              2
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          }
+        }
+      },
+      "saved_state": "state_100.npz",
+      "saved_state_sha256": "59ef563c30557db27ce9e57ccbf2a7d368a14b23c53276bb51068ed20daa321c",
+      "first_step_state": "first_step_100.npz",
+      "first_step_sha256": "13b058e8c6eb46e021f4bcc806e890a44ab0b7a3b1820296aac8664aea60b426",
+      "shock_position": 0.10074770279639006,
+      "shock_speed": 0.5037385139819502,
+      "exact_shock_speed": 0.5,
+      "shock_position_error": 0.000747702796390054,
+      "accepted": true
+    },
+    {
+      "cells": [
+        200,
+        200
+      ],
+      "time": 0.2,
+      "integrated_l1": 0.005880583587836595,
+      "mass_change": 0.09999999999999984,
+      "expected_mass_change": 0.1,
+      "boundary_mass_balance_defect": 1.6653345369377348e-16,
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "y_invariance": 6.661338147750939e-16,
+      "monotonicity_defect": 0.0,
+      "initial_max_error": 0.0,
+      "first_step_max_error": 8.673617379884035e-19,
+      "first_step_time": 0.0001,
+      "first_step_report": {
+        "accepted_steps": 1,
+        "rejected_steps": 0,
+        "final_time": 0.0001,
+        "final_macro_step": 1,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "2c7a2a678766e721406047ea8172e72c959a27f92e8f6e0b9f966f657651f5fe"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "d0ac178a5600e6190882ff54dfb7b0bf11bd9c9e135ee54d5f0be710a24e354e"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "28584ae56c530313aa3e9cb7396b0628560c884e862d3aee7299587c2825f3bb"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "ce10ba42035e01619658a12d38858f151fc8c27e97c3d3175faae976ad31cd25"
+          }
+        },
+        "field_providers": []
+      },
+      "accepted_steps": 101,
+      "run_report": {
+        "accepted_steps": 100,
+        "rejected_steps": 0,
+        "final_time": 0.2,
+        "final_macro_step": 101,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "c16856f981af826f08775edff684ca7cc859fb9586e35f232ecefc127f61be1b"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "d0ac178a5600e6190882ff54dfb7b0bf11bd9c9e135ee54d5f0be710a24e354e"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "28584ae56c530313aa3e9cb7396b0628560c884e862d3aee7299587c2825f3bb"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "ce10ba42035e01619658a12d38858f151fc8c27e97c3d3175faae976ad31cd25"
+          }
+        },
+        "field_providers": []
+      },
+      "compile_seconds": 7.036503457929939,
+      "run_seconds": 0.9276180421002209,
+      "mpi_ranks": 1,
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "c464ce567340784499d75f8885252fa1e9ec89f8f9b2e206553131fee9cc3e2f"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      },
+      "runtime_backend": {
+        "schema_version": 1,
+        "backend": {
+          "value": "production",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "target": {
+          "value": "system",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "abi": {
+          "value": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=47299dd6ba34f1d97464e06e06fb2fe3c4aab75958eb516cc0e57732437c39f6;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "precision": {
+          "storage": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "compute": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "accumulation": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "reduction": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          }
+        },
+        "device": {
+          "value": "cpu",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "memory_spaces": {
+          "value": [
+            "host"
+          ],
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "communicator": {
+          "value": "MPI_COMM_WORLD",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "capabilities": {
+          "centerings": {
+            "value": [
+              "cell"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "execution_backend": {
+            "value": "OpenMP",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "generic_field_view": {
+            "value": true,
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "layouts": {
+            "value": [
+              "right",
+              "left",
+              "strided"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "ownership": {
+            "value": [
+              "borrowed",
+              "owned",
+              "shared"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "scalars": {
+            "value": [
+              "float64"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "shared_space": {
+            "value": "Host",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "stream_identity": {
+            "value": "Kokkos::OpenMP::synchronous",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "supported_dimensions": {
+            "value": [
+              2
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          }
+        }
+      },
+      "saved_state": "state_200.npz",
+      "saved_state_sha256": "203a64b5b3bfd3cbe2675e037ab8bfdc0de9d0b876e0050616891dd313eab741",
+      "first_step_state": "first_step_200.npz",
+      "first_step_sha256": "caa134ef8cdc57fa9a5db6c602af83714846f9179c3ab330e89af656039126c1",
+      "shock_position": 0.10041612986400716,
+      "shock_speed": 0.5020806493200358,
+      "exact_shock_speed": 0.5,
+      "shock_position_error": 0.0004161298640071587,
+      "accepted": true
+    },
+    {
+      "cells": [
+        400,
+        400
+      ],
+      "time": 0.2,
+      "integrated_l1": 0.0029437936085409335,
+      "mass_change": 0.09999999999999988,
+      "expected_mass_change": 0.1,
+      "boundary_mass_balance_defect": 1.249000902703301e-16,
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "y_invariance": 8.326672684688674e-16,
+      "monotonicity_defect": 0.0,
+      "initial_max_error": 0.0,
+      "first_step_max_error": 0.0,
+      "first_step_time": 5e-05,
+      "first_step_report": {
+        "accepted_steps": 1,
+        "rejected_steps": 0,
+        "final_time": 5e-05,
+        "final_macro_step": 1,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "0248dd21da3d877a65fe21a7a0ec9339f656f3a860bed63c804450f5c62128e0"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "8b8c676b4e5b73591e6edd0e7ec655a7b27234d1bf1e949c1e8d00a32c8256ea"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "28584ae56c530313aa3e9cb7396b0628560c884e862d3aee7299587c2825f3bb"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "56567f6b608d571e6cc4f5a606ddd39e289d38fba844da30e29eb39844b21ad4"
+          }
+        },
+        "field_providers": []
+      },
+      "accepted_steps": 201,
+      "run_report": {
+        "accepted_steps": 200,
+        "rejected_steps": 0,
+        "final_time": 0.2,
+        "final_macro_step": 201,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "a928c01e1c5f979dc97724e33ef57e1460ae7445962c8e4b9e4f1b9974a606df"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "8b8c676b4e5b73591e6edd0e7ec655a7b27234d1bf1e949c1e8d00a32c8256ea"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "28584ae56c530313aa3e9cb7396b0628560c884e862d3aee7299587c2825f3bb"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "56567f6b608d571e6cc4f5a606ddd39e289d38fba844da30e29eb39844b21ad4"
+          }
+        },
+        "field_providers": []
+      },
+      "compile_seconds": 6.984769125003368,
+      "run_seconds": 5.796320332912728,
+      "mpi_ranks": 1,
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "c464ce567340784499d75f8885252fa1e9ec89f8f9b2e206553131fee9cc3e2f"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      },
+      "runtime_backend": {
+        "schema_version": 1,
+        "backend": {
+          "value": "production",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "target": {
+          "value": "system",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "abi": {
+          "value": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=47299dd6ba34f1d97464e06e06fb2fe3c4aab75958eb516cc0e57732437c39f6;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "precision": {
+          "storage": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "compute": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "accumulation": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "reduction": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          }
+        },
+        "device": {
+          "value": "cpu",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "memory_spaces": {
+          "value": [
+            "host"
+          ],
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "communicator": {
+          "value": "MPI_COMM_WORLD",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "capabilities": {
+          "centerings": {
+            "value": [
+              "cell"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "execution_backend": {
+            "value": "OpenMP",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "generic_field_view": {
+            "value": true,
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "layouts": {
+            "value": [
+              "right",
+              "left",
+              "strided"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "ownership": {
+            "value": [
+              "borrowed",
+              "owned",
+              "shared"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "scalars": {
+            "value": [
+              "float64"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "shared_space": {
+            "value": "Host",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "stream_identity": {
+            "value": "Kokkos::OpenMP::synchronous",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "supported_dimensions": {
+            "value": [
+              2
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          }
+        }
+      },
+      "saved_state": "state_400.npz",
+      "saved_state_sha256": "d409aad846fd416c4f4b5fa91fba330e298b789dd7700b65d0fe73626c92e67f",
+      "first_step_state": "first_step_400.npz",
+      "first_step_sha256": "11a638619548b94c4a771e2549093284575b220e5e50a49df6ccf077c7165d02",
+      "shock_position": 0.10020990253632281,
+      "shock_speed": 0.501049512681614,
+      "exact_shock_speed": 0.5,
+      "shock_position_error": 0.00020990253632280353,
+      "accepted": true
+    }
+  ]
+}

@@ -16,6 +16,8 @@ from pops.model.ownership import OwnerKind, OwnerPath
 from pops.time._program.contract import register_program_type
 from pops.time._cadence import ProgramCadence
 from pops.time._program.authoring import _ProgramAuthoring
+from pops.time._program.expressions import _ProgramExpressions
+from pops.time._program.affine_moments import _ProgramAffineMoments
 from pops.time._program.condensed import _ProgramCondensed
 from pops.time._program.operations import _ProgramCore
 from pops.time._program.dt_bound import _ProgramDtBound
@@ -26,6 +28,9 @@ from pops.time._program.passes import _ProgramPasses
 from pops.time._program.solve import _ProgramSolve
 from pops.time._program.time_handles import _ProgramTimeHandles
 from pops.time._program.physical_maps import _ProgramPhysicalMaps
+from pops.time._program.integrals import _ProgramIntegrals
+from pops.time._program.geometry import _ProgramGeometry
+from pops.time._program.spatial_interaction import _ProgramSpatialInteraction
 from pops.time.references import bind_program_block, block_name
 from pops.time._step.transaction import (
     ALL_PROVISIONAL_STORES,
@@ -40,8 +45,13 @@ from pops.time.values import _Coeff, ProgramValue  # noqa: F401  (ProgramValue u
 
 @register_program_type
 class Program(
+    _ProgramExpressions,
+    _ProgramAffineMoments,
     _ProgramTimeHandles,
     _ProgramPhysicalMaps,
+    _ProgramIntegrals,
+    _ProgramGeometry,
+    _ProgramSpatialInteraction,
     _ProgramCore,
     _ProgramLocal,
     _ProgramCondensed,
@@ -58,6 +68,8 @@ class Program(
     """
 
     def __setattr__(self, name: str, value: Any) -> None:
+        if name == "_global_field_history_issuance" and hasattr(self, name):
+            raise AttributeError("global field history original issuance cannot be replaced")
         if name == "name" and hasattr(self, "name"):
             raise AttributeError(
                 "pops.time.Program name is an immutable identity anchor; construct a new Program"
@@ -70,6 +82,8 @@ class Program(
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name: str) -> None:
+        if name == "_global_field_history_issuance" and hasattr(self, name):
+            raise AttributeError("global field history original issuance cannot be deleted")
         if name == "name":
             raise AttributeError(
                 "pops.time.Program name is an immutable identity anchor; construct a new Program"
@@ -95,6 +109,7 @@ class Program(
         self._issued_values = {}  # id -> strong identity, including stale immutable replacement records
         self._next_id = 0
         self._commits = {}  # qualified state Handle -> State value
+        self._geometry_states = {}  # qualified physical State -> coupled geometry SSA
         self._recording = []  # stack of sub-block lists (a control-flow body); see _new / while_
         self._next_region = 1
         self._recording_regions = {}  # id(list) -> (strong list ref, exact authoring-region token)
@@ -143,6 +158,9 @@ class Program(
         # so the main step can still commit the same state exactly once before synchronization.
         self._post_sync_commits = {}
         self._post_sync_recording = False
+        self._integral_states = {}
+        self._integral_units = {}
+        self._integral_transfers = []
         self._transaction_stores = ALL_PROVISIONAL_STORES
         self._acceptance_guards = ()
         # ADC-563 freeze: a Program is MUTABLE while authored and FROZEN by pops.compile. After
@@ -208,6 +226,11 @@ class Program(
         if block is not None:
             bind_program_block(self, block, where="IR op %r" % op)
         return super()._new(vtype, op, inputs, attrs, name, block, **metadata)
+
+    def temporal_tau(self, coefficient: Any = None, *, at: Any) -> Any:
+        """Bind an exact dt multiple to this Program's issued native frame."""
+        from pops.time.evolved_field_stage import TemporalTau
+        return TemporalTau(self, self.dt if coefficient is None else coefficient, at=at)
 
     def capture_source_locations(self, enabled: Any = True) -> Any:
         """Enable (or disable) recording each IR node's authoring source location (ADC-530).

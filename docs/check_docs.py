@@ -13,6 +13,8 @@ Usage: python docs/check_docs.py [--freshness-warn-only]
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import pathlib
 import re
 import subprocess
@@ -58,6 +60,85 @@ def active_docs(root: pathlib.Path = ROOT) -> list[pathlib.Path]:
     files = [root / p.name for p in PROJECT_ROOT_DOCS if (root / p.name).exists()]
     files.extend(sorted((root / "docs").glob("*.md")))
     return sorted(set(files))
+
+
+def retained_evidence(data: dict, root: pathlib.Path, violations: list[str]) -> set[pathlib.Path]:
+    """Authenticate opt-in raw archives, never reinterpret their captured prose.
+
+    Exact catalog pins, every member's bytes/hash and complete bounded inventory
+    are required. Active/mapped documentation cannot become an archived member.
+    """
+    retained: set[pathlib.Path] = set()
+    active = set(active_docs(root)) | {root / name for name in data.get("docs", {})}
+
+    def bounded(base: pathlib.Path, name: str) -> pathlib.Path:
+        if type(name) is not str:
+            raise ValueError("chemin d'archive non textuel")
+        relative = pathlib.PurePosixPath(name)
+        if relative.is_absolute() or not relative.parts or str(relative) != name or ".." in relative.parts:
+            raise ValueError("chemin d'archive non canonique ou hors perimetre")
+        target = base / name
+        if target.resolve() != target.absolute() or not target.resolve().is_relative_to(base.resolve()):
+            raise ValueError("alias ou chemin d'archive hors perimetre")
+        return target
+
+    def digest(path: pathlib.Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    archives = data.get("retained_evidence", {})
+    if not isinstance(archives, dict):
+        violations.append("retained_evidence: declaration d'archives non conforme")
+        return retained
+    for scope, config in archives.items():
+        try:
+            archive = bounded(root, scope)
+            if not scope.startswith("docs/") or "evidence" not in pathlib.PurePosixPath(scope).parts:
+                raise ValueError("archive hors du perimetre documentaire evidence")
+            if not archive.is_dir() or set(config) != {"members", "catalogs", "metadata"}:
+                raise ValueError("declaration d'archive incomplete")
+            if type(config["members"]) is not int or config["members"] <= 0:
+                raise ValueError("nombre de membres d'archive invalide")
+            catalogs, metadata = config["catalogs"], config["metadata"]
+            if not isinstance(catalogs, dict) or not catalogs or not isinstance(metadata, dict):
+                raise ValueError("catalogs/metadata d'archive invalides")
+            controls, members = set(), set()
+            for name, expected in {**catalogs, **metadata}.items():
+                target = bounded(archive, name)
+                if name in catalogs and name in metadata:
+                    raise ValueError("controle d'archive duplique")
+                if target.suffix != ".json" or not re.fullmatch(r"[0-9a-f]{64}", str(expected)):
+                    raise ValueError("controle d'archive sans empreinte JSON exacte")
+                if not target.is_file() or digest(target) != expected:
+                    raise ValueError("controle d'archive absent ou altere: " + name)
+                controls.add(target)
+            for name in catalogs:
+                document = json.loads(bounded(archive, name).read_text(encoding="utf-8"))
+                if not isinstance(document, dict) or type(document.get("schema")) is not int or document["schema"] != 1 \
+                        or not isinstance(document.get("files"), dict) or not document["files"]:
+                    raise ValueError("catalog d'archive non conforme: " + name)
+                for member, evidence in document["files"].items():
+                    target = bounded(archive, member)
+                    if target in active or target in controls or target in members:
+                        raise ValueError("page active, controle ou membre duplique dans archive: " + member)
+                    if set(evidence) != {"source", "bytes", "sha256"} \
+                            or type(evidence["source"]) is not str or not evidence["source"] \
+                            or type(evidence["bytes"]) is not int or evidence["bytes"] < 0 \
+                            or not re.fullmatch(r"[0-9a-f]{64}", str(evidence["sha256"])):
+                        raise ValueError("preuve d'archive non conforme: " + member)
+                    if not target.is_file() or target.stat().st_size != evidence["bytes"] \
+                            or digest(target) != evidence["sha256"]:
+                        raise ValueError("membre d'archive absent ou altere: " + member)
+                    members.add(target)
+            paths = list(archive.rglob("*"))
+            if any(path.is_symlink() for path in paths):
+                raise ValueError("alias interdit dans archive")
+            actual = {path for path in paths if path.is_file()}
+            if len(members) != config["members"] or actual != members | controls:
+                raise ValueError("inventaire d'archive incomplet ou membre non catalogue")
+            retained.update(members)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            violations.append(f"{scope}: {error}")
+    return retained
 
 
 def relpath(path: pathlib.Path, root: pathlib.Path = ROOT) -> str:
@@ -192,9 +273,17 @@ def check(freshness_warn_only: bool = False, root: pathlib.Path = ROOT) -> int:
     else:
         data = load_docmap(docmap)
 
+    archived = retained_evidence(data, root, violations)
+
     for path in md_files(root):
-        text = path.read_text(encoding="utf-8")
+        if path in archived:
+            continue  # Its exact retained bytes are checked above; it is not active prose.
         rel = relpath(path, root)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            violations.append(f"{rel}: document absent ou illisible: {error}")
+            continue
         if EM_DASH in text:
             violations.append(f"{rel}: {text.count(EM_DASH)} em-dash (U+2014) interdits")
         check_links(path, text, violations, root)

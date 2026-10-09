@@ -1,0 +1,3427 @@
+{
+  "current_native_stage_fields_reception_20261009": {
+    "schema": 1,
+    "scope": "Additive publication of actual bounded receptions. Full CI, stage fault injection, Dim1/3 and scientific MPI2/GPU/multilevel/EB/convergence remain separate obligations. Older archived negatives are not overwritten.",
+    "full_94_obligations_closed": false,
+    "qualified_cpu_native_build_Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+    "current_metadata_Source": "e27d065a5eb7c086ced60b751a2468f729361ff0",
+    "Native": "cee947c25c771f8c5a155e5f4cb990de308de14fe77e9f55c654e3b3837dee6f",
+    "SDK": "087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626",
+    "core_fingerprint": "95d0ccaa1e7aa39f9cbb01d539c4e31a5a7e6e143207b088fd9c2730482963f5",
+    "manifest": "evidence/current_8c1_cee_20261009/manifest.json",
+    "publication": "evidence/current_8c1_cee_20261009/publication.json",
+    "public_world1": {
+      "new_public_tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "core_files_rehashed": 1221,
+      "source_install_wheel_payload": 1175,
+      "canonical_quantities": 42,
+      "populated_histories": 27,
+      "checkpoint_arrays": 432
+    },
+    "source_original": {
+      "tests": 941,
+      "passed": 939,
+      "failures": 2,
+      "native_loaded": 0
+    },
+    "source_ci_corrected": {
+      "tests": 56,
+      "passed": 56,
+      "failures": 0,
+      "native_loaded": 0
+    },
+    "cpp": {
+      "world1_registered_tests_passed": 26,
+      "MPI2_groups_passed": 3,
+      "MPI2_gtest_cases_per_rank": 10,
+      "MPI2_case_rank_executions": 20
+    },
+    "ROMEOGPU": {
+      "Source_of_failed_build": "98804c6849c9966e05b5397126bab983a5fa0227",
+      "build_job": 738213,
+      "state": "FAILED",
+      "runtime_job": 738214,
+      "runtime_state": "CANCELLED",
+      "CUDA_new_source_e27_reception": "pending",
+      "GPU_native_or_PDE_received": false
+    },
+    "remaining": [
+      "Diagnostic third-accept fault actual execution/rollback/retry/restart",
+      "Native Dim1/3 and old affected suites on current core",
+      "Scientific new case MPI2/GPU/multilevel/EB/regrid/convergence",
+      "Persisted CG reports and per-stage publication clocks",
+      "Complete frontend-to-binary graph proof",
+      "All required CI checks on final pushed SHA",
+      "T1-T6/C01-C40/M01-M28/W01-W12 and principles 1.1-1.8 full reception"
+    ]
+  },
+  "current_native_reception_4017_20261009": {
+    "schema": 1,
+    "date": "2026-10-09",
+    "scope": "New closed current4017/939 scientific and physical reception. Subsequent docs/workflow/metadata commits do not relabel these runs.",
+    "genericity_contract": "New article physics and method are Python equations/compositions translated themselves to native C++; frozen core never knows a model identity; identities authorize provenance/cache only.",
+    "full_94_obligations_closed": false,
+    "historical_rows_equations_mappings_preserved": true,
+    "source_commit": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+    "native_sha256": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+    "sdk_sha256": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+    "core_fingerprint_schema": 2,
+    "core_fingerprint": "743bc354455285b4828e6d80039949317c31f63ac6fc3c5432ae2897487594a8",
+    "core_files": 1220,
+    "wheel_sha256": "0d3c66b61ce95291dcd59c23d183a06b058d8fdcf473bf8ec58a69f16e32f696",
+    "build": {
+      "seconds": 96.03899862500111,
+      "object_count": 24,
+      "observed_ninja_output_actions": 24,
+      "qualified_reuse_count": 0,
+      "frontend_execution_count": "UNDETERMINED",
+      "source_installed_wheel_files": 1174,
+      "wheel_payloads": 1179
+    },
+    "backend": "AppleClang21/Kokkos5.2 OpenMP+Serial/MPICH4.1.2/Dim2 double/HDF5parallel1.14.3; OMP2 configured, no measured throughput claim",
+    "source_only": {
+      "tests": 904,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "native_imports_blocked": true
+    },
+    "scientific_phases": [
+      {
+        "phase": "guarded-baseline-admitted",
+        "ranks": 1,
+        "counts_per_rank": [
+          {
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        ],
+        "result": "science/guarded-baseline-admitted/result.json",
+        "raw_outputs": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted"
+      },
+      {
+        "phase": "guarded-variants",
+        "ranks": 1,
+        "counts_per_rank": [
+          {
+            "tests": 2,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        ],
+        "result": "science/guarded-variants/result.json",
+        "raw_outputs": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run"
+      },
+      {
+        "phase": "original-pde",
+        "ranks": 1,
+        "counts_per_rank": [
+          {
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        ],
+        "result": "science/original-pde/result.json",
+        "raw_outputs": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/original-pde/run"
+      },
+      {
+        "phase": "public10",
+        "ranks": 1,
+        "counts_per_rank": [
+          {
+            "tests": 10,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        ],
+        "result": "science/public10/result.json",
+        "raw_outputs": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/public10/run"
+      },
+      {
+        "phase": "retry-and-native8",
+        "ranks": 1,
+        "counts_per_rank": [
+          {
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        ],
+        "result": "science/retry-and-native8/result.json",
+        "raw_outputs": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run"
+      },
+      {
+        "phase": "coupled-matched-world1",
+        "ranks": 1,
+        "counts_per_rank": [
+          {
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        ],
+        "result": "science/coupled-matched-world1/result.json",
+        "raw_outputs": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/coupled-matched-world1/run"
+      },
+      {
+        "phase": "mpi2-representative",
+        "ranks": 2,
+        "counts_per_rank": [
+          {
+            "tests": 2,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "tests": 2,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        ],
+        "result": "science/mpi2-representative/result.json",
+        "raw_outputs": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-representative/run"
+      },
+      {
+        "phase": "mpi2-all",
+        "ranks": 2,
+        "counts_per_rank": [
+          {
+            "tests": 13,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "tests": 13,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        ],
+        "result": "science/mpi2-all/result.json",
+        "raw_outputs": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-all/run"
+      }
+    ],
+    "world1": {
+      "science_baseline_pass": 23,
+      "extra_matched_coupled_pass": 1,
+      "static_inputs_pass": 6,
+      "compile_cache_route_pass": 1,
+      "distinct_scopes_not_one_monolithic_suite": true
+    },
+    "mpi2": {
+      "representative_pass_per_rank": 2,
+      "full_selected_pass_per_rank": 13,
+      "unchanged_original_guards": true,
+      "matched_coupled_state_pairs_bitwise": 24,
+      "matched_coupled_cp_numeric_pairs_bitwise": 48,
+      "whole_cp_archive_equal_claimed": false
+    },
+    "norm2_contract": "component0 active EB samples summed per level; replicated finite samples counted once, nonfinite copies all guarded; covered coarse samples retained; dot_all is a distinct operation",
+    "static_inputs": {
+      "kinds": [
+        "variable",
+        "diagonal_linear",
+        "diagonal_smooth"
+      ],
+      "methods": [
+        "Euler",
+        "SSPRK2"
+      ],
+      "saved_states": 6,
+      "saved_face_exchange_rows": 9216,
+      "maximum_independent_state_defect": 1.7763568394002505e-15,
+      "portable_full_program_cpp_ir_retained": false
+    },
+    "ci": {
+      "exact_4017_remote_failures_retained": true,
+      "compile_cache_installed_wheel_route": "reviewed and applied; actual local installedMPI world1 onePASS, LinuxSerialCI pending",
+      "two_dim1_file_routes": "reviewed and applied from actual1Dgeometry; NativeDim1 reception pending",
+      "dynamic_stage_provider_ssp": "generic Source candidate being implemented outsideMain; no Native reception or theorem claimed",
+      "required_aggregate_green_claimed": false,
+      "focused_source_validation": {
+        "tests": 60,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "native_loaded": 0,
+        "remote_ci_qualification": false,
+        "source_diff_sha256": "bd85286c7381e3e20642118cb6dfdbc5bea5b31f9cc64bbe6865f906b2b74b56"
+      },
+      "remote_4017_snapshot": {
+        "utc": "2026-10-09T01:28:49.452314+00:00",
+        "success": 63,
+        "failure": 65,
+        "in_progress": 2,
+        "required_aggregate_green": false
+      }
+    },
+    "gpu": {
+      "source_commit": "98804c6849c9966e05b5397126bab983a5fa0227",
+      "sdk_sha256": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+      "R4": "738173 failed before officialNativeentry: Kokkos_ROOT unset; real managedCuda allocation+kernel microprobePASS;738174cancelled neverran",
+      "R5": "738183actualFAILED1:0/29s afterofficialcommandentry but beforeCXX: defaultcondanamepopsmissing;738184actuallycancelledneverran; newmanagedCudamicroprobePASS; productionNative/sciencenotreceived",
+      "production_native_or_science_gpu_received": false,
+      "qualification_of_4017": false,
+      "R6": "Source preparation required: explicitownenvironmentselection and authenticatedpriorclosedfailure, no marker deletion or setup/clone/Kokkosrepeat"
+    },
+    "remaining": [
+      "dynamic stage-provider authority through public compiler",
+      "required exact finalHEAD CI",
+      "rebuilt NativeDim1/3",
+      "new O3C++ full affected non-regression",
+      "GPU productionPDE",
+      "multilevel AMR/EB/refinement/restart/convergence per corpus",
+      "comparable-cost measurements",
+      "full T1-T6/C01-C40/M01-M28/W01-W12 and eightprinciples reception"
+    ],
+    "evidence_manifest": "evidence/current_4017_939_20261009/manifest.json",
+    "additional_evidence_manifest": "evidence/current_4017_939_20261009/addendum-manifest.json"
+  },
+  "current_scoped_summary_20261009": {
+    "schema": 1,
+    "date": "2026-10-09",
+    "scope": "Source988 scientific reception and reviewed Source integration; changed integrated Native is not yet built.",
+    "full_94_obligations_closed": false,
+    "historical_rows_equations_mappings_preserved": true,
+    "genericity_contract": "core_expression_translation_contract_v1.md",
+    "observed_native_source_commit": "98804c6849c9966e05b5397126bab983a5fa0227",
+    "native_sha256": "f8d9281232039f3ed3f92b7a14ae6530aa18baf41257a3c99a9629a50af61f64",
+    "sdk_sha256": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+    "core_fingerprint_schema": 2,
+    "core_fingerprint": "b756f21226ad09e2108026bc9c3bfce9a251d1480e8a81e0e733db0c0845871a",
+    "world1": {
+      "guarded_field_variants": 3,
+      "original_pde": 1,
+      "retry_and_native8": 9,
+      "public_methods_rollback_capacity": 10,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0
+    },
+    "mpi2": {
+      "representative_per_rank": {
+        "pass": 2,
+        "fail": 0
+      },
+      "public_rollback_guarded_per_rank": {
+        "pass": 11,
+        "fail": 2,
+        "errors": 0,
+        "skips": 0
+      },
+      "physically_unique_checkpoints": 13,
+      "payloads": 850
+    },
+    "integrated_source_patch_sha256": "9c685bcefa658a2b66ea1fb1c48ff7e0efe1f35190f63847f5eaf6cf972adb4c",
+    "integrated_source_paths": 57,
+    "native_qualification_for_integrated_source": "pending; no transfer from Source988",
+    "source_composition": {
+      "scope": "external composed Source, author integration validation",
+      "pass": 900,
+      "fail": 0,
+      "errors": 0,
+      "skips": 0
+    },
+    "ROMEO": {
+      "source_commit": "98804c6849c9966e05b5397126bab983a5fa0227",
+      "build_job": 738116,
+      "build_state": "FAILED",
+      "exit_code": "127:0",
+      "runtime_job": 738117,
+      "runtime_state": "CANCELLED",
+      "native_gpu_or_science_received": false,
+      "failure": "managed probe compiled but libcudart.so.12 was absent from loader path; no PoPS Native build begun"
+    },
+    "status_document": "STATUS_DRAFT_PR_20261009.md",
+    "receipts": [
+      "evidence/current_988_f8d_20261009/manifest.json",
+      "evidence/reviewed_integration_20261009/manifest.json"
+    ]
+  },
+  "fixed_core_public_methods_scoped_summary_20261008": {
+    "date_utc": "2026-10-08T19:57:46.473054+00:00",
+    "observed_source_commit": "53fd6ec25fd67351aefe0a5d2ac1101be7041a78",
+    "core_files": 1198,
+    "core_fingerprint": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+    "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+    "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+    "scope": "Finite public diffusion/Field/method reception on actual installed package; does not close the full86 obligations and8 principles.",
+    "obligations": {
+      "T": "partial: diffusion value publication and algebraic accepted SSP proof integrated; other programmable Field producers and guarantees remain open",
+      "C": "partial: exact issuer/owner/stage and detached Source authority received for this route; full40 contracts not requalified",
+      "M": "five finite constructions of one public diffusion/screenedField problem, not five corpus models; 28 model obligations retained",
+      "W": "renaming and coefficient changes and world1/world2 raw equality received for this route; late-refusal and remaining12 witness obligations open",
+      "principles": "finite evidence for equations and methods written in Python, native translation and frozen1198-filecore; universal genericity and comparable full-cost performance remain open"
+    },
+    "world1": {
+      "physical_cases": 5,
+      "pytest_tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "checkpoint_payloads": 360,
+      "methods": [
+        "Euler",
+        "SSPRK2 weighted rates",
+        "SSPRK2 weighted predictor"
+      ],
+      "rename_raw_equal": true,
+      "coefficient_change_changes_native_results": true,
+      "SSPRK2_accepted_composition_max_difference": 4.440892098500626e-16,
+      "SSPRK2_other_arrays_raw_equal": true
+    },
+    "world2": {
+      "physical_cases": 1,
+      "rankset": [
+        0,
+        1
+      ],
+      "pytest_tests_per_rank": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "global_arrays_equal_between_ranks_and_world1": true,
+      "shared_checkpoint_payloads": 72,
+      "local_owner_cell_census_captured": false
+    },
+    "evidence_manifest": "evidence/fixed_core_methods_53fd_20261008/manifest.json",
+    "CI": {
+      "run": "37833215669",
+      "architecture_counts": {
+        "failed": 17,
+        "passed": 824,
+        "skipped": 1
+      },
+      "architecture_job": "113504095703",
+      "status": "failed jobs and pending jobs; no aggregate success claimed"
+    },
+    "remaining": [
+      "late-refusal byte rollback/control and public adaptive retry",
+      "affected original PDE/OwnRetry/Native8 on new proof core",
+      "unintegrated CompositeCUDA/Moving/Aux repairs and newNative/SDK",
+      "Uniform Aux capacity ownership and screenedField realization coverage",
+      "remaining Field producer families and independent new physics/method compositions",
+      "full backend/dimension scientific convergence and comparable-cost reception",
+      "exact final GitHub required aggregate gate"
+    ],
+    "late_refusal": {
+      "core_unchanged": true,
+      "world1": [
+        "Euler initial envelope lateFail/control independently received",
+        "SSPRK2 initial envelope lateFail/control independently received"
+      ],
+      "world2": "Independentlyreceived exactranks0/1 Source248 and currentbd291/Nativeed2: initialenvelope exacteachrank, twoRuntimeError records,4globalarrays rawbitwiseequal eachrankandworld1; no CP/localcensus/populatedringproof.",
+      "adaptive": "Independently received actual2accepted1rejected on e01/corebd291; eightNPY exactfirst/latestphysicalslots and fixedtwo-intervalFV/Field oracle. Original stale-slot negative preserved.",
+      "histories": "Public max readablelag1 implies2physicalslots. Initial failed bindings uninitialized/fill0; populated history rollback still open.",
+      "evidence_manifest": "evidence/late_refusal_20261008/manifest.json",
+      "limits": [
+        "No public snapshot API admission from privatejournal reads",
+        "Sameartifact2bindings are not same-instance parameterretry",
+        "No retainedticket validator or rank0-only predicate proof",
+        "No universal-language or GPU qualification"
+      ],
+      "populated_history": "Independentlyreceived actualNativePASS1 Source1766:40,456-byte eight-key populatedring image exact, Auxfulldecode generation3 restored, Program acceptedAttempt1/historybothslots/sampledt exact, two-stepcontrolgeneration6 and directFV/FFT oracle; consumer cursors EMPTY no populatedoutput claim.",
+      "current_original_nonregression": "Fresh originalPDE1 and OwnRetryNative8 all10 independentlyreceived e01/corebd291/Nativeed2;300physicalfiles of9selectorcohort rehashed,23positiveCP1121payloads and9negativearchives separatelyqualified."
+    }
+  },
+  "current_scoped_summary_20261008": {
+    "date": "2026-10-08",
+    "observed_source_commit": "637c3220da44102ff7dbe3468c99086d141f6981",
+    "scope": "Bounded Source/CPP reception:86 T/C/M/W obligations plus8 principles=94 total; historical mapping,28 models,12 witnesses and prior scoped entries unchanged. Mission remains open.",
+    "identity": {
+      "core_commit": "f32c5195f72af8dbca8e2b97c5cf5cade6f08606",
+      "core_cpp_sha256": "f3e4727bec9da03d09af3307c74e62973ffccd315deece0400795a3ace2bbf4e",
+      "current_test_sha256": "3e98d2cdaf0b6e6dc5f1471929f9f004e798c0651745cc68c366639e264f105f",
+      "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+      "NativeABI": 13,
+      "packageABI": 8,
+      "FieldInputReadContract": 2,
+      "callable_header_commit": "637c3220da44102ff7dbe3468c99086d141f6981",
+      "callable_header_sha256": "ec50b10fdf582f51515fce07fb622dde32a13edba0009102ae29f8c0d5817231",
+      "signed_header_rows": 383
+    },
+    "CPP16": "e1867b5a/test38ef/Coref3/bin c11a8bb6: 16 cases world1 plus16 perrank world2 =48 total rank executions;0failure/error/skip. Root351649 and independent7634 close this bounded reception;102 artifacts rehashed bytes/modes, mtimes not requalified. Repeated public restore/publication and malformed rank0 checkpoint refusal received; no Registry21 rerun.",
+    "malformed_refusal": "Identity/shape preflight before binding candidate preparation; not an injected carrier-binding preparation failure.",
+    "ownership": "Only three instrumented legacy cases record rank0 Fab1/cells64 and MPI2rank1 Fab0/cells0. AMR-incidence cases emit no ownership census; no AMR empty-rank qualification follows.",
+    "STATE17": "First v2 representativeworld1 PASS1/0error/skip received Rootf45bb and independente055:Source2cb88/CPP3e98/Coref3/SDK967, binarye625, XML0.629s,97manifestentries bytes/modes. Exact in-test source=currentQ=immutablehighQ reference, tag0, low6, Q2Phi and pergloballevelchangedforcing predicates pass; no independent positive arrays/phase telemetry. Original6b609 firstnegative8assertions/99closure unchanged.",
+    "STATE17_boundary": "Actual recorded Phi BoundaryEvaluationPoint is not STATE SSA proof or proof of cadence equality with restored provider point. Empty-consumer refresh fine failure follows coarse candidate preparation, before all-level accepted commit, then real registry-snapshot/swap rollback.",
+    "installed_python": "NativeD154/package2793 retained; old9db/600 PDE/retry/Native8 receipts remain historical and do not qualify Coref3. Current wholemanifest source/installed synchronization not received.",
+    "CUDA": "Portable callable header contract1 actually integrated637c, headerec50/signatureaf8 over383 signed Source headers. Source/Host probe and independentf0d3/Root3bfc only: no af8 compile/import/Native/DSO/scientific/NVCC/GPU qualification yet. Old736186 FAILED NVCC remains historical and unchanged.",
+    "remaining": "af8 actual Native/DSO rebuild/install/import/doctor and scoped scientific nonregression; binding-prepare failure, AMR emptyrank/ownership, enclosingSnapshot, GPU/3D/otherprecision/inter-node/convergence/cost/CI and mission remain separately open.",
+    "STATE17_source_critique": "produce_stage(...,1,2) scales activelevel only; real Field request explicitly uses accepted State on other levels. Sparse composite RHS is mixed-level, so constantPhi6/Q12 is not implied. Diagnostic phase labels and actual issued RHS/Phi/Q/source observations are required before choosing a new strict oracle; no failure phase assigned from chronology.",
+    "STATE17_correction": "Exact v2 CPP3e98/patch3b4bc8 admitted Source0ac081, integrated2cb88. V1 unadmitted869c NaNblocker, frozen/unrun. Corrected strictownedhighQ/finite-to-infinity/Q2Phi/pergloballeveldistinctness/baseline6 oracles received firstworld1; no unsupported constant12 oracle, no STATE SSA/cadence/emptyrank/enclosingAcceptedSnapshot proof inferred.",
+    "STATE17_source_count": "17 GTest cases/224 syntactic assertion occurrences with original16/192 preserved;224 is not runtimeexecutioncount. Actual fullsuite17 cohort=51 rank executions, representativefirst1 separately recorded.",
+    "CPP17": "Suite17 Source2cb/CPP3e98/Coref3/SDK967 independently received0cd and Root939:17world1+17perMPI2rank=51TOTAL,0fail/error/skip,68artifact byte/mode closure. Firstrepresentative1 is separate, receivede055/f45/97closure. No build/link in fullcohort: reuses received freshe625. Historicale186 suite16/48 and negative6b609/99 unchanged. Not SDKaf8 qualification.",
+    "source_activation_delta": "Separate b21d conda-activation Source delta; not evidence of an actual runtime abort or a received run.",
+    "executed_CPP_identity": {
+      "source_head": "2cb88e33d91ba3d0bf016b8d440ddd04881a2cb8",
+      "CPP_sha256": "3e98d2cdaf0b6e6dc5f1471929f9f004e798c0651745cc68c366639e264f105f",
+      "Core_sha256": "f3e4727bec9da03d09af3307c74e62973ffccd315deece0400795a3ace2bbf4e",
+      "SDK": "967e6afd549028368716cf484593d8424775d415daacba937e03822565da93e8",
+      "binary_sha256": "e625ba7c6f61902b11995627510bcba696dfd463adce349fe8e24896c1ff9326"
+    },
+    "Core_contract_then_header_contract": "Private carrier-bindings@1/f32 initially preserves SDK967. The separate later public callable@1/header637c changes signature toaf8, while Coref3/test3e98 remain exact. NativeD154 and received e625/fixtureDSOs967 are oldSDK artifacts, not qualified af8 consumers.",
+    "Native_af8_flow": "Version2 official incremental exact-wheel/install/prove/codeSign/verify/doctor flow prepared, NOT launched; awaits Primary final documentation HEAD/GO. No actual abort inferred from separate b21d activation Source delta."
+  },
+  "scoped_reception_evidence_20261008": {
+    "suite16_root": {
+      "path": "/Users/romaindespoulain/dev/tmp/root-restore-bindings-suite16-positive-reception-e1867b5a-20261008.json",
+      "sha256": "351649ce36c00573616309307019e80a35328d0d6d4361a0d35a7b97e6e9fb12"
+    },
+    "suite16_independent": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-restore-bindings-suite16-reception2-20261008/reception.json",
+      "sha256": "7634bdbfc67cb7959aa3d8f8f157f31929a3469ce1b46a919d5c05da6153c864"
+    },
+    "state17_source": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-review2-20261008/review.json",
+      "sha256": "fcc02a7f325184fc417b198b7533464b28b550aca8fd9cfadde01f3c7949210c"
+    },
+    "state17_clarification": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-restore-accepted-state-witness3-20261008/CLARIFICATION.md",
+      "sha256": "1289e57fbab708666f99fec94773f09b9795dd95484ad0b3fcc87d4a95179d68"
+    },
+    "state17_comment_admission": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-witness3-comment-admission-review2-20261008/reception.json",
+      "sha256": "e0ace16596e070be705cf23afde8dac7e6f0c3b4f3602ff74770aea305e8c1b4"
+    },
+    "cuda_source": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-named-RHS-callable-V1-source-review-20261007/review.json",
+      "sha256": "f0d3fa70bb9143b06b3b111888b0d9e3742ecc6dfbf5b55dd981d071e1b6f45e"
+    },
+    "cuda_contract": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cuda-rhs-callable-source-admission-v1-811ee2b1-20261007/contract-addendum-v1.json",
+      "sha256": "4c1feade4c8d90c316b0e289129edcc3509ad5bd36bc9aa741c156955e5b8be7"
+    },
+    "cuda_root_source_admission": {
+      "path": "/Users/romaindespoulain/dev/tmp/root-named-rhs-callable-v1-source-admission-20261008.json",
+      "sha256": "3bfc59ee663246b608a3a9d0de9727e5d791d4bf1569b4321eca3903c5116b39"
+    },
+    "state17_first_negative_root": {
+      "path": "/Users/romaindespoulain/dev/tmp/root-accepted-state-witness3-first-world1-negative-6b609b5c-20261008.json",
+      "sha256": "368a312dd3ad117010e77d3790815371ec496ed71dc641fd171b01af1ecf01e5"
+    },
+    "state17_first_negative_producer": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-CPP-world1-6b609b5c-20261008/complete-receipt.json",
+      "sha256": "e98d9bddacae172a53c4803cdaad2630a5359bc54cf3994d475e57df4a6d9a2c"
+    },
+    "state17_first_negative_manifest": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-CPP-world1-6b609b5c-20261008/evidence-manifest.json",
+      "sha256": "edb2c536f634881d60a84fdb28623955672064333791a41daaa2332d28db8ccb"
+    },
+    "state17_first_negative_independent": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-negative-reception2-20261008/reception.json",
+      "sha256": "302b81538429e9507b910c91dc62f9e74256f60f407271036ac4912983cb0e1c"
+    },
+    "state_highref_v1_source_blocker": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-high-reference-correction-v1-review2-20261008/review.json",
+      "sha256": "869c831807d4ceee3b30062726e6305b482a9fccd8bf79a7ac2d80fb4452a88e"
+    },
+    "state_highref_v2_source_admission": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-high-reference-correction-v2-review2-20261008/review.json",
+      "sha256": "0ac0815fc0c91c8f3670a3c32de35cc768d7bbf9269f3233c36593373feeb1f4"
+    },
+    "state_v2_first_world1_root": {
+      "path": "/Users/romaindespoulain/dev/tmp/root-accepted-state-witness3-v2-world1-positive-2cb88e33-20261008.json",
+      "sha256": "f45bb0d8924dc502f462b1059f4241ae1cc478ee7ea7f43ad6882a9b47f87313"
+    },
+    "state_v2_first_world1_independent": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-v2-world1-reception2-20261008/reception.json",
+      "sha256": "e05511517ad82c1c49d49bca4238bf01ef34c5eac9c58152ad3020010c593122"
+    },
+    "state_v2_first_world1_producer": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-v2-CPP-world1-2cb88e33-20261008/complete-receipt.json",
+      "sha256": "504fc0bc0739e6b692e2dfb872ff835b85e77bb4f3c4c96ce2c83fb72546d383"
+    },
+    "state_v2_first_world1_manifest": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-v2-CPP-world1-2cb88e33-20261008/evidence-manifest.json",
+      "sha256": "f61f805c5dad36bebbb46802d22d20e80a1a5916305e50354097dac3e5080517"
+    },
+    "state_v2_suite17_producer": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-v2-CPP-suite17-2cb88e33-20261008/complete-receipt.json",
+      "sha256": "32027c6cadbfc3d9eecb2bdf5932fa3eac3b4c8101f4abef8c2bf77fa64df977"
+    },
+    "state_v2_suite17_manifest": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-state-witness3-v2-CPP-suite17-2cb88e33-20261008/evidence-manifest.json",
+      "sha256": "a5953781cc5c624ed3f70773909434359532320dd0b04b4af72e8da97d271bbb"
+    },
+    "state_v2_suite17_independent": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-state-witness3-v2-suite17-reception2-20261008/reception.json",
+      "sha256": "0cd3584342eee4f7b5e19b022c49a686efd97b7ef0ff6194a2cb87156503eb9f"
+    },
+    "state_v2_suite17_root": {
+      "path": "/Users/romaindespoulain/dev/tmp/root-accepted-state-witness3-v2-suite17-positive-2cb88e33-20261008.json",
+      "sha256": "939ed75c970b60a85b0ac2b4211357c17e85afffd7993216edb684a81a4b5bd8"
+    }
+  },
+  "current_scoped_summary_20261007": {
+    "date": "2026-10-07",
+    "observed_source_commit": "c0f18d50efd454396d6761992a9817adf353f412",
+    "full_94_obligations_closed": false,
+    "scope": "Dated bounded reception; historical current_head/mapping_baseline and original obligations are unchanged",
+    "PDE": "New actual9dbSDK967e/NativeD154 built/installed originalonelevelworld1PASS, originalU/Fbounds+CP exact, Ynotmeasured and OMPeffectiveunmeasured",
+    "Cpp13": "World1 Field13/Registry21 PASS0skip. Firstworld2 13casesperrank/26exec total23PASS3FAIL emptylocalexpectations, multilevelcase bothPASS. FixturecorrectionSourceintegrated with actualfuturecensus, rerunpending.",
+    "formal_order": "99de181 Main Source61 PASS via archived XML/command; separate frozen author Source cohort noSO, Root stdout absent; formal certificate, no PDE convergence qualification",
+    "ROMEO735830": "FAILED1:0 in allocation before checkout/prefix/build; metadata omission corrected in staged inputs, 17 helpers reviewed, future Source/job freeze pending; nvcc version/driver queries occurred, no GPU PDE compilation",
+    "retry": "Historical ede/ea0c retry retained; no originalretry NativeD154received yet."
+  },
+  "source": "PoPS_Codex_handoff_0.4.0/reference/PoPS_API_v0.4.0/results/corpus_matrix.json",
+  "witness_source": "PoPS_Codex_handoff_0.4.0/context/CORPUS_ORIGINAL.md:278-289",
+  "current_head": "5d1126811ff72fbe54d8686682ff2eb1ca6254d1",
+  "mapping_kind": "source and receipt reconciliation through 5d11268; historical 83b2b12 and failed eac92bb attempts retained; no global acceptance",
+  "models": [
+    {
+      "id": "M01",
+      "title": "Advection scalaire",
+      "definition": "u_t+a u_x=0; a=1; moyennes de cellules périodiques.",
+      "planned_test": {
+        "initial_boundary_data": "Cosinus 1+0.1 cos(2πx), domaine [0,1), moyenne analytique; MC/SSPRK2.",
+        "mesh_time": "N=40,80,160,320; t=0.125; CFL=0.3.",
+        "oracle": "Erreur L1, bilan périodique et ordre observé >1.6; conservation tol=1e-12."
+      },
+      "reference_profile": "direct",
+      "reference_limit": "Cosinus périodique complet en 1D/2D/3D; traversée AMR non exécutée.",
+      "reference_evidence": [
+        "N01"
+      ],
+      "production_candidate_symbols": "python/pops/numerics/spatial.py:FiniteVolume;python/pops/lib/time/ssprk.py",
+      "production_status": "historical_scoped_pass",
+      "qualification": "Full prescribed resolutions/time, native Dim=2 invariant-y. OpenMP 1/4 threads and MPICH 2 ranks; other dimensions and AMR remain unexecuted. Historical022f/e1070cb evidence only; not rerun on83b.",
+      "production_evidence": [
+        "evidence/022f5ac/m01-openmp1-reviewed",
+        "evidence/022f5ac/m01-openmp4",
+        "evidence/022f5ac/m01-mpi2-authenticated"
+      ],
+      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
+      "remaining_gap": "Other dimensions, AMR traversal and current-artifact scientific replay remain unexecuted."
+    },
+    {
+      "id": "M02",
+      "title": "Burgers / flux utilisateur",
+      "definition": "u_t+(u²/2)_x=0; solution faible entropique, pas changement de coordonnées non conservatif.",
+      "planned_test": {
+        "initial_boundary_data": "Riemann uL=1,uR=0 (choc); uL=0,uR=1 (raréfaction), [-1,1].",
+        "mesh_time": "N=100,200,400; t=0.2; flux Godunov écrit en Python; premier ordre.",
+        "oracle": "Erreur contre moyenne exacte de la solution entropique; vitesse de choc 0.5; bilan frontière tol=1e-11."
+      },
+      "reference_profile": "direct",
+      "reference_limit": "Burgers lisse périodique complet. Choc, raréfaction et changement de coordonnées non exécutés.",
+      "reference_evidence": [
+        "N03"
+      ],
+      "production_candidate_symbols": "python/pops/physics/_authoring_flux.py:flux_term;python/pops/numerics/spatial.py:FiniteVolume",
+      "production_status": "historical_scoped_pass",
+      "qualification": "Full shock and rarefaction N100/200/400, t=.2, exact cell means, authored User Godunov with explicit numerical bound. Dim2 full NxN invariant-y CPU1 on native220b; exact source commit/diff retained in each identity.",
+      "production_evidence": [
+        "evidence/022f5ac/astra-m02-burgers.md",
+        "evidence/83b2b12/m02-shock-220b-openmp1",
+        "evidence/83b2b12/m02-rarefaction-220b-openmp1"
+      ],
+      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
+      "remaining_gap": "MPI and other dimensions/AMR unexecuted; no general positivity/order guarantee for arbitrary User bodies."
+    },
+    {
+      "id": "M03",
+      "title": "Euler / EOS",
+      "definition": "Euler compressible; fermer séparément EOS, admissibilité et borne caractéristique.",
+      "planned_test": {
+        "initial_boundary_data": "Gaz parfait γ=1.4, Sod: (ρ,u,p)L=(1,0,1), R=(0.125,0,0.1), [-0.5,0.5]. Deuxième EOS non fixée.",
+        "mesh_time": "N=100,200,400; t=0.15; HLL/Rusanov avec borne documentée.",
+        "oracle": "Résidu de Riemann exact pour EOS choisie, bilan, ρ>0 et e>0 sans clipping; seuils font partie du cas."
+      },
+      "reference_profile": "direct",
+      "reference_limit": "Ondes d’entropie avec EOS parfaite et raidie. Sod et EOS implicite non exécutés.",
+      "reference_evidence": [
+        "N05"
+      ],
+      "production_candidate_symbols": "python/pops/physics/_facade.py:Model;include/pops/physics/fluids/euler.hpp",
+      "production_status": "historical_scoped_pass",
+      "qualification": "Prescribed N100/200/400 and t=.15, authored perfect and stiffened EOS, Dim=2 invariant-y CPU OpenMP1. Stiffened component and parameter names changed. Revision2 boundary budget replaces invalid unchanged-boundary assumption with measured accepted quadrature; all thresholds unchanged. Old failure retained. MPI2 and other dimensions remain unexecuted. The old renamed stiffened attempt remains failed; revised boundary-budget receipt is the accepted variant. No83b scientific replay.",
+      "production_evidence": [
+        "evidence/022f5ac/m03-ideal-openmp1",
+        "evidence/022f5ac/m03-stiffened-boundary-budget",
+        "evidence/022f5ac/m03-stiffened-renamed-openmp1"
+      ],
+      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
+      "remaining_gap": "Other dimensions/MPI2 and current-artifact scientific replay remain unexecuted."
+    },
+    {
+      "id": "M04",
+      "title": "Advection–diffusion",
+      "definition": "u_t+a u_x=D u_xx; extension anisotrope/non linéaire distincte.",
+      "planned_test": {
+        "initial_boundary_data": "a=1,D=0.01, cosinus périodique: exp(-4π²Dt) cos(2π(x-at)).",
+        "mesh_time": "N=32,64,128; t=0.1; dt≤0.9/(|a|/h+2D/h²).",
+        "oracle": "Moyennes exactes; L1 et positivité conditionnelle; témoin violation W02."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Advection–diffusion scalaire directe. Flux anisotrope et variables de gradient générales à réaliser.",
+      "reference_evidence": [
+        "N04"
+      ],
+      "production_candidate_symbols": "python/pops/numerics/diffusion.py:Diffusion;python/pops/numerics/spatial.py:FiniteVolume",
+      "production_status": "partial_with_distinct_method_receipts",
+      "qualification": "Directional-bound defect is fixed. Full x-only tensor ForwardEuler reaches t=.1 but fails unchanged order criterion (.60635<.7). Distinct SSPRK2 full N32/64/128 t=.1 passes; orders .97814/.98885 and discrete-Fourier oracle retained. Both use native220b CPU1 Dim2. Exact zero-axis diffusion additionally passes9 native critical83 cases including AMR mass/refinement.",
+      "production_evidence": [
+        "evidence/022f5ac/m04-openmp1",
+        "evidence/022f5ac/installed-w02-combined-bound",
+        "evidence/83b2b12/m04-xonly-220b-openmp1",
+        "evidence/83b2b12/m04-ssprk2-220b-openmp1",
+        "evidence/83b2b12/installed-83b2b12-critical"
+      ],
+      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
+      "remaining_gap": "Do not promote the failed ForwardEuler method using SSPRK2. General tensors/nonlinear joint flux and other backends remain unqualified."
+    },
+    {
+      "id": "M05",
+      "title": "Navier–Stokes avec conduction",
+      "definition": "Distinguer stress visqueux, conduction et dissipation du flux numérique.",
+      "planned_test": {
+        "initial_boundary_data": "Sous-problème périodique u_t=νu_xx, ν=0.03,u=sin(2πx). Couette complet exige données thermiques fixées.",
+        "mesh_time": "N=32,64,128; t=0.1.",
+        "oracle": "Identité de dissipation discrète et amortissement; bilan total avec flux thermique pour le cas complet."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Flux visqueux/thermiques, gradients primitifs et conditions de paroi non réalisés.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/numerics/diffusion.py:Diffusion",
+      "production_status": "scoped_native_serial_and_mpi2_pass",
+      "qualification": "Closed periodic scalar viscous shear nu=.03, N32/64/128, T=.1, Forward Euler: strengthened serial 19/19 (18 source/math plus one three-grid native case) and MPI2 1/1 per rank. Six saved states and six raw ledgers independently reproduce discrete Fourier damping, dissipative work and the separate FE energy correction. Continuous errors are nonmonotone; no fitted convergence order.",
+      "assessment_kind": "sdk623_saved_state_and_ledger_recomputation_verified",
+      "remaining_gap": "Full compressible Navier-Stokes, primitive viscous stresses, conduction, thermal wall data and Couette acceptance remain IMPL/model-closure obligations. This is a closed scalar shear reduction on CPU Dim1; other backends are unqualified.",
+      "production_evidence": [
+        "evidence/m23-m05-converged/manifest.json",
+        "m23_m05_converged_reception.md"
+      ]
+    },
+    {
+      "id": "M06",
+      "title": "Enthalpie / Stefan",
+      "definition": "Accumulation H(T,phase); plateau latent, pas Euler sur T équivalent supposé.",
+      "planned_test": {
+        "initial_boundary_data": "H(T) par morceaux, c=2,L=3,Tm=1, apport homogène; front: variante de Stefan à fermer.",
+        "mesh_time": "Test homogène sans espace; durée/apport explicites dans script.",
+        "oracle": "Respect H_new=H_old+apport; T=Tm dans plateau; fraction dans [0,1]."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Calcul d’accumulation possible; relation de phase et front de Stefan non construits.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/_board_rate.py:rate",
+      "production_status": "scoped_native_pass",
+      "qualification": "Eight homogeneous enthalpy scenarios pass on installed eac92bb/native 6b5f452e after observing the accepted history slot. The original import and one-step-lag failures remain archived; H, T and phase are checked against independent saved-state criteria.",
+      "assessment_kind": "scoped_native_receipt_reconciled_at_5d11268",
+      "remaining_gap": "Homogeneous H accumulation does not establish nonlinear accumulation in T or a moving Stefan interface; other dimensions/MPI and later source are unexecuted.",
+      "production_evidence": [
+        "evidence/83b2b12/installed-38faddb-unit",
+        "m06_m13_scientific.md",
+        "evidence/scientific-eac92bb/m06-eac92bb-openmp1-accepted-history",
+        "evidence/scientific-eac92bb/m06-eac92bb-openmp1",
+        "evidence/scientific-eac92bb/m06-eac92bb-openmp1-reviewed"
+      ]
+    },
+    {
+      "id": "M07",
+      "title": "Saint-Venant / topographie",
+      "definition": "h_t+(hu)_x=0; flux/source topographie doivent être réalisés ensemble.",
+      "planned_test": {
+        "initial_boundary_data": "Lac h+z=1,u=0, topographie lisse z=0.2 exp(-50x²), [-1,1], bords même équilibre.",
+        "mesh_time": "N=40,80,160; t=1; reconstruction hydrostatique.",
+        "oracle": "Équilibre discret ≤1e-12 après normalisation; humide-sec requiert domaine et solveur dédiés à la méthode."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Association flux–topographie et états sec/mouillé à réaliser sans double comptage.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/_authoring_flux.py:flux_term",
+      "production_status": "scoped_native_dim1_serial_and_mpi2_pass",
+      "qualification": "Six Dim1 OpenMP1 runs and a separate six-run true Dim1 MPI2 receipt pass the lake-at-rest hydrostatic variant N40/80/160 in two component orders to T=1. The MPI2 records report two native ranks; saved states and oracle/equilibrium errors were checked from NPZ.",
+      "assessment_kind": "scoped_scientific_serial_and_mpi2_receipts",
+      "remaining_gap": "Wet/dry, non-equilibrium dynamics, multi-dimensional and broader boundary cases remain unqualified.",
+      "production_evidence": [
+        "evidence/native-388c323-and-t2-v1-3/manifest.json",
+        "evidence/cfef849-scoped/manifest.json"
+      ]
+    },
+    {
+      "id": "M08",
+      "title": "Centre-guide / advection–Poisson",
+      "definition": "Vitesse dérivée d’un potentiel; champ lié au stage exact.",
+      "planned_test": {
+        "initial_boundary_data": "Carré périodique [0,2π]²; charge de moyenne nulle et vortex fabriqué.",
+        "mesh_time": "32²,64²; SSPRK2; changer un stage à même date.",
+        "oracle": "Requêtes de cache différentes; résidu champ ≤1e-10; divergence vitesse compatible à vérifier."
+      },
+      "reference_profile": "not_demonstrated",
+      "reference_limit": "Solve et gradient disponibles; assemblage centre-guide 2D compatible non construit.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/fields/poisson.py;python/pops/time/_program/calls.py",
+      "production_status": "scoped_native_dim2_stage_pass",
+      "qualification": "Corrected cfef849 Dim2 OpenMP1 N32²/N64² SSPRK2 two-step runs to T=.04 pass independent current-stage field/FV oracle; saved final-step stage0 charge and fresh-vs-stale alternative were checked against actual NPZ.",
+      "assessment_kind": "scoped_scientific_stage_receipt_at_cfef849",
+      "remaining_gap": "General cross-stage cache semantics, MPI, other dimensions and broader centre-guide dynamics remain unqualified; earlier stale-slot receipt is preserved.",
+      "production_evidence": [
+        "evidence/83b2b12/installed-38faddb-unit",
+        "m08_scientific_variant.md",
+        "evidence/scientific-eac92bb/m08-eac92bb-openmp1",
+        "history_post_run_observation_audit.md",
+        "evidence/cfef849-scoped/manifest.json"
+      ]
+    },
+    {
+      "id": "M09",
+      "title": "Euler–Poisson magnétique de Hoffart",
+      "definition": "Variante arXiv v2 examinée; sous-système source potentiel–vitesse avec ρ gelée.",
+      "planned_test": {
+        "initial_boundary_data": "Relations discrètes A v+Bφ=f, C v+Kφ=g; rotation J connue; Dirichlet homogène du témoin.",
+        "mesh_time": "N=8; s=0.03; α=0.5; données RNG graine 20260928; puis disque du papier à établir en FV.",
+        "oracle": "Même résidu original mono/Schur; erreur≤1e-11; norme et phase séparées; aucune garantie FEM importée."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Potentiel continué par la méthode et condensation d’applications à intégrer; témoins de Schur hérités seulement.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/linalg/finite.py;include/pops/numerics/linalg/finite_linear.hpp;examples/migration/scientific/api040_m09_finite_native.py",
+      "production_status": "scoped_native_finite_witness_serial_and_mpi2_pass",
+      "qualification": "Original finite8+4 W06 equations execute in a singleton native batch via explicit finite supports and LocalResidual. Ten cases pass serial and on each MPI2 rank: mono/condensed, permutations, singular chosen pivot, rebound captures, owner-only finite-input overflow, rollback and new bind. Thirty-two saved states independently recompute residual<3.553e-15, monolithic error<7.772e-16 and CN endpoint energy error<1.066e-14 (fixed criterion1e-11).",
+      "assessment_kind": "finite_amr_bundle_xml_source_hashes_and_saved_state_recomputation_verified",
+      "remaining_gap": "Finite support witness does not qualify a globally meshed/distributed mixed residual, nonlinear spatial condensation or full Hoffart disk campaign. The original random8x4 incidence map is now implemented; older NumPy-only and failed native receipts remain historical.",
+      "production_evidence": [
+        "m09_hoffart_scope.md",
+        "evidence/finite-amr-preliminary/manifest.json",
+        "evidence/finite-amr-converged/manifest.json",
+        "finite_amr_converged_reception.md"
+      ]
+    },
+    {
+      "id": "M10",
+      "title": "Dérive–diffusion–Poisson",
+      "definition": "j=-D(∇n+n∇ψ); Scharfetter–Gummel réalise les deux termes.",
+      "planned_test": {
+        "initial_boundary_data": "nR=nL exp(-(ψR-ψL)); ψR-ψL∈{-10,-1,0,1,10}; D/h explicite.",
+        "mesh_time": "Témoin de face; puis équilibre 1D auto-cohérent avec charges/bords fermés.",
+        "oracle": "Flux nul relatif au niveau d’échelle; limite δ=0; ne pas doubler la diffusion."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Corps de Bernoulli testé auparavant; réalisation conjointe dérive–diffusion avec champ non intégrée.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/drift_diffusion.py;python/pops/fields/poisson.py",
+      "production_status": "scoped_native_dim1_mpi2_one_step_pass",
+      "qualification": "Installed Dim1 receipt has one source/emission check and one native N32 single-step self-consistent Poisson-stage/joint Scharfetter-Gummel flux check; independent stale-field and face-incidence discriminants apply to that test. A later 4bb0639 installed Dim1 MPI2 receipt passes the same selected source/emission and native one-step checks on both ranks.",
+      "assessment_kind": "scoped_native_single_step_receipts_through_4bb0639",
+      "remaining_gap": "Full M10 spatial/temporal campaign, multiple meshes, longer time and broader boundary cases remain unqualified; the MPI2 receipt is only the selected N32 one-step witness.",
+      "production_evidence": [
+        "evidence/cfef849-scoped/manifest.json",
+        "evidence/4bb0639-scoped/manifest.json"
+      ]
+    },
+    {
+      "id": "M11",
+      "title": "Poisson–Maxwell–Stefan",
+      "definition": "Flux collectifs et contrainte de référentiel; variante masses molaires encore à fixer.",
+      "planned_test": {
+        "initial_boundary_data": "Témoin symétrique trois flux avec somme nulle et matrice friction rang2.",
+        "mesh_time": "Résolution augmentée 4×4; données script. Mélange ternaire physique exige fermeture documentée.",
+        "oracle": "Résidu contraint et somme flux≤1e-12; pas renormalisation postérieure."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Loi collective et contraintes de mélange à écrire; aucune substitution par diffusions indépendantes.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/diffusion.py;python/pops/fields/problem.py:FieldProblem",
+      "production_status": "scoped_native_constrained_product_serial_and_mpi2_pass",
+      "qualification": "The normalized three-flux rank2 friction witness retains the original equations and sum-zero constraint through a public augmented local product. Both orderings pass MPI2, including incompatible forcing refusal and rollback; its separate earlier serial passes are preserved.",
+      "assessment_kind": "scoped_serial_and_mpi2_xml_hash_verified",
+      "remaining_gap": "This is the finite M11/W10 algebraic subproblem, not a spatial Poisson-Maxwell-Stefan campaign or a completed physical mixture closure.",
+      "production_evidence": [
+        "evidence/local-affine-converged/manifest.json"
+      ]
+    },
+    {
+      "id": "M12",
+      "title": "Multifluide cinq/dix moments–Maxwell",
+      "definition": "États hétérogènes, symbole principal collectif et représentations Maxwell compatibles.",
+      "planned_test": {
+        "initial_boundary_data": "Onde EM périodique; une espèce5 et une10 moments; fermetures thermiques à fixer.",
+        "mesh_time": "Grilles32,64,128; direction oblique; données normalisées une fois fermées.",
+        "oracle": "Relations curl/div et échanges; pas découpage selon seul nom d’espèce."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Deux fluides isothermes–Poisson exécutés comme cas distinct. Maxwell cinq/dix moments non construit.",
+      "reference_evidence": [
+        "N06"
+      ],
+      "production_candidate_symbols": "python/pops/physics/multispecies.py;python/pops/fields/poisson.py",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
+    },
+    {
+      "id": "M13",
+      "title": "Réactions / streamers / photoionisation",
+      "definition": "Stœchiométrie visible; radiatif non local distinct de la source locale.",
+      "planned_test": {
+        "initial_boundary_data": "Réseau A→B→C avec coefficients≥0; streamer exige chimie, transport et photoionisation précis.",
+        "mesh_time": "Homogène: exact exponentielle matricielle; t=1.",
+        "oracle": "Inventaire atomique; positivité et erreur de taux; bilan photonique selon fermeture retenue."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Réseaux mass-action explicites et implicites exécutés; photoionisation et front non exécutés.",
+      "reference_evidence": [
+        "N09",
+        "N11"
+      ],
+      "production_candidate_symbols": "python/pops/physics/_authoring_sources.py:source_term;python/pops/time/_program/local.py:solve",
+      "production_status": "scoped_native_pass",
+      "qualification": "Eight installed eac92bb/native 6b5f452e homogeneous A→B→C runs pass independent exponential and conservation criteria across two grids, nonzero-rate combinations, zero rate and component order.",
+      "assessment_kind": "scoped_native_receipt_reconciled_at_5d11268",
+      "remaining_gap": "This source chain does not realize streamer transport, Poisson coupling or nonlocal photoionization/photon budgets; other dimensions/MPI and later source unexecuted.",
+      "production_evidence": [
+        "evidence/83b2b12/installed-38faddb-unit",
+        "m06_m13_scientific.md",
+        "evidence/scientific-eac92bb/m13-eac92bb-openmp1"
+      ]
+    },
+    {
+      "id": "M14",
+      "title": "Gaine / paroi / circuit",
+      "definition": "Courant de trace alimente une quantité de surface/circuit persistante.",
+      "planned_test": {
+        "initial_boundary_data": "Capacité normalisée C=1, charge initiale0.7; enfant produit un courant, parent rejette.",
+        "mesh_time": "Une fenêtre parent/deux étapes; aucune géométrie physique prétendue.",
+        "oracle": "État, histoire et échange inchangés après rejet; seconde acceptation interdite."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Rejet d’un état de surface testé au niveau protocole; paroi PDE et circuit non intégrés.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/time/_step/transaction.py:StepTransactionPlan",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
+    },
+    {
+      "id": "M15",
+      "title": "HyQMOM 1D / ordres",
+      "definition": "Fox–Laurent: récurrence polynomiale et fermeture a_n moyenne; réalisation Gram choisie.",
+      "planned_test": {
+        "initial_boundary_data": "Gaussiennes modérées et mélange fixé; n=1..4, 3/5/7/9moments.",
+        "mesh_time": "Dix données gaussiennes/order; spectres comparés par DF et factorisation.",
+        "oracle": "Erreurs flottantes bornées dans résultats; rang/bord exclus du témoin."
+      },
+      "reference_profile": "not_demonstrated",
+      "reference_limit": "Récurrences héritées seulement. Hiérarchies HyQMOM 1D de plusieurs ordres non assemblées ici.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/moments/closures/hyqmom_axial_b1.py;examples/migration/scientific/api040_m15_hyqmom_axial_b1.py",
+      "production_status": "scoped_native_axial_b1_serial_and_mpi2_pass",
+      "qualification": "Earlier genuine Dim1 serial six-run axial B.1 order-four receipt remains valid. The new cd45279c installed Dim1 MPI2 receipt passes six saved trajectories at N32/64/128, T=0.02 in two component orders, plus six inadmissible-state refusals; an independent NPZ recomputation verifies the receipt metrics. A separate generated periodic-face collective refusal test passes on both MPI ranks.",
+      "assessment_kind": "scoped_scientific_serial_and_mpi2_axial_b1",
+      "remaining_gap": "The historical 4bb0639 MPI2 hang remains archived as a failure before repair. The new receipt closes only the selected axial B.1 five-moment 1V periodic FirstOrder/HLL/ForwardEuler case; multiorder Fox-Laurent hierarchy, higher moments and general HyQMOM remain unqualified.",
+      "production_evidence": [
+        "evidence/83b2b12/installed-38faddb-unit",
+        "evidence/83b2b12/source-reviews/astra-m15-m16-independent-review.md",
+        "evidence/native-388c323-and-t2-v1-3/manifest.json",
+        "evidence/4bb0639-scoped/manifest.json",
+        "evidence/post-7b35ffd-scoped/manifest.json"
+      ]
+    },
+    {
+      "id": "M16",
+      "title": "HyQMOM15 magnétique",
+      "definition": "Fermeture B.1 du code épinglé, six polynômes; PDF joint seul incomplet.",
+      "planned_test": {
+        "initial_boundary_data": "Gaussienne corrélée Θ=[[1,1/2],[1/2,1]], normales axiales et (1,-1)/√2; permutations.",
+        "mesh_time": "15moments; Jacobiennes450coefficients; transforms affines16.",
+        "oracle": "Quatre racines non réelles attendues dans cas identifié, jamais corrigées en réel."
+      },
+      "reference_profile": "direct",
+      "reference_limit": "Transport B.1 complet, 1D–2V, quinze moments. Le contre-exemple oblique interdit une garantie hyperbolique globale.",
+      "reference_evidence": [
+        "N10_hyqmom"
+      ],
+      "production_candidate_symbols": "python/pops/moments/closures/hyqmom15.py;examples/migration/scientific/api040_m16_hyqmom_b1_oblique.py",
+      "production_status": "partial_source_witness_with_math_blockage",
+      "qualification": "Complete2V15 moment indices/flux derivatives, correlated-Gaussian exact Jacobian/characteristic-polynomial and oblique/permutation witnesses checked at source. The example explicitly records MATH for the demonstrated hyperbolicity/admission conflict.",
+      "assessment_kind": "mechanism_and_receipt_reconciled_at_83b2b12",
+      "remaining_gap": "MATH applies only to the established B.1 model/method witness, not an excuse to drop all transport work. No complete magnetic HyQMOM15 native campaign; realizability admission is not a proof of hyperbolicity.",
+      "production_evidence": [
+        "evidence/83b2b12/installed-38faddb-unit",
+        "evidence/83b2b12/source-reviews/astra-m15-m16-independent-review.md"
+      ]
+    },
+    {
+      "id": "M17",
+      "title": "Fan–Li15",
+      "definition": "D=2,M=4, température complète; dix lignes conservatives + cinq régularisées.",
+      "planned_test": {
+        "initial_boundary_data": "États non gaussiens périodiques; chemin droit dans moments bruts.",
+        "mesh_time": "N=16; huit pasSSPRK2; ratiosdensité0.2..5 pour intégrale.",
+        "oracle": "Bilan dixlignes, côtés non conservatifs actifs; quadrature indépendante intégrale."
+      },
+      "reference_profile": "direct",
+      "reference_limit": "Flux et produit non conservatif complets avec chemin droit. Reconstruction d’ordre supérieur non réalisée.",
+      "reference_evidence": [
+        "N10_fan_li"
+      ],
+      "production_candidate_symbols": "python/pops/physics/_board_rate.py:nonconservative_product;python/pops/numerics/nonconservative.py:PathConservativeFiniteVolume",
+      "production_status": "scoped_native_pass",
+      "qualification": "The full authored Fan–Li15 Uniform Dim2 x-dependent extrusion passes eight SSPRK2 steps in canonical and reversed component order on installed eac92bb/native 6b5f452e. Independent DOP853/Gauss24 error is 4.461e-10, nonconservative contribution 7.564e-3 and permutation error zero; the prior FixedDt admission failure is retained.",
+      "assessment_kind": "scoped_native_receipt_reconciled_at_5d11268",
+      "remaining_gap": "Dim1, AMR, higher-order interior contribution and later unbuilt source remain unqualified; this scoped run does not establish them.",
+      "production_evidence": [
+        "evidence/83b2b12/m17-220b-openmp1",
+        "evidence/83b2b12/installed-38faddb-unit",
+        "evidence/83b2b12/manifest.json",
+        "path_consumer_stability_v2.md",
+        "evidence/scientific-eac92bb/m17-eac92bb-openmp1",
+        "evidence/scientific-eac92bb/m17-eac92bb-openmp1-reviewed"
+      ]
+    },
+    {
+      "id": "M18",
+      "title": "Fermeture entropique MN",
+      "definition": "Quadrature positive fixe cinq nœuds et trois moments; intérieur et bord distingués.",
+      "planned_test": {
+        "initial_boundary_data": "V=(-1,-.5,0,.5,1), w=(.1,.2,.4,.2,.1); données exp(λ·m), puis hors cône.",
+        "mesh_time": "20targets natifs modérés;12Newton fixes+garde; autre oracle amorti/LP.",
+        "oracle": "Résidu, populations, minimum entropique le long du noyau; E-CLOSURE-INFEASIBLE vs BOUNDARY."
+      },
+      "reference_profile": "not_demonstrated",
+      "reference_limit": "Newton public disponible; fermeture entropique complète sur quadrature paramétrable non construite.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/moments/closures/protocol.py;python/pops/time/_program/local.py:solve",
+      "production_status": "scoped_native_entropy_serial_and_mpi2_pass",
+      "qualification": "The repaired five-node, three-moment closure passes its separate serial receipt and one MPI2 case on both ranks covering20 moderate interior targets, positive populations, original moment residuals, independent entropy/nullspace checks, read-only targets and repeated outside-cone refusal with rollback.",
+      "assessment_kind": "scoped_serial_and_mpi2_xml_hash_verified",
+      "remaining_gap": "No general quadrature, near-boundary robustness, native BOUNDARY-vs-INFEASIBLE diagnostic classification, AMR/GPU or full MN transport follows. The earlier rectangular fixture failure remains archived.",
+      "production_evidence": [
+        "evidence/post-7b35ffd-scoped/manifest.json",
+        "evidence/local-affine-converged/manifest.json"
+      ]
+    },
+    {
+      "id": "M19",
+      "title": "Vlasov–Poisson / BGK",
+      "definition": "Support produit x×v, réduction en v, champ en x, relèvement; pas tableau monodomaine.",
+      "planned_test": {
+        "initial_boundary_data": "Chaîne finie4×3→4→4×3; ensuite transportlibre périodique solutionf(x-vt,v).",
+        "mesh_time": "Nx=32,64; Nv=32,64; supportvtronqué et bordsflux définis.",
+        "oracle": "Bilan masse, compatibilité champ et norme projection; Landau/amortissement fullcase distinct."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Réduction partielle et relèvement entre supports absents du profil exécuté.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/_ir/quantity.py:PhysicalSupport;python/pops/mesh/physical_mapping.py:PhysicalSupportMap;python/pops/time/_program/physical_maps.py:Program.map;include/pops/runtime/dynamic/physical_support_transfer.hpp;src/runtime/system/system_layout_transfer.cpp;src/runtime/amr/amr_layout_transfer.cpp",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "Generic product-support reduction/extension source realization exists; finite public 4x3 chain and installed native reception pending. Complete Vlasov-Poisson/BGK is not qualified.",
+      "assessment_kind": "source_mechanism_identified_native_reception_pending",
+      "remaining_gap": "Receive product-map states, clocks, ownership and restart with matching native artifacts, then implement/receive free transport and explicitly declared field/collision/boundary equations. Complete BGK and Landau damping remain separate scientific obligations."
+    },
+    {
+      "id": "M20",
+      "title": "Fokker–Planck multiespèces",
+      "definition": "Collision différentielle en vitesse; coefficients et conservation interespèces à fixer par article.",
+      "planned_test": {
+        "initial_boundary_data": "Maxwelliennes initiales de vitesses/températures différentes; masses, diffusivité et convention à documenter.",
+        "mesh_time": "À verrouiller après choix de variante; aucune substitution par ODE de friction.",
+        "oracle": "Résidu sur domainev, masses/impulsion/énergie et fluxbord; tolérances après normalisation."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Portée différentielle en vitesse et couplage par fibre non réalisés.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/diffusion.py",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
+    },
+    {
+      "id": "M21",
+      "title": "Gyrocinétique full-f",
+      "definition": "Mesure phase et dérivée de champ; papier DG, adaptation FV distincte.",
+      "planned_test": {
+        "initial_boundary_data": "Slab et onde d’Alfvén cinétique; équations/bracket/mesure/bords à fermer.",
+        "mesh_time": "Non fixé: dépend de la variante et des opérateurs compatibles.",
+        "oracle": "Dispersion/énergie/charge selon la construction réelle; échec explicite service de fibre absent."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Mesure de phase, géométrie et dérivée de champ spécifiques à expliciter; pas de remplacement par Vlasov.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/_facade.py:Model",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
+    },
+    {
+      "id": "M22",
+      "title": "Rayonnement M1–matière",
+      "definition": "Fermeture radiative et échange d’énergie raide; transport/diffusion limites séparées.",
+      "planned_test": {
+        "initial_boundary_data": "χ(f) bornes isotrope/libre; deux réservoirs linéaires normalisés, pas loiT⁴ remplacée silencieusement.",
+        "mesh_time": "Testalgebrique dt0.4,k0.8; Marshak à fermer avec opacité et bords.",
+        "oracle": "Énergie deuxréservoirs,χ(0)=1/3 χ(1)=1; domaine|F|≤cE."
+      },
+      "reference_profile": "not_demonstrated",
+      "reference_limit": "Fermeture M1, échange matière–rayonnement et régime de diffusion non assemblés.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/_board_rate.py:rate",
+      "production_status": "scoped_native_h05_serial_and_mpi2_pass",
+      "qualification": "Four H05 cases (two orders plus two independent nonuniform-cell variants) pass both serial and MPI2. Same-artifact rate rebind .8/0/-.8 verifies original backward-Euler exchange residuals, energy conservation, domain refusal and rollback at dt=.4 without post-solve renormalization.",
+      "assessment_kind": "scoped_serial_and_mpi2_xml_hash_verified",
+      "remaining_gap": "Only the normalized two-reservoir linear exchange H05 subproblem is received. Full M1 closure/transport, nonlinear T^4 matter coupling, opacity/boundary specification and Marshak diffusion limits remain open.",
+      "production_evidence": [
+        "evidence/local-affine-converged/manifest.json"
+      ]
+    },
+    {
+      "id": "M23",
+      "title": "MHD Hall",
+      "definition": "Terme dispersif antisymétrique distinct de la diffusion ohmique.",
+      "planned_test": {
+        "initial_boundary_data": "Fourier transverse linéaire k=2,ηH=0.3; matrice rotation.",
+        "mesh_time": "Temps0.2; référence exponentielle.",
+        "oracle": "ω=ηH k² et norme; limiteHall0; pas garantiecomplèteMHD."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Gradients réversibles prévus par la note; réalisation MHD–Hall complète absente.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/numerics/diffusion.py:CoupledGradient;python/pops/codegen/program_emit_diffusion.py;include/pops/numerics/diffusion/prepared_diffusion.hpp",
+      "production_status": "scoped_native_serial_and_mpi2_pass",
+      "qualification": "Constant component D sym-PSD plus R skew is realized in a real periodic Dim1 kernel. Five Hall Fourier trajectories per backend cover N32/64, component permutation, eta=.3 and zero. Two three-component matrix variants exercise rank-one D, two weighted occurrences, both SSPRK2 stages, all 384 oriented records, overflow rejection and exact rollback. Three native tests pass serial and each MPI rank, including an empty rank. Independent saved-state phase and polynomial-amplification oracle passes.",
+      "assessment_kind": "sdk623_saved_state_and_ledger_recomputation_verified",
+      "remaining_gap": "Full Hall MHD, arbitrary spatial tensors, variable/nonlinear coefficients, nonperiodic boundaries, AMR and GPU remain implementation/qualification obligations. This receipt does not prove general SSPRK2 imaginary-axis stability; dimensions 2/3 are being extended separately and are not covered by SDK623.",
+      "production_evidence": [
+        "evidence/m23-m05-converged/manifest.json",
+        "m23_m05_converged_reception.md"
+      ]
+    },
+    {
+      "id": "M24",
+      "title": "Baer–Nunziato",
+      "definition": "Deux phases et fraction volumique; chemins et relaxations font partie de la variante.",
+      "planned_test": {
+        "initial_boundary_data": "Contact/Riemann/phase disparaissante; pressions interfaciales et vitesses à fixer.",
+        "mesh_time": "Non fermé par le corpus; pas paramètres inventés de modèle.",
+        "oracle": "Conservation/positivité/chemin et équilibre selon variante; tests de limite physique requis."
+      },
+      "reference_profile": "not_demonstrated",
+      "reference_limit": "Produits non conservatifs disponibles; relations de phases et choix de chemin du cas à fermer.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/_board_rate.py:nonconservative_product",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
+    },
+    {
+      "id": "M25",
+      "title": "GPR thermomécanique",
+      "definition": "Distorsion et impulsion thermique sont de vraies variables internes.",
+      "planned_test": {
+        "initial_boundary_data": "Onde cisaillement et relaxation; énergie constitutive, coefficients et bords à fixer.",
+        "mesh_time": "Non fixé; bibliothèque scientifique nécessaire.",
+        "oracle": "Compatibilité évolutiondistorsion, énergie, limitevisqueuse; invariants ne viennent pas du typage."
+      },
+      "reference_profile": "not_demonstrated",
+      "reference_limit": "États internes persistants représentables; équations GPR et relaxation complète non codées.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/physics/_board_rate.py:rate",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
+    },
+    {
+      "id": "M26",
+      "title": "Agrégation–diffusion",
+      "definition": "Interaction par noyau symétrique; mesure et appariement explicites.",
+      "planned_test": {
+        "initial_boundary_data": "W(x)=cos(2πx) périodique et densité positive; énergieE=.5〈ρ,Wρ〉.",
+        "mesh_time": "N=12témoin; PDE N32,64,128 avecdiffusionàfixer.",
+        "oracle": "Dérivée énergétique et masse; énergie pleine seulement sifluxgradientcompatible."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Convolution générale et portée de l’interaction non locale non réalisées.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/time/_program/local.py:solve",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
+    },
+    {
+      "id": "M27",
+      "title": "Cahn–Hilliard",
+      "definition": "Formulation mixte (c,μ), opérateurordre4 et deux relations de bord.",
+      "planned_test": {
+        "initial_boundary_data": "Sous-cas linéarisé stable μ=c-ε²Δc,ε=.08, périodique.",
+        "mesh_time": "N16;dt.01; puis raffinement32/64 et potentiel doublepuits explicitementdistinct.",
+        "oracle": "Masse et décroissancequadratique; pas conclusion sur séparation non linéaire."
+      },
+      "reference_profile": "not_demonstrated",
+      "reference_limit": "Produit d’inconnues et Laplaciens disponibles; formulation mixte, bords et solve Cahn–Hilliard non testés.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/fields/problem.py:FieldProblem;python/pops/time/_program/local.py:solve",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
+    },
+    {
+      "id": "M28",
+      "title": "ALE / volumes mobiles",
+      "definition": "Évoluer volume et inventaire avec même volume balayé; pas remap instantané.",
+      "planned_test": {
+        "initial_boundary_data": "Troiscellules périodiques de volumes(.2,.3,.5), étatuniforme2.3, volumesbalayés(.01,-.02,.01).",
+        "mesh_time": "Une miseàjourGCL; grilleoscillante surpériode à intégrer ensuite.",
+        "oracle": "Uniformité≤1e-13 et sommervolumes conservée; fluxrelatifphysique ultérieur."
+      },
+      "reference_profile": "extension",
+      "reference_limit": "Extension ALE déjà explicite dans la note; volumes mobiles et flux balayés non réalisés.",
+      "reference_evidence": [],
+      "production_candidate_symbols": "python/pops/mesh/_amr/hierarchy_regrid.py:RegridTransactionGate",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "candidate symbols only; complete native case not established",
+      "assessment_kind": "prior_mapping_retained_without_new_requalification",
+      "remaining_gap": "Complete native corpus case remains unestablished; missing expression or implementation is not reclassified as SCOPE."
+    }
+  ],
+  "witnesses": [
+    {
+      "id": "W01",
+      "title": "Cosinus scalaire en FV",
+      "related_model": "M01",
+      "production_candidate_symbols": "python/pops/initial/__init__.py;python/pops/numerics/spatial.py:FiniteVolume",
+      "production_status": "historical_scoped_pass",
+      "qualification": "Native cell-average initial state and independent face-integral oracle, complete M01 Dim=2 sweeps. Historical identity only; not a global83b qualification.",
+      "production_evidence": [
+        "evidence/022f5ac/m01-openmp1-reviewed",
+        "evidence/022f5ac/m01-mpi2-authenticated"
+      ],
+      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception."
+    },
+    {
+      "id": "W02",
+      "title": "Advection-diffusion avec borne combinée",
+      "related_model": "M04",
+      "production_candidate_symbols": "python/pops/numerics/diffusion.py:Diffusion;python/pops/time/_step/transaction.py:AcceptanceGuard",
+      "production_status": "historical_scoped_pass",
+      "qualification": "Native combined-bound rejection/rollback passes at historicale107/220b. Stable M04 ForwardEuler scientific order still fails; SSPRK2 is a distinct successful variant.",
+      "production_evidence": [
+        "evidence/022f5ac/installed-w02-combined-bound"
+      ],
+      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception."
+    },
+    {
+      "id": "W03",
+      "title": "Flux principal entre deux blocs",
+      "related_model": "M12",
+      "production_candidate_symbols": "python/pops/_ir/balance.py:BalanceView",
+      "production_status": "scoped_native_amr_routes_pass_with_historical_failures",
+      "qualification": "Generic principal grouping source and selected native AMR routes are integrated. Earlier seven generated compilation failures remain historical; later seven selected User/principal AMR routes pass on the authenticated native 6b5f452e receipt already linked by C11/C23.",
+      "remaining_gap": "This closes only the selected grouped AMR routes, not arbitrary state counts, regions, boundaries, or the full original W03 matrix.",
+      "production_evidence": [
+        "evidence/83b2b12/installed-38faddb-unit",
+        "evidence/83b2b12/installed-83b2b12-critical",
+        "evidence/83b2b12/installed-83b2b12-critical-pde",
+        "evidence/eac92bb/manifest.json"
+      ]
+    },
+    {
+      "id": "W04",
+      "title": "Poisson au vrai stage",
+      "related_model": "M08",
+      "production_candidate_symbols": "python/pops/time/_program/clocks.py:stage;python/pops/fields/poisson.py",
+      "production_status": "scoped_native_dim2_stage_pass",
+      "qualification": "Corrected cfef849 M08 N32²/N64² two-step Dim2 receipt authenticates final-step stage0 state, distinct same-time probe and physical stage field; independent saved-state checks reject stale-field transport for this witness.",
+      "remaining_gap": "General stage-cache equivalence, MPI and other model/dimension contexts remain open; prior stale-slot receipt stays historical.",
+      "production_evidence": [
+        "evidence/83b2b12/installed-38faddb-unit",
+        "m08_scientific_variant.md",
+        "evidence/scientific-eac92bb/m08-eac92bb-openmp1",
+        "history_post_run_observation_audit.md",
+        "evidence/cfef849-scoped/manifest.json"
+      ]
+    },
+    {
+      "id": "W05",
+      "title": "Rotation pure de Lorentz",
+      "related_model": "M12",
+      "production_candidate_symbols": "python/pops/physics/_authoring_sources.py:source_term",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "No new complete production witness receipt located in this audit.",
+      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception."
+    },
+    {
+      "id": "W06",
+      "title": "Solve par blocs contre solve monolithique",
+      "related_model": "M09",
+      "production_candidate_symbols": "python/pops/linalg/finite.py;include/pops/numerics/linalg/finite_linear.hpp;examples/migration/scientific/api040_m09_finite_native.py",
+      "production_status": "scoped_native_finite_witness_serial_and_mpi2_pass",
+      "qualification": "Original finite8+4 W06 equations execute in a singleton native batch via explicit finite supports and LocalResidual. Ten cases pass serial and on each MPI2 rank: mono/condensed, permutations, singular chosen pivot, rebound captures, owner-only finite-input overflow, rollback and new bind. Thirty-two saved states independently recompute residual<3.553e-15, monolithic error<7.772e-16 and CN endpoint energy error<1.066e-14 (fixed criterion1e-11).",
+      "remaining_gap": "Finite original witness received; general spatial/global condensation with candidate-dependent providers and arbitrary field constraints remains open.",
+      "production_evidence": [
+        "m09_hoffart_scope.md",
+        "evidence/finite-amr-preliminary/manifest.json",
+        "evidence/finite-amr-converged/manifest.json"
+      ]
+    },
+    {
+      "id": "W07",
+      "title": "HyQMOM15 états réalisables normales et permutations",
+      "related_model": "M16",
+      "production_candidate_symbols": "python/pops/moments/hierarchy.py;python/pops/moments/transport.py",
+      "production_status": "partial_source_with_math_blockage",
+      "qualification": "Full correlated-Gaussian Jacobian/charpoly and permutations checked; demonstrated B.1 hyperbolicity conflict classified MATH; no native magnetic trajectory.",
+      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception.",
+      "production_evidence": [
+        "evidence/83b2b12/source-reviews/astra-m15-m16-independent-review.md"
+      ]
+    },
+    {
+      "id": "W08",
+      "title": "Fan-Li réellement non conservatif",
+      "related_model": "M17",
+      "production_candidate_symbols": "python/pops/numerics/nonconservative.py:PathConservativeFiniteVolume",
+      "production_status": "scoped_native_pass",
+      "qualification": "M17/W08 full authored nonconservative Fan–Li15 Dim2 x-dependent Uniform case passes canonical and reversed eight-step SSPRK2 runs on native 6b5f452e; old FixedDt failure remains archived.",
+      "remaining_gap": "Dim1/AMR and general nonconservative schemes are not established by this scoped witness.",
+      "production_evidence": [
+        "evidence/83b2b12/m17-220b-openmp1",
+        "path_consumer_stability_v2.md",
+        "evidence/scientific-eac92bb/m17-eac92bb-openmp1",
+        "evidence/scientific-eac92bb/m17-eac92bb-openmp1-reviewed"
+      ]
+    },
+    {
+      "id": "W09",
+      "title": "Fermeture infaisable sur sa quadrature",
+      "related_model": "M18",
+      "production_candidate_symbols": "python/pops/moments/closures/protocol.py",
+      "production_status": "scoped_variant_native_infeasible_capture_serial_and_mpi2_pass",
+      "qualification": "The M18 five-node variant on[-1,1] refuses target(m0,m1,m2)=(1,0,1.1) twice, with original-residual failure and dual/read-only-target/time rollback on each MPI rank; a separate repaired serial receipt also passes.",
+      "remaining_gap": "The original W09 quadrature/target variant is not silently replaced by this M18 variant. A distinct native boundary-versus-infeasible diagnostic is still absent.",
+      "assessment_kind": "scoped_serial_and_mpi2_xml_hash_verified",
+      "production_evidence": [
+        "evidence/local-affine-converged/manifest.json"
+      ]
+    },
+    {
+      "id": "W10",
+      "title": "Contrainte collective de mélange",
+      "related_model": "M11",
+      "production_candidate_symbols": "python/pops/physics/diffusion.py",
+      "production_status": "scoped_native_constrained_product_serial_and_mpi2_pass",
+      "qualification": "Two public augmented-product permutations pass on each MPI rank, retaining original friction and sum-zero constraint and refusing incompatible forcing; earlier serial positives remain in their original failed-suite context.",
+      "remaining_gap": "Selected normalized constraint/product witness only; no general collective-mixture theorem, full M11 field campaign or arbitrary singular operator acceptance is inferred.",
+      "production_evidence": [
+        "evidence/post-7b35ffd-scoped/manifest.json",
+        "evidence/local-affine-converged/manifest.json"
+      ],
+      "assessment_kind": "scoped_serial_and_mpi2_xml_hash_verified"
+    },
+    {
+      "id": "W11",
+      "title": "Rejet après calcul d'un courant de paroi",
+      "related_model": "M14",
+      "production_candidate_symbols": "python/pops/time/_step/transaction.py:StepTransactionPlan",
+      "production_status": "not_executed_for_this_mapping",
+      "qualification": "No new complete production witness receipt located in this audit.",
+      "remaining_gap": "Original witness remains open; candidate mechanisms do not constitute a native reception."
+    },
+    {
+      "id": "W12",
+      "title": "Construction dépendant de la durée",
+      "related_model": "M17",
+      "production_candidate_symbols": "include/pops/runtime/program/program_runtime_state.hpp;include/pops/runtime/program/accepted_exchange.hpp;tests/cpp/integration/runtime/test_program_runtime.cpp",
+      "production_status": "scoped_native_duration_transaction_serial_and_mpi2_pass",
+      "qualification": "Real ProgramRuntime accepted caches/exchanges distinguish proposed durations .1/.2/.3 after child commit, parent rollback and retry. Exact state/history/cache/clock rollback and duplicate-occurrence refusal pass3/3 CTest entries including the ten-case MPI2 aggregate. Earlier MPI test snapshot ownership error is retained and repaired.",
+      "remaining_gap": "General interval exchange replacement, computed endpoints and persistent IntegralState/circuit are not established by this W12 cache/mailbox witness.",
+      "production_evidence": [
+        "evidence/finite-amr-converged/manifest.json",
+        "finite_amr_converged_reception.md"
+      ]
+    }
+  ],
+  "production_evidence_schema": 5,
+  "evidence_manifest": "evidence/83b2b12/manifest.json",
+  "reception_window": {
+    "native_sha256": "4574ed6096650aa708ad040fd6ee056414a3cfa1735a0440bd74220170265beb",
+    "verified_source_files": 1079,
+    "source_files_sha256": "c1f5d8141ac858aa80efc7e24ca1c2960b2733b83084b97b7715fb08ffeacaf5",
+    "initial_critical_receipt": {
+      "tests": 71,
+      "passed": 50,
+      "setup_errors": 21,
+      "failures": 0,
+      "status": "failed"
+    },
+    "qualification": "Historical 83b2b12 window retained, including all failures. Later scoped eac92bb receipts are recorded separately; no global acceptance or GPU/OpenMPI qualification.",
+    "corrected_pde_receipt": {
+      "tests": 21,
+      "passed": 12,
+      "failures": 9,
+      "setup_errors": 0,
+      "status": "failed",
+      "breakdown": "6 Primitive and6 LocalResidual native passes;2 C17 test-API failures;6 AMRgroup+1Primitive/User generated-package compilation failures."
+    }
+  },
+  "post_snapshot_source_fixes": [
+    {
+      "commit": "6ce6782dd9c83d18e56fbc1bee82429d8089f317",
+      "change": "C17 fixture reads diagnostics from installed native executor; former test-API failures retained.",
+      "reception": "pending; no pass inferred"
+    },
+    {
+      "commit": "3d06cab",
+      "change": "Do not instantiate group User policies on constituent Program-only storage carriers; principal helper retains policies.",
+      "reception": "Seven selected installed AMR routes pass on native 6b5f452e; earlier seven critical83 failures remain in historical evidence. See scoped_receptions.selected_amr."
+    }
+  ],
+  "mapping_baseline_head": "83b2b1239973f3e744f9e3975734a40a3abf65d6",
+  "scoped_receptions": {
+    "selected_amr": {
+      "manifest": "evidence/eac92bb/manifest.json",
+      "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+      "statuses": {
+        "installed-a085890-amr-routes": "passed",
+        "installed-eac92bb-rank-one-amr-mpi2": "failed",
+        "installed-eac92bb-rank-one-amr-mpi2-diagnostics": "failed",
+        "installed-eac92bb-rank-one-amr-mpi2-reviewed": "passed"
+      },
+      "limit": "Seven selected installed AMR routes and one rank-one invalid-body MPI2 rollback test; no full C38/AND9 or general AMR acceptance."
+    },
+    "scientific": {
+      "manifest": "evidence/scientific-eac92bb/manifest.json",
+      "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+      "statuses": {
+        "m06-eac92bb-openmp1": "failed",
+        "m06-eac92bb-openmp1-reviewed": "failed",
+        "m06-eac92bb-openmp1-accepted-history": "passed",
+        "m13-eac92bb-openmp1": "passed",
+        "m08-eac92bb-openmp1": "passed",
+        "m17-eac92bb-openmp1": "failed",
+        "m17-eac92bb-openmp1-reviewed": "passed",
+        "cattaneo-eac92bb-openmp1": "failed",
+        "cattaneo-eac92bb-openmp1-named-grid": "passed"
+      },
+      "limit": "M06/M13/M17/Cattaneo pass in their declared Dim2 OpenMP1 scopes; M08 final state passes but its archived stage diagnostic is invalid pending corrected rerun."
+    },
+    "source_after_executed_package": "5d1126811ff72fbe54d8686682ff2eb1ca6254d1 includes coordinated faces, products and C38 AND9 under build; no eac92bb runtime result is assigned to them."
+  },
+  "supplemental_receptions": {
+    "after_388c323": {
+      "manifest": "evidence/native-388c323-and-t2-v1-3/manifest.json",
+      "native_sha256": {
+        "dim1": "84b7d44400c40218d91c90d5cdfaa31a0860f6205eaa1a9fd5c4f709af3bac6c",
+        "dim2": "7105935a756fc6f0411c831ea18500f549365a30bc35cdbe340ef4ef11d56011"
+      },
+      "limits": "M07/M15 Dim1 scientific pass; selected C++ C38/C40 MPI2 pass; installed Dim2 products/boundaries 7 pass/8 fail; C17 two pass in older failed package; resource observed only.",
+      "pending": [
+        "T3 native after sparse detach fix",
+        "C22 native after sparse detach fix",
+        "M08 corrected stage reception"
+      ]
+    },
+    "after_cfef849": {
+      "manifest": "evidence/cfef849-scoped/manifest.json",
+      "native_sha256": {
+        "dim1": "84b7d44400c40218d91c90d5cdfaa31a0860f6205eaa1a9fd5c4f709af3bac6c",
+        "dim2": "7105935a756fc6f0411c831ea18500f549365a30bc35cdbe340ef4ef11d56011"
+      },
+      "statuses": {
+        "m08-cfef849-stage-reviewed": "passed",
+        "m07-cfef849-dim1-mpi2": "passed",
+        "installed-cfef849-dim1-m10": "passed",
+        "installed-cfef849-integrated-unit": "passed",
+        "installed-cfef849-local-and-frontier": "failed"
+      },
+      "limits": "M08 corrected Dim2 stage witness, M07 true Dim1 MPI2 lake-at-rest, M10 one native Dim1 stage-field step, 163 selected unit/source/host checks (24 C22), and historical 19-test local/frontier red with eight failures. Not corpus-wide.",
+      "pending": [
+        "T3/H05 local product native after collective layout-vote fix",
+        "C22 general native PDE frontier",
+        "full M10 spatial campaign"
+      ]
+    },
+    "after_4bb0639": {
+      "manifest": "evidence/4bb0639-scoped/manifest.json",
+      "native_sha256": {
+        "dim1": "84b7d44400c40218d91c90d5cdfaa31a0860f6205eaa1a9fd5c4f709af3bac6c",
+        "dim2": "7105935a756fc6f0411c831ea18500f549365a30bc35cdbe340ef4ef11d56011"
+      },
+      "statuses": {
+        "installed-4bb0639-products-operators-frontier": "failed",
+        "installed-4bb0639-dim1-m10-mpi2": "passed",
+        "m15-4bb0639-dim1-mpi2": "failed"
+      },
+      "limits": "Dim2 products/operators/frontier 11 pass/10 fail; selected M10 true Dim1 MPI2 two tests per rank pass; M15 MPI2 interrupted after first N32 state and has no scientific receipt. Source/host qualified-parameter red remains diagnostic only. No aggregate acceptance.",
+      "pending": [
+        "Local product/H05 runtime after ghost-depth and parameter repairs",
+        "general M10 spatial/temporal campaign"
+      ],
+      "excluded_later_evidence": [
+        "M15 MPI2 result on rebuilt native cd45279c belongs to the next evidence window"
+      ]
+    },
+    "after_7b35ffd_periodic": {
+      "manifest": "evidence/post-7b35ffd-scoped/manifest.json",
+      "statuses": {
+        "installed-7b35ffd-integrated-unit": "passed",
+        "installed-7b35ffd-dim1-m15-refusal-mpi2": "passed",
+        "m15-periodic-core-dim1-mpi2": "passed",
+        "installed-fc0d6f4c-native-smoke": "failed",
+        "installed-readonly-m11-m18-reception": "failed",
+        "installed-c22-frontier-mpi2": "passed",
+        "installed-affine-consumers-native": "failed",
+        "installed-m18-rectangular-repaired": "passed"
+      },
+      "limits": "M15 axial B.1 six Dim1 MPI2 trajectories and six invalid states pass, with saved NPZ metrics recomputed; C22 one test per Dim2 rank passes; selected source/host unit 95/95; CTest 92 run/pass plus three guard skips. Readonly smoke 3/4, readonly M11/M18 8/9 and affine 6/8 remain failed. No corpus-wide acceptance. The later M18 corrected fixture passes 6/6 selected cases; earlier 8/9 remains archived.",
+      "pending": [
+        "general M15 Fox-Laurent multiorder and M10 spatial campaign",
+        "general M18 quadrature/target campaigns"
+      ],
+      "excluded_live_campaigns": [
+        "later affine fixture repair or other campaigns after these archived receipts"
+      ]
+    },
+    "local_affine_converged": {
+      "manifest": "evidence/local-affine-converged/manifest.json",
+      "statuses": {
+        "installed-local-affine-serial-converged": "passed",
+        "installed-local-affine-m11-m18-mpi2": "passed",
+        "installed-selected-state-waves-unit": "passed"
+      },
+      "serial_counts": {
+        "helper": 6,
+        "native": 20
+      },
+      "mpi_native_cases_per_rank": 23,
+      "installed_unit_cases": 28,
+      "affine_scope": "Four native library-body cases: velocity1D order6 and2D order5, both orderings, on spatial Dim2 Uniform; shared body on stages and local unknowns. Conditional inactive/active coefficients and old/new particle-oracle equivalence pass serial/MPI2. Historical affine AMR recipe is outside this receipt.",
+      "limits": "CPU Kokkos Dim2 Uniform only. Twenty serial native cases coincide with the first20 MPI cases; MPI adds two M11 and one M18, whose serial evidence is separate. No general AMR/GPU/global solver or complete-corpus qualification. All earlier red receipts remain preserved."
+    },
+    "finite_amr_converged": {
+      "manifest": "evidence/finite-amr-converged/manifest.json",
+      "manifest_sha256": "2bbefba5801829198ec91d802765310a88792e90723890c75e0e9a04b4f2e8fd",
+      "prior_red_manifest": "evidence/finite-amr-preliminary/manifest.json",
+      "reconciled_at": "b2e32523",
+      "native_sha256": "aed8c1582c3344bd5afb19ab784adec260bcdbd4bf944b26a29242b53889c862",
+      "sdk_header_sha256": "396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c",
+      "serial_m09_passed": 10,
+      "mpi_m09_passed_per_rank": 10,
+      "amr_passed_serial_and_per_mpi_rank": 3,
+      "w12_ctest_passed": 3,
+      "saved_m09_states": 32,
+      "statuses": {
+        "installed-finite-amr-repaired-unit": "passed",
+        "installed-finite-amr-repaired-serial": "failed",
+        "installed-finite-m09-mpi2": "passed",
+        "installed-affine-amr-interface-serial": "passed",
+        "installed-affine-amr-interface-mpi2": "passed",
+        "native-w12-reviewed-ctest": "failed",
+        "native-w12-snapshot-repaired-ctest": "passed"
+      },
+      "limits": "CPU OpenMP/MPICH2, finite8+4 M09 batch, selected partial2-level affine/local-state AMR, W12 native transaction. No meshed mixed PDE, general AMR, integral circuit, GPU, HPC or remote CI qualification; later M23 SDK is distinct."
+    },
+    "m23_m05_converged": {
+      "manifest": "evidence/m23-m05-converged/manifest.json",
+      "manifest_sha256": "d4b9d913133b77884c3dbb09ed4c1e329d9100978baf7f9cf4acdc779764c996",
+      "reconciled_at": "e25133e7",
+      "saved_states": 26,
+      "raw_ledgers": 10,
+      "retained_failed_testcases": 4,
+      "sdk_header_sha256": "62398f3c13c193eb48db07518735fe755e6d108821adffc37acccd8fcea290eb",
+      "native_sha256": {
+        "dim1": "42436a0ccef7c5504273c9e459f4bd946652597aa6ee025bc484ac595ad7ca02",
+        "dim2": "1afb920397c7fca0d683444c8c21b3fbc908847bdd7e8906457e6dd384c44c27"
+      },
+      "limits": "Closed Dim1 Hall/component-gradient and scalar-shear witnesses, CPU serial/MPI2. The distinct 0cd16d01 Python refresh receives the old five Dim2 implicit/diffusion cases serial only. No complete Hall MHD, NS/conduction, AMR/GPU/HPC, new IntegralState ABI or remote CI qualification."
+    }
+  },
+  "scoped_receptions_20261001": {
+    "schema": "pops.api040.scoped-reception-index@1",
+    "date": "2026-10-01",
+    "metadata_base_commit": "54dc1c0dd56c8fbc1a8982a259fc894739389f90",
+    "production_snapshot": "ceecd4f889b0067709c5544c5e7e9c0b02711fa4",
+    "historical_fields_preserved": true,
+    "baseline_requalified": false,
+    "note": "scoped_reception_20261001.md",
+    "entries": {
+      "m18_sdk375f_actual": {
+        "status": "scoped_native_scientific_received",
+        "related_models": [
+          "M18"
+        ],
+        "related_witnesses": [
+          "W09"
+        ],
+        "evidence": {
+          "commit": "2f2903d2ee155b131bbfeb4324284fbd0d5275ff",
+          "path": "docs/development/api_040/m18_sdk375f_native_reception.json",
+          "sha256": "f7c40bfbd569d7006db3937a34c8ea47b1980c17520c63db00fd8dc2aea13f0b"
+        },
+        "dimension": 2,
+        "sdk_signature": "375fbdebb4b68bb43164ba3fdfa32ead3beaa8d89606925609e96507eeed3eff",
+        "native_sha256": "8dcdfacab20fffd876128c2ee4b06bd26f4c952f2d7ed6ce76fb028815bb6310",
+        "runtime_source": "33dee906850d56eec542dd0a7d0b21954aa244d3",
+        "native_build_source": "32235b93296fe6d4337194e17d0d45569dc63a08",
+        "native_passes": {
+          "serial": 1,
+          "mpi2_per_rank": 1
+        },
+        "phases_per_backend": 10,
+        "moderate_targets": 20,
+        "pinned_files": {
+          "serial": 35,
+          "mpi2": 36
+        },
+        "outside_refusals_per_backend": 2,
+        "safe_rebind": true,
+        "accepted_retry_same_outside_runtime": false,
+        "readonly_target_bitexact": true,
+        "original_moment_residual": 4.548139642679416e-12,
+        "original_residual_guard": 2e-11,
+        "scientific_countermodels_refused_per_backend": 12,
+        "original_files_reverified_unchanged": true,
+        "countermodel_native_execution": false,
+        "exchange_reader": "sol61.m18-empty-exchange-reader@2",
+        "scientific_reader": "sol61.m18-offline-reception@2",
+        "owners": {
+          "serial": {
+            "workspace_path": "outputs/installed-m18-entropy-serial-dim2-sdk375f-owner-codec-20261001/owner-pins.json",
+            "sha256": "6e047b1121882183ac3a5ca9cef63deeb3a430b579b0e175d1bafdb80f50b144"
+          },
+          "mpi2": {
+            "workspace_path": "outputs/installed-m18-entropy-mpi2-dim2-sdk375f-owner-codec-20261001/owner-pins.json",
+            "sha256": "6a3878b52b6435b2bd1494a2edeeff98758168934ef55e87e45858fb024730d6"
+          }
+        },
+        "limits": [
+          "Five fixed quadrature nodes, three multipliers, twenty moderate interior targets only.",
+          "Safe rebind is a new interior bind, not an accepted retry of the unchanged impossible target.",
+          "No near-boundary, general quadrature, native boundary-versus-infeasible classification, M19/BGK or AMR/GPU qualification.",
+          "System-generated CPP not exposed; no reconstructed source substitutes for it."
+        ],
+        "contract_links": {
+          "C15": {
+            "title_as_in_spec": "Inconnues et données fixes",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 63,
+            "scoped_relation": "Three solved multipliers and read-only five-node targets."
+          },
+          "C16": {
+            "title_as_in_spec": "Région de résidu fermée",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 65,
+            "scoped_relation": "Original closed moment residual recomputed from real saved populations."
+          },
+          "C17": {
+            "title_as_in_spec": "Résolution et contrôle d'erreur",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 67,
+            "scoped_relation": "Original residual guard retained; no universal Newton/error bound."
+          },
+          "C19": {
+            "title_as_in_spec": "Résultat faillible",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 77,
+            "scoped_relation": "Two actual outside refusals; generic outcome, not a new infeasibility classification."
+          },
+          "C33": {
+            "title_as_in_spec": "État d'une tentative",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 46,
+            "scoped_relation": "Read-only target/state/clock rollback on repeated outside attempts."
+          },
+          "C35": {
+            "title_as_in_spec": "Acceptation numérique séparée",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 76,
+            "scoped_relation": "Original numerical residual and positive-population/entropy guards."
+          },
+          "C40": {
+            "title_as_in_spec": "Reprise",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 135,
+            "scoped_relation": "Ten real phases include checkpoint/restart and exact restored state."
+          }
+        }
+      },
+      "t5_physical_global_sdk375f_actual": {
+        "status": "scoped_native_and_offline_source_component_received_root_association",
+        "related_models": [],
+        "fixture": "tests/python/integration/runtime/test_public_integral_feedback.py",
+        "wrapper": "sol61.physical-global-feedback.offline-reception@2",
+        "wrapper_commit": "54dc1c0dd56c8fbc1a8982a259fc894739389f90",
+        "dimension": 2,
+        "sdk_signature": "375fbdebb4b68bb43164ba3fdfa32ead3beaa8d89606925609e96507eeed3eff",
+        "native_sha256": "8dcdfacab20fffd876128c2ee4b06bd26f4c952f2d7ed6ce76fb028815bb6310",
+        "runtime_source": "180afdc5b294788f370e3720c71772d70805919c",
+        "native_build_source": "32235b93296fe6d4337194e17d0d45569dc63a08",
+        "native_batches": {
+          "serial_feedback_and_fields": 8,
+          "serial_field_consumers_separate": 3,
+          "mpi2_combined_per_rank": 11
+        },
+        "native_batch_outputs": [
+          "outputs/installed-public-physical-global-field-serial-dim2-sdk375f-20261001",
+          "outputs/installed-public-field-consumers-serial-dim2-sdk375f-20261001",
+          "outputs/installed-public-physical-global-field-mpi2-dim2-sdk375f-20261001"
+        ],
+        "true_feedback_cases_per_backend": 3,
+        "phases_per_backend": 13,
+        "phase_files_per_backend": 39,
+        "serial_secondary_batch_scope": "Field source/transport False and True plus joint Neumann consumed gradient; distinct from the three True feedback witnesses.",
+        "root_inputs": {
+          "serial": {
+            "workspace_path": "outputs/physical-global-serial-root-owner-20261001/root-inputs-associated.json",
+            "sha256": "8a38ae1f13f6fe90027c3fa488fe155b81b93a4226d32aeda7499bd6d41d2efe"
+          },
+          "mpi2": {
+            "workspace_path": "outputs/physical-global-mpi2-root-owner-20261001/root-inputs-associated.json",
+            "sha256": "383252dd21ca867173de787e3084867251b78ebd4b4d0a6d8fca47b472d8080e"
+          }
+        },
+        "mathematical_owners": {
+          "serial": {
+            "workspace_path": "outputs/physical-global-serial-root-owner-20261001/mathematical-owner-pins.json",
+            "sha256": "8f4aeca8ad6f37d95aeeacea5a6ff14d516a9c38a8745761f9dc5e60f126b753"
+          },
+          "mpi2": {
+            "workspace_path": "outputs/physical-global-mpi2-root-owner-20261001/mathematical-owner-pins.json",
+            "sha256": "d8d7dd753fb514baa7878d5758a645c246632b1ddcec91bf4a75ff6232e756a8"
+          }
+        },
+        "linkage_receipts": {
+          "serial": {
+            "workspace_path": "outputs/physical-global-serial-root-owner-20261001/physical-source-linkage-reception-v2.json",
+            "sha256": "de99d62a8c322efb595972e9906929c4ddb97ee7e6855767ccb07c50e2f80367"
+          },
+          "mpi2": {
+            "workspace_path": "outputs/physical-global-mpi2-root-owner-20261001/physical-source-linkage-reception-v2.json",
+            "sha256": "613f60e30b10fbad080e9ffbf22ae589a7b966e398ab9808aca8e9241af8ea8e"
+          }
+        },
+        "field_linf_max": 2.220446049250313e-16,
+        "physical_inventory_residual_max": 8.304988641238964e-17,
+        "native_ledger_residual_max": 1.951563910473908e-18,
+        "original_source": "S=-0.3*circuit_quantity*U; candidate q consumed once before local cell loops; no extra q.",
+        "component_binary_binding_recomputed": true,
+        "cryptographic_aggregate_binding": false,
+        "aggregate_binding": "ROOT-attested execution/cache association; original aggregate payload not retained.",
+        "historical_sdk7b_program_false_requalified": false,
+        "limits": [
+          "Only three physicalTrue feedback witnesses receive the 13-phase math/source/CPP/component linkage; other native cases retain their own scope.",
+          "No cryptographic aggregate-to-child binding, synthesized aggregate payload, AMR/vector/Dim3 qualification."
+        ],
+        "contract_links": {
+          "C15": {
+            "title_as_in_spec": "Inconnues et données fixes",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 63,
+            "scoped_relation": "Typed read-only integral candidate as original physical-source global input."
+          },
+          "C20": {
+            "title_as_in_spec": "Temps et identité",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 88,
+            "scoped_relation": "Exact candidate capture point n and accepted clocks."
+          },
+          "C23": {
+            "title_as_in_spec": "Continuation et échange effectif",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 94,
+            "scoped_relation": "Unique real exterior x+ trace, selected occurrence and actual accepted ledger."
+          },
+          "C24": {
+            "title_as_in_spec": "Ordre d'exécution",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 96,
+            "scoped_relation": "Original source evaluates captured global quantity once before local loops."
+          },
+          "C25": {
+            "title_as_in_spec": "Compilation de corps inspectables",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 115,
+            "scoped_relation": "Authentic retained CPP/source and recomposed component SO identities; aggregate limit explicit."
+          },
+          "C33": {
+            "title_as_in_spec": "État d'une tentative",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 46,
+            "scoped_relation": "Rejected transport preserves captured q/state/clock before safe retry."
+          },
+          "C40": {
+            "title_as_in_spec": "Reprise",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 135,
+            "scoped_relation": "Accepted checkpoint state/ledger and restart/replay bytes received."
+          }
+        }
+      },
+      "m04_fe_fixed_courant_sdk375f_control": {
+        "status": "separate_native_control_received_historical_case_failed",
+        "related_models": [
+          "M04"
+        ],
+        "related_witnesses": [
+          "W02"
+        ],
+        "output": "outputs/installed-m04-forward-euler-fixed-courant-control-dim2-sdk375f-20261001",
+        "dimension": 2,
+        "ranks": 1,
+        "sdk_signature": "375fbdebb4b68bb43164ba3fdfa32ead3beaa8d89606925609e96507eeed3eff",
+        "native_sha256": "8dcdfacab20fffd876128c2ee4b06bd26f4c952f2d7ed6ce76fb028815bb6310",
+        "seconds": 116.70078783296049,
+        "temporal_method": "ForwardEuler",
+        "step_policy": "fixed_courant",
+        "advective_courant_cap": 0.125,
+        "resolutions": [
+          32,
+          64,
+          128
+        ],
+        "final_time": 0.1,
+        "observed_orders": [
+          0.978645834436066,
+          0.9884487638692555
+        ],
+        "original_order_guard": 0.7,
+        "independent_saved_npz_oracle": "passed",
+        "scientific_receipt": {
+          "workspace_path": "outputs/installed-m04-forward-euler-fixed-courant-control-dim2-sdk375f-20261001/states/receipt.json",
+          "sha256": "74bbf113d611d1894870cfaa4843bbefaa7645f78b0013475d4332eeecca2407"
+        },
+        "independent_receipt": {
+          "workspace_path": "outputs/installed-m04-forward-euler-fixed-courant-control-dim2-sdk375f-20261001/independent-reception.json",
+          "sha256": "78e42e7bce3b47d09c22a2545e24442d0b30881cd786862a26fe2c63fa76ad1b"
+        },
+        "historical_combined_bound_forward_euler": {
+          "status": "failed",
+          "observed_order": 0.60635,
+          "guard": 0.7,
+          "closed": false
+        },
+        "limits": [
+          "Separate fixed-Courant regime/cancellation control, not closure of historical combined-bound M04.",
+          "ForwardEuler, original physics/constants/resolutions/L1 and order guards preserved; SSPRK2 remains a distinct method.",
+          "Native Serial Dim2 y-invariant x-only tensor, no MPI/general tensor/GPU convergence qualification."
+        ],
+        "contract_links": {
+          "C14": {
+            "title_as_in_spec": "Diffusion, flux joints et ordre supérieur",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 57,
+            "scoped_relation": "Scoped x-only diagonal diffusion and original advection-diffusion equations."
+          },
+          "C21": {
+            "title_as_in_spec": "Méthode construite",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 90,
+            "scoped_relation": "Separately declared ForwardEuler fixed-Courant control; historical method failure retained."
+          }
+        }
+      },
+      "amr_original_fixture_v2": {
+        "status": "historical_native_red_and_source_admission_gap_preserved_corrected_fixture_native_pending",
+        "related_models": [],
+        "old_output": "outputs/installed-public-original-amr-serial-dim2-sdk375f-20261001",
+        "historical_native_cases": 4,
+        "historical_native_status": "failed",
+        "historical_failures": [
+          "N16 scalar accepted rows exist but coarse active mask is entirely false.",
+          "N16 three-component accepted rows exist but coarse active mask is entirely false.",
+          "N32 original GMRES exhausts unchanged 240-column budget.",
+          "Rollback fixture used nonexistent RuntimeInstance.step before attempts."
+        ],
+        "fixture_commit": "a2f7a2a9902de5ec21571efac7de401ea5f13167",
+        "fixture_contract": "sol61.public-original-amr-fixture@2",
+        "fixture": "tests/python/integration/runtime/test_public_amr_original_field.py",
+        "explicit_cpp_jacobi": "c7cdd2c38cc7145abb5981b90f38e9b6035b6e5e",
+        "python_port": "433f0d3f511b102d9c09076e57bc332838f0c6df",
+        "historical_source_review": "c880644af0cc73c6144b18786bbbee93dadcdc7d",
+        "historical_source_review_scope": "Ten source/math/extracted-controller checks passed without public Case/validate/resolve admission; unsupported LT tag was missed. Not integrated or qualified as admissible.",
+        "subsequent_root_source_counts": {
+          "passed": 162,
+          "failed": 5,
+          "seconds": 653.75
+        },
+        "corrected_fixture_commit": "b943dd6627550364337d41743cb4efe2f7b33480",
+        "corrected_fixture_public_resolve_reception": "pending independent source replay",
+        "realization": "SpatialBasisJacobi@1",
+        "builder_default": null,
+        "layout_change": "Current corrected fixture uses admitted strict a>1.035 narrow extrema bands, buffer1 and box maximum8. The previous a<.97 central strip is inadmissible; original a=1+.04cos remains unchanged.",
+        "duration_change": "Guarded FixedDt10DT once; public pops.run same runtime clips safe DT endpoint.",
+        "original_equations_and_numeric_controls_preserved": true,
+        "native_reception": false,
+        "limits": [
+          "Corrected public Case/validate/resolve admission, genuine partial clustering/ownership, explicit Jacobi N16/N32/permutations and original residual remain pending their respective source/native receptions.",
+          "Old full-fine N16 rows are constant-reaction observations only, not partial AMR qualification.",
+          "Legacy N32 budget failure remains failed; no hidden budget/tolerance/physics change."
+        ],
+        "contract_links": {
+          "C15": {
+            "title_as_in_spec": "Inconnues et données fixes",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 63,
+            "scoped_relation": "Original captured forcing/coefficient inputs, unchanged unknown product."
+          },
+          "C16": {
+            "title_as_in_spec": "Région de résidu fermée",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 65,
+            "scoped_relation": "Original nonlinear closed F preserved; new native original-residual proof pending."
+          },
+          "C17": {
+            "title_as_in_spec": "Résolution et contrôle d'erreur",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 67,
+            "scoped_relation": "Explicit right realization, unchanged Newton/linear budgets; no legacy failure requalification."
+          },
+          "C19": {
+            "title_as_in_spec": "Résultat faillible",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 77,
+            "scoped_relation": "Original solve and domain refusals remain explicit; actual new native outcomes pending."
+          },
+          "C33": {
+            "title_as_in_spec": "État d'une tentative",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 46,
+            "scoped_relation": "Corrected public large-attempt/safe-retry route; native rollback pending."
+          },
+          "C40": {
+            "title_as_in_spec": "Reprise",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 135,
+            "scoped_relation": "Strict accepted restart/history comparisons retained, new native reception pending."
+          }
+        }
+      },
+      "captured_diffusion_v2_ir10": {
+        "status": "source_math_syntax_received_native_pending",
+        "related_models": [],
+        "production_commit": "4ae5c4de2c73b88e1ed1644293df1c3ad0c66b9a",
+        "evidence": {
+          "commit": "3ceab3b719ad3ea316ddcf6b34b73396fce0e6d1",
+          "path": "docs/development/api_040/original_field_captured_diffusion_source_receipt.json",
+          "sha256": "d77011fa5ca761d9d9d6f353a34b09f646285bf23056a38d3f29d10551bd3c03"
+        },
+        "captured_diffusion_contract_version": 2,
+        "program_ir_version": 10,
+        "source_checks": {
+          "new_captured_and_combined": 24,
+          "legacy": 22
+        },
+        "syntax_dimensions": [
+          1,
+          2,
+          3
+        ],
+        "legacy_cpp_ir_modules_byte_exact": true,
+        "native_execution": false,
+        "mpi_execution": false,
+        "jit": false,
+        "limits": [
+          "Captured State coefficients frozen per prepared original residual; unknown-dependent diffusion refused.",
+          "No installed/native convergence, MPI or scientific campaign qualification; source syntax is not execution."
+        ],
+        "contract_links": {
+          "C14": {
+            "title_as_in_spec": "Diffusion, flux joints et ordre supérieur",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 57,
+            "scoped_relation": "Declared captured diffusion realization @2; native flux/operator reception pending."
+          },
+          "C15": {
+            "title_as_in_spec": "Inconnues et données fixes",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 63,
+            "scoped_relation": "Read-only captured State coefficients, distinct from unknown-dependent diffusion."
+          },
+          "C16": {
+            "title_as_in_spec": "Région de résidu fermée",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 65,
+            "scoped_relation": "Original closed residual coefficient capture preserved in source."
+          },
+          "C25": {
+            "title_as_in_spec": "Compilation de corps inspectables",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 115,
+            "scoped_relation": "Inspectable emitter and actual Dim1/2/3 syntax, not native execution."
+          },
+          "C31": {
+            "title_as_in_spec": "Version et validité",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 34,
+            "scoped_relation": "Explicit @2/IR10 discriminator with byte-exact old legacy branch."
+          }
+        }
+      },
+      "m19_finite_product_observation": {
+        "status": "historical_native_red_preserved_relay_source_received_full_native_pending",
+        "related_models": [
+          "M19"
+        ],
+        "historical_serial_compiled_and_bound": 6,
+        "historical_serial_status": "failed_before_saved_phases",
+        "historical_failure": "MultiLayout.local_boxes absent during initial _save after successful compile/bind.",
+        "source_relay": "9ccd3efbc92518899680360189c5b1f6c3e0ff4a",
+        "independent_source_commit": "ceecd4f889b0067709c5544c5e7e9c0b02711fa4",
+        "independent_source_checks": 43,
+        "source_doc": "docs/development/api_040/multi_layout_local_observation_sol61.md",
+        "native_reception": false,
+        "full_six_serial_and_mpi_replay": "pending",
+        "limits": [
+          "Source per-block relay and shape/ownership guards only; not replay of six installed cases.",
+          "Finite product reduction/field/lift mechanism only; no complete Vlasov-Poisson/BGK, Landau damping or AMR/GPU qualification."
+        ],
+        "contract_links": {
+          "C05": {
+            "title_as_in_spec": "Identité, type et coordonnées",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 3,
+            "scoped_relation": "Per-block local geometry and rank/component/ownership observation guards, source only."
+          },
+          "C15": {
+            "title_as_in_spec": "Inconnues et données fixes",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 63,
+            "scoped_relation": "Distinct product/fixed input supports; complete installed finite-chain reception pending."
+          },
+          "C39": {
+            "title_as_in_spec": "Propriétés du transfert",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 133,
+            "scoped_relation": "Declared support-map finite chain cannot be qualified before real saved phases."
+          },
+          "C40": {
+            "title_as_in_spec": "Reprise",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 135,
+            "scoped_relation": "Finite composite/child restart remains pending the full six-case Serial/MPI replay."
+          }
+        }
+      },
+      "m19_sdk7_finite_product_received": {
+        "status": "scoped_native_scientific_received",
+        "related_models": [
+          "M19"
+        ],
+        "evidence": {
+          "path": "docs/development/api_040/m19_sdk7_native_reception.json",
+          "sha256": "4306f2ef6d264d8000ee19c7e5289b6b2ab765c256b102c37b92d54eefb4de3a"
+        },
+        "native_passes": {
+          "serial": 6,
+          "mpi2_per_rank": 6
+        },
+        "countermodels_per_backend": 12,
+        "max_original_error": 2.842170943040401e-14,
+        "later_build_requalified": false,
+        "contract_links": {
+          "C05": {
+            "title_as_in_spec": "Identité, type et coordonnées",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 3,
+            "scoped_relation": "SDK7 actual finite-product Serial/MPI2 saved states, ownership, original reduction/extension and exact replay received; whole contract remains open."
+          },
+          "C15": {
+            "title_as_in_spec": "Inconnues et données fixes",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 63,
+            "scoped_relation": "SDK7 actual finite-product Serial/MPI2 saved states, ownership, original reduction/extension and exact replay received; whole contract remains open."
+          },
+          "C39": {
+            "title_as_in_spec": "Propriétés du transfert",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 133,
+            "scoped_relation": "SDK7 actual finite-product Serial/MPI2 saved states, ownership, original reduction/extension and exact replay received; whole contract remains open."
+          },
+          "C40": {
+            "title_as_in_spec": "Reprise",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 135,
+            "scoped_relation": "SDK7 actual finite-product Serial/MPI2 saved states, ownership, original reduction/extension and exact replay received; whole contract remains open."
+          }
+        },
+        "limits": [
+          "No full M19 kinetic family, arbitrary support, AMR/GPU/OpenMPI/ROMEO qualification",
+          "System-generated CPP absent; retained Program CPP does not prove CPP-to-System-DSO compile graph",
+          "Original resolved-plan payload absent; actual artifact aggregate recomputed, CompiledPlanRecord ROOT-attested",
+          "Later source/header changes do not inherit SDK7 qualification; a rebuilt package needs a fresh campaign"
+        ],
+        "archived_root_receptions": {
+          "serial": {
+            "root_reception": {
+              "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-portable-root-owner/root-reception.json",
+              "sha256": "a1db2dcee7c2b3d3ec7557994ea9e679ee287c901e79a1cebfb516dcf14bd11f"
+            },
+            "closed_selected_origin_leaves": 145,
+            "owner_pins": {
+              "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-portable-root-owner/owner-pins.json",
+              "sha256": "635fcbd576dec7e0fc5b1cb3e1cfac01ba05e8048f302442d18bb9e939f8a8cb"
+            },
+            "approval": {
+              "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-portable-root-owner/root-approval.json",
+              "sha256": "50e4d61434a1ec6d86ef3a3c1d5b8cc2031a9b1502785f124783fe78c606650e"
+            },
+            "backing_archive": {
+              "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-portable-root-owner/actual-selected-origin-bytes.zip",
+              "sha256": "5351eda423752711d9556586732f340df7f02a490ecfa9778e489c43dd91ae44"
+            },
+            "report": {
+              "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-serial-portable-root-owner/scientific-reception.json",
+              "sha256": "d650e50e2f13e2b9c10fdc30542f54eb53a8a4e309cd2a867803bd84c2ecb93e"
+            },
+            "original_paths_and_digests_unchanged": true,
+            "environment_fallback": false,
+            "new_native_execution": false,
+            "cpp_dso_graph_qualified": false
+          },
+          "mpi2": {
+            "root_reception": {
+              "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-mpi2-portable-root-owner/root-reception.json",
+              "sha256": "59eeb9fde98e033d5183964ae58c8b0b431be6b01e795e2b222d6e36a7882346"
+            },
+            "closed_selected_origin_leaves": 146,
+            "owner_pins": {
+              "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-mpi2-portable-root-owner/owner-pins.json",
+              "sha256": "c54c994a8f49d60bcb9032fa7cb057b5559785c582d4a60679760c9a01ec0149"
+            },
+            "approval": {
+              "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-mpi2-portable-root-owner/root-approval.json",
+              "sha256": "d2cfffc2bedb9a485fb2782e16892a660fc29bffe04833210019b9993effd313"
+            },
+            "backing_archive": {
+              "path": "/Users/romaindespoulain/dev/tmp/sol61-m19-mpi2-offline-pending-20261001/actual-origins-snapshot.zip",
+              "sha256": "ce8010b4b5c11c4d6e7a3d6fac4bd31309726d0917bd6653eedf1d053d1adc83"
+            },
+            "report": {
+              "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/m19-mpi2-portable-root-owner/scientific-reception.json",
+              "sha256": "fac28a94dae20a49f7368e1a0ac0a0bd792328b3866fe9975ac852580eb9c8bc"
+            },
+            "original_paths_and_digests_unchanged": true,
+            "environment_fallback": false,
+            "new_native_execution": false,
+            "cpp_dso_graph_qualified": false
+          }
+        }
+      },
+      "candidate_diffusion_v3_ir11": {
+        "status": "source_received_native_pending",
+        "related_models": [
+          "M06",
+          "M13",
+          "M22",
+          "M26",
+          "M27"
+        ],
+        "source_tests": 163,
+        "native_executed": false,
+        "evidence": {
+          "path": "docs/development/api_040/candidate_diffusion_root_source_reception.json",
+          "sha256": "506277a28cd37d20c16185d8f6c1186bae5faa9fd225a8a8ce8ccef62745825c"
+        },
+        "contract_links": {
+          "C14": {
+            "title_as_in_spec": "Diffusion, flux joints et ordre supérieur",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 57,
+            "scoped_relation": "PerCandidate@1 D(q) full original residual/JVP/authentication source reception; native and complete family acceptance pending."
+          },
+          "C15": {
+            "title_as_in_spec": "Inconnues et données fixes",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 63,
+            "scoped_relation": "PerCandidate@1 D(q) full original residual/JVP/authentication source reception; native and complete family acceptance pending."
+          },
+          "C16": {
+            "title_as_in_spec": "Région de résidu fermée",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 65,
+            "scoped_relation": "PerCandidate@1 D(q) full original residual/JVP/authentication source reception; native and complete family acceptance pending."
+          },
+          "C25": {
+            "title_as_in_spec": "Compilation de corps inspectables",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/02_contracts.tex",
+            "spec_line": 115,
+            "scoped_relation": "PerCandidate@1 D(q) full original residual/JVP/authentication source reception; native and complete family acceptance pending."
+          },
+          "C31": {
+            "title_as_in_spec": "Version et validité",
+            "spec_source": "reference/PoPS_API_v0.4.0/document/03_protocols.tex",
+            "spec_line": 34,
+            "scoped_relation": "PerCandidate@1 D(q) full original residual/JVP/authentication source reception; native and complete family acceptance pending."
+          }
+        },
+        "limits": [
+          "Original D(q) Native acceptance pending coherent rebuild",
+          "FullResidualBasisLU and EvolvedStage are separate pending extensions",
+          "No whole M06/M13/M22/M26/M27 qualification from source checks"
+        ]
+      },
+      "sdk2e4_build_cpp_and_native_attempts": {
+        "status": "scoped_build_cpp_received_and_python_native_defects_open",
+        "evidence": {
+          "path": "docs/development/api_040/sdk2e4_native_reception_snapshot.json",
+          "sha256": "f861c155aa2858a3309f48f172c2b1da031d9db22700da57f4715ebe232d2c0b"
+        },
+        "migration_complete": false,
+        "historical_baseline_requalified": false,
+        "sdk_signature": "2e4d69fd3574933f4b83cf014ad2d0159902fea6197d74623bee4b4ee6cf1675",
+        "native_dimensions_built": [
+          1,
+          2,
+          3
+        ],
+        "cpp": {
+          "selected": 240,
+          "passed": 235,
+          "failed": 0,
+          "serial_mpi_only_skips": 5
+        },
+        "installed_api_source_host_unit": {
+          "passed": 451,
+          "failed": 0
+        },
+        "serial_native_python": {
+          "diffusion_passed": 4,
+          "amr_diagnostics_passed": 2,
+          "uniform_diagnostics_fixture_failed": 2,
+          "stage_generated_compile_failed": 8
+        },
+        "scientific_saved_state_owner_seals_pending": true
+      },
+      "sdk2e4_diffusion_stage_followup": {
+        "status": "scoped_native_diffusion_stage_and_diffusion_science_received",
+        "evidence": {
+          "path": "docs/development/api_040/sdk2e4_diffusion_stage_followup.json",
+          "sha256": "5ca56f261b57f6871d5c2457c38a93233c2ed5595954fe51d1987de9c728de86"
+        },
+        "migration_complete": false,
+        "historical_baseline_requalified": false,
+        "sdk_signature": "2e4d69fd3574933f4b83cf014ad2d0159902fea6197d74623bee4b4ee6cf1675",
+        "native_stage_uniform": {
+          "serial_cases": 8,
+          "mpi2_cases_per_rank": 8,
+          "failed": 0,
+          "skipped": 0,
+          "scientific_root_seals_pending": false
+        },
+        "diffusion_scientific_receptions": {
+          "families": [
+            "frozen@3",
+            "candidate@2"
+          ],
+          "backends": [
+            "Serial",
+            "MPI2"
+          ],
+          "cases_per_family_and_backend": 2,
+          "mpi_archives_shared": true,
+          "original_F_relative_l2_max": 1.1978305400827463e-11,
+          "guard": 3e-08,
+          "cpp_to_dso_graph_proof": false,
+          "compound_semantic_payload_recomputed": false,
+          "cryptographic_aggregate_binding": false
+        },
+        "native_diagnostics": {
+          "uniform_and_amr_mpi2_cases_per_rank": 4,
+          "failed": 0
+        },
+        "remaining_port": "explicit global-field history storage owner for AMR; implementation and independent reception pending"
+      },
+      "sdk2e4_product_entropy_feedback_nonreg": {
+        "status": "six-product-checkpoint-capacity-failures-and-seven-passes-per-rank",
+        "evidence": {
+          "path": "docs/development/api_040/sdk2e4_product_entropy_feedback_nonreg.json",
+          "sha256": "245937b0d85ccac1ee66869d1a3996ba264dedd3fdf73a32be5fdb4b529bb223"
+        },
+        "migration_complete": false,
+        "sdk_signature": "2e4d69fd3574933f4b83cf014ad2d0159902fea6197d74623bee4b4ee6cf1675",
+        "counts_per_rank": {
+          "selected": 13,
+          "passed": 7,
+          "failed": 6,
+          "errors": 0,
+          "skipped": 0
+        },
+        "same_installation": true,
+        "rank_test_parity": true,
+        "scientific_owner_seal": false,
+        "remaining_fix": "verified multi-layout compiled diagnostic source inventory and fresh native reception"
+      },
+      "integrated_ir16_ir17_source_contracts": {
+        "schema": "root.api040.integrated-source-reception@1",
+        "scope": "SOURCE_ONLY-plus-actual-header-host",
+        "receipt": {
+          "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/ir16_ir17_integrated_source_reception.json",
+          "sha256": "b8e3e93ce7ffde6880a6c9577c71d88a60074314926fd451122af465284c0687",
+          "bytes": 5708
+        },
+        "native_scientific_acceptance": false,
+        "tests": 91,
+        "new_sdk_freeze_pending": true
+      },
+      "sdk9f57_dim2_actual_build": {
+        "schema": "root.api040.repository-native-build@3",
+        "receipt": "sdk9f57_dim2_build_reception.json",
+        "receipt_sha256": "99ef67b4fefbf54fbbbbb0af35b746e6472a91bfa2d76f00b943908d52df12fa",
+        "source_commit": "0abbe25395a44e570d8d5525693b8e2dcbf4d387",
+        "dimension": 2,
+        "sdk_signature": "9f57def42c90cfc0e7ee127afa5050d95f27ecbc65b4ed198f788a097e4b4bad",
+        "native_sha256": "c8a45b013042f53a76ca6754a0285203aa5a9fda6a18f1d580e181dec99642fe",
+        "build_passed": true,
+        "verified_installed_source_files": 1128,
+        "native_scientific_acceptance": false,
+        "other_dimensions_rebuilt": false,
+        "preserved_sdk2e4_unchanged": true
+      },
+      "sdk9f57_amr_stage_initial_attempt": {
+        "receipt": "sdk9f57_amr_stage_initial_attempt.json",
+        "receipt_sha256": "39868d3104c1a89b28d83ca35d92785b19cdd00d8be86fa6021b861b39612ecb",
+        "status": "failed",
+        "counts": {
+          "tests": 4,
+          "failures": 4,
+          "errors": 0,
+          "skipped": 0
+        },
+        "native_scientific_acceptance": false
+      },
+      "sdk9f57_metadata_repair_and_attempts": {
+        "receipt": "sdk9f57_metadata_repair_and_attempts.json",
+        "receipt_sha256": "4c32c862cdedc9b4f96a036a65d67312e3c652eb7089984c09d4b7922173399c",
+        "installation_passed": true,
+        "new_native_compilation": false,
+        "amr_counts": {
+          "tests": 4,
+          "failures": 4,
+          "errors": 0,
+          "skipped": 0
+        },
+        "spatial_initial_counts": {
+          "tests": 6,
+          "failures": 6,
+          "errors": 0,
+          "skipped": 0
+        },
+        "native_scientific_acceptance": false
+      },
+      "sdk9f57_closed_serial_product_spatial": {
+        "receipt": "sdk9f57_closed_serial_product_spatial.json",
+        "receipt_sha256": "9b49de3bc1fbb7e5f4ee97669abcd77c1a8cb4830b37d29ec1885c47e400e114",
+        "product_serial_counts": {
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "spatial_after_array_wire_counts": {
+          "tests": 6,
+          "failures": 4,
+          "errors": 0,
+          "skipped": 0
+        },
+        "native_scientific_acceptance": false,
+        "migration_complete": false,
+        "preserved_sdk2e4_unchanged": true
+      },
+      "sdk9f57_product_entropy_feedback_mpi2_nonreg": {
+        "receipt": "sdk9f57_product_entropy_feedback_mpi2_nonreg.json",
+        "receipt_sha256": "b5bbebef7aa2970b1b8e39cef4b5c9f34cdabb528617b731a3d1d8000dea00ec",
+        "counts_per_rank": {
+          "tests": 13,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "same_installation": true,
+        "rank_test_parity": true,
+        "scientific_owner_seal": false,
+        "migration_complete": false
+      },
+      "sdk9f57_m19_scientific_reception": {
+        "receipt": "sdk9f57_m19_scientific_reception.json",
+        "receipt_sha256": "40257d35b32a5c698478cb3bbcc80d859da4dee87a085aea2a284730385917df",
+        "cases_per_backend": 6,
+        "phases_per_case": 4,
+        "max_original_error": 2.842170943040401e-14,
+        "scientific_owner_seal": true,
+        "archived_execution_only": true,
+        "negative_countermodels_refused": 19,
+        "strong_cpp_dso_link_qualified": false,
+        "migration_complete": false
+      },
+      "sdk5ec_dim2_build_and_amr_full_storage_defect": {
+        "id": "sdk5ec_dim2_build_and_amr_full_storage_defect",
+        "receipt": "sdk5ec7_dim2_native_build.json",
+        "source_commit": "7dd325d48636dda590ee5aaf2ed34aaf43b74d0c",
+        "backend": "arm64 LLVM21 Kokkos5.2 Serial/OpenMP MPICH4.1.2 Dim2",
+        "status": "build_authentic_representative_run_pass_full_restart_fail",
+        "native_scientific_acceptance": false,
+        "exact_defect": "coarse state ghosts absent from v11 persistence; valid fields/history/diagnostics/clocks exact",
+        "next_action": "native v12 full-state carrier codec build and full fixture reception",
+        "principles_core_remaining": "M14–16 central Hermite recipe/canonical affine ordering; generic-core composition audit4562ee3c"
+      }
+    },
+    "limits": [
+      "No corpus-wide completion or PR/GitHub CI gate claim.",
+      "No GPU, official OpenMPI or Kokkos4.4 native reception claim.",
+      "Source/native build commits and runtime owners remain distinct; later source is not assigned an older native pass."
+    ]
+  },
+  "scoped_receptions_20261007": {
+    "schema": "pops.api040.scoped-scientific-receptions@1",
+    "historical_snapshot_rows_preserved": true,
+    "whole_M19_or_94_obligations_received": false,
+    "consumed_field_AMR_backend_memory_local": {
+      "ids": [
+        "M19"
+      ],
+      "production_source_revision": "069be5055a218c809f0df35e5226ff1c40446f20",
+      "MPI1_source_scope": "False at 069be; True at a084 documentary descendant, production and fixture byte-identical",
+      "MPI2_fixture_source_revision": "01d2cd22e7b6a75561b04feb6f1a657496efb2d3",
+      "native_sha256": "ce024e70e66a9258f4e39d3405f93d4919e9189f502b0d2a1c205cabed0baacf",
+      "wheel_sha256": "62be9f0487e4f7cfa3b27111267a86bb17f2b9534a836d3041d344effa0d0b72",
+      "backend": "local Apple LLVM, MPI-enabled Dim2 Host; MPI1 and MPI2",
+      "original_cases": [
+        "False",
+        "True"
+      ],
+      "steps_per_case": 2,
+      "saved_CP12_NPY_regrid_nonfinite_State_cursor_rollback_received": true,
+      "original_numerical_audits_pass": 4,
+      "CPP_unique_MPI1_PASS": 13,
+      "CPP_original_MPI1_multirank_skips": 2,
+      "CPP_unique_MPI2_PASS_per_rank": 15,
+      "CPP_MPI2_skips": 0,
+      "CPP_unique_union": 16,
+      "old_d725_complete_installed_package_preserved": true,
+      "new_whole_package_inventory_interval": "after first MPI1 False through final comparison; wheel/install proof precedes first case",
+      "actual_M19_OpenMP_concurrency_measured": false,
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-sdk43-amr-residence-local-reception-20261007.json",
+      "root_receipt_sha256": "8ac7359ce474e2b3b269e130cae0224df62eea8a799774651bfbdd3a25d3eeb1",
+      "independent_pins_sha256": "04181e90e47b9ef860b8248db6714c858bdefec7b1d5c2075355df3fb7e9aa0b",
+      "documentation": "amr_backend_memory_reception_20261007.md",
+      "GPU_ROMEO_3D_CI_convergence_comparable_costs_received": false,
+      "broader_populated_Field_history_Aux_semantics_received": false
+    },
+    "consumed_field_AMR_CUDA_requested": {
+      "job": "735454",
+      "source_revision": "01d2cd22e7b6a75561b04feb6f1a657496efb2d3",
+      "production_source_revision": "069be5055a218c809f0df35e5226ff1c40446f20",
+      "actual_submission_and_release_received": true,
+      "initial_observation": "RUNNING romeo-a056; no scientific CUDA reception inferred",
+      "actuation_receipt": "/Users/romaindespoulain/dev/tmp/root-sdk28-amr-vp-units-dim2-preparation-20261003/sdk43-cuda-actuation-e3bd35e0-9b33-4d02-9cb1-7c4c738e1eea/actuation-receipt.json",
+      "actuation_receipt_sha256": "1faef584d00273efc300a4838172c55a250fbba29257bc08ddbce1291a8b0bbe",
+      "CUDA_scientific_received": false,
+      "GPU_MPI2_replica_case_received": false,
+      "terminal_observed": "FAILED 1:0 / 01:04:23 / romeo-a056",
+      "first_error": "NVCC private nested Impl device lambda in src/runtime/system/system_layout_transfer.cpp:629",
+      "wheel_install_Native_or_PDE_received": false,
+      "root_negative_receipt": "/Users/romaindespoulain/dev/tmp/root-sdk43-cuda-negative-reception-735454-20261007.json",
+      "root_negative_receipt_sha256": "89ed904b09163911374ae01e0572c72b5409b09e45d2dcf594a33c73ed0f07a5",
+      "counter_negative_pins_sha256": "4655a622dc079490cb0e846d739435e07dfa622e2861bf91d83af2761cfcd000",
+      "full_TAR_entries": 103,
+      "raw_entries": 96,
+      "raw_regular_files": 78,
+      "raw_directories": 18,
+      "preservation": {
+        "CPU_prefixes": 19,
+        "GPU_prefixes": 7,
+        "Sources": 16,
+        "Home_scope": "Conda registry/config only"
+      },
+      "later_Source_fix": "a17a304 named physical carrier copy functor; Source review only, CUDA rebuild pending"
+    },
+    "W11_finite_FV_current_capacity": {
+      "ids": [
+        "W11",
+        "M14"
+      ],
+      "scope": "Finite FV/capacity witness, not complete sheath/circuit reception",
+      "source_revision": "eae21965f1f156d78328f53ca94a20924eb6b854",
+      "native_sha256": "64c8922e58cf484a1b1188b899e25e84569707ae2090ecbd26f515daf2e1e9c6",
+      "wheel_sha256": "d884d3035bcc6c34f48f600927d51fb15053f47d455c2908aaab567e63c7e582",
+      "variants_received": [
+        "Euler MPI1",
+        "SSPRK2 MPI1",
+        "Euler MPI2",
+        "SSPRK2 MPI2"
+      ],
+      "independent_State_error_max": 0.0,
+      "q_after_retry": {
+        "Euler": 0.74734,
+        "SSPRK2": 0.74718
+      },
+      "rollback_State_q_ledger_history_temporal_CP_arrays_exact_except_two_seals": true,
+      "nontrivial_child_history_received": true,
+      "q_consumption_before_actual_parent_guard_received": true,
+      "retry_t_end": 0.08,
+      "MPI2_layout": "replicated, not spatially partitioned",
+      "MPI2_ledger_record_counts_per_rank": {
+        "Euler": [
+          512,
+          0
+        ],
+        "SSPRK2": [
+          1024,
+          0
+        ]
+      },
+      "OpenMP_effective_concurrency_received": false,
+      "OpenMP_threads_configured": 2,
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-w11-finite-current-native-reception-20261007.json",
+      "root_receipt_sha256": "49d5f9cc14828490fa2d7e7e7e78446dbab11b3c5725c56fdbfa7842ceb417fb",
+      "independent_pins_sha256": "81371f532c33cea76e65b6ec24a82a76abf2037098b132abb1ae9b910484b858",
+      "documentation": "accepted_trace_regions_v2.md",
+      "partitioned_MPI2_regional_AMR_GPU_3D_CI_convergence_costs_received": false,
+      "complete_W11_M14_or_94_received": false
+    },
+    "IMEX_exact_field_stage_original_negative": {
+      "source_revision": "9d4cdcca19abd7d8acfc2151497d8f2a967cddcc",
+      "change": "Field and explicit rate consume identical State SSA at c_explicit; implicit rate remains at c_implicit",
+      "source_author_tests_pass": 47,
+      "source_manual_preset_tests_pass": 3,
+      "source_independent_tests_pass": 16,
+      "official_incremental_build_RC": 0,
+      "setup_repeated": false,
+      "native_sha256": "64c8922e58cf484a1b1188b899e25e84569707ae2090ecbd26f515daf2e1e9c6",
+      "wheel_sha256": "bbb3e87eefd048b64f92a134a9aed9bf715f0f31911bc941612c782494b9d395",
+      "installed_imex_sha256": "e6158934c813658741655e5e4d55df6680b7802b29161b5953481589b007c7a7",
+      "actual_context_after": "Dim2 MPIworld1 Kokkos OpenMP concurrency2 Host",
+      "original_entrypoint": "run_manual_and_restart",
+      "C25_receipt_sha256": "7aefd61a368635090a7f51b815c5619993947ede52e3a4d14b7ad5c5472b7277",
+      "test_XML": {
+        "tests": 1,
+        "errors": 1,
+        "failures": 0,
+        "skipped": 0
+      },
+      "failure": "ConsumerPublicationError: state carrier checkpoint requires prepared accepted state",
+      "failure_location": "stage consumers before native commit, transaction depth1 versus public depth0 guard",
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-imex-original-negative-reception-9d4-20261007.json",
+      "root_receipt_sha256": "11c10d361aa20093c3a782e0c71c8505d3c0ffdb94ccb78d64e5e3b0fa93a58c",
+      "author_pins_sha256": "05e9e2fc1e97a2b29985e182d313c3cb96bb1e66bef899d3e55816e6c604a893",
+      "all_declared_entries_authenticated": 2845,
+      "physical_domain": {
+        "regular": 2602,
+        "directories": 242,
+        "links": 1,
+        "regular_bytes": 90023689
+      },
+      "scientific_accepted_steps_restart_or_variants_received": false,
+      "next": "Integrate versioned immutable transaction-candidate capture, rebuild exact source, rerun original without weakening accepted-state guards",
+      "documentation": "imex_exact_field_stage_20261007.md",
+      "whole_94_received": false
+    },
+    "CUDA44_same_job_actuation": {
+      "job": "735570",
+      "source_revision": "eae21965f1f156d78328f53ca94a20924eb6b854",
+      "operation": "9723bb14-9ec5-435b-baee-fe77eba75ef9",
+      "actual_submission_count": 1,
+      "actual_submission_release_RC": [
+        0,
+        0
+      ],
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-cuda44-actuation-reception-735570-20261007.json",
+      "root_receipt_sha256": "9606b7c220c315136da5c2aeed17c5187a97cc9eeba4af4d7ef72af0455ef388",
+      "producer_pins_sha256": "8edcc8ab0de0fc4d221b030cac1d40d7b2551252e9b8df0cb23aec2579b2de2a",
+      "physical_actuation_files_authenticated": 21,
+      "actuation_preservation": {
+        "CPU_prefixes": 19,
+        "GPU_prefixes": 8,
+        "Sources": 17,
+        "scope": "root lstat, Native leaves, Source HEAD/status and declared Home; whole batch inventory separate"
+      },
+      "initial_observation": "2026-10-07T01:36:01.009727Z RUNNING romeo-a049 originals-before",
+      "later_independent_observation": "2026-10-07T02:21:06Z RUNNING romeo-a049 45:38; declared phase build-python",
+      "GPU_build_wheel_Native_PDE_received": false,
+      "previous_735454_negative_preserved": true,
+      "IMEX_9d4_and_ABI12_candidate_capture_in_this_source": false,
+      "whole_94_received": false,
+      "later_independent_observation_pins_sha256": "d7a5e939fe2e825d57704e0f839b99767b124186edd21718dee806e37dcd9530",
+      "later_independent_observation_report": "/Users/romaindespoulain/dev/tmp/sol61-sdk44-cuda-735570-observation-r2-20261007/report.json",
+      "later_independent_observation_report_sha256": "fd1bf614e9e341e5ceeecb51930c0f696b61b1f39c8e91643154cfbc867efe37"
+    },
+    "AMR_candidate_checkpoint_ABI12_original_publication_negative": {
+      "source_revision": "23810e143d24b901d1ba1410a0e8b1c64a6f7770",
+      "contract": "pops.amr.prepared-checkpoint-capture@1",
+      "native_abi": 12,
+      "native_sha256": "77d5e29cd8146cdb17cba08c88d03fc63e9b14ea32673ff99f3baff8db800a4c",
+      "header_signature": "c04a7fa8d0852fb3dd8542ed7907485264350e1764227d077a993fe5e8712c77",
+      "wheel_sha256": "44ff159a0412db9dd946f17e7cba3207df5a523afc22771dec4f65846486ba69",
+      "official_incremental_build_RC": 0,
+      "all_seven_binding_TUs_compiled": true,
+      "setup_repeated": false,
+      "original_manual_capture_and_seal_before_commit_passed": true,
+      "original_manual_XML": {
+        "tests": 1,
+        "errors": 1,
+        "failures": 0,
+        "skipped": 0
+      },
+      "failure": "Committed checkpoint token stale after preceding HDF5 Integral publishes Native inspection diagnostic",
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-imex-publication-negative-reception-23810-20261007.json",
+      "root_receipt_sha256": "ee91711a02f96c7876682a410ca67111d1ec6b2a200d4b57fb899e743f4fc741",
+      "producer_pins_sha256": "92e30bdf1fbc1562c4d93795b56e104c5d7fe5d1cabaf0b9e1512d1923347ba5",
+      "physical_entries_authenticated": 2845,
+      "whole_previous_64c_backup_preserved": true,
+      "installed_2563_members_exact_since_build": true,
+      "accepted_steps_restart_variants_scientific_received": false,
+      "next": "Prepare Native diagnostic projection within rollback boundary before checkpoint sealing, publish Python registry after commit, rerun rebuilt original without relaxing stale guards",
+      "documentation": "prepared_amr_checkpoint_capture_v1.md",
+      "whole_94_received": false
+    },
+    "Uniform_native12_bounded_nonreg": {
+      "source_revision": "23810e143d24b901d1ba1410a0e8b1c64a6f7770",
+      "native_abi": 12,
+      "native_sha256": "77d5e29cd8146cdb17cba08c88d03fc63e9b14ea32673ff99f3baff8db800a4c",
+      "requested_IDs": 10,
+      "actual_cases": 11,
+      "PASS": 7,
+      "FAIL": 4,
+      "error": 0,
+      "skip": 0,
+      "initialized_real_Uniform_candidate_route": "PASS",
+      "six_checkpoint_inode_cursor_restart_unit_protocols": "PASS",
+      "failure_scope": "Four older captures use local Native doubles missing checkpoint_state_carriers; fixture and production Uniform capture source byte-identical to parent9d4",
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-uniform-native12-bounded-nonreg-reception-23810-20261007.json",
+      "root_receipt_sha256": "17eda869a7792ccb92de17bcfbfe51ae01450afefa7ddffcdedd199d289fc495",
+      "producer_pins_sha256": "db94b4989090764fdb4262093b45a3aade0cb3ab6f5816f3b48ed9f61a3d8faf",
+      "package_2563_REG_223_DIR_0_LINK_exact_before_after": true,
+      "context_scope": "Separate actual world1/OpenMP2 probes before and after under same controls; pytest effective concurrency not separately recorded",
+      "physical_IMEX_MPI2_CUDA_3D_received": false
+    },
+    "CUDA44_whole_negative": {
+      "job": "735570",
+      "source_revision": "eae21965f1f156d78328f53ca94a20924eb6b854",
+      "native_abi_expected": 11,
+      "terminal": "FAILED 1:0 /01:07:02 /romeo-a049",
+      "original_exit": 1,
+      "archive_exit": 0,
+      "first_late_exit": 0,
+      "final_exit": 1,
+      "first_error": "NVCC generated host stub names private RegionTransport PackKernel and UnpackKernel",
+      "source_file": "include/pops/mesh/parallel/region_transfer.hpp",
+      "source_lines": [
+        475,
+        493
+      ],
+      "compiled_TU": "src/runtime/system/system_layout_transfer.cpp",
+      "log_lines": [
+        2340,
+        2346
+      ],
+      "log_sha256": "d36c9f17eeecbd8c1565971219125f2845182b0dd4017d8e6683c5175b2f5086",
+      "TAR_entries": 104,
+      "TAR_regular": 84,
+      "TAR_directories": 20,
+      "raw_entries": 97,
+      "raw_regular": 79,
+      "raw_directories": 18,
+      "raw_links": 0,
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-cuda44-negative-reception-735570-20261007.json",
+      "root_receipt_sha256": "5293aeec956a09667fa349929f6f86d5a188120fec38d39753a22e6cf77dd8dc",
+      "producer_pins_sha256": "17657577f9a653bd4fcba6a49f882f2b3a2b30336754e87f02dd319a96b7058d",
+      "independent_counter": "Real Peirce offline counter-read of entire114-row manifest/TAR104 and five exact inventory joins",
+      "preservation": {
+        "CPU_prefixes": 19,
+        "GPU_prefixes": 8,
+        "Sources": 17,
+        "five_before_after_pairs_exact": true,
+        "Home_scope": "registry/config only"
+      },
+      "allocated_device_observation": "GH200120GB compute9.0, not a PoPS backend qualification",
+      "wheel_full7_Native_PDE_received": false,
+      "new_ABI12_source_qualified": false,
+      "next": "Make only named pack/unpack functor types accessible to NVCC stub, authenticate changed header and rebuild on a fresh qualified GPU source",
+      "documentation": "amr_backend_memory_reception_20261007.md"
+    },
+    "AMR_candidate_checkpoint_CPP_commit_control": {
+      "source_cpp_revision": "23810e143d24b901d1ba1410a0e8b1c64a6f7770",
+      "native_abi": 12,
+      "header_signature": "c04a7fa8d0852fb3dd8542ed7907485264350e1764227d077a993fe5e8712c77",
+      "standalone_binary_sha256": "33b2e258bdd53f3096b1a047564efeaf004832e7542278949d34d3d8a6e2a5d5",
+      "case": "TwoBlockImplicitSourceTransactionRollsBackAndRetriesExactly",
+      "MPI1": "PASS85ms",
+      "MPI2": "PASS112ms on each of two ranked XML processes",
+      "CPP_runtime_optimization": "O3/C++20",
+      "test_TU_optimization": "O0 according to repository CMake heavy-test policy",
+      "completed_step_clock_setter_refusal_samepoint_mutation_nested_rollback_commit_and_expiration_executed": true,
+      "unequal_local_diagnostic_revisions_and_one_rank_stale_collective_refusal_executed": true,
+      "frozen_CPP_sources_byte_exact": 706,
+      "installed_77d_package_2563_members_unchanged": true,
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-cpp-candidate-checkpoint-control-reception-23810-20261007.json",
+      "root_receipt_sha256": "7c54ea8648543a5b7e1f69f7ba3d6654d6dcb8917c1d607550b150f741cc995c",
+      "producer_pins_sha256": "324528d463b96f5f78d0113ccce54aa1b0e3ba7c380fe647181e8f6e32ef3fe5",
+      "physical_entries_authenticated": 1716,
+      "physical_REG": 404,
+      "physical_DIR": 1312,
+      "scope": "Standalone genuine C++ runtime, not execution of Python extension77d or original manual IMEX; first shared-XML MPI2 capture preserved",
+      "original_IMEX_restart_partitioned_MPI_GPU_3D_received": false
+    },
+    "IMEX_original_AMR_and_publication_rollback_local": {
+      "source_original": "2ded3ffae3b740fba26c0e409206498e2721b894",
+      "source_injection_test_only": "f550b73010b5aaa9c5b6e80c9a82103187597b1f",
+      "source_cursor_fixture_test_only": "29ad1c9c379d5cfeb0a560902fcff66c722254b7",
+      "native_abi": 12,
+      "Native_sha256": "77d5e29cd8146cdb17cba08c88d03fc63e9b14ea32673ff99f3baff8db800a4c",
+      "header_signature": "c04a7fa8d0852fb3dd8542ed7907485264350e1764227d077a993fe5e8712c77",
+      "wheel_sha256": "b9d067e91c11c8c2d02c85dc56aa6c22e0fb501625521f82813b50d25834b238",
+      "official_repackage_RC": 0,
+      "seven_bindings": "Reused; no C++ work in Ninja",
+      "original_workflows_PASS": 2,
+      "original_seconds": [
+        91.26,
+        185.48
+      ],
+      "original_context": "Dim2 Host MPIworld1 measured OpenMP concurrency2",
+      "original_exact_comparisons": [
+        "accepted/restored",
+        "continuous/restarted",
+        "manual/preset",
+        "singular rejection before/after"
+      ],
+      "actual_diagnostic_bytes": 345,
+      "declared_diagnostic_capacity_per_rank": 383,
+      "actual_diagnostic_records": "Integral only; frontier duration is potential but absent in saved image",
+      "original_ledger_rows": 920,
+      "original_regrid_levels": [
+        2,
+        3
+      ],
+      "publication_fault_PASS": 1,
+      "publication_fault_seconds": 61.81,
+      "publication_fault_checkpoint_time": 0.0001,
+      "publication_fault_checkpoint_step": 1,
+      "publication_fault_State_Field_changed_then_restored": true,
+      "publication_fault_CP_arrays_exact": 52,
+      "publication_fault_CP_arrays_total": 54,
+      "publication_fault_changed_arrays": "Only two reseals",
+      "publication_fault_Program_exact_bytes": 7654,
+      "publication_fault_output_files_observed_then_compensated": [
+        7,
+        0
+      ],
+      "publication_fault_histories_ledger_cache_populated": false,
+      "publication_fault_effective_OpenMP_measured": false,
+      "installed_package_2563_members_exact_before_after": true,
+      "initial_affected_units": {
+        "atomic_PASS": 10,
+        "budget_PASS": 10,
+        "step_PASS": 9,
+        "step_fixture_FAIL": 22
+      },
+      "corrected_step_fixture_PASS": 31,
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-imex-original-and-publication-rollback-reception-2ded-20261007.json",
+      "root_receipt_sha256": "32e9b400894f5be5ac9cadd77ff2fa2b112cc52c951013490138d91f8c289afc",
+      "independent_pins_sha256": "82e60bb1c9b44755ebf18ce2523783f52a3c5fea76eed3311769b84f89d59696",
+      "documentation": "prepared_amr_checkpoint_capture_v1.md",
+      "PDE_MPI2_GPU_3D_CI_convergence_costs_received": false,
+      "nonautonomous_Field_time_CP_own_Retry_whole94_received": false
+    },
+    "nonautonomous_Field_component_compile_negative_d5b0": {
+      "source": "d5b0cfbacc6a2bfe5778ceba95d6fe3bbc7cce5d",
+      "native_sha256": "76af57236d6a65630febc1e974452a0010abef1c3e9c269ab32c5c15655daac3",
+      "header_signature": "773b8630b18aa821b0e8394c460dfd62ec990f6d3866807bf7581b358f8420e8",
+      "native_abi": 12,
+      "build": "PASS seven bindings recompiled, module relinked, wheel/install/doctor",
+      "observed_numbered_ninja_steps": 27,
+      "announced_ninja_denominator": 28,
+      "field_component_compile": "FAIL undeclared auxiliary in Field RHS, before bind/PDE",
+      "pytest": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0,
+        "seconds": 5.95
+      },
+      "full_temporary_cpp_received": false,
+      "actual_compiler_command_and_stderr_received": true,
+      "accepted_data_received": false,
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-nonautonomous-field-compilation-negative-d5b0-20261007.json",
+      "root_receipt_sha256": "0cb650c4925c70834f34cfeec972b4cc14514a63ddf4d5ea7635418717c59b0b",
+      "independent_pins_sha256": "38557b51a01f27af52428ddfd228a68a7d340f977b09baab87bb0407ab8e3427",
+      "next": "Integrate common Native State+Aux RHS inputs with exact Field point/source/frame/level and versioned ABI; rebuild, run mandatory witness then independent numerical reception",
+      "limits": [
+        "no bind or PDE",
+        "no numerical State/Field/Y",
+        "no checkpoint/restart/own Retry run",
+        "no MPI2/GPU/3D/convergence/cost/CI/all94 receipt"
+      ]
+    },
+    "nonautonomous_Field_State_Aux_native13_positive_ede680": {
+      "source_commit": "ede680fe00746c1bc7e5eeb4afabd9772b92cc33",
+      "contract": {
+        "field_input_read": 2,
+        "system_package_abi": 8,
+        "native_abi": 13,
+        "uniform_checkpoint": 9,
+        "amr_checkpoint": 12
+      },
+      "root_receipt": "root-field-rhs-native13-nonautonomous-positive-20261007.json",
+      "root_receipt_sha256": "03e911a86bb8909d0eff29eb3c39cb2c3e6698063b9176654e1344ae733bb37c",
+      "scope": "CPU Kokkos, Dim2, MPI-enabled world1, one AMR level, actual public validate/resolve/compile/bind/run/checkpoint",
+      "native_sha256": "ea0c7bf4e2a752469091030597cedd671291fc74bd9354ab8fbcdb6068eeec1d",
+      "sdk_header_signature": "4b2c57fbdc84b72f8b0c66c7c943eb2f793d519181d7f9032f02313032e8f04a",
+      "cpp_native_recompiled_for_python_fix": false,
+      "source_tests_passed": 74,
+      "native_tests_passed": 1,
+      "accepted_state": 3.359999999999518,
+      "field": 5.759999999998074,
+      "max_absolute_errors": {
+        "state": 4.818367926873179e-13,
+        "field": 1.9255708139098715e-12
+      },
+      "oracles_unchanged": true,
+      "Y_directly_measured": false,
+      "checkpoint_arrays_exact": true,
+      "actual_artifacts_verified": 26,
+      "full_obligations_closed": false,
+      "remaining": [
+        "MPI2",
+        "GPU",
+        "Dim3",
+        "multiple AMR levels",
+        "advanced SSA producer hooks",
+        "split-coordinate regression",
+        "convergence",
+        "comparable costs",
+        "exact-revision GitHub CI"
+      ]
+    },
+    "original_checkpoint_own_retry_native13_positive_ede680": {
+      "source_commit": "ede680fe00746c1bc7e5eeb4afabd9772b92cc33",
+      "root_receipt": "root-own-checkpoint-retry-native13-positive-20261007.json",
+      "root_receipt_sha256": "1031e8befc07b2b38c0e4d5a147d2b46d0ecd408ab0e244eab1299e5809640e9",
+      "scope": "Original public IMEX, CPU Host Dim2, MPI world1, OpenMP concurrency2 recorded inside pytest",
+      "native_abi": 13,
+      "system_package_abi": 8,
+      "checkpoint_provider_version": 6,
+      "captures": 1,
+      "factories": 1,
+      "publications": 2,
+      "sealed_bytes": 178807,
+      "sealed_sha256": "b5acae1632f72b5032cc914f051b179b40d2c233d574afc1af2f828ac538d0d2",
+      "same_inode_and_bytes_reread": true,
+      "accepted_restored_reference_exact": true,
+      "continuous_restarted_exact": true,
+      "actual_artifacts_verified": 69,
+      "levels": [
+        2,
+        2
+      ],
+      "regrid_counter": [
+        2,
+        3
+      ],
+      "topology_epoch": [
+        2,
+        3
+      ],
+      "populated_ledger_rows": 920,
+      "histories_and_cache_populated": false,
+      "equations_oracles_unchanged": true,
+      "full_obligations_closed": false,
+      "remaining": [
+        "MPI2",
+        "GPU",
+        "Dim3",
+        "populated histories and cache",
+        "concurrent simulations",
+        "full mission94 and final CI"
+      ]
+    },
+    "nonautonomous_Field_State_Aux_native13_CoreR4_c0f18_positive": {
+      "source_commit": "c0f18d50efd454396d6761992a9817adf353f412",
+      "root_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-field-rhs-native13-core-r4-nonautonomous-positive-20261007.json",
+        "sha256": "f1261ad6323964c675e94126678bbf09dbfe473162972b49abb6a9946460e931"
+      },
+      "policy_review": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-field-rhs-independent-default-policy-r2-review-20261007/review.json",
+        "sha256": "75927544c21541571ab532968d3d0e00a08ff4ed59602e83eaa8c45a30619d6d"
+      },
+      "scope": "Actual installed-package CPU Kokkos Dim2, one AMR level, MPI world1, one unchanged nonautonomous PDE",
+      "default_Derived_events": [
+        "before_residual",
+        "before_field_solve"
+      ],
+      "native_sha256": "b471e01b7d8e669e3d7c11f5cb8925a509edf2a17d9993a5211dc3bc4080f595",
+      "wheel_sha256": "7cd704765ee7f339a060fa7e90f451f948a2057beeefc2362beaf15886127982",
+      "rebuild": {
+        "core_objects": 3,
+        "binding_objects_reused": 7
+      },
+      "pytest_counts": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "references": {
+        "state": "84/25",
+        "field": "144/25",
+        "stage_Y": "48/25"
+      },
+      "Y_directly_measured": false,
+      "max_absolute_errors": {
+        "state": 4.818367926873179e-13,
+        "field": 1.9255708139098715e-12
+      },
+      "original_bounds_unchanged": true,
+      "checkpoint_arrays_exact": true,
+      "raw_artifacts_verified": 34,
+      "OMP_NUM_THREADS_declared": 2,
+      "OMP_effective_concurrency_measured": false,
+      "original_retry_on_b471_launched": false,
+      "full_obligations_closed": false,
+      "remaining": [
+        "MPI2",
+        "multi-level AMR",
+        "GPU",
+        "Dim3",
+        "other methods and producer paths",
+        "PDE convergence",
+        "comparable costs",
+        "exact-revision final CI"
+      ]
+    },
+    "Field_State_Aux_cpp13_c0f18_partial_negative": {
+      "source_commit": "c0f18d50efd454396d6761992a9817adf353f412",
+      "root_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-field-rhs-cpp13-c0f18-two-failure-reception-20261007.json",
+        "sha256": "abddfcf732af3d8a6b540ebbbe997a7e37fc82defbd5397ff247b130776bfdc5"
+      },
+      "counts": {
+        "executed": 13,
+        "passed": 11,
+        "failed": 2,
+        "skipped": 0
+      },
+      "scope": "Actual C++ world1 unit execution; 11 passing witnesses are partial coverage",
+      "lane_fixture": {
+        "status": "Owning live System lane identity capture patch integrated after independent review; no new C++ run",
+        "review": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-cpp13-c0f18-two-failure-review-20261007/lane-test-only-counter-signature.json",
+          "sha256": "b74e7f40bd5ecfa20aca54bf6ee16f3cadeb18cd11f8143159949b8f9b4e91a5"
+        },
+        "assertion_invocations": 120,
+        "unchanged_invocations": 119,
+        "changed_expectations": 1
+      },
+      "AMR_failure": {
+        "status": "Coherent targeted test-only execution observes physical before_field_solve points at levels0,0,1 followed by after_regrid diagnostic Clock without physical payload at level0; original guard raises during bootstrap. No full native stack captured.",
+        "guard": "analytic auxiliary requires its exact consuming physical Clock"
+      },
+      "world2_received": false,
+      "full_obligations_closed": false
+    },
+    "formal_explicit_order_Source_R2_99de181": {
+      "source_commit": "99de181d034384bc405bb3959dc50182f9a875b7",
+      "Main_Source_tests_passed": 61,
+      "Main_Source_xml": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-program-order-r2-integration-20261007/source.xml",
+        "sha256": "aeb254b05359ecd37b868f87fb26ead3066b1aca6c1b84450ab5248bc60dfc08"
+      },
+      "Main_Source_command": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-program-order-r2-integration-20261007/command.json",
+        "sha256": "1f8bd9089212af185b5d4d6146138f8897696ff7d25ee930b745c280db5e5809"
+      },
+      "Main_Source_stdout_archived": false,
+      "author_frozen_Source_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/sol61-program-certificate-ssa-source-r2-20261007/source-gel-receipt-r2.json",
+        "sha256": "f91c970db3a57918b6185ce44de820e7688d573dfd1ad086ba62b50807818177"
+      },
+      "author_native_modules_loaded": false,
+      "Main_Source_receipt_basis": "Actual Root XML/command; no standalone Root receipt or stdout retained. Frozen author and independent R2 Source cohorts are distinct",
+      "independent_review": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-program-certificate-independent-review-20261007/r2/review.json",
+        "sha256": "a4cb58c1c3cec4f3118f3c12ddad46f0dc909b2f47b775dcd44fa938fa624eed"
+      },
+      "scope": "Generic affine explicit-RK formal order from actual SSA, including extrapolated stage c; clock/cadence, prior-rate SSA, effects and polynomial guards preserved",
+      "PDE_convergence_received": false,
+      "Native_execution_inferred": false,
+      "R1_generic_claim": "Superseded; range-bound candidate and revoked review preserved separately",
+      "full_obligations_closed": false
+    },
+    "CUDA46_735830_whole_preparation_negative": {
+      "root_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-sdk46-cuda-735830-whole-negative-reception-20261007.json",
+        "sha256": "f9fed5b3700fe35eb49deb5ca9473311e6763d4292ee5735a7fdf39329392960"
+      },
+      "independent_review": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-romeo-735830-preparation-review-20261007/review.json",
+        "sha256": "bc0c330bfe1807fc4acf50dbeef716e38c2411d67f619eeac18f81edc53798da"
+      },
+      "job": "735830",
+      "state": "FAILED",
+      "exit": "1:0",
+      "elapsed": "01:04:05",
+      "phase": "allocation",
+      "received_members": 28,
+      "regular_files": 20,
+      "regular_bytes": 425537092,
+      "preserved_cohorts": {
+        "cpu_prefixes": 19,
+        "gpu_prefixes": 9,
+        "Sources": 18
+      },
+      "source_checkout_created": false,
+      "prefix_created": false,
+      "PoPS_compilation": false,
+      "GPU_PDE_executed": false,
+      "nvcc_version_query_executed": true,
+      "CUDA_driver_query_executed": true,
+      "staged_metadata": {
+        "status": "Missing preparation.json sibling corrected and 17 helper closure reviewed",
+        "candidate": {
+          "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk46-cuda-735830-monitor-20261007/metadata-correction-input/preparation.json",
+          "sha256": "f0f7e18196a63f5cbda584753570ddd1ac318bfc7115704a9ae232dc12a20186",
+          "bytes": 1011
+        },
+        "future_Source_frozen": false,
+        "new_job_launched": false
+      },
+      "scope": "Preparation failure; device/tool observations are separate from a build. Exact declared prefix/Source/registry/driver preservation, not whole Home or full external compiler dependency closure",
+      "full_obligations_closed": false
+    },
+    "AMR_aux_coherent_callback_diagnostic_c0f18": {
+      "source_commit": "c0f18d50efd454396d6761992a9817adf353f412",
+      "root_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-amr-aux-clock-coherent-diagnostic-reception-20261007.json",
+        "sha256": "d54478e6b0dddae0e9bc795b8f8737f8dabc230f3d55ced5bc16a8ead72ad67c"
+      },
+      "counts": {
+        "tests": 1,
+        "failed": 1,
+        "skipped": 0
+      },
+      "scope": "Test-only instrumented C++ world1 callback/phase diagnostic; production source and original guard unchanged; no scientific AMR acceptance",
+      "configuration_matches_c0": {
+        "all_compile_commands": true,
+        "all_existing_capabilities": true,
+        "exact_target_link": true,
+        "new_HDF5_discovery_keys_retained": 8
+      },
+      "actual_compilation_steps": 18,
+      "physical_before_field_levels": [
+        0,
+        0,
+        1
+      ],
+      "then_after_regrid_diagnostic_without_payload_level": 0,
+      "failure_phase": "commit_bootstrap_level",
+      "phases_not_reached": [
+        "mark_bound",
+        "begin_step",
+        "solve_fields"
+      ],
+      "native_full_stack_captured": false,
+      "raw_artifacts_verified": 54,
+      "baseline_test_restored_byte_exact": true,
+      "package_unchanged_entries": 2793,
+      "native_sha256": "b471e01b7d8e669e3d7c11f5cb8925a509edf2a17d9993a5211dc3bc4080f595",
+      "prior_attempts": {
+        "configuration_drift_runs": 1,
+        "raw_cache_gate_blocked_runs": 0
+      },
+      "runtime_candidate_installed": false,
+      "full_obligations_closed": false
+    },
+    "AMR_aux_incidence_drain_R3_Source_integrated": {
+      "source_base": "c0f18d50efd454396d6761992a9817adf353f412",
+      "implementation_patch_sha256": "4f1ef99ed395e949136d4df292453bbd22c5b5b4347d6001de4ffa0630840eae",
+      "independent_Source_review": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-amr-aux-publication-protocol-review-20261007/candidate-r3-final-source-review.json",
+        "sha256": "56d99eda5cadf1af45df1236015fd0c55f7340f27e135e3730f37d491d4a3f81"
+      },
+      "independent_registry_tests_review": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-amr-aux-publication-protocol-review-20261007/six-registry-countertests-source-review.json",
+        "sha256": "c4155b43ca06ca97b073f0db7fe4e04f7ac9c04640c6387af166fd10bdcacce6"
+      },
+      "production_paths": [
+        "src/runtime/amr/amr_system.cpp",
+        "include/pops/runtime/system/exact_aux_registry.hpp"
+      ],
+      "signed_header_count": 383,
+      "HeaderSignature": "967e6afd549028368716cf484593d8424775d415daacba937e03822565da93e8",
+      "NativeABI": 13,
+      "SystemPackageABI": 8,
+      "FieldInputContract": 2,
+      "POPSAUX3_wire_unchanged": true,
+      "normal_registry_methods_byte_unchanged": true,
+      "countertests_added": 6,
+      "dimension_instantiations": 18,
+      "old_registry_tests_preserved": 15,
+      "new_tests_executed": 0,
+      "native_rebuilt_installed_or_run": false,
+      "required_next": "Official reconstructed SDK967e/Native and fresh component DSOs, original nonautonomous installed run then reception, Cpp13 and registry21, retry, true AMR incidence/failure/transport/regrid/checkpoint/MPI2 witnesses",
+      "R1_R2_author_artefacts_preservation": "Overwritten; original emitted SHA only, not separately rehashable. Immutable R3 and original runtime negatives retained.",
+      "full_obligations_closed": false
+    },
+    "AMR_sdk967e_793_compile_negative_and_publisher_correction": {
+      "failed_source": "79374592ffa3fe1ef1e386ee9bb552821a2b4c2b",
+      "root_negative_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-native793-compile-negative-reception-20261007.json",
+        "sha256": "d2e6c050d2601baa5caf31b36be9dab665d7168071e6bc81b939d9b19a76ca96"
+      },
+      "actual_successful_CXX": 18,
+      "failed_CXX_attempts": 1,
+      "successful_binding_TUs": 2,
+      "Native_relink_wheel_install_PDE": false,
+      "package_unchanged_entries": 2793,
+      "installed_Native": "b471e01b7d8e669e3d7c11f5cb8925a509edf2a17d9993a5211dc3bc4080f595",
+      "failure": "Four retired AMR member accesses in included genuine Program field publisher; prior56dreview coverage incomplete and retained",
+      "corrective_patch_sha256": "f5100d98f5e0461fe881c82c1fd800f9706829dc7aecbad46b038b040a5af76d",
+      "corrective_source_path": "src/runtime/amr/amr_program_field_publication.inc",
+      "corrective_source_sha256": "47ce87aa8f380908bf15e47f72b7cd8bdc29d5b621cd31d96cfbc6b2afe1289c",
+      "independent_corrective_review": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-native793-compile-negative-review-20261007/corrective-publisher-source-review.json",
+        "sha256": "b1ac7feca6252a2585752489d19534b463326b99155ac09bd6036f3472082c08"
+      },
+      "literal_local_include_files_audited": 237,
+      "inc_fragments_audited": 4,
+      "retired_AMR_references": 0,
+      "publication_contract": 2,
+      "publication_incidence_contract": 1,
+      "SDK_HeaderSignature": "967e6afd549028368716cf484593d8424775d415daacba937e03822565da93e8",
+      "Point_construction_and_guards_unchanged": true,
+      "preexisting_limit": "Custom temporal prerequisites of legacy Program field publisher require actual physical authority; callerlabel/dt do not mint that authority",
+      "corrective_native_build_run_received": false,
+      "GPU793admitted": false,
+      "full_obligations_closed": false
+    },
+    "SDK967e_installed_nonauto_and_cpp_world1_native_positive_9db": {
+      "source": "9db1c37b6be06f0a11a1fad2041825492851394e",
+      "Native": "d154b257484040c18b4a2a1439240e5ec963954715d6cb340cad0c7b12a8e2a1",
+      "SDK": "967e6afd549028368716cf484593d8424775d415daacba937e03822565da93e8",
+      "bindings": {
+        "new9db": 5,
+        "successful793cached": 2,
+        "totalauthenticated": 7
+      },
+      "root_PDE_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-sdk967e-nonautonomous-positive-reception-9db1c37-20261007.json",
+        "sha256": "8cbae51f8f5ed27a7f0f402e9d70b5d2a15c470f2e35364dee1d8955e52d030c"
+      },
+      "root_CPP_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-sdk967e-cpp-cohort-world1-positive-reception-9db1c37-20261007.json",
+        "sha256": "d7998d072289ae6a0af7346c32d821cb62b26e65b9117f5992e72ae5aff29328"
+      },
+      "PDE_counts": {
+        "tests": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "CPP_counts": {
+        "Field": 13,
+        "Registry": 21,
+        "passed": 34,
+        "failed": 0,
+        "skipped": 0
+      },
+      "MPI_world_size": 1,
+      "original_bounds_unchanged": true,
+      "checkpoint_exact_NPY": true,
+      "Y_directly_measured": false,
+      "effective_OMP_threads_measured": false,
+      "registry_template_dims_not_NativeDims13": true,
+      "package_unchanged_entries": 2793,
+      "scope": "One unchanged one-level original PDE plus two complete CPPunit suites, namedmultilevelguardpath; not allAMR incidence/runtime/fault cases",
+      "full94_received": false
+    },
+    "SDK967e_CPP_world2_first_negative_and_emptyrank_fixture_Source": {
+      "source_run": "9db1c37b6be06f0a11a1fad2041825492851394e",
+      "root_negative": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-sdk967e-cpp-world2-first-negative-reception-9db1c37-20261007.json",
+        "sha256": "27d72efeff90dcac526ab31c20d095aa260a61abdc50ad6cf7fe39b16099eaae"
+      },
+      "distinct_cases_per_rank": 13,
+      "rank_executions_total": 26,
+      "passed": 23,
+      "failed": 3,
+      "skipped": 0,
+      "multilevel_case_passes_both": true,
+      "failure": "Unconditional localmax zero expectation against observed-inf; exact emptylocalcensus not instrumented in first run",
+      "fixture_patch_sha256": "a88fbd2e4ace6610303a0183207d844e976cf56b0ea02ecac7941ae7053f2d64",
+      "integrated_CPP_sha256": "a02bfb676e30c92bcf5c6f7c3950e8011c5649acf0e11d43de209bafb1168049",
+      "independent_review": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-emptyrank-test-only-review-20261007/review.json",
+        "sha256": "159d80ac1ce2c29c8df2998db9307216af82e0789f4cac6cb1cac34105d7416c"
+      },
+      "original_13_cases_120_assertions_preserved": true,
+      "exact_empty_identity_assertions_added": 2,
+      "new_global_collectives": 0,
+      "Core_reducer_formula_guard_tolerance_changed": false,
+      "new_census_record_properties": "Actual local Fab and valid-cell counts in next XML only; not retroactive proof",
+      "corrected_runtime_received": false,
+      "scope": "Test-only correction Source integrated, no correctedworld2PDE/case acceptance yet",
+      "full94_received": false
+    },
+    "SDK967e_CPP_world2_corrected_native_positive_600": {
+      "source": "6006749593bcbd3ed32b5b1906951786aaced5d0",
+      "root_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-sdk967e-cpp-world2-corrected-positive-reception-60067495-20261007.json",
+        "sha256": "a0c2c26ee18c87d9914380aa3a8a20ece6c7cb4605a0709a9c28ab6104275cc9"
+      },
+      "unique_cases": 13,
+      "total_rank_executions": 26,
+      "passed": 26,
+      "failed": 0,
+      "skipped": 0,
+      "MPI_ranks": 2,
+      "former_three_cases_actual_census": {
+        "rank0": {
+          "local_fabs": 1,
+          "valid_cells": 64
+        },
+        "rank1": {
+          "local_fabs": 0,
+          "valid_cells": 0
+        }
+      },
+      "local_identities": "exact0 nonempty, exact negative-infinity empty",
+      "registry_world2_repeated": false,
+      "new_world1_run": false,
+      "full94_received": false
+    },
+    "SDK967e_original_checkpoint_own_retry_native_positive_600": {
+      "source": "6006749593bcbd3ed32b5b1906951786aaced5d0",
+      "Native": "d154b257484040c18b4a2a1439240e5ec963954715d6cb340cad0c7b12a8e2a1",
+      "SDK": "967e6afd549028368716cf484593d8424775d415daacba937e03822565da93e8",
+      "root_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-sdk967e-original-own-retry-positive-reception-60067495-20261007.json",
+        "sha256": "3b454c9311088ed0ed5e2d5a9d07ad5fbaa4c86f6887d6df842b8864e51253e1"
+      },
+      "artifacts": 110,
+      "MPI_ranks": 1,
+      "counts": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 1
+      },
+      "scope": "Bounded executed CPU evidence; refer to receipt for exact arrays/checkpoints/history and context limits",
+      "full94_received": false
+    },
+    "SDK967e_affected_Native8_nonreg_positive_600": {
+      "source": "6006749593bcbd3ed32b5b1906951786aaced5d0",
+      "Native": "d154b257484040c18b4a2a1439240e5ec963954715d6cb340cad0c7b12a8e2a1",
+      "SDK": "967e6afd549028368716cf484593d8424775d415daacba937e03822565da93e8",
+      "root_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-sdk967e-native8-positive-reception-60067495-20261007.json",
+        "sha256": "68571307f9d3e34a27d27419051960fff56d2de9009ca7830e0cf914837da47c"
+      },
+      "artifacts": 195,
+      "MPI_ranks": 1,
+      "counts": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 8
+      },
+      "scope": "Bounded executed CPU evidence; refer to receipt for exact arrays/checkpoints/history and context limits",
+      "full94_received": false
+    },
+    "AMR_phi_Q_psi_R4_test_Source_integrated_811": {
+      "source": "811ee2b157f3832ce3c62f96524fc998c36c4f70",
+      "patch_sha256": "a375d4a8ebe0b665483a2611f39fffe64d3731dda11eab09b00448186f77d28a",
+      "root_Source_admission": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-phi-Q-psi-r4-source-admission-60067495-20261007.json",
+        "sha256": "92663adc8c2f1774fce3452068bb7b9991662c3486a5109f098c5bb414f44c00"
+      },
+      "independent_Source_review_sha256": "2e139903bb63566722cb75dcd60bd436bf53460f29160d9d8c382e3d19a4830f",
+      "old_cases_assertions": [
+        13,
+        122
+      ],
+      "new_cases_assertions": [
+        1,
+        52
+      ],
+      "test_only_files": 5,
+      "signed383_unchanged": true,
+      "whole_manifest_changed": true,
+      "current_installed_package_synchronized": false,
+      "actual_CPP_run_received": false,
+      "full94_received": false
+    },
+    "SDK48_CUDA736186_actual_submission_only": {
+      "Source": "9db1c37b6be06f0a11a1fad2041825492851394e",
+      "SDK": "967e6afd549028368716cf484593d8424775d415daacba937e03822565da93e8",
+      "actual_job": 736186,
+      "submissions": 1,
+      "root_submit_receipt": "/Users/romaindespoulain/dev/tmp/root-sdk48-cuda-dispatch-9db1c37b-20261007/submission.json",
+      "root_pre_dispatch_review_sha256": "adaad97af512a833bf4454bc00b609178b3605ebfa4a0cc5dff9ab22a28fc17f",
+      "payload_members": 27,
+      "preserved_CPU_GPU_Source_cohorts": [
+        19,
+        9,
+        20
+      ],
+      "profile": "CPU8/GPUh1001/memory96G/time12h strictFP build+identity only",
+      "build_or_PDE_GPU_received": false,
+      "full94_received": false
+    },
+    "CPP811_phi_Q_psi_first_compile_negative": {
+      "Source": "811ee2b157f3832ce3c62f96524fc998c36c4f70",
+      "root_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-CPP811-phi-Q-psi-first-compile-negative-reception-20261007.json",
+        "sha256": "d209abbe96ea35cdffcf1026bd581d96761e3f21302d3de90cb96d3ec08582d9"
+      },
+      "artifacts": 66,
+      "two_fixture_API_errors": "make_poisson_rhs_v2<D> vs template<classModel>",
+      "old_fixture_regenerated_same_bytes_new_mtime": true,
+      "successful_CXX_TU": 1,
+      "failed_CXX_TU": 1,
+      "new_test_links": 0,
+      "runtime_tests": 0,
+      "full94_received": false
+    },
+    "GPU736186_whole_compile_negative": {
+      "Source": "9db1c37b6be06f0a11a1fad2041825492851394e",
+      "SDK": "967e6afd549028368716cf484593d8424775d415daacba937e03822565da93e8",
+      "root_receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/root-GPU736186-whole-compile-negative-reception-20261007.json",
+        "sha256": "a44e58630ce1fa65626acdbdcf897b31979a52a82694e74c59e0061d80b30b0f"
+      },
+      "job": 736186,
+      "Slurm": "FAILED1:0",
+      "members": 92,
+      "regular_files": 74,
+      "regular_bytes": 454883912,
+      "observed_CXX_rows": 5,
+      "completed_objects_claimed": false,
+      "bindings": 0,
+      "wheel_Native_GPU_PDE_received": false,
+      "first_error": "NVCC extended HDlambda parent make_poisson_rhs_v2 may not have deduced returntype",
+      "preservation_CPU_GPU_Source": [
+        19,
+        9,
+        20
+      ],
+      "full94_received": false
+    }
+  },
+  "scoped_receptions_20261006": {
+    "schema": "pops.api040.scoped-scientific-receptions@1",
+    "historical_snapshot_rows_preserved": true,
+    "whole_M19_or_94_obligations_received": false,
+    "consumed_field_AMR_local": {
+      "ids": [
+        "M19"
+      ],
+      "production_source_revision": "7edddce1255012700fac7d098c94a3bf18d23141",
+      "native_sha256": "d725dcc30a411f7782ee290de989143f83a14bf2bca6c8b17579e545a0e6994c",
+      "backend": "local Apple LLVM, MPI-enabled Dim2 CPU; MPI1 and MPI2",
+      "original_cases": [
+        "False",
+        "True"
+      ],
+      "steps_per_case": 2,
+      "saved_CP12_NPY_regrid_nonfinite_State_cursor_rollback_received": true,
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-sdk42-collective-cause-local-reception-20261006.json",
+      "root_receipt_sha256": "36badef6adae93922833e3e6f2eac3cf0ffb8e56d827e9a91e2abc3c72d3f0b6",
+      "independent_pins_sha256": "eb90dffc9f79527e2e2a1920b96f3a7ff40eb4f5d3cca2a0b2e7c38ea3aa8feb",
+      "documentation": "amr_mapped_field_buffers_and_publication_20261006.md",
+      "broader_Field_history_Aux_semantics_or_PDE_convergence_received": false
+    },
+    "consumed_field_AMR_ROMEO": {
+      "ids": [
+        "M19"
+      ],
+      "job": "735312",
+      "source_revision": "b1203435aa5fc5017233fa22a04e78373e3f80b5",
+      "native_sha256": "cf3d2fd4c6071650a8d9382485fc2022c1437a906c07afb130c2b49c9f32932d",
+      "backend": "ROMEO GNU15.3 Dim2, actual MPI world1/OpenMP concurrency8",
+      "terminal": "COMPLETED 0:0",
+      "original_cases": [
+        "False",
+        "True"
+      ],
+      "steps_per_case": 2,
+      "native_seven_TU_build_wheel_install_doctor_received": true,
+      "saved_CP12_NPY_regrid_nonfinite_State_cursor_rollback_received": true,
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-sdk28-amr-vp-units-dim2-preparation-20261003/root-sdk42-amr-build-reception-735312.json",
+      "root_receipt_sha256": "6af39e06bd229a0ef8fdb26da60c75992ec7cf0e44757c93a857fa1ce30ade35",
+      "independent_pins_sha256": "d222c8b3f2fa26d76dee4ba8f5b32cdff57f121b71d824578e749917039a0e0f",
+      "preservation": {
+        "CPU_prefixes": 18,
+        "GPU_prefixes": 7,
+        "Sources": 15,
+        "Home_scope": "Conda registry only"
+      },
+      "current_local_Native_d725_or_MPI2_GPU_3D_CI_received_by_this_lot": false
+    },
+    "isolated_self_BGK_local": {
+      "ids": [
+        "M19"
+      ],
+      "production_source_revision": "7edddce1255012700fac7d098c94a3bf18d23141",
+      "test_source_revision": "190cd3c60de7ca8be947beaf745d59df4a5a9eee",
+      "native_sha256": "d725dcc30a411f7782ee290de989143f83a14bf2bca6c8b17579e545a0e6994c",
+      "backend": "local Apple LLVM, MPI-enabled Dim2 CPU singleton",
+      "original_cases": [
+        "32-32-False",
+        "64-64-True"
+      ],
+      "method": "SSPRK2",
+      "steps_per_case": 2,
+      "dt": [
+        1,
+        128
+      ],
+      "nu": [
+        3,
+        2
+      ],
+      "continuous_self_Maxwellian_without_discrete_fit": true,
+      "independent_distribution_error_max": 1.1102230246251565e-16,
+      "independent_moment_error_max": 8.881784197001252e-16,
+      "independent_conservation_error_max": 9.325873406851315e-15,
+      "NPY_CP9_payloads_bitwise_equal": true,
+      "checkpoint_restore_exercised": false,
+      "C25_Models_per_case": 8,
+      "C25_Programs_per_case": 2,
+      "source_compiled_transfer_components_per_case": 6,
+      "installed_whole_members_preserved": 2563,
+      "root_receipt": "/Users/romaindespoulain/dev/tmp/root-m19-bgk-local-reception-20261006.json",
+      "root_receipt_sha256": "3d16db81a8f76d99cab527bb47e6cf27dad70be75841f0294788d7dd678a263e",
+      "independent_pins_sha256": "5f2f90b0a03d45d1547c2d4170d4e6c24eb97142b9ea8115e42f184089065134",
+      "documentation": "m19_isolated_bgk_native_reception_20261006.md",
+      "compiler_to_binary_graph_or_populated_Field_history_cache_received": false,
+      "transport_Landau_full_BGK_convergence_costs_MPI2_GPU_ROMEO_CI_received": false
+    }
+  },
+  "sdk967e_supplemental_scoped_summary_20261007_received_20261008": {
+    "date": "2026-10-07",
+    "observed_source_commit": "8c1cf54184a1ee20f2f9cefcef55aac3b0a2147f",
+    "full_94_obligations_closed": false,
+    "scope": "Dated bounded reception; historical current_head/mapping_baseline and original obligations are unchanged",
+    "PDE": "New actual9dbSDK967e/NativeD154 built/installed originalonelevelworld1PASS, originalU/Fbounds+CP exact, Ynotmeasured and OMPeffectiveunmeasured",
+    "Cpp13": "World1 Field13/Registry21 PASS0skip. Correctedworld2 Field13casesperrank/26executions PASS0skip, actual former3cases rank0 localFab1/cells64 andrank1 Fab0/cells0, exact0/negativeinfinity. Original23PASS3FAIL preserved separately.",
+    "formal_order": "99de181 Main Source61 PASS via archived XML/command; separate frozen author Source cohort noSO, Root stdout absent; formal certificate, no PDE convergence qualification",
+    "ROMEO735830": "Historical FAILED allocation/preparation before checkout/build; missing metadata corrected in SDK48 payload, originals unchanged.",
+    "retry": "Original current600/D154/SDK967e world1 PASS0skip independently received,110artifacts, same seal/inode; exact2levels, regrid/topology counters2→3, histories/cache empty; OpenMP2 actually measured only this process.",
+    "Native8": "Eight installed current600/D154/SDK967e tests PASS0skip471.63s,195artifacts received independently;17validCP/13scientific archives/9negative excluded; actual adaptive history/cache/queue and child-history evidence. EffectiveOpenMP2 only manual fixture.",
+    "CPP_phi_Q_psi": "R4 test811 firstcompile failed wrong<D> calls; R5 integrated8c1cf withonly2callsdeduction, secondcompile now instantiates then fails Count0 Phi model arity. No testcase run. R6 fixture and genericCUDAcallable correction prepared separately, physical guards/criteria unchanged.",
+    "ROMEO736186": "Actual FAILED1:0/build-python70min48s on9db/SDK967e: NVCC1560 rejects extendedlambda in deducedreturn factory;92members/74files454883912bytes whole received,19CPU9GPU20Sources+dependencies preserved. No completedbinding/fullNativeGPU/wheel/PDE. Roota44e586."
+  }
+}

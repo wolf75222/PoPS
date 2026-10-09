@@ -1,0 +1,12 @@
+{
+  "schema": "pops.root.fixed-core-Euler-variants-reception@1",
+  "date_utc": "2026-10-08T18:11:23.931392+00:00",
+  "Source": "da4ec543f8beeb57c1ad1f122184005b82fb3f64",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "core_fingerprint": "fd27f604adde381bad38e6f04986805ed05f33b549a8dc8c36b622770a9b6aa5",
+  "independent_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-independent-fixed-core-Euler-variants-da4-ed2-reception-20261008/reception.json",
+  "independent_sha256": "e49cadb605a5c602ed1915c32d8addad38462a60d6a897625d7da59542604d4b",
+  "physical_pins_rehashed": 43,
+  "RootGO_MPI2_single_Euler": true,
+  "scope": "Only finite names/coefficient variations; not whole-language genericity nor SSP/GPU qualification."
+}

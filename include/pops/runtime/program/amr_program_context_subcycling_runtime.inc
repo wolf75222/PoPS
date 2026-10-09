@@ -1,3 +1,15 @@
+void retain_subcycling_attempt_authority_() const noexcept {
+  if (multiblock_subcycling_)
+    allocated_subcycling_attempt_ =
+        std::max(allocated_subcycling_attempt_, multiblock_subcycling_->last_allocated_attempt());
+}
+
+void retire_multiblock_subcycling_engine_() const noexcept {
+  retain_subcycling_attempt_authority_();
+  multiblock_subcycling_.reset();
+  multiblock_subcycling_has_accepted_step_ = false;
+}
+
 void begin_interface_flux_attempt_() const {
   const auto& lane = facade_->prepared_amr_multiblock_hierarchy_().lane();
   std::optional<typename interface_flux_ledger_type::PreparedBegin> prepared_begin;
@@ -89,13 +101,21 @@ void advance_prepared_hierarchy_(double dt, Body&& body, std::string_view operat
           facade_->validate_prepared_amr_state_publication_candidate(
               static_cast<int>(runtime_block), static_cast<int>(level), candidate);
         },
-        [&](std::size_t level, std::span<field_type*> pack) {
-          stage_prepared_publication_candidates_(level, pack);
+        [&](auto&& first, auto&& second, auto&&... history) {
+          if constexpr (std::is_integral_v<std::remove_cvref_t<decltype(first)>>)
+            stage_prepared_publication_candidates_(first, second);
+          else
+            prepare_accepted_publication_halos_(dt, first, second, history...);
         },
         operation == "advance_composite_hierarchy");
+    retain_subcycling_attempt_authority_();
     commit_interface_flux_attempt_();
+    accepted_subcycling_attempt_ = multiblock_subcycling_->last_accepted_attempt();
     multiblock_subcycling_has_accepted_step_ = true;
   } catch (...) {
+    retain_subcycling_attempt_authority_();
+    program_values_.revoke_();
+    rhs_input_traces_.clear();
     if (interface_flux_ledger_ && interface_flux_ledger_->in_transaction())
       interface_flux_ledger_->rollback();
     active_level_ = prior_level;
@@ -108,6 +128,7 @@ void advance_prepared_hierarchy_(double dt, Body&& body, std::string_view operat
     clear_active_multiblock_group_();
     throw;
   }
+  rhs_input_traces_.clear();
   active_level_ = prior_level;
   current_dt_ = prior_dt;
   current_interval_start_time_ = prior_interval_start;
@@ -292,6 +313,8 @@ void prepare_multiblock_subcycling_engine_() const {
     throw std::runtime_error("AMR Program subcycling preparation failed collectively");
   }
 
+  retain_subcycling_attempt_authority_();
+  prepared->restore_attempt_authority(allocated_subcycling_attempt_, accepted_subcycling_attempt_);
   multiblock_subcycling_ = std::move(prepared);
   multiblock_subcycling_has_accepted_step_ = false;
   prepared_rhs_basis_bounds_ = std::move(rhs_basis_bounds);
@@ -389,7 +412,11 @@ void advance_multiblock_level_group_(multiblock_level_group_type group, double m
     collectively_rethrow_exception(preparation_error, prepared_execution_lane(),
                                    "AMR Program level envelope preparation failed collectively");
     facade_->clear_prepared_amr_level_evaluations();
-    body(current_dt_);
+    // Agree on body completion before a peer can enter retained/shared-flux collectives.
+    const ExecutionLane& body_lane = prepared_execution_lane();
+    runtime::program::collective_step_rejection_phase(
+        body_lane.communicator(), {"pops.amr-level-body.v1", "amr-level-body", false, false},
+        "AMR Program level body failed collectively", [&] { body(current_dt_); });
     if (multiblock_subcycling_->has_synchronized_groups()) {
       for (int level = 0; level < nlev(); ++level)
         with_program_attempt_level(level, [&] {
@@ -409,6 +436,45 @@ void advance_multiblock_level_group_(multiblock_level_group_type group, double m
   }
   synchronized_level_envelopes_.clear();
   clear_active_multiblock_group_();
+}
+
+template <class ClockMatrix, class HistoryMatrix>
+void prepare_accepted_publication_halos_(double macro_dt, std::vector<std::vector<field_type>>& candidates,
+                                        const ClockMatrix& clocks, const HistoryMatrix& histories) const {
+  if (!facade_->requests_accepted_halo_preparation()) return;
+  const auto& lane = prepared_execution_lane();
+  std::vector<std::vector<runtime::multiblock::BoundaryEvaluationPoint>> points;
+  std::exception_ptr error;
+  try {
+    if (primary_clock_.empty() || !std::isfinite(macro_dt) || macro_dt <= 0 ||
+        candidates.size() != clocks.size() || histories.size() != candidates.size())
+      throw std::invalid_argument("accepted halo preparation lacks its exact Program clock authority");
+    points.resize(candidates.size());
+    for (std::size_t block = 0; block < candidates.size(); ++block) {
+      if (clocks[block].size() != candidates[block].size() ||
+          histories[block].size() != candidates[block].size())
+        throw std::invalid_argument("accepted halo preparation lacks one candidate level clock");
+      points[block].reserve(clocks[block].size());
+      for (std::size_t level = 0; level < clocks[block].size(); ++level) {
+        if (!clocks[block][level] || !histories[block][level])
+          throw std::invalid_argument("accepted halo preparation requires an authenticated accepted clock");
+        const auto& clock = *clocks[block][level];
+        const auto& window = histories[block][level]->window;
+        const double local_dt = macro_dt * (window.end.phase - window.begin.phase).value();
+        if (window.end != clock || !std::isfinite(local_dt) || local_dt <= 0 ||
+            clock.level != static_cast<int>(level))
+          throw std::invalid_argument("accepted halo candidate clock has a different level");
+        points[block].push_back({.clock = primary_clock_, .tick = clock.macro_step,
+            .level = clock.level, .substep = 0, .stage = 0, .stage_fraction = clock.phase,
+            .dt = local_dt, .physical_time = clock.physical_time});
+      }
+    }
+  } catch (...) { error = std::current_exception(); }
+  if (all_reduce_max(error ? 1L : 0L, lane)) {
+    if (lane.size() == 1 && error) std::rethrow_exception(error);
+    throw std::runtime_error("accepted halo clock preparation failed collectively");
+  }
+  facade_->prepare_accepted_halo_candidates(candidates, points);
 }
 
 void stage_prepared_publication_candidates_(std::size_t level, std::span<field_type*> pack) const {
@@ -498,6 +564,7 @@ void stage_prepared_publication_candidates_(std::size_t level, std::span<field_t
 }
 
 void clear_active_multiblock_group_() const noexcept {
+  program_values_.revoke_();
   active_attempt_states_.clear();
   active_staged_parents_.clear();
   active_incoming_flux_.clear();

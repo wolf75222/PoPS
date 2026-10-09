@@ -9,6 +9,7 @@ import stat
 import tempfile
 import threading
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -51,7 +52,7 @@ from pops.output.observers import (
     ObserverWorkerCollectiveLost,
     authenticate_observer_session,
 )
-from pops.output._consumer_contracts import ConsumerKind, ParallelMode
+from pops.output._consumer_contracts import ConsumerKind, ParallelMode, Retry
 from pops.output._writers.common import (
     _OutputRecoveryRequired,
     _StagedOutputFile,
@@ -264,11 +265,29 @@ def _conservative_names(owner: Any, block: str) -> tuple[str, ...]:
 
 def _diagnostic_record_name(payload: DiagnosticPayload) -> str:
     """Exact inspection key; distinct level/role declarations must never overwrite each other."""
-    return "%s:%s:%s" % (
+    return _diagnostic_record_name_parts(
         payload.key.reference.qualified_id,
         payload.key.reduction,
         payload.key.state_id,
     )
+
+
+def _diagnostic_record_name_parts(reference: str, reduction: str, state_id: str) -> str:
+    return "%s:%s:%s" % (reference, reduction, state_id)
+
+
+def _potential_diagnostic_record_names(quantity: Any) -> tuple[str, ...]:
+    """Inventory aggregate records declared by one exact diagnostic quantity."""
+    execution = quantity.execution
+    operations = execution["operations"]
+    if {operation["reduction"] for operation in operations} == {"accepted_balance"}:
+        reductions = ("discrete_balance",)
+    else:
+        prefix = "conservation:" if execution["conservation"] is not None else ""
+        reductions = tuple(prefix + operation["name"] for operation in operations)
+    return tuple(_diagnostic_record_name_parts(
+        quantity.handle.qualified_id, reduction, quantity.identity.token
+    ) for reduction in reductions)
 
 
 def _identity_payload(value: Any, *, path: str = "layout") -> Any:
@@ -413,6 +432,13 @@ def _post_commit_root_consensus(
         )
 
 
+@dataclass(frozen=True)
+class _DiagnosticProjection:
+    values: tuple[DiagnosticPayload, ...]
+    baseline_updates: tuple[tuple[str, float], ...]
+    unavailable: str | None
+
+
 class _PreparedDiagnostic(PreparedPublication):
     def __init__(
         self,
@@ -421,10 +447,18 @@ class _PreparedDiagnostic(PreparedPublication):
         publish: Callable[[AcceptedSideEffect, tuple[DiagnosticPayload, ...]], None],
         discard: Callable[[AcceptedSideEffect], None],
         rollback: Callable[[AcceptedSideEffect, tuple[DiagnosticPayload, ...]], None],
+        *,
+        native_staged: bool = False,
     ) -> None:
         self._effect, self._values = effect, values
         self._publish, self._discard, self._rollback = publish, discard, rollback
         self._published = self._discarded = False
+        self._native_staged = native_staged
+
+    @property
+    def native_staged(self) -> bool:
+        """Whether the outer rollback boundary already owns the Native diagnostic writes."""
+        return self._native_staged
 
     @property
     def effect_identity(self) -> Identity:
@@ -706,9 +740,29 @@ class _PreparedCheckpoint(PreparedPublication):
         self._effect, self._target, self._operation = effect, Path(target), operation
         # ``snapshot`` is the same collective prepared transaction used by
         # RuntimeInstance.checkpoint(); it captures now but remains unpublished and compensatable.
-        self._snapshot = operation.snapshot(engine, self._target.parent)
+        prepare = getattr(engine, "_prepare_checkpoint_candidate", None)
+        candidate = prepare() if callable(prepare) else None
+        self._snapshot = (operation.snapshot(engine, self._target.parent) if candidate is None
+                          else operation.snapshot(engine, self._target.parent,
+                                                  prepared_capture=candidate))
         operation.validate_snapshot(self._snapshot)
         self._published = self._discarded = False
+        self._replay = None
+        retain = getattr(self._snapshot, "retain_sealed_replay", None)
+        retry_contract = operation.consumer_data().get("publication_retry_contract")
+        self._publisher_id = ("pops.restart-checkpoint.v6" if retry_contract ==
+                              "pops.checkpoint.sealed-replay@1" else "pops.restart-checkpoint.v5")
+        if retry_contract is not None and retry_contract != "pops.checkpoint.sealed-replay@1":
+            self._snapshot.discard()
+            raise ValueError("unsupported checkpoint publication retry contract")
+        if type(effect.failure_action) is Retry and retry_contract is not None:
+            try:
+                if not callable(retain):
+                    raise TypeError("checkpoint provider lacks its declared sealed replay authority")
+                self._replay = retain()
+            except BaseException:
+                self._snapshot.discard()
+                raise
 
     @property
     def effect_identity(self) -> Identity:
@@ -736,27 +790,75 @@ class _PreparedCheckpoint(PreparedPublication):
         return PublicationReceipt(
             self.effect_identity,
             self.payload_identity,
-            "pops.restart-checkpoint.v5",
+            self._publisher_id,
             artifact.token,
             self._effect.target.parallel_mode,
         )
 
+    def retry_publication(self, error: Exception) -> PreparedPublication | None:
+        if self._replay is None:
+            return None
+        from pops.output._restart_provider import _CheckpointTransportFailure
+
+        if isinstance(error, _CheckpointTransportFailure):
+            self._replay.transport_lost = True
+            raise error
+        # Compensation deletes only this attempt; the readonly retained seal survives.
+        self._snapshot.rollback()
+        snapshot = self._replay.stage(self._snapshot)
+        result = object.__new__(_PreparedCheckpoint)
+        result._effect, result._target, result._operation = self._effect, self._target, self._operation
+        result._snapshot = snapshot
+        result._publisher_id = self._publisher_id
+        result._replay, self._replay = self._replay, None
+        result._published = result._discarded = False
+        self._discarded = True
+        return result
+
+    def _release_replay(self) -> None:
+        if self._replay is not None:
+            self._replay.close()
+            self._replay = None
+
+    def _finish_snapshot(self, method: str) -> None:
+        primary = None
+        try:
+            action = getattr(self._snapshot, method, None)
+            if callable(action):
+                action()
+        except BaseException as error:
+            primary = error
+            from pops.output._restart_provider import _CheckpointTransportFailure
+            if isinstance(error, _CheckpointTransportFailure) and self._replay is not None:
+                self._replay.transport_lost = True
+        try:
+            self._release_replay()
+        except BaseException as error:
+            if primary is None:
+                raise
+            add_note = getattr(primary, "add_note", None)
+            if callable(add_note):
+                add_note("sealed checkpoint replay release also failed: %s" % error)
+        if primary is not None:
+            raise primary
+
     def discard(self) -> None:
         if not self._published and not self._discarded:
-            self._snapshot.discard()
+            self._finish_snapshot("discard")
             self._discarded = True
+        else:
+            self._release_replay()
 
     def rollback(self) -> None:
-        if self._discarded:
-            return
-        self._snapshot.rollback()
-        self._published = False
-        self._discarded = True
+        if not self._discarded:
+            self._finish_snapshot("rollback")
+            self._published = False
+            self._discarded = True
+        else:
+            self._release_replay()
 
     def finalize(self) -> None:
-        finalize = getattr(self._snapshot, "finalize", None)
-        if callable(finalize):
-            finalize()
+        self._finish_snapshot("finalize")
 
 
 def _writer_snapshot_data(snapshot: OutputSnapshot, request: OutputRequest) -> dict[str, Any]:
@@ -1437,6 +1539,19 @@ class _PreparedRootExternalWriter(PreparedPublication):
     def finalize(self) -> None:
         self._cleanup("finalize")
         return None
+
+
+class _CheckpointCandidatePublisher(ConsumerPublisher):
+    """Prepare diagnostics inside the outer candidate, before its checkpoint is sealed."""
+
+    def __init__(self, publisher: RuntimeConsumerPublisher) -> None:
+        self._publisher = publisher
+        self._diagnostic_projections: dict[str, _DiagnosticProjection] = {}
+
+    def prepare(self, effect: AcceptedSideEffect) -> PreparedPublication:
+        return self._publisher.prepare(
+            effect, native_staged=True, diagnostic_projections=self._diagnostic_projections
+        )
 
 
 class RuntimeConsumerPublisher(ConsumerPublisher):
@@ -4269,16 +4384,18 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         return tuple(values), baseline_updates
 
     def _publish_diagnostics(
-        self, effect: AcceptedSideEffect, values: tuple[DiagnosticPayload, ...]
+        self, effect: AcceptedSideEffect, values: tuple[DiagnosticPayload, ...],
+        *, native_staged: bool = False,
     ) -> None:
         baseline_updates = self._pending_baselines.get(effect.identity.token, {})
         for key, value in baseline_updates.items():
             self._baselines.setdefault(key, value)
         for value in values:
             self._diagnostics[value.key.identity.token] = value
-            recorder = getattr(self._owner._executor, "record_program_diagnostic", None)
-            if callable(recorder):
-                recorder(_diagnostic_record_name(value), value.value)
+            if not native_staged:
+                recorder = getattr(self._owner._executor, "record_program_diagnostic", None)
+                if callable(recorder):
+                    recorder(_diagnostic_record_name(value), value.value)
         self._pending.pop(effect.identity.token, None)
         self._pending_baselines.pop(effect.identity.token, None)
 
@@ -4337,23 +4454,33 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         self._pending.pop(effect.identity.token, None)
         self._pending_baselines.pop(effect.identity.token, None)
 
-    def _prepare_diagnostic(self, effect: AcceptedSideEffect, manifest: Any) -> Any:
+    def _prepare_diagnostic(
+        self, effect: AcceptedSideEffect, manifest: Any, *, native_staged: bool = False,
+        diagnostic_projections: dict[str, _DiagnosticProjection] | None = None,
+    ) -> Any:
         unavailable = None
-        try:
-            values, baseline_updates = self._diagnostic_values(manifest)
-        except RuntimeError as error:
-            message = str(error)
-            if manifest.kind is not ConsumerKind.DIAGNOSTIC:
-                raise
-            if "step-change L2 unavailable after an AMR topology change" in message:
-                unavailable = "AMR regrid"
-            elif "step_change_l2 requires an active external step transaction" in message:
-                unavailable = "initial state"
-            else:
-                raise
-            values, baseline_updates = self._diagnostic_values(
-                manifest, skip_reductions=frozenset({"step_change_l2"})
-            )
+        projection = (None if diagnostic_projections is None
+                      else diagnostic_projections.get(effect.identity.token))
+        if projection is not None:
+            values = projection.values
+            baseline_updates = dict(projection.baseline_updates)
+            unavailable = projection.unavailable
+        else:
+            try:
+                values, baseline_updates = self._diagnostic_values(manifest)
+            except RuntimeError as error:
+                message = str(error)
+                if manifest.kind is not ConsumerKind.DIAGNOSTIC:
+                    raise
+                if "step-change L2 unavailable after an AMR topology change" in message:
+                    unavailable = "AMR regrid"
+                elif "step_change_l2 requires an active external step transaction" in message:
+                    unavailable = "initial state"
+                else:
+                    raise
+                values, baseline_updates = self._diagnostic_values(
+                    manifest, skip_reductions=frozenset({"step_change_l2"})
+                )
         previous = {
             value.key.identity.token: self._diagnostics.get(value.key.identity.token)
             for value in values
@@ -4386,24 +4513,66 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             self._pending.pop(_effect.identity.token, None)
             self._pending_baselines.pop(_effect.identity.token, None)
 
-        self._pending[effect.identity.token] = values
-        self._pending_baselines[effect.identity.token] = baseline_updates
+        if native_staged:
+            # The active outer Native snapshot restores this map if preparation/publication
+            # fails. All ranks must decide staging before writer/checkpoint collectives.
+            local_error = None
+            try:
+                self._pending[effect.identity.token] = values
+                self._pending_baselines[effect.identity.token] = baseline_updates
+                if projection is None:
+                    recorder = getattr(self._owner._executor, "record_program_diagnostic", None)
+                    if values and not callable(recorder):
+                        raise RuntimeError("checkpoint candidate diagnostics require a Native recorder")
+                    for value in values:
+                        recorder(_diagnostic_record_name(value), value.value)
+                    if diagnostic_projections is not None:
+                        diagnostic_projections[effect.identity.token] = _DiagnosticProjection(
+                            values, tuple(sorted(baseline_updates.items())), unavailable
+                        )
+            except BaseException as error:
+                local_error = error
+            try:
+                from pops.output._checkpoint_collective import CheckpointTopology, consensus
+
+                consensus(
+                    CheckpointTopology(self._rank, self._size, self._communicator),
+                    "candidate diagnostic staging", error=local_error,
+                )
+            except BaseException:
+                self._discard_diagnostics(effect)
+                if diagnostic_projections is not None and projection is None:
+                    diagnostic_projections.pop(effect.identity.token, None)
+                raise
+        else:
+            self._pending[effect.identity.token] = values
+            self._pending_baselines[effect.identity.token] = baseline_updates
         publish_callback: Callable[[AcceptedSideEffect, tuple[DiagnosticPayload, ...]], None]
         if manifest.kind is ConsumerKind.DIAGNOSTIC:
 
             def publish_console(
                 accepted_effect: AcceptedSideEffect, accepted_values: tuple[DiagnosticPayload, ...]
             ) -> None:
-                self._publish_diagnostics(accepted_effect, accepted_values)
+                self._publish_diagnostics(
+                    accepted_effect, accepted_values, native_staged=native_staged
+                )
                 self._render_console_diagnostics(
                     accepted_effect, manifest, accepted_values, unavailable=unavailable
                 )
 
             publish_callback = publish_console
         else:
-            publish_callback = self._publish_diagnostics
+            def publish_registry(
+                accepted_effect: AcceptedSideEffect, accepted_values: tuple[DiagnosticPayload, ...]
+            ) -> None:
+                self._publish_diagnostics(
+                    accepted_effect, accepted_values, native_staged=native_staged
+                )
+
+            publish_callback = publish_registry
         return _PreparedDiagnostic(
-            effect, values, publish_callback, self._discard_diagnostics, rollback
+            effect, values, publish_callback, self._discard_diagnostics, rollback,
+            native_staged=native_staged,
         )
 
     def _snapshot_for_effect(
@@ -4503,15 +4672,28 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             size=self._size,
         )
 
-    def prepare(self, effect: AcceptedSideEffect) -> PreparedPublication:
+    def checkpoint_candidate_preparation(self) -> ConsumerPublisher:
+        """Bind one explicit preparation mode to the final-checkpoint transaction only."""
+        return _CheckpointCandidatePublisher(self)
+
+    def prepare(
+        self, effect: AcceptedSideEffect, *, native_staged: bool = False,
+        diagnostic_projections: dict[str, _DiagnosticProjection] | None = None,
+    ) -> PreparedPublication:
         if type(effect) is not AcceptedSideEffect:
             raise TypeError("RuntimeConsumerPublisher requires an exact AcceptedSideEffect")
         manifest = self._manifest(effect)
         if manifest.kind is ConsumerKind.DIAGNOSTIC:
-            return self._prepare_diagnostic(effect, manifest)
+            return self._prepare_diagnostic(
+                effect, manifest, native_staged=native_staged,
+                diagnostic_projections=diagnostic_projections,
+            )
         if manifest.kind is ConsumerKind.MONITOR:
             diagnostic = (
-                self._prepare_diagnostic(effect, manifest)
+                self._prepare_diagnostic(
+                    effect, manifest, native_staged=native_staged,
+                    diagnostic_projections=diagnostic_projections,
+                )
                 if manifest.diagnostic_quantities
                 else None
             )
@@ -4524,7 +4706,10 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             return live if diagnostic is None else _PreparedScientificOutput(live, diagnostic)
         if manifest.kind is ConsumerKind.SCIENTIFIC_OUTPUT:
             diagnostic = (
-                self._prepare_diagnostic(effect, manifest)
+                self._prepare_diagnostic(
+                    effect, manifest, native_staged=native_staged,
+                    diagnostic_projections=diagnostic_projections,
+                )
                 if manifest.diagnostic_quantities
                 else None
             )
@@ -4572,6 +4757,32 @@ class RuntimeOutputSnapshot:
         """Drop geometry snapshots when restart replaces topology under a reused epoch."""
         self._geometry_cache.clear()
 
+    def _moving_declaration(self, layout: Any) -> tuple[str, str] | None:
+        install = getattr(self._owner,"_install_plan",None)
+        if install is None:
+            if layout.requirements.get("geometry_evolution") is not None:
+                raise RuntimeError("moving output lacks its compiled Program authority")
+            return None
+        artifact = install.artifact
+        rows = [row for row in artifact.layout_programs if row.layout_id == layout.handle.qualified_id]
+        handle = rows[0].program if len(rows) == 1 else artifact.program
+        program = getattr(handle, "program", None)
+        if program is None:
+            return None
+        names = {row.subject.local_id for row in self._owner._layout_plan.assignments
+                 if row.subject_kind == "block" and row.layout == layout.handle}
+        bindings = [value for value in program._values if value.op == "geometry_state" and
+                    value.block.local_id in names]
+        if not bindings:
+            return None
+        if len(bindings) != 1 or layout.adaptive:
+            raise NotImplementedError("moving output requires one Uniform1D geometry authority per layout")
+        from pops.time.references import canonical_handle
+        value = bindings[0]
+        if value.space.frame != layout.geometry.frame_id:
+            raise ValueError("moving output physical frame differs from its assigned layout")
+        return "pops.moving:" + canonical_handle(value.state_ref).qualified_id, value.space.frame
+
     @staticmethod
     def _native_composite_integral(
         entry: Mapping[str, Any],
@@ -4614,7 +4825,8 @@ class RuntimeOutputSnapshot:
             "method_name": method_name,
         }
 
-    def _geometry(self, layout: Any, level: int) -> LevelGeometry:
+    def _geometry(self, layout: Any, level: int, *, moving_snapshot: Any = None,
+                  reference_only: bool = False) -> LevelGeometry:
         engine = self._owner._executor_for_layout(layout.handle.qualified_id)
         native_engine = getattr(engine, "_s", None)
         native_geometry = getattr(native_engine, "_output_geometry_snapshot", None)
@@ -4646,8 +4858,18 @@ class RuntimeOutputSnapshot:
         )
         layout_identity = _layout_identity(layout)
         cache_key = (layout_identity.token, level, topology_epoch)
+        moving = self._moving_declaration(layout)
+        if moving is not None and not reference_only:
+            if dimension != 1 or level != 0:
+                raise NotImplementedError("moving output needs the installed 1D endpoint provider")
+            if moving_snapshot is None:
+                raise RuntimeError("moving output requires a collectively prepared native snapshot")
+            generation = moving_snapshot["generation"]
+            if type(generation) is not int or generation < 0:
+                raise TypeError("moving output generation must be an exact nonnegative integer")
+            cache_key = (layout_identity.token, level, generation)
         cached = self._geometry_cache.get(cache_key)
-        if cached is not None:
+        if cached is not None and moving is None:
             return cached
         spacing = tuple(
             length / extent
@@ -4711,10 +4933,13 @@ class RuntimeOutputSnapshot:
             cell_shape,
             native_boxes,
             native["coverage"],
-            native["cell_volumes"],
-            coordinate_system=geometry.coordinate_system,
-            cell_measure=geometry.cell_measure,
+            native["cell_volumes"] if moving_snapshot is None else moving_snapshot["cell_volumes"],
+            coordinate_system=(geometry.coordinate_system if moving_snapshot is None else
+                               "pops://coordinates/moving-cartesian-1d@1"),
+            cell_measure=(geometry.cell_measure if moving_snapshot is None else
+                          "pops://cell-measures/endpoint-length@1"),
             axis_names=geometry.axis_names,
+            node_coordinates=None if moving_snapshot is None else moving_snapshot["node_coordinates"],
             _native_valid_cells=native["valid_cells"],
             _native_arrays=_NATIVE_GEOMETRY_ARRAYS,
         )
@@ -4723,7 +4948,8 @@ class RuntimeOutputSnapshot:
         for stale in tuple(self._geometry_cache):
             if stale[:2] == cache_key[:2] and stale != cache_key:
                 del self._geometry_cache[stale]
-        self._geometry_cache[cache_key] = result
+        if moving is None:
+            self._geometry_cache[cache_key] = result
         return result
 
     @staticmethod
@@ -5080,6 +5306,53 @@ class RuntimeOutputSnapshot:
             raise ValueError(
                 "%s output snapshot requires a native MPI ExecutionContext" % mode.name
             )
+        # Moving geometry capture is collective. Establish the entire ordered
+        # request list and converge local preparation failures BEFORE calling
+        # it; the subsequent per-quantity preflight never enters a new geometry
+        # collective after a rank-local metadata exception.
+        geometry_requests = {}
+        prepared_geometries = {}
+        geometry_error = None
+        try:
+            for quantity in (*manifest.quantities, *manifest.diagnostic_quantities):
+                layout = self._layout(quantity.layout_id)
+                selected = quantity.levels or tuple(row.index for row in layout.levels)
+                for level in _active_output_levels(self._owner, layout, tuple(selected)):
+                    geometry_requests[(layout.handle.qualified_id, level)] = (
+                        layout, self._moving_declaration(layout))
+                    prepared_geometries[(layout.handle.qualified_id, level)] = self._geometry(
+                        layout, level, reference_only=True)
+                    if geometry_requests[(layout.handle.qualified_id, level)][1] is not None:
+                        engine = self._owner._executor_for_layout(layout.handle.qualified_id)._s
+                        if not callable(getattr(engine, "_output_moving_geometry_snapshot", None)):
+                            raise RuntimeError("installed native provider lacks its accepted moving geometry view")
+        except Exception as error:
+            geometry_error = "%s: %s" % (type(error).__name__, error)
+        geometry_schema = tuple((layout_id, level, declaration)
+            for (layout_id, level), (_layout, declaration) in sorted(geometry_requests.items()))
+        envelopes = ([{"error": geometry_error, "requests": geometry_schema}] if communicator is None else
+                     allgather_value(communicator, {"error": geometry_error, "requests": geometry_schema}))
+        if any(row["error"] is not None for row in envelopes):
+            raise RuntimeError("output geometry preparation failed: %s" %
+                               "; ".join(row["error"] for row in envelopes if row["error"] is not None))
+        if any(row["requests"] != geometry_schema for row in envelopes):
+            raise ValueError("output geometry collective request order differs between ranks")
+        for (layout_id, level), (layout, declaration) in sorted(geometry_requests.items()):
+            if declaration is None:
+                continue
+            capture_error = None
+            try:
+                engine = self._owner._executor_for_layout(layout_id)._s
+                snapshot = engine._output_moving_geometry_snapshot(*declaration)
+                prepared_geometries[(layout_id, level)] = self._geometry(
+                    layout, level, moving_snapshot=snapshot)
+            except Exception as error:
+                capture_error = "%s: %s" % (type(error).__name__, error)
+            failures = ([capture_error] if communicator is None else
+                        allgather_value(communicator, capture_error))
+            if any(error is not None for error in failures):
+                raise RuntimeError("moving output capture failed: %s" %
+                                   "; ".join(error for error in failures if error is not None))
         entries: list[dict[str, Any]] = []
         embedded_entries: dict[tuple[str, int], dict[str, Any]] = {}
         sidecar_entries: tuple[dict[str, Any], ...] = ()
@@ -5100,7 +5373,7 @@ class RuntimeOutputSnapshot:
                 )
                 component_manifest = self._owner._component_manifests[block].manifest_digest
                 for level in levels:
-                    geometry = self._geometry(layout, level)
+                    geometry = prepared_geometries[(layout.handle.qualified_id, level)]
                     geometries[geometry.key] = geometry
                     if isinstance(quantity.reference, FieldHandle):
                         plan = self._owner._install_plan.artifact.plan.field_plans.get(
@@ -5179,7 +5452,7 @@ class RuntimeOutputSnapshot:
                 selected = quantity.levels or tuple(row.index for row in layout.levels)
                 levels = _active_output_levels(self._owner, layout, tuple(selected))
                 for level in levels:
-                    geometry = self._geometry(layout, level)
+                    geometry = prepared_geometries[(layout.handle.qualified_id, level)]
                     geometries[geometry.key] = geometry
                     sidecar_entry = self._embedded_boundary_output_entry(layout, geometry)
                     if sidecar_entry is not None:

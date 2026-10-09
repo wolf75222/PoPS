@@ -99,6 +99,10 @@ def _mapping_blocks(plan: Any, transfer: Any) -> tuple[str, str]:
             "runtime Transfer must resolve to exactly one authenticated layout mapping"
         )
     requirement = matches[0].requirement
+    from pops.mesh._layout_plan_contracts import LayoutRepresentation
+    if requirement.source_port.representation is LayoutRepresentation.CELL_FIELD_V1:
+        requirement.physical_map.validate_ports(requirement.source_port, requirement.target_port)
+        return (requirement.source_port.subject.qualified_id, requirement.target_port.subject.qualified_id)
     return (
         _mapping_block(requirement.source_port.subject),
         _mapping_block(requirement.target_port.subject),
@@ -340,6 +344,9 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
     if source_target != target_target or source_target not in ("system", "amr_system"):
         raise ValueError("layout Transfer requires matching resolved native execution targets")
     adaptive = source_target == "amr_system"
+    mapped_field = transfer.source_representation_uri == "pops://representations/cell-field-observation@1"
+    if mapped_field and not program_invocation:
+        raise NotImplementedError("mapped consumed Field output requires a program-point invocation")
     if transfer.operation_abi in (2, 3):
         requirement = next(row.requirement for row in plan.artifact.layout_plan.mappings
                            if row.requirement.qualified_id == transfer.mapping_id)
@@ -372,9 +379,9 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
     component = plan.components.get(transfer.component_id)
     if getattr(component, "native_handle", None) is None:
         raise TypeError("mapping Transfer component has no authenticated native handle")
-    source_components = int(source_engine.block_n_vars(source_block) if adaptive
+    source_components = 1 if mapped_field else int(source_engine.block_n_vars(source_block) if adaptive
                             else source_engine.n_vars(source_block))
-    target_components = int(target_engine.block_n_vars(target_block) if adaptive
+    target_components = 1 if mapped_field else int(target_engine.block_n_vars(target_block) if adaptive
                             else target_engine.n_vars(target_block))
     if source_components != target_components or source_components <= 0:
         raise ValueError("layout transfer source/target component counts differ")
@@ -408,6 +415,7 @@ def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]
             "operation": transfer.operation_abi,
             "program_invocation": program_invocation,
             **contract,
+            **({"mapped_field_components": 1} if mapped_field else {}),
         },
         physical_spec=physical_spec,
         source_element_count=None if adaptive else source_components * source_cells,
@@ -662,7 +670,7 @@ class _CompositeTemporalRestartState:
         return values[0]
 
     def _require_shared(self) -> None:
-        for name in ("_restored_pending", "strategy", "time_hex", "macro_step",
+        for name in ("_restored_pending", "_initial_strategy_declaration", "strategy", "time_hex", "macro_step",
                      "controller_state", "event_queue", "transaction_stats", "status",
                      "synchronized"):
             self._same_attribute(name)
@@ -923,9 +931,9 @@ class _MultiLayoutUniformExecutor:
     def _restore_checkpoint_run_identity(self, identity: Any) -> None:
         from pops.identity import Identity
 
-        if type(identity) is not Identity or identity.domain != "run":
+        if identity is not None and (type(identity) is not Identity or identity.domain != "run"):
             raise TypeError("multi-layout restart requires an authenticated run identity")
-        restored = Identity.from_data(identity.to_data())
+        restored = None if identity is None else Identity.from_data(identity.to_data())
         self._last_run_manifest = None
         self._last_run_identity = restored
         self._restart_lineage_identity = restored
@@ -1146,6 +1154,14 @@ class _MultiLayoutUniformExecutor:
 
     def set_state(self, block: str, values: Any) -> Any:
         return self.executor_for_block(block).set_state(block, values)
+
+    def local_boxes(self, block: str) -> Any:
+        """Relay rank-owned boxes through the exact block's native executor."""
+        return self.executor_for_block(block).local_boxes(block)
+
+    def local_state(self, block: str, box_index: int) -> Any:
+        """Relay a native local piece without changing its axis/component order."""
+        return self.executor_for_block(block).local_state(block, box_index)
 
     def spatial_shape(self) -> tuple[int, ...]:
         raise ValueError(
@@ -1715,6 +1731,9 @@ class _MultiLayoutUniformExecutor:
             prepared_children.append(prepare(child_bytes, bit_identical=policy))
         children = tuple(prepared_children)
         temporal = self._prepared_temporal_state(children)
+        from pops.runtime._checkpoint_manifest import checkpoint_run_identity, require_bound_initial_children
+        if checkpoint_run_identity(stored) is None:
+            require_bound_initial_children(children, temporal)
         from pops.runtime._temporal_restart import _clock
 
         now, step = _clock(stored["t"].item(), stored["macro_step"].item())

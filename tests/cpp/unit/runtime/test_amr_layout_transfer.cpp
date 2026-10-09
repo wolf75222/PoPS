@@ -2,12 +2,14 @@
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/runtime/dynamic/authenticated_native_file.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
+#include <pops/runtime/dynamic/physical_support_transfer.hpp>
 
 #include "native_dso_compiler.hpp"
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -15,6 +17,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -106,7 +109,19 @@ std::shared_ptr<pops::component::LoadedComponent> provider(const pops::Execution
         if (TEST_INTEGRAL_FAILURE == 93)
           return 0;  // Deliberately leaves status unwritten.
         if (TEST_INTEGRAL_FAILURE) {
-          *static_cast<double*>(request->destination.data) = -444.0;
+          auto* destination = static_cast<double*>(request->destination.data);
+          if (request->destination.memory_space == POPS_MEMORY_SPACE_HOST_V1) {
+            destination[0] = -444.0;
+          } else {
+            using ExecutionSpace = Kokkos::DefaultExecutionSpace;
+            const auto execution =
+                pops::component::physical_transfer_detail::execution_instance<ExecutionSpace>(
+                    request->execution);
+            Kokkos::parallel_for("amr_test_failure_exact_residence",
+                                Kokkos::RangePolicy<ExecutionSpace>(execution, 0, 1),
+                                KOKKOS_LAMBDA(const int) { destination[0] = -444.0; });
+            execution.fence();
+          }
           *status = {sizeof(PopsComponentStatusV1), TEST_INTEGRAL_FAILURE,
                      POPS_COMPONENT_ABORT_RUN_V1, "injected integral failure"};
           return TEST_INTEGRAL_FAILURE;
@@ -118,7 +133,8 @@ std::shared_ptr<pops::component::LoadedComponent> provider(const pops::Execution
         for (int axis = 0; axis < request->dimension; ++axis)
           integral.weight_offsets[axis] = request->weight_offsets[axis];
         return pops::component::apply_physical_support_integral(integral, request->source,
-                                                                request->destination, status);
+                                                                request->destination, status,
+                                                                &request->execution);
       }
 #if TEST_TRANSFER_LEGACY
       const PopsTransferApiV1 table{{sizeof(PopsTransferApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
@@ -186,13 +202,15 @@ pops::SystemLayoutTransferExecution execution(const pops::ExecutionLane& lane) {
   pops::SystemLayoutTransferExecution value{};
   value.context_version = 1;
   value.execution_identity = "test::amr-physical-execution";
-  value.memory_space = POPS_MEMORY_SPACE_HOST_V1;
-  value.backend_identity = "test::cpu";
-  value.device_identity = "test::cpu:0";
+  value.memory_space =
+      pops::component::physical_transfer_detail::memory_kind<typename Field::memory_space>();
+  value.backend_identity = Kokkos::DefaultExecutionSpace::name();
+  using MemorySpace = typename Field::memory_space;
+  value.device_identity = MemorySpace::name();
   value.scalar_type = POPS_SCALAR_FLOAT64_V1;
   value.storage_precision = value.compute_precision = value.accumulation_precision =
       value.reduction_precision = POPS_PRECISION_FLOAT64_V1;
-  value.stream_identity = "test::host-synchronous";
+  value.stream_identity = "test::compiled-default-synchronous";
 #ifdef POPS_HAS_MPI
   value.communicator_identity = std::string(lane.identity());
   value.communicator_datatype_identity = "MPI_DOUBLE";
@@ -204,6 +222,49 @@ pops::SystemLayoutTransferExecution execution(const pops::ExecutionLane& lane) {
 #endif
   return value;
 }
+
+// The provider and AMR bridge borrow this stream; neither may replace or destroy it.
+struct BorrowedPhysicalStream {
+  explicit BorrowedPhysicalStream(pops::SystemLayoutTransferExecution& context) {
+#if defined(KOKKOS_ENABLE_CUDA)
+    if constexpr (std::is_same_v<Kokkos::DefaultExecutionSpace, Kokkos::Cuda>) {
+      if (cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking) != cudaSuccess)
+        throw std::runtime_error("cannot create actual AMR test CUDA stream");
+      context.stream_handle = reinterpret_cast<std::uintptr_t>(stream);
+      context.stream_identity = "test::borrowed-amr-cuda-stream";
+    }
+#elif defined(KOKKOS_ENABLE_HIP)
+    if constexpr (std::is_same_v<Kokkos::DefaultExecutionSpace, Kokkos::HIP>) {
+      if (hipStreamCreateWithFlags(&stream, hipStreamNonBlocking) != hipSuccess)
+        throw std::runtime_error("cannot create actual AMR test HIP stream");
+      context.stream_handle = reinterpret_cast<std::uintptr_t>(stream);
+      context.stream_identity = "test::borrowed-amr-hip-stream";
+    }
+#else
+    (void)context;
+#endif
+  }
+  ~BorrowedPhysicalStream() {
+#if defined(KOKKOS_ENABLE_CUDA)
+    if (stream) {
+      cudaStreamSynchronize(stream);
+      cudaStreamDestroy(stream);
+    }
+#elif defined(KOKKOS_ENABLE_HIP)
+    if (stream) {
+      hipStreamSynchronize(stream);
+      hipStreamDestroy(stream);
+    }
+#endif
+  }
+  BorrowedPhysicalStream(const BorrowedPhysicalStream&) = delete;
+  BorrowedPhysicalStream& operator=(const BorrowedPhysicalStream&) = delete;
+#if defined(KOKKOS_ENABLE_CUDA)
+  cudaStream_t stream{};
+#elif defined(KOKKOS_ENABLE_HIP)
+  hipStream_t stream{};
+#endif
+};
 
 struct Hierarchy {
   std::vector<Field> state, coverage;
@@ -394,8 +455,10 @@ TEST(AmrLayoutTransfer, ActiveCompositeMeasureStageRebindingRetryAndRestartFence
         Transfer::capacity_budget(high.endpoint(), low.endpoint(),
                                   std::numeric_limits<std::size_t>::max(), capacity(low), 4, 3),
         std::exception);
+    auto context = execution(lane);
+    BorrowedPhysicalStream borrowed(context);
     auto transfer =
-        Transfer::prepare(high.endpoint(), low.endpoint(), spec, component, execution(lane), lane);
+        Transfer::prepare(high.endpoint(), low.endpoint(), spec, component, context, lane);
     EXPECT_GT(transfer->canonical_jobs(), 0u);
     EXPECT_GT(transfer->transported_elements(), 0u);
     EXPECT_LE(transfer->prepared_bytes(), spec.budget.prepared_bytes);
@@ -592,6 +655,12 @@ TEST(AmrLayoutTransfer, CoverageForgeryAndBudgetsFailBeforeCandidatePublication)
                std::exception);
   auto transfer =
       Transfer::prepare(high.endpoint(), low.endpoint(), spec, component, execution(lane), lane);
+  too_small = spec;
+  ASSERT_GT(transfer->prepared_bytes(), 0u);
+  too_small.budget.prepared_bytes = transfer->prepared_bytes() - 1;
+  EXPECT_THROW(Transfer::prepare(high.endpoint(), low.endpoint(), too_small, component,
+                                execution(lane), lane),
+               std::exception);
   for (std::size_t local = 0; local < high.coverage[0].local_size(); ++local)
     high.coverage[0].fab(local).set_val(1);
   transfer->begin_transaction(1);
@@ -783,10 +852,12 @@ TEST(AmrLayoutTransfer, ProviderFailureRollsBackDetachedCandidateAndLegacyProvid
   auto high = high_hierarchy(lane), low = low_hierarchy(lane);
   const auto spec = specification(high, low);
   auto candidates = low.state;
+  auto context = execution(lane);
+  BorrowedPhysicalStream borrowed(context);
   for (int failure : {91, 92, 93}) {
     auto component = provider(lane, failure);
     auto transfer =
-        Transfer::prepare(high.endpoint(), low.endpoint(), spec, component, execution(lane), lane);
+        Transfer::prepare(high.endpoint(), low.endpoint(), spec, component, context, lane);
     transfer->begin_transaction(1);
     transfer->capture(high.endpoint(), 1, 1);
     const auto before = provider_integral_calls(*component, lane);
@@ -808,12 +879,41 @@ TEST(AmrLayoutTransfer, ProviderFailureRollsBackDetachedCandidateAndLegacyProvid
   auto forged = spec;
   forged.physical_contract_identity = "test::forged-physical-contract";
   auto wrong_identity =
-      Transfer::prepare(high.endpoint(), low.endpoint(), forged, valid, execution(lane), lane);
+      Transfer::prepare(high.endpoint(), low.endpoint(), forged, valid, context, lane);
   wrong_identity->begin_transaction(1);
   wrong_identity->capture(high.endpoint(), 1, 1);
   EXPECT_THROW(wrong_identity->apply(low.endpoint(), pointers(candidates), 1, 1),
                std::runtime_error);
   wrong_identity->rollback_transaction(1);
+}
+
+TEST(AmrLayoutTransfer, ExecutionResidenceMustMatchTheActualNativeFields) {
+  runtime();
+  auto lane = pops::ExecutionLane::duplicate_world_collectively("test::amr-exact-memory");
+  auto high = high_hierarchy(lane), low = low_hierarchy(lane);
+  auto component = provider(lane);
+  auto incompatible = execution(lane);
+  incompatible.memory_space = incompatible.memory_space == POPS_MEMORY_SPACE_HOST_V1
+                                  ? POPS_MEMORY_SPACE_DEVICE_V1
+                                  : POPS_MEMORY_SPACE_HOST_V1;
+  try {
+    Transfer::prepare(high.endpoint(), low.endpoint(), specification(high, low),
+                      component, incompatible, lane);
+    ADD_FAILURE() << "incompatible execution residence was accepted";
+  } catch (const std::exception& error) {
+    // A collective MPI refusal preserves the reason while using runtime_error on every rank.
+    EXPECT_NE(std::string(error.what()).find(
+                  "AMR physical execution memory differs from native field storage"),
+              std::string::npos);
+  }
+  for (const auto& field : low.state)
+    for (std::size_t local = 0; local < field.local_size(); ++local) {
+      const auto& fab = field.fab(local);
+      auto values = fab.create_host_mirror();
+      fab.copy_to_host(values);
+      for (std::size_t value = 0; value < fab.size(); ++value)
+        EXPECT_DOUBLE_EQ(values(value), 7);
+    }
 }
 
 }  // namespace

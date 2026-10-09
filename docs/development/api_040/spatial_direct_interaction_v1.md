@@ -1,0 +1,220 @@
+# Spatial direct interaction, source realization @1 (IR17)
+
+This extension realizes a nonlocal spatial map, not the complete M26 aggregation–diffusion PDE. No flux, diffusion, energy-gradient identity, Poisson surrogate, model-specific matrix, or native scientific reception is supplied by this receipt.
+
+For each explicitly selected component c, the physical declaration is
+
+    I_c(x) = integral W(x,y) rho_c(y) dmu(y).
+
+`CellVolumeMeasure` selects Cartesian physical cell volume multiplied by the actual prepared EB volume fraction kappa. `CellMidpoint` selects piecewise constant cell source values and kernel evaluation at physical cell centers. `DirectSpatialInteraction(max_workspace_bytes=...)` selects the numerical direct realization. These declarations remain distinct in the inspectable request.
+
+```python
+from pops.fields import (SpatialInteractionKernel, CellVolumeMeasure,
+                         CellMidpoint, DirectSpatialInteraction)
+from pops.model.spaces import FieldSpace
+
+interaction = P.spatial_interaction(
+    rho.n, SpatialInteractionKernel(2, lambda x, y: 1 + x[0]*y[1]),
+    output_space=FieldSpace("interaction", components=("c", "a"),
+        frame=rho.n.space.frame, support=rho.n.space.support,
+        sampling="cell_center"), components=(2, 0),
+    measure=CellVolumeMeasure(), quadrature=CellMidpoint(),
+    realization=DirectSpatialInteraction(64*1024*1024), source_scope="accepted")
+```
+
+W is a scalar applied independently to the selected ordered components; signed and nonsymmetric kernels are permitted. The closed coordinate Expr grammar is finite lossless binary64 literals, x/y coordinates, arithmetic/power, negation, abs, sqrt and exp. Opaque runtime Python callbacks and foreign physical variables are rejected. This grammar is an inspectable realization profile, not a restriction on future physical kernel extensions. Self interaction evaluates W(x,x); no diagonal omission, regularization, minimum periodic image, symmetrization, positivity or SPD assumption is introduced. Singular/nonfinite evaluated kernels/products/sums refuse collectively. Periodic geometry does not alter the declared W.
+
+The provisional result is an owner-qualified FieldSpace with cell_center sampling, ordered selected components, the source point/clock/frame/support/layout, and explicit physical units. Known output units must equal W units + selected rho units + every coordinate-measure unit. Unknown inputs cannot manufacture known units. The operator never commits a State; guarded acceptance, observation, physical conversion and publication remain explicit Program operations.
+
+## Source profiles and authority
+
+* Uniform `source_scope="issued"` reads the issued State/candidate. `accepted` requires the actual State.n carrier. A candidate cannot be relabeled accepted. A State.n read must retain exact TimePoint(clock,0), including every original/canonical dependency leaf under a calculated candidate and recorded regions/results via the existing Program subblock-reference traversal, with a visited-object cycle guard, and detached-contract/IR serialization; a calculated candidate at a later point remains admissible under issued scope.
+* Composite AMR `accepted` requires SSA State.n and resolves `prepared_amr_block_state` on every level, excluding live attempt states. This is an explicit accepted hierarchy read, not an implicit conversion of candidate data.
+* Typed state history uses its exact HistoryContract, lag and TimePoint. AMR requires the same authenticated retained sample and registered descriptor on every level, and rejects pending remaps. The consumer's current runtime frame is authenticated separately from the retained source sample.
+* AMR issued candidates/direct fields with more than one level refuse: the existing level-local execution has no simultaneous composite candidate barrier. Implementing that barrier is an open extension, not a permanent limit on PoPS. Mono-level issued fields remain available.
+* Moving maps refuse this Cartesian provider. A moving physical midpoint/measure provider is a separate extension; static Cartesian positions are not substituted for moving coordinates.
+
+The complete request, clock and current native frame, geometry/domain/boxes/rank space/distribution, actual active/coverage/kappa measures and selected source bits are checked on the prepared execution lane. AMR topology epoch/materialization generation and live resource attempt are captured and checked again before consumption. There is no invented independent data-epoch counter: selected data are freshly snapshotted from the authenticated carriers in that exact attempt, not cached across calls. History supplies its actual sample identity. Source family/history descriptor and attempt ordinal qualify the AMR request.
+
+Every stored source cell must have exactly one physical contributor. Replicated fields contribute on lane rank zero, while all replicas validate relevant masks and selected source values and compare their exact native Real bit snapshot against the owner. Active, coverage and kappa bits are also compared independently on replicas, including excluded cells: equal product measure is insufficient to authenticate geometry. This physical rank is unrelated to the rank publishing evidence files. Distributed and empty ranks follow every vote and scalar transport phase. Invalid masks on a noncontributing replica cannot be skipped. Covered coarse cells and zero-measure EB cells do not enter the source quotient; target values are not multiplied by a target measure. Covered/inactive targets are zero.
+
+The actual PreparedMultiBlockAmrSubcyclingEngine copies a detached candidate tower in prepare_attempt_, completes every recursive/synchronous callback, then calls publish_attempt_. AmrSystem's prepared state getter addresses that hierarchy's accepted carriers. The actual-engine host probe moves the coarse candidate (the active commit_many behavior), then before fine verifies accepted coarse/fine pointer/value/revision/epoch/generation identity and matching attempt/windows. The real direct-header convolution remains 4; a candidate-coarse substitution would give 22. Only terminal publication changes accepted revision/state. This is an actual header-class host proof with explicitly synthetic unit-test fields, not a native facade/DSO reception. The true emitted Uniform/AMR calls are separately syntax received; Native ROOT must still exercise the facade and multi-rank lifecycle.
+
+AMR results enter the existing scratch registry keyed by owner, active level and exact SSA node ID only after calculation/votes. A detached map node is allocated and voted first; the final transfer allocates no node, and replacement uses statically checked noexcept field move assignment. Subsequent reduction/history does not infer an ambiguous level solely from identical box layouts.
+
+## Work and workspace
+
+The immutable compact source snapshot has N rows of coordinates, physical measure and selected component values. There is no N-by-N matrix. Work is direct O(Nsource*Ntarget*nselected), with additional canonical topology checks; communication uses owner scalar word reductions rather than an MPI int-count-sized buffer. No model-size/DOF cap or INT_MAX total-source cap is imposed. This first implementation prioritizes exact ownership and bounded workspace over communication throughput.
+
+The voted bound uses checked size_t sums/products and includes both explicit host/device snapshots, returned local target values, copied target layout/distribution/owner and Fab/index vectors, level descriptors and selected-component storage. AMR checks level-descriptor storage before its allocation. Exact source/geometry word transport preserves both native Real32 and Real64 bits using two/four 16-bit limbs, including IEEE negative zero; it does not impose a binary64 runtime restriction. Every rank votes budget failure before target/snapshot allocation. The API budget is not an RSS cap: borrowed source/mask carriers, pre-existing runtime caches, exact-contract strings/control metadata, registry nodes, allocator overhead and internal Kokkos/MPI implementation storage are outside that bound. uint64 budgets use canonical 16-character lowercase hex in IR17; shared legacy CBOR and existing IR schemas are unchanged.
+
+## Source receipt and pending native obligations
+
+Production gel dd46ea495f01f0e8e59e0caa3f9b8f697483f9b2 plus correction 61c78b9b430f3101c49f1a9ec306e2936edf78fc. The independent review found State.n point relabeling and malformed-kernel IR serialization missing refusals on dd46; 61c seals both before code emission/identity and stages scratch allocation before publication. Subsequent corrections close the independently demonstrated linear-combination and branch-region leaves and reject noncanonical or boolean physical-dimension rationals at the feature boundary; historical dd46 or 61c alone is not this final receipt. Private base bf1b2cfb34bf047f2c6b5afb599dd2187235a58d plus exact HistoryStorageOwner IR16 production 0bc86f3e91d54137decbf9524ab07ffac8a90012 (private cherry-pick 189e500b). Existing graphs without the interaction keep their previous schema/IR/semantic/codegen behavior; IR17 is conditional on a reachable spatial_interaction node.
+
+Command from the exclusive worktree:
+
+```sh
+rtk proxy env -u PYTHONPATH -u POPS_NATIVE_DIM PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python -B -m pytest -q --tb=short tests/review/test_sol61_spatial_interaction.py
+```
+
+The suite uses actual public Case/validate/resolve/ProgramModelGraph/emit_cpp_program for Uniform and synchronous AMR, syntax-checks both genuine emitted Dim2 MPI branches, and compiles/runs the actual direct header with Kokkos CPU and two threads. The host quadrature checks real MultiFab dimensions 1/2/3, signed nonsymmetric component permutation, EB fractional measure, covered coarse exclusion, genuine partial fine source coverage, target nonweighting, finite/overflow/budget refusals and signed-zero cell extraction. The final bounded suite receives 47 checks and 61 actual-header host assertions per Real width. Four existing public profiles (mixed linear, its component permutation, implicit stage, nonlinear-map implicit stage) preserve exact IR and emitted C++ hashes against the git archive of bf1b2cfb via tests/review/sol61_spatial_field_legacy_parity.py. These are source/host checks, not native DSO execution, AMR runtime, MPI execution, GPU, or scientific PDE qualification.
+
+ROOT must rebuild the new System/AmrSystem volume-fraction exports and receive real native Uniform/AMR and MPI2: owned/distributed/replicated/empty-rank snapshots, one-rank invalid kappa/source/budget, replica divergence, authority mismatches, nonfinite self kernel, exact refusal before physical publication, saved output quadrature/selected-component permutations, history/regrid/restart provenance and retry rollback. Full candidate AMR needs a separately reviewed composite barrier. A scientific M26 acceptance still requires its original flux/diffusion and equation-specific oracle.
+
+## History source extension @2 / IR18 (source and host reception only)
+
+History authoring now seals `pops.spatial-interaction@2` with the separate
+`pops.spatial-interaction-history-source@1` descriptor. It records the actual
+keeper name, retained lag, qualified State/StateSpace/clock, State.n seed SSA and
+point, and CopyCurrent policy. Admission rederives that image from the Program's
+real keeper/store/configuration, with typed canonical comparison. A computed
+observation, relabelled State.n, or storage-owner witness is not a State.n seed.
+In particular, IR16 observation T stored under Q=T+T² cannot cold-copy Q as T;
+that expression-seed realization remains an explicit extension, refused here.
+Only this new history descriptor raises the Program schema to IR18. Plain
+Issued/Accepted maps remain @1/IR17, and historical @1 history keeps its old
+entrypoint and refusal behavior. The general matching_authenticated_sample
+implementation is unchanged.
+
+The dedicated native entrypoints authenticate owner, physical state, space,
+clock, interpolation, complete ring lifecycle/stamps, and selected slot. Warm
+lag >= 1 requires the same publication identity and native dt bits on every
+level. A pending write to slot zero may differ between levels; it cannot remap
+or replace the selected slot. Cold fill_count=0 uses the proven accepted
+State.n carriers on every prepared level, and bit-compares every already
+cold-stored slot against that seed before taking the compact source snapshot.
+It never initializes a ring, advances maturity, or fabricates a Publication
+sample. Remaps, mixed maturity, foreign descriptors, malformed windows, or
+changed lifecycle/attempt/epoch/frame refuse collectively before result
+publication. The all-level geometry preparations remain outside local callbacks.
+
+The confirmed counter-before used real HistoryManager and real MultiFabs: after
+prepare_sample_store published pending slot-zero metadata, old matching refused
+although the lag-one data and sample were unchanged. The new consumer accepts
+that selected lag while the old matcher still refuses. Actual-header checks
+also reject Q/T substitution and preserve signed-zero bit distinctions. The
+source suite receives 54 coherent tests plus one frozen-body compatibility
+check (55 total) and 71 host assertions per native Real width,
+including genuine Case/validate/resolve/emitted Uniform and AMR Dim2 syntax.
+No installed runtime, MPI execution, checkpoint archive, or scientific M26
+PDE qualification follows from these checks. The added header changes the SDK
+signature; Root must rebuild and receive the installed providers.
+
+The budget precedes source-density payload transport and snapshot/target
+allocation, not every collective: the constant-size geometry/mask/measure
+metadata census and owner counts occur first. Native cache/control/string
+allocations and RSS remain outside the documented workspace bound.
+
+
+## Installed fixture archive @1 (native reception pending)
+
+`test_public_spatial_interaction.py` defines six installed-package cases per
+rank. Three scientific witnesses are `scalar-cutcell`,
+`signed-vector-permuted`, and `partial-amr-cutcell`; the width-three input keeps
+all three channels and selects output components `(2, 0)`. Three distinct
+controls are `budget`, `pole`, and `nonfinite`. They must refuse on every rank,
+retain the exact state, auxiliary accepted image, geometry, history and clock,
+and save the actual converged error diagnostics. Controls have no fabricated
+interaction output. No Serial, MPI, cut-cell or partial-AMR native receipt is
+claimed by this source fixture commit.
+
+The declared finite kernel is `1 + x[0]*y[1] - 2*y[0]`, including self pairs,
+with CellMidpoint and actual Native `kappa * cell_volume`. The source equation
+is zero physical flux and `rho_t = -0.2*rho`, using ForwardEuler and exact
+`dt=0.01`. All input channels vary along both directions. Cartesian physical
+bounds are `(0.3, -0.4)` to `(2.3, 2.6)`, base cells `(8, 6)`. Embedded-boundary
+Disc geometry uses the actual prepared active/kappa output APIs; no all-one
+measure is substituted. AMR uses actual two-level refinement by two and must
+pass a genuine covered AND uncovered active coarse-cell guard before the
+first attempt. This layout is pending Native admission and is not a received
+partial mesh. The singular-kernel control declares `1/(x[0]-y[0])`; its finite
+self-pair guard must fail. The nonfinite control keeps a finite IC but sets
+one actual cell to `rho=3` and declares source `rho/(3-rho)`, forming a typed
+issued candidate. Actual piece ownership determines the resident ranks;
+there is no assertion that a particular rank owns that cell.
+
+The collective root-written directory contains five observation NPZs
+`initial`, `accepted`, `continuous`, `reloaded`, `replay`, five distinct
+checkpoint paths with hashes captured immediately, compiler-retained Program
+CPP and same-component `dump_ir` JSON, and `receipt.json` under
+`pops.spatial-interaction-native-fixture@1`. Each refusal directory instead
+contains `initial`/`rejected` NPZ and two distinct checkpoints. Every checkpoint
+is rehashed after all observations and must remain disjoint from observation
+paths. Actual Program/System binaries and their exact `.pops-artifact.json`
+sidecars are pinned by path/hash; the fixture records its own two source
+files. ROOT must additionally seal installed SDK/source/Native identities,
+complete JUnit and these leaves with externally supplied pins and approval.
+The fixture does not mint those approvals or recompose an aggregate payload.
+
+NPZ stores `time`, `step`, `topology_epoch`, and all rank/level accepted
+auxiliary byte images. Per-level keys preserve `coverage`, `valid_cells`,
+`cell_volumes`, `boxes`, Native `cell_shape`, physical `origin` and `spacing`.
+Per-rank compact `rho`, `active`, `kappa` pieces retain exact arrays, bounds,
+global box index, reported owner, resident rank and replicated flag in
+`piece_manifest_json`. NumPy spatial axes are `(y,x)`, box bounds are half-open.
+Geometry coverage true means COVERED, whereas the Native direct consumer's
+coverage one means owned; the independent quotient must explicitly distinguish
+them. Coordinates are derived from bound Cartesian origin/spacing and native
+indices, not claimed to be separately observed node coordinates. Actual
+fractional kappa and coarse/fine boxes must be read independently.
+
+After a completed step, NPZ also stores every physical slot of the rho keeper,
+`I_accepted`, and `I_history`, their Native names, full POPSHID1 sample bytes,
+ring depths, fill counts, initialized flags and slot dt values. Slot-one
+aliases `rho_retained`, `I_accepted`, `I_history` are convenience copies of
+these actual buffers. The initial phase is SOURCE_SNAPSHOT_ONLY, without an
+invented initial I. Accepted/reloaded I consume initial rho and cold seed;
+continuous I consumes accepted rho and the retained lag-one rho from BEFORE
+step two; replay I consumes the corresponding reloaded checkpoint. Receipt
+`consumption_anchors` seals these associations. Post-step-two lag-one has
+rotated and is never renamed as the source consumed by step two. Independent
+reception must compare the pre-consumption checkpoint's actual history/sample
+codec with the NPZ, or report its association gap explicitly.
+
+Source validation command (no Native selection, no JIT):
+
+```sh
+rtk proxy env -u PYTHONPATH -u POPS_NATIVE_DIM PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python -B -m pytest -q tests/review/test_sol61_spatial_interaction_native_fixture.py
+```
+
+ROOT alone runs the integration file with installed rebuilt Dim2, the new
+`pops-api040-ir17` environment, isolated cache, collective compilation and
+complete JUnit for all six cases, first Serial then MPI2. The math witness is
+the spatial sum over real active unique-owner rows; linear source decay is
+only a separate consistency check. This fixture closes neither M26's PDE,
+diffusion, energy gradient nor its unspecified flux, and supplies no GPU,
+Native Float32 or MPI result until genuine campaigns and external seals exist.
+
+
+### Fixture initialization-authority correction (post e7 historical RED)
+
+ROOT's first genuine SDK9f57 Serial run of the six e7 cases compiled every
+profile but refused all six at bind (6 FAIL, zero errors/skips, 198.475 seconds).
+The fixture simultaneously declared an InitialConditionPlan/BindArray provider
+and supplied a second block-name `initial_state` authority. No successful
+nonlocal output or cut-cell/partial-AMR science follows from that campaign.
+The immutable evidence remains under
+`/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk9f57-spatial-interaction-serial-first-dim2`.
+
+The corrected fixture binds only `initial_values={canonical_subject: values}`
+from the exact compiled InitialConditionPlan. It never provides initial_state,
+and no runtime data are mutated after bind. BindArray is explicitly the plan's
+external-value provider, whose public contract excludes embedding those arrays
+in the immutable Case. Positive scalar/vector arrays and all equations remain
+unchanged. The nonfinite profile chooses its single finite rho=3 cell through
+the helper's declared input-data profile before bind and provides those bytes
+to that same InitialConditionPlan; the declared source alone produces the
+nonfinite issued candidate. This does not relax initialization or interaction
+guards.
+
+The source admission probe obtains the real resolved initial plan for all six
+profiles, authenticates its canonical Handle, exercises production
+`_canonicalize_initial_value_mapping`, verifies exact expected bytes and finite
+shape, and refuses block-name string keys. It also inspects the fixture's
+actual bind call, requiring initial_values/resources only. No Native module,
+JIT or synthetic successful runtime was used for this admission. The archive
+schema, phase roles, CP anchors, full histories, raw masks/geometry/owners and
+all scientific guards remain @1 as documented above. ROOT must execute a fresh
+six-case campaign and Frontier independently receive its actual externally
+sealed data; the six historical failures remain distinct.

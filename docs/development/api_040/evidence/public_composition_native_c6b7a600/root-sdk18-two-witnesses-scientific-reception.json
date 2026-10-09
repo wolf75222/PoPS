@@ -1,0 +1,94 @@
+{
+  "build_receipt_sha256": "a20ca731187e441352cdf7730a7618022d36c4748065ccc59ec540c710d8818c",
+  "build_source_freeze": "c6b7a600033cb3ba42ca6adf7ca9c743e216ab87",
+  "cases": [
+    {
+      "Program_cpp_sha256": "c9cf33b2ef290482232572e2e9887f93e49ab782deeeaf0a99d9ea94f1cf2ea1",
+      "actual_model_sources": 2,
+      "kind": "wave-transports",
+      "phases": [
+        {
+          "clock": [
+            0.0,
+            0,
+            1
+          ],
+          "grown_values": 500,
+          "max_abs_error": 0.0,
+          "phase": "initial"
+        },
+        {
+          "clock": [
+            0.00390625,
+            1,
+            1
+          ],
+          "grown_values": 500,
+          "max_abs_error": 0.0,
+          "phase": "accepted1"
+        },
+        {
+          "clock": [
+            0.0078125,
+            2,
+            1
+          ],
+          "grown_values": 500,
+          "max_abs_error": 0.0,
+          "phase": "accepted2"
+        }
+      ],
+      "root_transfer_sha256": "1c85421d8187e7c9f9448586fad43f04d0b87de858b6572acf89ba8ea804aae2",
+      "world": 1
+    },
+    {
+      "Program_cpp_sha256": "fefc1918645c682b6972b022aadfe0a441d707424dfc83047e876b0df38b26a3",
+      "actual_model_sources": 2,
+      "kind": "second-state21",
+      "phases": [
+        {
+          "clock": [
+            0.0,
+            0,
+            1
+          ],
+          "grown_values": 828,
+          "max_abs_error": 0.0,
+          "phase": "before"
+        },
+        {
+          "clock": [
+            0.125,
+            1,
+            1
+          ],
+          "grown_values": 828,
+          "max_abs_error": 4.440892098500626e-16,
+          "phase": "after"
+        }
+      ],
+      "root_transfer_sha256": "d84577697aa6838b6af034d9e924476a1fb04b6fb13b279fd621975bd06c4c23",
+      "world": 1
+    }
+  ],
+  "independent_pins": "/Users/romaindespoulain/dev/tmp/sol61-sdk18-wave-state2-independent-20261002/pins.json",
+  "independent_pins_sha256": "1b779e93daea6a8bd60d1f246dba1bf5bf52040f3e4fcb469852b857732b85fb",
+  "independent_report_sha256": "6b791b6e7e1cb0c7f16f802f9202f479a58f1c6105d7c41f2e3868c4316cf321",
+  "limits": [
+    "Two logical CPU single-process witnesses on the MPI-enabled installed SDK18; no actual MPI2 in this receipt.",
+    "Valid-state mathematics and full grown carrier finiteness/ownership/correspondence; Ghost readiness is not inferred.",
+    "Actual Model TU/compiler command/output/DSO provenance for every model; no cryptographic semantic C++ to DSO proof or full transitive compiler dependency inventory.",
+    "M16 is one affine degree-five update on the second State, not full HyQMOM transport/realizability.",
+    "Wave fixture is two independent physical transports with scoped nonlinear bounds, not a full Fan-Li trajectory.",
+    "No GPU, inter-node, Dim1/3, performance or current GitHub CI qualification."
+  ],
+  "pops_imported": false,
+  "pure_reader_recomputed_exactly": true,
+  "regular_pins_verified": 124,
+  "repinned_mutants_refused": 14,
+  "root_replay_script_sha256": "425bf5822ca7513447e28b45a5f7ce4915a30ca188b14398cf30d3d81f18b101",
+  "root_seal": true,
+  "schema": "root.sdk18-two-witnesses-scoped-scientific-reception@1",
+  "symlinks_verified": 2,
+  "whole_mission_complete": false
+}

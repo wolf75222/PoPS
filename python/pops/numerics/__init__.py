@@ -19,15 +19,29 @@ from __future__ import annotations
 from . import riemann, reconstruction, variables, projections, spatial, terms
 from .reconstruction import limiters
 from .spatial import FiniteVolume
+from .nonconservative import NormalizedPolynomialPath, SymbolicPath, PathConservativeFiniteVolume
+from .nonconservative import CoordinatedFace, FaceBalance, CoordinatedFiniteVolume
 from .state_storage import StateStorage
 from .named_flux import NamedCenteredDivergence
 from .interactions import JointEvaluation
-from .diffusion import Diffusion, TensorDiffusion
+from .diffusion import Diffusion, TensorDiffusion, CoupledGradient
 from .scharfetter_gummel import ScharfetterGummel
 from .indicator_stencils import DiscreteGradientStencil, LinearAxisStencil
 from .plan import DiscretizationPlan
 
 __all__ = ["riemann", "reconstruction", "limiters", "variables", "projections", "terms",
-           "spatial", "FiniteVolume", "StateStorage", "NamedCenteredDivergence", "Diffusion", "TensorDiffusion",
+           "FaceBalance", "CoordinatedFace", "CoordinatedFiniteVolume",
+           "spatial", "FiniteVolume", "FanLi15RawMomentPath", "NormalizedPolynomialPath", "SymbolicPath", "PathConservativeFiniteVolume",
+           "StateStorage", "NamedCenteredDivergence", "Diffusion", "TensorDiffusion",
+           "CoupledGradient",
            "ScharfetterGummel",
            "DiscreteGradientStencil", "LinearAxisStencil", "DiscretizationPlan", "JointEvaluation"]
+
+def __getattr__(name: str):
+    """Resolve registered compatibility names to their canonical library classes."""
+    from pops.public_api_exports import resolve_public_library_alias
+    return resolve_public_library_alias(__name__, name)
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))

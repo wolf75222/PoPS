@@ -1,0 +1,66 @@
+{
+  "date_utc": "2026-10-08T19:55:07.933856+00:00",
+  "scope": "Five finite world1 public methods and one genuine distributed SSPRK2 rates world2 case on exact 53fd core; no universal-language, GPU, late-refusal or full94 claim.",
+  "files": {
+    "core-manifest.json": {
+      "bytes": 197327,
+      "sha256": "0c871f738710bd736e099b0e7f21d2fb35d6b47958860556a08dc61c697b7ac5",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-installed-build-53fd6ec2-20261008/core-manifest.json"
+    },
+    "wheel-source-admission.json": {
+      "bytes": 789,
+      "sha256": "d0b3bdf72ddb819cd46ad4dca313bd041eb372e8e68f34e18b28f22ed34f9f48",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-installed-build-53fd6ec2-20261008/root-package-admission.json"
+    },
+    "rates-independent.json": {
+      "bytes": 12159,
+      "sha256": "7475d33e4d1aa3c3216b3e30ac4c8dce3471cec4a67f3cc33d15f04419fbe18e",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-public-SSPRK2-rates-53fd-ed2-reception-20261008/reception.json"
+    },
+    "methods-independent.json": {
+      "bytes": 38562,
+      "sha256": "f950dbded8cbc5c490000f7c4c3207b0e5a9fabc336d0880fafbbf840e776fc0",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-fixed-core-methods-53fd-ed2-reception-20261008/reception.json"
+    },
+    "rates-root.json": {
+      "bytes": 649,
+      "sha256": "688422e220af1261cfe6594950a915e08b476c249ecf2353f2cb513ce6d0378e",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-installed-build-53fd6ec2-20261008/root-first-SSPRK2-positive-reception.json"
+    },
+    "methods-root.json": {
+      "bytes": 665,
+      "sha256": "228b3fe0fac1f54375b5fa00a0b00ce842127e97f73cd9b9e202c7e7eee37f51",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-installed-build-53fd6ec2-20261008/root-finite-methods-positive-reception.json"
+    },
+    "detached-authority-independent.json": {
+      "bytes": 8600,
+      "sha256": "5caffbd5c62482da3de2e7ecba6ea88269a98cceba331ea5adcb0a123cdfeeaa",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-ssp-V3-detached-authority-source-review-20261008/reception.json"
+    },
+    "mpi2-independent.json": {
+      "bytes": 19294,
+      "sha256": "7433e1416403bdf6b45325f95051bea6fce056e6aad2f25dc2d1d199c8cdce8e",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-public-SSPRK2-MPI2-53fd-ed2-reception-20261008/reception.json"
+    },
+    "mpi2-root.json": {
+      "bytes": 691,
+      "sha256": "caa869cb7e4121d6340bc854e6956466b96e21fc3d80c286ade10e7d03c68ee8",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-installed-build-53fd6ec2-20261008/root-MPI2-SSPRK2-positive-reception.json"
+    },
+    "mpi2-rank0-result.json": {
+      "bytes": 808,
+      "sha256": "9da6da4ab1409a5d92897df51bbe85f482c706ec2db4337d729adcab93b0ac57",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-public-SSPRK2-MPI2-53fd6ec2-ed2-20261008/rank0/result.json"
+    },
+    "mpi2-rank1-result.json": {
+      "bytes": 809,
+      "sha256": "771a3049e317801762d57bfa6f9b256e3bec4d8f12fcd73966c720a2a75a9808",
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-public-SSPRK2-MPI2-53fd6ec2-ed2-20261008/rank1/result.json"
+    },
+    "current-ci-failures.json": {
+      "bytes": 12199,
+      "sha256": "2799deea83e29d41510ba1286a065297e06789b90834cd8f3c88ccfb51387d96",
+      "original_local_path": "same repository file; raw external log paths recorded within"
+    }
+  }
+}

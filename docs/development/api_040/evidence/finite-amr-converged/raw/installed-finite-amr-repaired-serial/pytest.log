@@ -1,0 +1,76 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 13 items
+
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[False-False] PASSED [  7%]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[False-True] PASSED [ 15%]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[True-False] PASSED [ 23%]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[True-True] PASSED [ 30%]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_singular_elimination_pivot_is_not_a_monolithic_singularity[False] PASSED [ 38%]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_singular_elimination_pivot_is_not_a_monolithic_singularity[True] PASSED [ 46%]
+tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py::test_public_affine_body_and_local_solve_match_particles_on_amr[1] PASSED [ 53%]
+tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py::test_public_affine_body_and_local_solve_match_particles_on_amr[2] FAILED [ 61%]
+tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py::test_impossible_local_residual_rejects_without_amr_publication FAILED [ 69%]
+tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py::test_finite_maps_rebind_operands_and_reject_owner_nonfinite_collectively[0-False] PASSED [ 76%]
+tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py::test_finite_maps_rebind_operands_and_reject_owner_nonfinite_collectively[0-True] PASSED [ 84%]
+tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py::test_finite_maps_rebind_operands_and_reject_owner_nonfinite_collectively[0.375-False] PASSED [ 92%]
+tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py::test_finite_maps_rebind_operands_and_reject_owner_nonfinite_collectively[0.375-True] PASSED [100%]
+
+=================================== FAILURES ===================================
+______ test_public_affine_body_and_local_solve_match_particles_on_amr[2] _______
+tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py:54: in test_public_affine_body_and_local_solve_match_particles_on_amr
+    _root_check(world, check_initial)
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:47: in _root_check
+    assert not failure, failure
+E   AssertionError: AssertionError: a real coarse/fine interface is required
+E     assert np.int64(1024) < 1024
+E      +  where np.int64(1024) = <built-in method sum of numpy.ndarray object at 0x1320008d0>()
+E      +    where <built-in method sum of numpy.ndarray object at 0x1320008d0> = array([[ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       ...,\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True]], shape=(32, 32)).sum
+E      +  and   1024 = array([[ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       ...,\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True]], shape=(32, 32)).size
+E   assert not 'AssertionError: a real coarse/fine interface is required\nassert np.int64(1024) < 1024\n +  where np.int64(1024) = <built-in method sum of numpy.ndarray object at 0x1320008d0>()\n +    where <built-in method sum of numpy.ndarray object at 0x1320008d0> = array([[ True,  True,  True, ...,  True,  True,  True],\\n       [ True,  True,  True, ...,  True,  True,  True],\\n       [ True,  True,  True, ...,  True,  True,  True],\\n       ...,\\n       [ True,  True,  True, ...,  True,  True,  True],\\n       [ True,  True,  True, ...,  True,  True,  True],\\n       [ True,  True,  True, ...,  True,  True,  True]], shape=(32, 32)).sum\n +  and   1024 = array([[ True,  True,  True, ...,  True,  True,  True],\\n       [ True,  True,  True, ...,  True,  True,  True],\\n       [ True,  True,  True, ...,  True,  True,  True],\\n       ...,\\n       [ True,  True,  True, ...,  True,  True,  True],\\n       [ True,  True,  True, ...,  True,  True,  True],\\n       [ True,  True,  True, ...,  True,  True,  True]], shape=(32, 32)).size'
+----------------------------- Captured stdout call -----------------------------
+[rank 0] affine-local-amr2: compile and publish start
+[rank 0] affine-local-amr2: compile and publish done
+________ test_impossible_local_residual_rejects_without_amr_publication ________
+tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py:90: in test_impossible_local_residual_rejects_without_amr_publication
+    _root_check(world, check_partial_refinement)
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:47: in _root_check
+    assert not failure, failure
+E   AssertionError: AssertionError: rollback must cover a real coarse/fine interface
+E     assert np.int64(1024) < 1024
+E      +  where np.int64(1024) = <built-in method sum of numpy.ndarray object at 0x115f700f0>()
+E      +    where <built-in method sum of numpy.ndarray object at 0x115f700f0> = array([[ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       ...,\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True]], shape=(32, 32)).sum
+E      +  and   1024 = array([[ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       ...,\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True]], shape=(32, 32)).size
+E   assert not 'AssertionError: rollback must cover a real coarse/fine interface\nassert np.int64(1024) < 1024\n +  where np.int64(1024) = <built-in method sum of numpy.ndarray object at 0x115f700f0>()\n +    where <built-in method sum of numpy.ndarray object at 0x115f700f0> = array([[ True,  True,  True, ...,  True,  True,  True],\\n       [ True,  True,  True, ...,  True,  True,  True],\\n       [ True,  True,  True, ...,  True,  True,  True],\\n       ...,\\n       [ True,  True,  True, ...,  True,  True,  True],\\n       [ True,  True,  True, ...,  True,  True,  True],\\n       [ True,  True,  True, ...,  True,  True,  True]], shape=(32, 32)).sum\n +  and   1024 = array([[ True,  True,  True, ...,  True,  True,  True],\\n       [ True,  True,  True, ...,  True,  True,  True],\\n       [ True,  True,  True, ...,  True,  True,  True],\\n       ...,\\n       [ True,  True,  True, ...,  True,  True,  True],\\n       [ True,  True,  True, ...,  True,  True,  True],\\n       [ True,  True,  True, ...,  True,  True,  True]], shape=(32, 32)).size'
+----------------------------- Captured stdout call -----------------------------
+[rank 0] affine-local-amr-reject: compile and publish start
+[rank 0] affine-local-amr-reject: compile and publish done
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[False-False]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[False-True]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[True-False]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[True-True]
+  tests/python/integration/runtime/test_finite_m09_runtime.py:23: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.parametrize("condensed",(False,True))
+
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_singular_elimination_pivot_is_not_a_monolithic_singularity[False]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_singular_elimination_pivot_is_not_a_monolithic_singularity[True]
+  tests/python/integration/runtime/test_finite_m09_runtime.py:63: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.parametrize("condensed",(False,True))
+
+tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py::test_finite_maps_rebind_operands_and_reject_owner_nonfinite_collectively[0-False]
+tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py::test_finite_maps_rebind_operands_and_reject_owner_nonfinite_collectively[0-True]
+tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py::test_finite_maps_rebind_operands_and_reject_owner_nonfinite_collectively[0.375-False]
+tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py::test_finite_maps_rebind_operands_and_reject_owner_nonfinite_collectively[0.375-True]
+  tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py:24: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.parametrize("condensed",(False,True))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-repaired-serial/pytest.xml -
+=========================== short test summary info ============================
+FAILED tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py::test_public_affine_body_and_local_solve_match_particles_on_amr[2]
+FAILED tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py::test_impossible_local_residual_rejects_without_amr_publication
+============ 2 failed, 11 passed, 10 warnings in 246.15s (0:04:06) =============

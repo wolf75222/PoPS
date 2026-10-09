@@ -1,0 +1,753 @@
+{
+  "SDK": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "actual_frontend_compile_count": "not inferred from actions/bytes/cache statistics",
+  "cache_files_after": {
+    ".ninja_log": {
+      "bytes": 6754,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/.ninja_log",
+      "sha256": "1e4d7719051c712222ac3c16c4ca79fd635093d8a4db05d5fe4ec4dc80d92ca8"
+    },
+    "CMakeCache.txt": {
+      "bytes": 31983,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/CMakeCache.txt",
+      "sha256": "48067bf4388cbbb79a48131fc44a52d5cdf28f10e82c64942c2b45784dc308fd"
+    },
+    "build.ninja": {
+      "bytes": 93554,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/build.ninja",
+      "sha256": "a0ca57855259e0bf7f4d03a5faa8709d1d8309d584c15fe72595b200999d721e"
+    },
+    "compile_commands.json": {
+      "bytes": 49480,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/compile_commands.json",
+      "sha256": "9e43944daf1b3eabc574c16c39c74d33b30b68ed99207f4858e39da5fc87a062"
+    }
+  },
+  "cache_files_before": {
+    ".ninja_log": {
+      "bytes": 6794,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/.ninja_log",
+      "sha256": "4148727ca737006c76c4f4dba91ac27c805f56feb6012ee061a4232ab685c395"
+    },
+    "CMakeCache.txt": {
+      "bytes": 31847,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/CMakeCache.txt",
+      "sha256": "547b9c1f00b9d714fdde5bbadf32f7c30d5e2b2177c756464ccdbe12b9c4179f"
+    },
+    "build.ninja": {
+      "bytes": 93554,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/build.ninja",
+      "sha256": "4c601f5e7689ca5afc5d84ea1711d2984c46cbc1c315e74f99e889cfb13e7f18"
+    }
+  },
+  "cache_native_outputs_after": [
+    {
+      "bytes": 14468728,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/pops/_native/dim2/_pops.cpython-312-darwin.so",
+      "sha256": "5ceb1b41f2f9caa321531e678c6f518d3175ec8eb6a372cb7d5836b32f227132"
+    }
+  ],
+  "cache_native_outputs_before": [
+    {
+      "bytes": 14468728,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/pops/_native/dim2/_pops.cpython-312-darwin.so",
+      "sha256": "53f11bc24c38cd13a361ebc295a034fc9682b9fbeec904eba7346124cdebaf6e"
+    }
+  ],
+  "core_files": 1220,
+  "core_fingerprint": "743bc354455285b4828e6d80039949317c31f63ac6fc3c5432ae2897487594a8",
+  "header_payload_files_including_manifest": 385,
+  "identity": {
+    "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584;dim=2",
+    "doctor": {
+      "compilateur": [
+        true,
+        "/usr/bin/clang++ [baked by the _pops build] ; -std=c++20 accepted"
+      ],
+      "headers_sync": [
+        true,
+        "headers == module build (sig acf0eeca7773...)"
+      ],
+      "include": [
+        true,
+        "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/include"
+      ],
+      "interpreteur": [
+        true,
+        "/Users/romaindespoulain/miniforge3/envs/pops/bin/python (3.12) ; extension /Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so"
+      ],
+      "kokkos": [
+        true,
+        "Kokkos module (thread/device resources selected before initialization)"
+      ],
+      "kokkos_root": [
+        true,
+        "/Users/romaindespoulain/miniforge3/envs/pops"
+      ],
+      "numpy": [
+        true,
+        "2.5.1"
+      ],
+      "threads": [
+        true,
+        "OMP_NUM_THREADS=2 ; first System created=False"
+      ]
+    },
+    "execution_environment": {
+      "FI_PROVIDER": "tcp",
+      "FI_TCP_IFACE": null,
+      "OMP_NUM_THREADS": "2",
+      "OMP_PROC_BIND": "false",
+      "POPS_THREADS": null
+    },
+    "native_file": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "native_sha256": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+    "package_file": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/__init__.py",
+    "package_version": "1.1.0",
+    "python": "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "schema_version": 2,
+    "scope": "installed production PoPS, local CPU Kokkos, MPI-enabled Dim=2",
+    "source_commit": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+    "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "source_files_sha256": "35761fc9e94e39881f0e78f03c0f2004e63efbc4cb36ddc95968f7fe4da73733",
+    "sys_path": [
+      "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/scripts",
+      "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+      "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/docs/development/api_040",
+      "/Users/romaindespoulain/miniforge3/envs/pops/lib/python312.zip",
+      "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12",
+      "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/lib-dynload",
+      "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages"
+    ],
+    "verified_source_files": 1174
+  },
+  "installed_header_rows": 384,
+  "installed_native": {
+    "bytes": 14468728,
+    "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "sha256": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941"
+  },
+  "load_commands": [
+    {
+      "argv": [
+        "otool",
+        "-L",
+        "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so"
+      ],
+      "exit": 0,
+      "stderr": "",
+      "stdout": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so:\n\t@rpath/libkokkoscontainers.5.2.dylib (compatibility version 5.2.0, current version 5.2.0)\n\t@rpath/libkokkoscore.5.2.dylib (compatibility version 5.2.0, current version 5.2.0)\n\t@rpath/libomp.dylib (compatibility version 5.0.0, current version 5.0.0)\n\t@rpath/libmpicxx.12.dylib (compatibility version 16.0.0, current version 16.1.0)\n\t@rpath/libmpi.12.dylib (compatibility version 16.0.0, current version 16.1.0)\n\t@rpath/libpmpi.12.dylib (compatibility version 16.0.0, current version 16.1.0)\n\t@rpath/libhdf5.310.dylib (compatibility version 314.0.0, current version 314.0.0)\n\t@rpath/libcrypto.3.dylib (compatibility version 3.0.0, current version 3.0.0)\n\t@rpath/libcurl.4.dylib (compatibility version 13.0.0, current version 13.0.0)\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1356.0.0)\n\t@rpath/libsz.2.dylib (compatibility version 3.0.0, current version 3.1.0)\n\t@rpath/libz.1.dylib (compatibility version 1.0.0, current version 1.3.2)\n\t@rpath/libfftw3.3.dylib (compatibility version 11.0.0, current version 11.11.0)\n\t/usr/lib/libc++.1.dylib (compatibility version 1.0.0, current version 2100.43.0)\n"
+    },
+    {
+      "argv": [
+        "otool",
+        "-l",
+        "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so"
+      ],
+      "exit": 0,
+      "stderr": "",
+      "stdout": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so:\nLoad command 0\n      cmd LC_SEGMENT_64\n  cmdsize 792\n  segname __TEXT\n   vmaddr 0x0000000000000000\n   vmsize 0x0000000000904000\n  fileoff 0\n filesize 9453568\n  maxprot 0x00000005\n initprot 0x00000005\n   nsects 9\n    flags 0x0\nSection\n  sectname __text\n   segname __TEXT\n      addr 0x0000000000004308\n      size 0x000000000077f388\n    offset 17160\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x80000400\n reserved1 0\n reserved2 0\nSection\n  sectname __stubs\n   segname __TEXT\n      addr 0x0000000000783690\n      size 0x0000000000001b84\n    offset 7878288\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x80000408\n reserved1 0 (index into indirect symbol table)\n reserved2 12 (size of stubs)\nSection\n  sectname __stub_helper\n   segname __TEXT\n      addr 0x0000000000785214\n      size 0x0000000000001260\n    offset 7885332\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x80000400\n reserved1 0\n reserved2 0\nSection\n  sectname __init_offsets\n   segname __TEXT\n      addr 0x0000000000786474\n      size 0x0000000000000060\n    offset 7890036\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x00000016\n reserved1 0\n reserved2 0\nSection\n  sectname __const\n   segname __TEXT\n      addr 0x00000000007864e0\n      size 0x000000000001b020\n    offset 7890144\n     align 2^4 (16)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __gcc_except_tab\n   segname __TEXT\n      addr 0x00000000007a1500\n      size 0x00000000000d5150\n    offset 8000768\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __cstring\n   segname __TEXT\n      addr 0x0000000000876650\n      size 0x0000000000071522\n    offset 8873552\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000002\n reserved1 0\n reserved2 0\nSection\n  sectname __unwind_info\n   segname __TEXT\n      addr 0x00000000008e7b74\n      size 0x0000000000019038\n    offset 9337716\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __eh_frame\n   segname __TEXT\n      addr 0x0000000000900bb0\n      size 0x0000000000000228\n    offset 9440176\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x6800000b\n reserved1 0\n reserved2 0\nLoad command 1\n      cmd LC_SEGMENT_64\n  cmdsize 232\n  segname __DATA_CONST\n   vmaddr 0x0000000000904000\n   vmsize 0x000000000000c000\n  fileoff 9453568\n filesize 49152\n  maxprot 0x00000003\n initprot 0x00000003\n   nsects 2\n    flags 0x10\nSection\n  sectname __got\n   segname __DATA_CONST\n      addr 0x0000000000904000\n      size 0x0000000000000d38\n    offset 9453568\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000006\n reserved1 587 (index into indirect symbol table)\n reserved2 0\nSection\n  sectname __const\n   segname __DATA_CONST\n      addr 0x0000000000904d38\n      size 0x000000000000a2e8\n    offset 9456952\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nLoad command 2\n      cmd LC_SEGMENT_64\n  cmdsize 552\n  segname __DATA\n   vmaddr 0x0000000000910000\n   vmsize 0x0000000000004000\n  fileoff 9502720\n filesize 16384\n  maxprot 0x00000003\n initprot 0x00000003\n   nsects 6\n    flags 0x0\nSection\n  sectname __la_symbol_ptr\n   segname __DATA\n      addr 0x0000000000910000\n      size 0x0000000000000c30\n    offset 9502720\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000007\n reserved1 1010 (index into indirect symbol table)\n reserved2 0\nSection\n  sectname __data\n   segname __DATA\n      addr 0x0000000000910c30\n      size 0x0000000000000340\n    offset 9505840\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __thread_vars\n   segname __DATA\n      addr 0x0000000000910f70\n      size 0x0000000000000030\n    offset 9506672\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000013\n reserved1 0\n reserved2 0\nSection\n  sectname __thread_data\n   segname __DATA\n      addr 0x0000000000910fa0\n      size 0x000000000000003c\n    offset 9506720\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000011\n reserved1 0\n reserved2 0\nSection\n  sectname __thread_bss\n   segname __DATA\n      addr 0x0000000000910fe0\n      size 0x0000000000000008\n    offset 0\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000012\n reserved1 0\n reserved2 0\nSection\n  sectname __bss\n   segname __DATA\n      addr 0x0000000000910fe8\n      size 0x00000000000004e8\n    offset 0\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000001\n reserved1 0\n reserved2 0\nLoad command 3\n      cmd LC_SEGMENT_64\n  cmdsize 72\n  segname __LINKEDIT\n   vmaddr 0x0000000000914000\n   vmsize 0x00000000004bc000\n  fileoff 9519104\n filesize 4949624\n  maxprot 0x00000001\n initprot 0x00000001\n   nsects 0\n    flags 0x0\nLoad command 4\n            cmd LC_DYLD_INFO_ONLY\n        cmdsize 48\n     rebase_off 9519104\n    rebase_size 1848\n       bind_off 9520952\n      bind_size 5576\n  weak_bind_off 9526528\n weak_bind_size 30784\n  lazy_bind_off 9557312\n lazy_bind_size 12480\n     export_off 9569792\n    export_size 42248\nLoad command 5\n     cmd LC_SYMTAB\n cmdsize 24\n  symoff 9632840\n   nsyms 35357\n  stroff 10204152\n strsize 4152280\nLoad command 6\n            cmd LC_DYSYMTAB\n        cmdsize 80\n      ilocalsym 0\n      nlocalsym 34345\n     iextdefsym 34345\n     nextdefsym 491\n      iundefsym 34836\n      nundefsym 521\n         tocoff 0\n           ntoc 0\n      modtaboff 0\n        nmodtab 0\n   extrefsymoff 0\n    nextrefsyms 0\n indirectsymoff 10198552\n  nindirectsyms 1400\n      extreloff 0\n        nextrel 0\n      locreloff 0\n        nlocrel 0\nLoad command 7\n     cmd LC_UUID\n cmdsize 24\n    uuid 273941FC-156F-37F1-9840-6B2B74603A89\nLoad command 8\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n    minos 26.0\n      sdk 26.5\n   ntools 1\n     tool 3\n  version 1267.0\nLoad command 9\n      cmd LC_SOURCE_VERSION\n  cmdsize 16\n  version 0.0\nLoad command 10\n          cmd LC_LOAD_DYLIB\n      cmdsize 64\n         name @rpath/libkokkoscontainers.5.2.dylib (offset 24)\n   time stamp 2 Thu Jan  1 01:00:02 1970\n      current version 5.2.0\ncompatibility version 5.2.0\nLoad command 11\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name @rpath/libkokkoscore.5.2.dylib (offset 24)\n   time stamp 2 Thu Jan  1 01:00:02 1970\n      current version 5.2.0\ncompatibility version 5.2.0\nLoad command 12\n          cmd LC_LOAD_DYLIB\n      cmdsize 48\n         name @rpath/libomp.dylib (offset 24)\n   time stamp 2 Thu Jan  1 01:00:02 1970\n      current version 5.0.0\ncompatibility version 5.0.0\nLoad command 13\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name @rpath/libmpicxx.12.dylib (offset 24)\n   time stamp 2 Thu Jan  1 01:00:02 1970\n      current version 16.1.0\ncompatibility version 16.0.0\nLoad command 14\n          cmd LC_LOAD_DYLIB\n      cmdsize 48\n         name @rpath/libmpi.12.dylib (offset 24)\n   time stamp 2 Thu Jan  1 01:00:02 1970\n      current version 16.1.0\ncompatibility version 16.0.0\nLoad command 15\n          cmd LC_LOAD_DYLIB\n      cmdsize 48\n         name @rpath/libpmpi.12.dylib (offset 24)\n   time stamp 2 Thu Jan  1 01:00:02 1970\n      current version 16.1.0\ncompatibility version 16.0.0\nLoad command 16\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name @rpath/libhdf5.310.dylib (offset 24)\n   time stamp 2 Thu Jan  1 01:00:02 1970\n      current version 314.0.0\ncompatibility version 314.0.0\nLoad command 17\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name @rpath/libcrypto.3.dylib (offset 24)\n   time stamp 2 Thu Jan  1 01:00:02 1970\n      current version 3.0.0\ncompatibility version 3.0.0\nLoad command 18\n          cmd LC_LOAD_DYLIB\n      cmdsize 48\n         name @rpath/libcurl.4.dylib (offset 24)\n   time stamp 2 Thu Jan  1 01:00:02 1970\n      current version 13.0.0\ncompatibility version 13.0.0\nLoad command 19\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name /usr/lib/libSystem.B.dylib (offset 24)\n   time stamp 2 Thu Jan  1 01:00:02 1970\n      current version 1356.0.0\ncompatibility version 1.0.0\nLoad command 20\n          cmd LC_LOAD_DYLIB\n      cmdsize 48\n         name @rpath/libsz.2.dylib (offset 24)\n   time stamp 2 Thu Jan  1 01:00:02 1970\n      current version 3.1.0\ncompatibility version 3.0.0\nLoad command 21\n          cmd LC_LOAD_DYLIB\n      cmdsize 48\n         name @rpath/libz.1.dylib (offset 24)\n   time stamp 2 Thu Jan  1 01:00:02 1970\n      current version 1.3.2\ncompatibility version 1.0.0\nLoad command 22\n          cmd LC_LOAD_DYLIB\n      cmdsize 48\n         name @rpath/libfftw3.3.dylib (offset 24)\n   time stamp 2 Thu Jan  1 01:00:02 1970\n      current version 11.11.0\ncompatibility version 11.0.0\nLoad command 23\n          cmd LC_LOAD_DYLIB\n      cmdsize 48\n         name /usr/lib/libc++.1.dylib (offset 24)\n   time stamp 2 Thu Jan  1 01:00:02 1970\n      current version 2100.43.0\ncompatibility version 1.0.0\nLoad command 24\n      cmd LC_FUNCTION_STARTS\n  cmdsize 16\n  dataoff 9612040\n datasize 20800\nLoad command 25\n      cmd LC_DATA_IN_CODE\n  cmdsize 16\n  dataoff 9632840\n datasize 0\nLoad command 26\n      cmd LC_CODE_SIGNATURE\n  cmdsize 16\n  dataoff 14356432\n datasize 112296\n"
+    }
+  ],
+  "objects": [
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT src/CMakeFiles/pops_runtime_core_objects.dir/runtime/prepared_embedded_boundary.cpp.o -MF src/CMakeFiles/pops_runtime_core_objects.dir/runtime/prepared_embedded_boundary.cpp.o.d -o src/CMakeFiles/pops_runtime_core_objects.dir/runtime/prepared_embedded_boundary.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/prepared_embedded_boundary.cpp",
+      "command_sha256": "7463bff4205bf36d91a83889379e0dfbb6b1a625390a080f9f796163fd99f4d9",
+      "ninja_output_record": "60\t803\t1791505421743837322\tsrc/CMakeFiles/pops_runtime_core_objects.dir/runtime/prepared_embedded_boundary.cpp.o\tc34ee63dec4adc05",
+      "physical": {
+        "bytes": 1050552,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_core_objects.dir/runtime/prepared_embedded_boundary.cpp.o",
+        "sha256": "1493af65e7cf764d26dfab36658d6fe587da467eb28bd84845557294a6b9c17c"
+      },
+      "physical_before": {
+        "bytes": 1050552,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_core_objects.dir/runtime/prepared_embedded_boundary.cpp.o",
+        "sha256": "1493af65e7cf764d26dfab36658d6fe587da467eb28bd84845557294a6b9c17c"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/prepared_embedded_boundary.cpp",
+      "source_sha256": "170dc2c88bcb703f63c8f767abb072d58026838c255ff6c7d828781253732f82",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT src/CMakeFiles/pops_runtime_core_objects.dir/runtime/program/step_transaction.cpp.o -MF src/CMakeFiles/pops_runtime_core_objects.dir/runtime/program/step_transaction.cpp.o.d -o src/CMakeFiles/pops_runtime_core_objects.dir/runtime/program/step_transaction.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/program/step_transaction.cpp",
+      "command_sha256": "f8328caa9001a041a4645ed090a66d4f9c228a7fddfbf4d0c8dc344b69cb6086",
+      "ninja_output_record": "61\t751\t1791505421744192074\tsrc/CMakeFiles/pops_runtime_core_objects.dir/runtime/program/step_transaction.cpp.o\t7a57182c3d644d7e",
+      "physical": {
+        "bytes": 5392,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_core_objects.dir/runtime/program/step_transaction.cpp.o",
+        "sha256": "a757fb4a890b3d2ea87a489f8ec17035d3c1ea855990a8d46715ac9737236b11"
+      },
+      "physical_before": {
+        "bytes": 5392,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_core_objects.dir/runtime/program/step_transaction.cpp.o",
+        "sha256": "a757fb4a890b3d2ea87a489f8ec17035d3c1ea855990a8d46715ac9737236b11"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/program/step_transaction.cpp",
+      "source_sha256": "dbba877c35860c60edd2a9930e7bc248d0fd6db242006f63ae706aa800d94948",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": true,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT src/CMakeFiles/pops_runtime_system.dir/runtime/system/system.cpp.o -MF src/CMakeFiles/pops_runtime_system.dir/runtime/system/system.cpp.o.d -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system.cpp",
+      "command_sha256": "a6742903daf1ed108181f90c85b22a35177f7708d65a3d432f8b3715f3340bee",
+      "ninja_output_record": "61\t11847\t1791505421744366491\tsrc/CMakeFiles/pops_runtime_system.dir/runtime/system/system.cpp.o\td854db9be2954927",
+      "physical": {
+        "bytes": 1174920,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system.cpp.o",
+        "sha256": "2feb1adebd07b9e3f9aaad841ea5491924ef5f8a0531dde2b37c9eb43b2330d3"
+      },
+      "physical_before": {
+        "bytes": 1174920,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system.cpp.o",
+        "sha256": "2feb1adebd07b9e3f9aaad841ea5491924ef5f8a0531dde2b37c9eb43b2330d3"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system.cpp",
+      "source_sha256": "ef16aa212d5971b0bf82183f691017bf969d2ce2a0b6d9f8ce73774a05c74e35",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_aux.cpp.o -MF src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_aux.cpp.o.d -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_aux.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_aux.cpp",
+      "command_sha256": "b8075704d0405a89d75979ea0b8d3021c7f650eef4a6f75d87d7ac43553e0981",
+      "ninja_output_record": "61\t9793\t1791505421744553158\tsrc/CMakeFiles/pops_runtime_system.dir/runtime/system/system_aux.cpp.o\t779a67094e2da2d3",
+      "physical": {
+        "bytes": 844544,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_aux.cpp.o",
+        "sha256": "0183e52268fb9f16fa4f47c84f20d53fbe40c374696300b016a695253fc1645d"
+      },
+      "physical_before": {
+        "bytes": 844544,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_aux.cpp.o",
+        "sha256": "0183e52268fb9f16fa4f47c84f20d53fbe40c374696300b016a695253fc1645d"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_aux.cpp",
+      "source_sha256": "3c41907d4013ac3a7c6706e1a8550bc63af36779690731b1f591f36fe4fe7794",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": true,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_install.cpp.o -MF src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_install.cpp.o.d -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_install.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_install.cpp",
+      "command_sha256": "f0be742d1ef697e646d5d31f75b21b550f77d50d3e9328ff741fa016e7161ab3",
+      "ninja_output_record": "61\t23510\t1791505421744727784\tsrc/CMakeFiles/pops_runtime_system.dir/runtime/system/system_install.cpp.o\tade086bf0323251d",
+      "physical": {
+        "bytes": 3099760,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_install.cpp.o",
+        "sha256": "808761fe088b0563394219fb536f281c3d92c4e2293a4d7f0c25d250f37df101"
+      },
+      "physical_before": {
+        "bytes": 3099760,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_install.cpp.o",
+        "sha256": "808761fe088b0563394219fb536f281c3d92c4e2293a4d7f0c25d250f37df101"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_install.cpp",
+      "source_sha256": "6b191eee3e55b6f838dd69341ab543fe7dc0d71e7874ad8dc5ba1d377b9490df",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_fields.cpp.o -MF src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_fields.cpp.o.d -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_fields.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_fields.cpp",
+      "command_sha256": "ccb25a8ac4faa299443949678e8cc3ac4728300dc0b3177e7dbcebe0eec7cc2b",
+      "ninja_output_record": "61\t12488\t1791505421744900618\tsrc/CMakeFiles/pops_runtime_system.dir/runtime/system/system_fields.cpp.o\t8192eec835738eb0",
+      "physical": {
+        "bytes": 1544752,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_fields.cpp.o",
+        "sha256": "db95d148be1e0753a7de860ce43390043d37fc6f97eb9142f03d26faf962d04b"
+      },
+      "physical_before": {
+        "bytes": 1544752,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_fields.cpp.o",
+        "sha256": "db95d148be1e0753a7de860ce43390043d37fc6f97eb9142f03d26faf962d04b"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_fields.cpp",
+      "source_sha256": "45a5b7a96ea60a4ee5438c6643e4d6bfa0c67ac002c48eaaa184a7c5f4f90efc",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_embedded_boundary.cpp.o -MF src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_embedded_boundary.cpp.o.d -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_embedded_boundary.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_embedded_boundary.cpp",
+      "command_sha256": "73741ecda658c2c5a077f4140cf66720ddd42417dd93eba157662ec3fe292409",
+      "ninja_output_record": "9794\t13884\t1791505431477329656\tsrc/CMakeFiles/pops_runtime_system.dir/runtime/system/system_embedded_boundary.cpp.o\ta863b0f6524b872c",
+      "physical": {
+        "bytes": 120152,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_embedded_boundary.cpp.o",
+        "sha256": "79e0e8dcc7d81909ca79d31545c61ec2f651df378c851b10abcf4852957da5bd"
+      },
+      "physical_before": {
+        "bytes": 120152,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_embedded_boundary.cpp.o",
+        "sha256": "79e0e8dcc7d81909ca79d31545c61ec2f651df378c851b10abcf4852957da5bd"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_embedded_boundary.cpp",
+      "source_sha256": "a57e98a0d421882619716b4a06726790a961cb1984baa3f7b96aef90dff846b3",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_field_plans.cpp.o -MF src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_field_plans.cpp.o.d -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_field_plans.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_field_plans.cpp",
+      "command_sha256": "86f451efc98abb4016148ac0df157ee9601aaee1038d6e93b227f9fc095c3efc",
+      "ninja_output_record": "11848\t16063\t1791505433531156913\tsrc/CMakeFiles/pops_runtime_system.dir/runtime/system/system_field_plans.cpp.o\t662b762152e9947f",
+      "physical": {
+        "bytes": 170664,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_field_plans.cpp.o",
+        "sha256": "62b56a73497484b5805121ea32240476e2695b2fd041ff55bf100b73c606b39c"
+      },
+      "physical_before": {
+        "bytes": 170664,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_field_plans.cpp.o",
+        "sha256": "62b56a73497484b5805121ea32240476e2695b2fd041ff55bf100b73c606b39c"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_field_plans.cpp",
+      "source_sha256": "12a2a23908945d187230f71d790c1686b3494c6a3c04f027c029a49c2211862a",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_layout_transfer.cpp.o -MF src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_layout_transfer.cpp.o.d -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_layout_transfer.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_layout_transfer.cpp",
+      "command_sha256": "ae288a4abdda14611a2509882055fbc8eb595a9819fa8ba910cb4f9b1447e621",
+      "ninja_output_record": "12488\t17919\t1791505434171692152\tsrc/CMakeFiles/pops_runtime_system.dir/runtime/system/system_layout_transfer.cpp.o\t25c8562eb93a252b",
+      "physical": {
+        "bytes": 351120,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_layout_transfer.cpp.o",
+        "sha256": "24ee5848d4e58c87fd5818136cfc8b18cd773626a26b51bfc376c9ce9e6e93d3"
+      },
+      "physical_before": {
+        "bytes": 351120,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_layout_transfer.cpp.o",
+        "sha256": "24ee5848d4e58c87fd5818136cfc8b18cd773626a26b51bfc376c9ce9e6e93d3"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_layout_transfer.cpp",
+      "source_sha256": "e5481853a313c75f778b40eb0be398ce6c00c077a53dbc52a189d8c733e11566",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_io.cpp.o -MF src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_io.cpp.o.d -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_io.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_io.cpp",
+      "command_sha256": "c6f8335ae502d99ed0d2a7594fdb2bce23530775a9f258fc9695a07cb329e2b1",
+      "ninja_output_record": "13884\t20819\t1791505435567804964\tsrc/CMakeFiles/pops_runtime_system.dir/runtime/system/system_io.cpp.o\te2eed7e65aa0449",
+      "physical": {
+        "bytes": 512960,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_io.cpp.o",
+        "sha256": "d4548320c92bcca814b992b1487b0d3c6afa415108c9aa9b7a523f13f2d623b6"
+      },
+      "physical_before": {
+        "bytes": 512960,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_io.cpp.o",
+        "sha256": "d4548320c92bcca814b992b1487b0d3c6afa415108c9aa9b7a523f13f2d623b6"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_io.cpp",
+      "source_sha256": "024d6cd21029478033623db0ad6e998076d82d06ddbc00a2af228182e626669c",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_profiling.cpp.o -MF src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_profiling.cpp.o.d -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_profiling.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_profiling.cpp",
+      "command_sha256": "404fbeeac193c37f1e22660637260cf86ddf9ccfb8816dacbdab1fa46826735c",
+      "ninja_output_record": "16063\t19388\t1791505437747017939\tsrc/CMakeFiles/pops_runtime_system.dir/runtime/system/system_profiling.cpp.o\tcb9cc9855c7ddf58",
+      "physical": {
+        "bytes": 15272,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_profiling.cpp.o",
+        "sha256": "76e650286c97c4f0733202f57ca45caf1a5c8470671376f920d2260542f50dc6"
+      },
+      "physical_before": {
+        "bytes": 15272,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_profiling.cpp.o",
+        "sha256": "76e650286c97c4f0733202f57ca45caf1a5c8470671376f920d2260542f50dc6"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_profiling.cpp",
+      "source_sha256": "3aa3d00ee843ab2961193f72980b502d52a38852b4af0675597d6a2ff8c3ac95",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_program.cpp.o -MF src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_program.cpp.o.d -o src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_program.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_program.cpp",
+      "command_sha256": "d745a2ddec1ed158ed9b396d8c8c83583afac99190169598394124c6af49e817",
+      "ninja_output_record": "17919\t25079\t1791505439602499758\tsrc/CMakeFiles/pops_runtime_system.dir/runtime/system/system_program.cpp.o\te8bb29a0d2c97b1f",
+      "physical": {
+        "bytes": 687528,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_program.cpp.o",
+        "sha256": "f013809d61ee0fb610b5dfce86fc62e6d310c54b1d5636f4d2ebc9360ddc20d6"
+      },
+      "physical_before": {
+        "bytes": 687528,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_program.cpp.o",
+        "sha256": "f013809d61ee0fb610b5dfce86fc62e6d310c54b1d5636f4d2ebc9360ddc20d6"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_program.cpp",
+      "source_sha256": "b472d105ea9ee04a09bad2b3e3a06949448058d2d1d294b8521c65c39e57437b",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_layout_transfer.cpp.o -MF src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_layout_transfer.cpp.o.d -o src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_layout_transfer.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_layout_transfer.cpp",
+      "command_sha256": "48dd6d4d0f9b47d9a8d1c3a7a11d3d4d8c67f2532483d2a20056dd8b15281ebd",
+      "ninja_output_record": "19388\t24442\t1791505441071327998\tsrc/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_layout_transfer.cpp.o\t5f6286cf1cea4eaa",
+      "physical": {
+        "bytes": 418448,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_layout_transfer.cpp.o",
+        "sha256": "f9bd7bbeb0727fa423ae531263a18a1f5b08c040d0359c876817e1816ae70a60"
+      },
+      "physical_before": {
+        "bytes": 418448,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_layout_transfer.cpp.o",
+        "sha256": "f9bd7bbeb0727fa423ae531263a18a1f5b08c040d0359c876817e1816ae70a60"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_layout_transfer.cpp",
+      "source_sha256": "c4f84bbac8c16fa55a502e8d9a849f2c20788c25ad1e8caef5c45b2a45a1e457",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o -MF src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o.d -o src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_field_solver_builtin.cpp",
+      "command_sha256": "2934655771e9efff89f57273e365ad4c935feb7419ce7ba4ec8ec7412c869fc0",
+      "ninja_output_record": "20819\t21209\t1791505442502319183\tsrc/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o\t5e0223a23520f4b7",
+      "physical": {
+        "bytes": 1776248,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o",
+        "sha256": "4894afb2750ac6ad2c151552d3dc5403fcc18c1f630778b2ecd3e2f6406dd610"
+      },
+      "physical_before": {
+        "bytes": 1776248,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o",
+        "sha256": "4894afb2750ac6ad2c151552d3dc5403fcc18c1f630778b2ecd3e2f6406dd610"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_field_solver_builtin.cpp",
+      "source_sha256": "236c5c29c4ee5effa35d20f36d7298e232fdf2f866f6fc74cf3e1d80194e4367",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_component.cpp.o -MF src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_component.cpp.o.d -o src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_component.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_field_solver_component.cpp",
+      "command_sha256": "4bd0f6fb57de7d202768973c1654edc438f7391f86d7d90adb3eee06cb2053a5",
+      "ninja_output_record": "21209\t25729\t1791505442892617321\tsrc/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_component.cpp.o\t6ff17669574f7361",
+      "physical": {
+        "bytes": 324584,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_component.cpp.o",
+        "sha256": "bf82a9679da0ee4e4d9c8fe1e49860b583ffac6c0fd7e2271f9bca66490a408c"
+      },
+      "physical_before": {
+        "bytes": 324584,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_component.cpp.o",
+        "sha256": "bf82a9679da0ee4e4d9c8fe1e49860b583ffac6c0fd7e2271f9bca66490a408c"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_field_solver_component.cpp",
+      "source_sha256": "698e2e05b5eb6ce98becc71efbbca669e0bf1db3d5027c316d592ae84835e698",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": true,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o -MF src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o.d -o src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_system.cpp",
+      "command_sha256": "c836e87c748bf708eb5390eb2a1fa8f0f638afbef693ccb71f71cb48b3115676",
+      "ninja_output_record": "23510\t82357\t1791505445193579164\tsrc/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o\t86cd280785293bd2",
+      "physical": {
+        "bytes": 8656328,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o",
+        "sha256": "cfc6ae01896a511bc488eafacee6897329fabda07f4690bc00e56b33814f7290"
+      },
+      "physical_before": {
+        "bytes": 8656328,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o",
+        "sha256": "cfc6ae01896a511bc488eafacee6897329fabda07f4690bc00e56b33814f7290"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_system.cpp",
+      "source_sha256": "59e3fd9fe42cc8c31d2999840d16b1e2ac5ca399a828986126c98265add0a185",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT src/CMakeFiles/pops_runtime_output.dir/runtime/output/hdf5_collective.cpp.o -MF src/CMakeFiles/pops_runtime_output.dir/runtime/output/hdf5_collective.cpp.o.d -o src/CMakeFiles/pops_runtime_output.dir/runtime/output/hdf5_collective.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/output/hdf5_collective.cpp",
+      "command_sha256": "0f5bc6a21e338f26bfc4a96fe2a69bc6dadef43b84b9b2655f4d99dfdbc10b87",
+      "ninja_output_record": "24442\t24675\t1791505446125655323\tsrc/CMakeFiles/pops_runtime_output.dir/runtime/output/hdf5_collective.cpp.o\t26cbdbf609fddcf6",
+      "physical": {
+        "bytes": 120648,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_output.dir/runtime/output/hdf5_collective.cpp.o",
+        "sha256": "29517540fd5612a0dbcc07b50fc8917419e461bd1d89fbe54e936df66db4e836"
+      },
+      "physical_before": {
+        "bytes": 120648,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/src/CMakeFiles/pops_runtime_output.dir/runtime/output/hdf5_collective.cpp.o",
+        "sha256": "29517540fd5612a0dbcc07b50fc8917419e461bd1d89fbe54e936df66db4e836"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/output/hdf5_collective.cpp",
+      "source_sha256": "3879ffc62a0a1a0d3c535d8f9a1093784b6fe48ab60107bbea5ddf1fb37fae24",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_KOKKOS_ABI=\\\"7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5\\\" -DPOPS_KOKKOS_HEADER_HASHES=\"\\\"669bec6fdabcda806e5e02ad28cd357b1ed320cfc49802fd73323aaf49cd4483|15e1ab96c449103a425b60b21a27d173f9c38c48f0d1b423f676d6cce8f1bd57\\\"\" -DPOPS_KOKKOS_HEADER_PATHS=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/include/Kokkos_Core.hpp|/Users/romaindespoulain/miniforge3/envs/pops/include/KokkosCore_config.h\\\"\" -DPOPS_KOKKOS_INCLUDE=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_MPI_COMPILER=\\\"/Users/romaindespoulain/miniforge3/envs/pops/bin/mpicxx\\\" -DPOPS_MPI_COMPILE_DEFINITIONS=\\\"\\\" -DPOPS_MPI_COMPILE_OPTIONS=\\\"\\\" -DPOPS_MPI_HEADER_HASHES=\\\"257346cd65e9cfe8bfbf9d46da32493583d0d8e95626f1c5e75d5c709b765323\\\" -DPOPS_MPI_HEADER_PATHS=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include/mpi.h\\\" -DPOPS_MPI_INCLUDE=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include\\\" -DPOPS_MPI_LIBRARY_HASHES=\"\\\"f86a1c41429720377bf19bfe446579dc9eb97d7636ebacc4be1b44351f629963|45c64151fa98d5071d5f3ccaaf00667be137d1258c803625434f4609efff4be7|40c8476c0b9e6507c0d0eac8e393a3489121e62a7ab409bb60668a9efcb2d905\\\"\" -DPOPS_MPI_LIBRARY_PATHS=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib\\\"\" -DPOPS_MPI_LINK_LIBRARIES=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib\\\"\" -DPOPS_MPI_LINK_OPTIONS=\"\\\"-Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops/lib|-Wl,-commons,use_dylibs\\\"\" -DPOPS_MPI_STANDARD=\\\"4.0\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include/python3.12 -isystem /Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pybind11/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT python/CMakeFiles/_pops.dir/bindings/core/bindings.cpp.o -MF python/CMakeFiles/_pops.dir/bindings/core/bindings.cpp.o.d -o python/CMakeFiles/_pops.dir/bindings/core/bindings.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/bindings/core/bindings.cpp",
+      "command_sha256": "65fdb4187058958aab76934e96c03497ff45d4083207d8f84cfae20c976d5aaa",
+      "ninja_output_record": "24675\t29869\t1791505446358741051\tpython/CMakeFiles/_pops.dir/bindings/core/bindings.cpp.o\t8742521845d9bb73",
+      "physical": {
+        "bytes": 160656,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/bindings.cpp.o",
+        "sha256": "b6496238f116944154552a23ec7a3b05c0a9938a627349f5b52075fe73cd22ab"
+      },
+      "physical_before": {
+        "bytes": 160656,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/bindings.cpp.o",
+        "sha256": "b6496238f116944154552a23ec7a3b05c0a9938a627349f5b52075fe73cd22ab"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/bindings/core/bindings.cpp",
+      "source_sha256": "c5afcac11e8ff18972960a86d629c1b42ca882d9beba72169ca53cb12203f5a1",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": true,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_KOKKOS_ABI=\\\"7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5\\\" -DPOPS_KOKKOS_HEADER_HASHES=\"\\\"669bec6fdabcda806e5e02ad28cd357b1ed320cfc49802fd73323aaf49cd4483|15e1ab96c449103a425b60b21a27d173f9c38c48f0d1b423f676d6cce8f1bd57\\\"\" -DPOPS_KOKKOS_HEADER_PATHS=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/include/Kokkos_Core.hpp|/Users/romaindespoulain/miniforge3/envs/pops/include/KokkosCore_config.h\\\"\" -DPOPS_KOKKOS_INCLUDE=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_MPI_COMPILER=\\\"/Users/romaindespoulain/miniforge3/envs/pops/bin/mpicxx\\\" -DPOPS_MPI_COMPILE_DEFINITIONS=\\\"\\\" -DPOPS_MPI_COMPILE_OPTIONS=\\\"\\\" -DPOPS_MPI_HEADER_HASHES=\\\"257346cd65e9cfe8bfbf9d46da32493583d0d8e95626f1c5e75d5c709b765323\\\" -DPOPS_MPI_HEADER_PATHS=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include/mpi.h\\\" -DPOPS_MPI_INCLUDE=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include\\\" -DPOPS_MPI_LIBRARY_HASHES=\"\\\"f86a1c41429720377bf19bfe446579dc9eb97d7636ebacc4be1b44351f629963|45c64151fa98d5071d5f3ccaaf00667be137d1258c803625434f4609efff4be7|40c8476c0b9e6507c0d0eac8e393a3489121e62a7ab409bb60668a9efcb2d905\\\"\" -DPOPS_MPI_LIBRARY_PATHS=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib\\\"\" -DPOPS_MPI_LINK_LIBRARIES=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib\\\"\" -DPOPS_MPI_LINK_OPTIONS=\"\\\"-Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops/lib|-Wl,-commons,use_dylibs\\\"\" -DPOPS_MPI_STANDARD=\\\"4.0\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include/python3.12 -isystem /Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pybind11/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT python/CMakeFiles/_pops.dir/bindings/core/init/init_core.cpp.o -MF python/CMakeFiles/_pops.dir/bindings/core/init/init_core.cpp.o.d -o python/CMakeFiles/_pops.dir/bindings/core/init/init_core.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/bindings/core/init/init_core.cpp",
+      "command_sha256": "a6c9f327b5fcd0bd18a0119de15813f1a26944824bd52feb40ee4210ff8eb23a",
+      "ninja_output_record": "25080\t33953\t1791505446763637924\tpython/CMakeFiles/_pops.dir/bindings/core/init/init_core.cpp.o\tdb189c9d4403b3cb",
+      "physical": {
+        "bytes": 882328,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/init/init_core.cpp.o",
+        "sha256": "73db983b20fbba24b269d7454f94ecdf1e243098e089b1b2c3c064b9afc0d6a3"
+      },
+      "physical_before": {
+        "bytes": 882328,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/init/init_core.cpp.o",
+        "sha256": "73db983b20fbba24b269d7454f94ecdf1e243098e089b1b2c3c064b9afc0d6a3"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/bindings/core/init/init_core.cpp",
+      "source_sha256": "e7e6f3e31b3718f623d6bf23b1c70db67ac0924952128b5298eb59d0a123a99d",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_KOKKOS_ABI=\\\"7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5\\\" -DPOPS_KOKKOS_HEADER_HASHES=\"\\\"669bec6fdabcda806e5e02ad28cd357b1ed320cfc49802fd73323aaf49cd4483|15e1ab96c449103a425b60b21a27d173f9c38c48f0d1b423f676d6cce8f1bd57\\\"\" -DPOPS_KOKKOS_HEADER_PATHS=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/include/Kokkos_Core.hpp|/Users/romaindespoulain/miniforge3/envs/pops/include/KokkosCore_config.h\\\"\" -DPOPS_KOKKOS_INCLUDE=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_MPI_COMPILER=\\\"/Users/romaindespoulain/miniforge3/envs/pops/bin/mpicxx\\\" -DPOPS_MPI_COMPILE_DEFINITIONS=\\\"\\\" -DPOPS_MPI_COMPILE_OPTIONS=\\\"\\\" -DPOPS_MPI_HEADER_HASHES=\\\"257346cd65e9cfe8bfbf9d46da32493583d0d8e95626f1c5e75d5c709b765323\\\" -DPOPS_MPI_HEADER_PATHS=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include/mpi.h\\\" -DPOPS_MPI_INCLUDE=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include\\\" -DPOPS_MPI_LIBRARY_HASHES=\"\\\"f86a1c41429720377bf19bfe446579dc9eb97d7636ebacc4be1b44351f629963|45c64151fa98d5071d5f3ccaaf00667be137d1258c803625434f4609efff4be7|40c8476c0b9e6507c0d0eac8e393a3489121e62a7ab409bb60668a9efcb2d905\\\"\" -DPOPS_MPI_LIBRARY_PATHS=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib\\\"\" -DPOPS_MPI_LINK_LIBRARIES=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib\\\"\" -DPOPS_MPI_LINK_OPTIONS=\"\\\"-Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops/lib|-Wl,-commons,use_dylibs\\\"\" -DPOPS_MPI_STANDARD=\\\"4.0\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include/python3.12 -isystem /Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pybind11/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT python/CMakeFiles/_pops.dir/bindings/core/init/init_identity.cpp.o -MF python/CMakeFiles/_pops.dir/bindings/core/init/init_identity.cpp.o.d -o python/CMakeFiles/_pops.dir/bindings/core/init/init_identity.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/bindings/core/init/init_identity.cpp",
+      "command_sha256": "48484670b8ff5d1ff17acd5bb2230161323524dbc02276d40055619ab55cfecd",
+      "ninja_output_record": "25730\t32014\t1791505447413927709\tpython/CMakeFiles/_pops.dir/bindings/core/init/init_identity.cpp.o\t9d492346b379045d",
+      "physical": {
+        "bytes": 346512,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/init/init_identity.cpp.o",
+        "sha256": "b5e35cfc64aa2180235649d404ca61e89ce3ff61f03d1d3e8b96ed56d408da2c"
+      },
+      "physical_before": {
+        "bytes": 346512,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/init/init_identity.cpp.o",
+        "sha256": "b5e35cfc64aa2180235649d404ca61e89ce3ff61f03d1d3e8b96ed56d408da2c"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/bindings/core/init/init_identity.cpp",
+      "source_sha256": "fed488facdc055129e182556acf66abef90884ad1f065e188b816b5690f6d7d7",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_KOKKOS_ABI=\\\"7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5\\\" -DPOPS_KOKKOS_HEADER_HASHES=\"\\\"669bec6fdabcda806e5e02ad28cd357b1ed320cfc49802fd73323aaf49cd4483|15e1ab96c449103a425b60b21a27d173f9c38c48f0d1b423f676d6cce8f1bd57\\\"\" -DPOPS_KOKKOS_HEADER_PATHS=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/include/Kokkos_Core.hpp|/Users/romaindespoulain/miniforge3/envs/pops/include/KokkosCore_config.h\\\"\" -DPOPS_KOKKOS_INCLUDE=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_MPI_COMPILER=\\\"/Users/romaindespoulain/miniforge3/envs/pops/bin/mpicxx\\\" -DPOPS_MPI_COMPILE_DEFINITIONS=\\\"\\\" -DPOPS_MPI_COMPILE_OPTIONS=\\\"\\\" -DPOPS_MPI_HEADER_HASHES=\\\"257346cd65e9cfe8bfbf9d46da32493583d0d8e95626f1c5e75d5c709b765323\\\" -DPOPS_MPI_HEADER_PATHS=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include/mpi.h\\\" -DPOPS_MPI_INCLUDE=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include\\\" -DPOPS_MPI_LIBRARY_HASHES=\"\\\"f86a1c41429720377bf19bfe446579dc9eb97d7636ebacc4be1b44351f629963|45c64151fa98d5071d5f3ccaaf00667be137d1258c803625434f4609efff4be7|40c8476c0b9e6507c0d0eac8e393a3489121e62a7ab409bb60668a9efcb2d905\\\"\" -DPOPS_MPI_LIBRARY_PATHS=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib\\\"\" -DPOPS_MPI_LINK_LIBRARIES=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib\\\"\" -DPOPS_MPI_LINK_OPTIONS=\"\\\"-Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops/lib|-Wl,-commons,use_dylibs\\\"\" -DPOPS_MPI_STANDARD=\\\"4.0\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include/python3.12 -isystem /Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pybind11/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT python/CMakeFiles/_pops.dir/bindings/core/init/init_component_loader.cpp.o -MF python/CMakeFiles/_pops.dir/bindings/core/init/init_component_loader.cpp.o.d -o python/CMakeFiles/_pops.dir/bindings/core/init/init_component_loader.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/bindings/core/init/init_component_loader.cpp",
+      "command_sha256": "6e7ca1185a43be5df158132a88f2f0e3371cfb43d5d8d9847f27ddee1ff8595f",
+      "ninja_output_record": "29869\t37630\t1791505451552753287\tpython/CMakeFiles/_pops.dir/bindings/core/init/init_component_loader.cpp.o\t94ed9e5496970f23",
+      "physical": {
+        "bytes": 533632,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/init/init_component_loader.cpp.o",
+        "sha256": "e3a33bab6da60b24e6ec21905d1b2dc1424e29958e4308aee4ff410760e261ff"
+      },
+      "physical_before": {
+        "bytes": 533632,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/init/init_component_loader.cpp.o",
+        "sha256": "e3a33bab6da60b24e6ec21905d1b2dc1424e29958e4308aee4ff410760e261ff"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/bindings/core/init/init_component_loader.cpp",
+      "source_sha256": "af99e1bc75235c4ddb4c8987e150c6a46bf85b66cc63da3889e5307505748bb9",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_KOKKOS_ABI=\\\"7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5\\\" -DPOPS_KOKKOS_HEADER_HASHES=\"\\\"669bec6fdabcda806e5e02ad28cd357b1ed320cfc49802fd73323aaf49cd4483|15e1ab96c449103a425b60b21a27d173f9c38c48f0d1b423f676d6cce8f1bd57\\\"\" -DPOPS_KOKKOS_HEADER_PATHS=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/include/Kokkos_Core.hpp|/Users/romaindespoulain/miniforge3/envs/pops/include/KokkosCore_config.h\\\"\" -DPOPS_KOKKOS_INCLUDE=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_MPI_COMPILER=\\\"/Users/romaindespoulain/miniforge3/envs/pops/bin/mpicxx\\\" -DPOPS_MPI_COMPILE_DEFINITIONS=\\\"\\\" -DPOPS_MPI_COMPILE_OPTIONS=\\\"\\\" -DPOPS_MPI_HEADER_HASHES=\\\"257346cd65e9cfe8bfbf9d46da32493583d0d8e95626f1c5e75d5c709b765323\\\" -DPOPS_MPI_HEADER_PATHS=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include/mpi.h\\\" -DPOPS_MPI_INCLUDE=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include\\\" -DPOPS_MPI_LIBRARY_HASHES=\"\\\"f86a1c41429720377bf19bfe446579dc9eb97d7636ebacc4be1b44351f629963|45c64151fa98d5071d5f3ccaaf00667be137d1258c803625434f4609efff4be7|40c8476c0b9e6507c0d0eac8e393a3489121e62a7ab409bb60668a9efcb2d905\\\"\" -DPOPS_MPI_LIBRARY_PATHS=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib\\\"\" -DPOPS_MPI_LINK_LIBRARIES=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib\\\"\" -DPOPS_MPI_LINK_OPTIONS=\"\\\"-Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops/lib|-Wl,-commons,use_dylibs\\\"\" -DPOPS_MPI_STANDARD=\\\"4.0\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include/python3.12 -isystem /Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pybind11/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT python/CMakeFiles/_pops.dir/bindings/core/init/init_parallel_hdf5.cpp.o -MF python/CMakeFiles/_pops.dir/bindings/core/init/init_parallel_hdf5.cpp.o.d -o python/CMakeFiles/_pops.dir/bindings/core/init/init_parallel_hdf5.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/bindings/core/init/init_parallel_hdf5.cpp",
+      "command_sha256": "9eba31b10e962e8ba5978a8a3f1ca8913de17469d3a9526da7806ffeee002c24",
+      "ninja_output_record": "32014\t37979\t1791505453697676850\tpython/CMakeFiles/_pops.dir/bindings/core/init/init_parallel_hdf5.cpp.o\tcbb78c85ac6c7302",
+      "physical": {
+        "bytes": 231552,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/init/init_parallel_hdf5.cpp.o",
+        "sha256": "94741c72c6ca2f37c22b5240fca6390d4cb7d23b3dffccf30e258648a0a7360f"
+      },
+      "physical_before": {
+        "bytes": 231552,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/init/init_parallel_hdf5.cpp.o",
+        "sha256": "94741c72c6ca2f37c22b5240fca6390d4cb7d23b3dffccf30e258648a0a7360f"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/bindings/core/init/init_parallel_hdf5.cpp",
+      "source_sha256": "de6900561eae791d834587ce2590d99bae88d8fabae6aa32df7e5dceb4ab4297",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_KOKKOS_ABI=\\\"7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5\\\" -DPOPS_KOKKOS_HEADER_HASHES=\"\\\"669bec6fdabcda806e5e02ad28cd357b1ed320cfc49802fd73323aaf49cd4483|15e1ab96c449103a425b60b21a27d173f9c38c48f0d1b423f676d6cce8f1bd57\\\"\" -DPOPS_KOKKOS_HEADER_PATHS=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/include/Kokkos_Core.hpp|/Users/romaindespoulain/miniforge3/envs/pops/include/KokkosCore_config.h\\\"\" -DPOPS_KOKKOS_INCLUDE=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_MPI_COMPILER=\\\"/Users/romaindespoulain/miniforge3/envs/pops/bin/mpicxx\\\" -DPOPS_MPI_COMPILE_DEFINITIONS=\\\"\\\" -DPOPS_MPI_COMPILE_OPTIONS=\\\"\\\" -DPOPS_MPI_HEADER_HASHES=\\\"257346cd65e9cfe8bfbf9d46da32493583d0d8e95626f1c5e75d5c709b765323\\\" -DPOPS_MPI_HEADER_PATHS=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include/mpi.h\\\" -DPOPS_MPI_INCLUDE=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include\\\" -DPOPS_MPI_LIBRARY_HASHES=\"\\\"f86a1c41429720377bf19bfe446579dc9eb97d7636ebacc4be1b44351f629963|45c64151fa98d5071d5f3ccaaf00667be137d1258c803625434f4609efff4be7|40c8476c0b9e6507c0d0eac8e393a3489121e62a7ab409bb60668a9efcb2d905\\\"\" -DPOPS_MPI_LIBRARY_PATHS=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib\\\"\" -DPOPS_MPI_LINK_LIBRARIES=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib\\\"\" -DPOPS_MPI_LINK_OPTIONS=\"\\\"-Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops/lib|-Wl,-commons,use_dylibs\\\"\" -DPOPS_MPI_STANDARD=\\\"4.0\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include/python3.12 -isystem /Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pybind11/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT python/CMakeFiles/_pops.dir/bindings/core/init/init_system.cpp.o -MF python/CMakeFiles/_pops.dir/bindings/core/init/init_system.cpp.o.d -o python/CMakeFiles/_pops.dir/bindings/core/init/init_system.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/bindings/core/init/init_system.cpp",
+      "command_sha256": "a7327aca2da917257459d1ba6c905a942c19c90775c729b9796e713adb62a73a",
+      "ninja_output_record": "33953\t51392\t1791505455636520105\tpython/CMakeFiles/_pops.dir/bindings/core/init/init_system.cpp.o\tc7b9d5b50a3609e0",
+      "physical": {
+        "bytes": 2070120,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/init/init_system.cpp.o",
+        "sha256": "79d296a97e58e7ef4ce1c48926777b3c82141f386acdd9408d6a6e981ba1006c"
+      },
+      "physical_before": {
+        "bytes": 2070120,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/init/init_system.cpp.o",
+        "sha256": "79d296a97e58e7ef4ce1c48926777b3c82141f386acdd9408d6a6e981ba1006c"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/bindings/core/init/init_system.cpp",
+      "source_sha256": "53596c2c4c30e0a952ec855dbe9fcdffd9fc299693c1a9114d5aaa615e7ee4ee",
+      "status": "observed_Ninja_CXX_output_action"
+    },
+    {
+      "SDK_tokens": [
+        "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa"
+      ],
+      "actual_frontend_execution": "not inferred from Ninja action or unchangedbytes; perobject compiler/ccache trace required",
+      "byte_changed": false,
+      "command": "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache /usr/bin/clang++ -DKOKKOS_DEPENDENCE -DPOPS_CXX_COMPILER=\\\"/usr/bin/clang++\\\" -DPOPS_CXX_STD=20 -DPOPS_EXPORT_BUILDING_MODULE -DPOPS_HAS_FFTW -DPOPS_HAS_HDF5 -DPOPS_HAS_KOKKOS -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -DPOPS_HEADER_SIG=\\\"acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa\\\" -DPOPS_KOKKOS_ABI=\\\"7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5\\\" -DPOPS_KOKKOS_HEADER_HASHES=\"\\\"669bec6fdabcda806e5e02ad28cd357b1ed320cfc49802fd73323aaf49cd4483|15e1ab96c449103a425b60b21a27d173f9c38c48f0d1b423f676d6cce8f1bd57\\\"\" -DPOPS_KOKKOS_HEADER_PATHS=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/include/Kokkos_Core.hpp|/Users/romaindespoulain/miniforge3/envs/pops/include/KokkosCore_config.h\\\"\" -DPOPS_KOKKOS_INCLUDE=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include\\\" -DPOPS_MPI_ABI=\\\"b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584\\\" -DPOPS_MPI_COMPILER=\\\"/Users/romaindespoulain/miniforge3/envs/pops/bin/mpicxx\\\" -DPOPS_MPI_COMPILE_DEFINITIONS=\\\"\\\" -DPOPS_MPI_COMPILE_OPTIONS=\\\"\\\" -DPOPS_MPI_HEADER_HASHES=\\\"257346cd65e9cfe8bfbf9d46da32493583d0d8e95626f1c5e75d5c709b765323\\\" -DPOPS_MPI_HEADER_PATHS=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include/mpi.h\\\" -DPOPS_MPI_INCLUDE=\\\"/Users/romaindespoulain/miniforge3/envs/pops/include\\\" -DPOPS_MPI_LIBRARY_HASHES=\"\\\"f86a1c41429720377bf19bfe446579dc9eb97d7636ebacc4be1b44351f629963|45c64151fa98d5071d5f3ccaaf00667be137d1258c803625434f4609efff4be7|40c8476c0b9e6507c0d0eac8e393a3489121e62a7ab409bb60668a9efcb2d905\\\"\" -DPOPS_MPI_LIBRARY_PATHS=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib\\\"\" -DPOPS_MPI_LINK_LIBRARIES=\"\\\"/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib|/Users/romaindespoulain/miniforge3/envs/pops/lib/libpmpi.dylib\\\"\" -DPOPS_MPI_LINK_OPTIONS=\"\\\"-Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops/lib|-Wl,-commons,use_dylibs\\\"\" -DPOPS_MPI_STANDARD=\\\"4.0\\\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_VERSION=\\\"1.1.0\\\" -D_FORTIFY_SOURCE=2 -D_pops_EXPORTS -I/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include/python3.12 -isystem /Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pybind11/include -isystem /Users/romaindespoulain/miniforge3/envs/pops/include -O3 -DNDEBUG -std=c++20 -arch arm64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Xpreprocessor -fopenmp -I/Users/romaindespoulain/miniforge3/envs/pops/include -MD -MT python/CMakeFiles/_pops.dir/bindings/core/init/init_amr.cpp.o -MF python/CMakeFiles/_pops.dir/bindings/core/init/init_amr.cpp.o.d -o python/CMakeFiles/_pops.dir/bindings/core/init/init_amr.cpp.o -c /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/bindings/core/init/init_amr.cpp",
+      "command_sha256": "bdfe2a53c3206720551bc11e5a3c4e66724189bf3a774615eeac7358321fbfd2",
+      "ninja_output_record": "37631\t54778\t1791505459314238460\tpython/CMakeFiles/_pops.dir/bindings/core/init/init_amr.cpp.o\t5da921c67edc53f8",
+      "physical": {
+        "bytes": 2426920,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/init/init_amr.cpp.o",
+        "sha256": "a0b8e9587d21788b36ae1fc181b05d3990a8432c729a17ae1d154e57b8cd1a67"
+      },
+      "physical_before": {
+        "bytes": 2426920,
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/python/CMakeFiles/_pops.dir/bindings/core/init/init_amr.cpp.o",
+        "sha256": "a0b8e9587d21788b36ae1fc181b05d3990a8432c729a17ae1d154e57b8cd1a67"
+      },
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/bindings/core/init/init_amr.cpp",
+      "source_sha256": "2ffd4a0e6cbc1bdf94be9152660d31d9ef708f922eee3e01189bac77a10602b0",
+      "status": "observed_Ninja_CXX_output_action"
+    }
+  ],
+  "observed_CXX_output_action_count": 24,
+  "packaging": {
+    "distribution_root": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages",
+    "expected_dimensions": [
+      2
+    ],
+    "installed_member_count": 1179,
+    "installed_tree_sha256": "16ea6d737da8dfa03868b334b70afeb8bcc827aeda8b65feea2ef245d4193b89",
+    "native_manifest": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/variants.json",
+    "native_manifest_member": "pops/_native/variants.json",
+    "native_manifest_sha256": "8a33e1d0013dec328aabb8083a8c070eb47c39fed842852762d2243650c359c6",
+    "native_variants": [
+      {
+        "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584;dim=2",
+        "dimension": 2,
+        "extension": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+        "has_kokkos": true,
+        "has_mpi": true,
+        "member": "pops/_native/dim2/_pops.cpython-312-darwin.so",
+        "sha256": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+        "version": "1.1.0"
+      }
+    ],
+    "package_file": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/__init__.py",
+    "proof_script_sha256": "3aa78bc8c3648e120439ac6e90a0887b60a54f37da7b7db2b2983015be5f1a8d",
+    "python_executable": "/Users/romaindespoulain/miniforge3/envs/pops/bin/python3.12",
+    "schema_version": 3,
+    "version": "1.1.0",
+    "wheel_path": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/wheel/pops-1.1.0-cp312-cp312-macosx_26_0_arm64.whl",
+    "wheel_sha256": "0d3c66b61ce95291dcd59c23d183a06b058d8fdcf473bf8ec58a69f16e32f696"
+  },
+  "prior_installed_native_backup": {
+    "bytes": 14468728,
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/prior-installed-native/_pops.cpython-312-darwin.so",
+    "sha256": "f8d9281232039f3ed3f92b7a14ae6530aa18baf41257a3c99a9629a50af61f64"
+  },
+  "qualified_reused_object_count": 0,
+  "schema": 2,
+  "scope": "Actual incremental installed Source/SDK/object provenance admission; reused objects only when oldqualifiedsource/SDK/command/bytes match. Not fullnewNative fromlinkonly, not scientific/GPU/3D acceptance.",
+  "total_object_graph_count": 24,
+  "wheel": {
+    "bytes": 9361977,
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/wheel/pops-1.1.0-cp312-cp312-macosx_26_0_arm64.whl",
+    "sha256": "0d3c66b61ce95291dcd59c23d183a06b058d8fdcf473bf8ec58a69f16e32f696"
+  },
+  "wheel_source_count": 1174
+}

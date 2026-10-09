@@ -21,6 +21,7 @@ from .ghost_plan import (
     GhostProducerRegistry,
     GhostProduction,
     PhysicalGhost,
+    PeriodicGhost,
     SameLevelHaloMPI,
 )
 from .ghost_plan_types import (
@@ -160,6 +161,23 @@ def compose_transport_boundary(
     producers = [same_level]
     predecessor = same_level.handle
 
+    for identification in topology.periodic:
+        periodic = PeriodicGhost(
+            handle=_handle("periodic", "ghost_producer", owner=owner,
+                           evidence={**base_evidence,
+                                     "identification": identification.canonical_identity()}),
+            protocol=_handle("periodic", "ghost_producer_protocol", owner=protocol_owner,
+                             evidence={"protocol": "axis-translation-v1"}),
+            identification=identification,
+            dependencies=(predecessor,),
+        )
+        for boundary in (identification.source, identification.target):
+            periodic_region = region("periodic_face", boundary=boundary)
+            regions.append(periodic_region)
+            productions.append(GhostProduction(periodic_region, periodic))
+        producers.append(periodic)
+        predecessor = periodic.handle
+
     if normalized.adaptive:
         if amr_transfer is None:
             raise ValueError("adaptive ghost composition requires resolved AMR transfer authority")
@@ -213,12 +231,14 @@ def compose_transport_boundary(
         discretization_manifest,
         tuple(regions),
     )
+    inferred=authority.inferred_component_bindings()
     return GhostProducerRegistry(*producers).resolve(
         topology,
         coverage,
         tuple(regions),
         tuple(productions),
         execution_authority=authority,
+        component_bindings=tuple(binding for binding,_ in inferred),
     )
 
 

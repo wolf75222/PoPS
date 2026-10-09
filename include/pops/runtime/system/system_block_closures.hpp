@@ -59,6 +59,9 @@ struct SystemBlockClosures {
   using PreparedPointPeriodicResidual =
       std::function<void(const point_type&, field_type&, field_type&, const ExecutionLane&,
                          const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
+  using PreparedPointPathResidual = std::function<Real(
+      const point_type&, field_type&, field_type&, const boundary_type*,
+      const ExecutionLane&, const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
   using PreparedPointJvp = std::function<void(
       const point_type&, field_type&, const field_type&, field_type&, const boundary_type&,
       const ExecutionLane&, const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
@@ -110,6 +113,8 @@ struct SystemBlockClosures {
   /// The topology-only periodic route retains native faces without a physical boundary object.
   PreparedPointPeriodicResidual periodic_full_at_point_prepared;
   PreparedPointPeriodicResidual periodic_flux_at_point_prepared;
+  /// Complete conservative face flux plus signed left/right path contributions.
+  PreparedPointPathResidual path_rhs_at_point_prepared;
   PreparedPointBoundaryResidual boundary_residual_at_point_prepared;
   PreparedPointJvp boundary_jvp_at_point_prepared;
   std::shared_ptr<BoundaryFluxTransform> external_boundary_flux;
@@ -274,6 +279,11 @@ typename SystemBlockClosures<Dim>::PreparedPointJvp make_prepared_boundary_jvp(
 /// The image crosses the loader boundary once and is committed as one structural mutation.  This
 /// prevents the former install-then-patch sequence (ghosts, conversion, recovery, dt bounds) from
 /// leaving a partially installed block after a later preparation failure.
+enum class PreparedPhysicalBoundaryRoute {
+  legacy_spatial,
+  path_residual,
+};
+
 template <int Dim>
 struct PreparedSystemBlock {
   static_assert(Dim >= 1 && Dim <= 3, "PreparedSystemBlock only supports dimensions 1, 2, and 3");
@@ -282,6 +292,10 @@ struct PreparedSystemBlock {
 
   std::string name;
   std::string provider_identity;
+  /// Selects the actual boundary consumer. A path residual owns its physical
+  /// ghost fill within path_rhs_at_point_prepared; it has no legacy residual/JVP.
+  PreparedPhysicalBoundaryRoute physical_boundary_route =
+      PreparedPhysicalBoundaryRoute::legacy_spatial;
   int ncomp = 0;
   /// Number of values in this block's local compact provider pack.  It is zero for a model with no
   /// providers; it is never a width request for a shared physical ``aux`` field.

@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='73b3bfaa9a6c22380a3eb500e216b97c1978725a36476dd4f4a573dddf87a5a2'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-da86e9e-path-reviewed/pytest.xml",
+    "tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_refusal_preserves_accepted_state_and_clock[fixed_dt]",
+    "tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_uniform_path_fixed_dt_uses_unit_numerical_budget",
+    "tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py::test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_state[guarded]"
+  ],
+  "returncode": 0,
+  "duration_seconds": 48.715431208955124,
+  "counts": {
+    "tests": 3,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "passed",
+  "identity_sha256": "d0ac1f160e73abb2d989f0fee09cef2fc193a6313fb123df149df8a6facdd410",
+  "log_sha256": "f70113c1d7a8a233fc44a8e5cecfc9168e31d8e812051e6c231d7df18c69f5e3"
+}

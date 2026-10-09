@@ -42,8 +42,14 @@ def _expression_data(value: Expr | ScalarExpr, *, qualified: bool = False) -> An
     if qualified:
         from pops.model._bind_expression import qualified_expression_key
 
-        key = qualified_expression_key(
-            value, where="resolved transport boundary expression")
+        try:
+            key = qualified_expression_key(
+                value, where="resolved transport boundary expression")
+        except (TypeError,NotImplementedError):
+            from pops.codegen.inferred_boundary_expression import lower_expression
+            cpp,leaves=lower_expression(value)
+            return {"protocol":"pops.inferred-boundary-expression@1",
+                "value":{"ordered_cpp":cpp,"qualified_leaves":list(leaves)}}
     else:
         key = _key(value)
     return {
@@ -183,12 +189,18 @@ def _analytic_time_handle(clock: Any) -> Handle:
 def _dependency_handles(
     values: tuple[Expr | ScalarExpr, ...], *, include_state: Handle | None = None
 ) -> tuple[tuple[Handle, ...], tuple[Handle, ...], tuple[Handle, ...], tuple[ParamHandle, ...]]:
-    references = _unique_references(
-        *(
-            value.declaration_references() if isinstance(value, Expr) else value.parameter_handles()
-            for value in values
-        )
-    )
+    from .interior_trace import InteriorTrace
+    def storage_references(value: Any) -> tuple[Handle, ...]:
+        # Resolve retains the primary Handle, but its authenticated interior view
+        # is not a ghost-region dependency or another producer in the DAG.
+        if isinstance(value, InteriorTrace):return ()
+        children=getattr(value,"__pops_ir_children__",None)
+        rows=children() if callable(children) else NotImplemented
+        if rows is NotImplemented:
+            rows=tuple(getattr(value,name) for name in ("a","b") if hasattr(value,name))
+        if rows:return _unique_references(*(storage_references(child) for child in rows))
+        return value.declaration_references() if isinstance(value,Expr) else value.parameter_handles()
+    references = _unique_references(*(storage_references(value) for value in values))
     states = [reference for reference in references if reference.kind == "state"]
     fields = [reference for reference in references if reference.kind == "field"]
     time = [reference for reference in references if reference.kind == "time"]
@@ -777,6 +789,7 @@ class ResolvedTransportBoundarySet:
     frame_id: str
     conditions: tuple[ResolvedTransportCondition, ...]
     plan: Any
+    periodic_faces: tuple[DomainBoundary, ...] = ()
 
     def __post_init__(self) -> None:
         from pops.mesh.boundaries import ResolvedBoundaryPlan
@@ -798,6 +811,33 @@ class ResolvedTransportBoundarySet:
         # same pure validator again so detached/tampered resolved values remain fail-closed.
         self._native_contract()
 
+    @staticmethod
+    def requires_expression_component(condition: ResolvedTransportCondition) -> bool:
+        deps=condition.provider.dependencies
+        from pops.fields.boundary_values import LogicalTimeValue
+        from .interior_trace import InteriorTrace
+        from pops.mesh.boundaries import ClosureMode
+        def reads_time(node: Any) -> bool:
+            if isinstance(node,(LogicalTimeValue,InteriorTrace)):return True
+            children=getattr(node,"__pops_ir_children__",None)
+            rows=children() if callable(children) else NotImplemented
+            if rows is NotImplemented:
+                rows=tuple(getattr(node,name) for name in ("a","b") if hasattr(node,name))
+            return any(reads_time(child) for child in rows)
+        return (condition.condition_type == "inflow"
+            and deps.characteristic.mode is ClosureMode.NONE
+            and not any(isinstance(row,ScalarExpr) for row in condition.values)
+            and bool(deps.states or deps.fields or deps.time
+                or any(reads_time(row) for row in condition.values)))
+
+    def inferred_component_bindings(self) -> tuple[Any, ...]:
+        from pops.codegen.inferred_boundary_expression import inferred_component
+        from pops.mesh.boundaries.component_binding import BoundaryComponentBinding
+        state,_,conditions,_,dimension=self._native_contract()
+        return tuple((BoundaryComponentBinding(condition.provider.handle,component),component)
+            for condition in conditions if self.requires_expression_component(condition)
+            for component in (inferred_component(condition,state,frame_id=self.frame_id,dimension=dimension),))
+
     def canonical_identity(self) -> dict[str, Any]:
         return {
             "schema_version": _SCHEMA_VERSION,
@@ -806,9 +846,41 @@ class ResolvedTransportBoundarySet:
             "frame_id": self.frame_id,
             "conditions": [row.canonical_identity() for row in self.conditions],
             "plan": self.plan.canonical_identity(),
+            "periodic_faces": [face.canonical_identity() for face in self.periodic_faces],
         }
 
     inspect = canonical_identity
+
+    def _periodic_native_rows(self) -> list[dict[str, Any]]:
+        """Authenticate ordinary periodic geometry separately from physical providers."""
+        if not isinstance(self.periodic_faces, tuple) or any(
+                not isinstance(face, DomainBoundary) for face in self.periodic_faces):
+            raise TypeError("periodic transport faces must be typed domain boundaries")
+        dimension = len(self.plan.topology.boundaries) // 2
+        endpoints = {}
+        for pair in self.plan.topology.periodic:
+            if pair.orientation.permutation != tuple(range(dimension)) \
+                    or pair.orientation.signs != (1,) * dimension:
+                raise NotImplementedError("TransportBoundarySet supports ordinary axis periodicity")
+            for boundary in (pair.source, pair.target):
+                ordinal = 2 * boundary.orientation.axis + (boundary.orientation.side.value == "upper")
+                if ordinal in endpoints:
+                    raise ValueError("periodic transport endpoint has duplicate orientation")
+                endpoints[ordinal] = boundary
+        rows = []
+        seen = set()
+        for face in self.periodic_faces:
+            ordinal = 2 * face.axis.index + (face.side.value == "upper")
+            if face.domain_geometry_id != self.domain_geometry_id \
+                    or ordinal not in endpoints or ordinal in seen:
+                raise ValueError("periodic transport geometry differs from its exact topology")
+            seen.add(ordinal)
+            rows.append(dict(ordinal=ordinal, condition_type="periodic", type="periodic",
+                producer=endpoints[ordinal].qualified_id, geometry=face.canonical_identity(),
+                representation="conservative", converter=None, values=[]))
+        if seen != set(endpoints):
+            raise ValueError("periodic transport topology has missing geometric endpoints")
+        return sorted(rows, key=lambda row: row["ordinal"])
 
     def ghost_plan_composer_capability(self) -> dict[str, Any]:
         """Advertise the narrow open composer protocol; this authority composes only itself."""
@@ -865,12 +937,15 @@ class ResolvedTransportBoundarySet:
                 "the installed native transport boundary provider supports dimensions 1, 2, and 3"
             )
         face_rows: list[ResolvedTransportCondition | None] = [None] * (2 * dimension)
+        periodic_ordinals = {row["ordinal"] for row in self._periodic_native_rows()}
         analytic_plan_clocks: set[str] = set()
         has_analytic = False
         depth = 0
         for condition in self.conditions:
             geometry = condition.geometry
             face = 2 * geometry.axis.index + (0 if geometry.side.value == "lower" else 1)
+            if face in periodic_ordinals:
+                raise ValueError("periodic transport face cannot carry a physical condition")
             if face_rows[face] is not None:
                 raise ValueError("native transport boundary contains overlapping face producers")
             face_rows[face] = condition
@@ -948,19 +1023,23 @@ class ResolvedTransportBoundarySet:
                         )
                     if (
                         dependencies.characteristic.mode is ClosureMode.NONE
-                        and (dependencies.states or dependencies.fields or dependencies.time)
+                        and self.requires_expression_component(condition)
                     ):
-                        raise NotImplementedError(
-                            "state/field/time-dependent PoPS Expr inflow requires a compiled "
-                            "boundary component"
-                        )
+                        from pops.codegen.inferred_boundary_expression import lower_expression
+                        if representation != "conservative":
+                            raise NotImplementedError(
+                                "inferred-boundary-expression-component@1 requires conservative output; "
+                                "primitive conversion needs an explicit versioned conversion contract")
+                        for expression in condition.values:
+                            lower_expression(expression,output_state=state)
                     for expression in condition.values:
                         if (
                             _expression_data(expression, qualified=True).get("protocol")
-                            != "pops.expr.key.v1"
+                            not in {"pops.expr.key.v1","pops.inferred-boundary-expression@1"}
                         ):
                             raise NotImplementedError("unsupported boundary expression protocol")
-        if any(row is None for row in face_rows):
+        if any(row is None and ordinal not in periodic_ordinals
+               for ordinal, row in enumerate(face_rows)):
             raise ValueError("native transport boundary has incomplete physical-face coverage")
         if len(analytic_plan_clocks) > 1:
             raise ValueError("one prepared analytic boundary plan cannot mix several logical Clocks")
@@ -1024,7 +1103,7 @@ class ResolvedTransportBoundarySet:
             "state": state.canonical_identity(),
             "ncomp": ncomp,
             "required_depth": depth,
-            "faces": [
+            "faces": sorted([
                 {
                     "ordinal": 2 * row.geometry.axis.index + (
                         0 if row.geometry.side.value == "lower" else 1),
@@ -1032,6 +1111,7 @@ class ResolvedTransportBoundarySet:
                     "producer": row.provider.qualified_id,
                     "geometry": row.geometry.canonical_identity(),
                     "type": (
+                        "external" if self.requires_expression_component(row) else
                         "characteristic_no_inflow"
                         if row.provider.dependencies.characteristic.mode
                         is not ClosureMode.NONE
@@ -1046,8 +1126,12 @@ class ResolvedTransportBoundarySet:
                         row, state)[0],
                     "converter": self._native_representation_contract(
                         row, state)[1],
+                    **({"value_protocol":"native-boundary-component-values@1"}
+                       if self.requires_expression_component(row) else {}),
                     "values": (
                         []
+                        if self.requires_expression_component(row)
+                        else []
                         if row.condition_type in {"no_flux", "outflow"}
                         else [
                             (
@@ -1060,7 +1144,7 @@ class ResolvedTransportBoundarySet:
                     ),
                 }
                 for row in conditions
-            ],
+            ] + self._periodic_native_rows(), key=lambda row: row["ordinal"]),
         }
 
     def runtime_boundary_data(self, params: Any) -> dict[str, Any]:
@@ -1085,6 +1169,11 @@ class ResolvedTransportBoundarySet:
 
         state, ncomp, conditions, depth, dimension = self._native_contract()
         face_rows: list[dict[str, Any] | None] = [None] * (2 * dimension)
+        for periodic_row in self._periodic_native_rows():
+            native_row = {key: value for key, value in periodic_row.items()
+                          if key != "condition_type"}
+            native_row.update(values=[0.0] * ncomp, analytic_programs=[], analytic_clock=None)
+            face_rows[native_row["ordinal"]] = native_row
         for condition in conditions:
             geometry = condition.geometry
             face = 2 * geometry.axis.index + (0 if geometry.side.value == "lower" else 1)
@@ -1123,8 +1212,8 @@ class ResolvedTransportBoundarySet:
                 else:
                     clock_id = None
                     analytic_programs = []
-                    values = []
-                    for index, expression in enumerate(condition.values):
+                    values = [0.0]*ncomp if self.requires_expression_component(condition) else []
+                    for index, expression in enumerate(() if self.requires_expression_component(condition) else condition.values):
                         data = _expression_data(expression, qualified=True)
                         value = eval_expression_key(
                             data["value"], env,
@@ -1216,8 +1305,12 @@ class TransportBoundarySet:
     """
 
     entries: tuple[tuple[DomainBoundary, tuple[Any, ...]], ...]
+    periodic: Any
 
-    def __init__(self, bindings: Any) -> None:
+    def __init__(self, bindings: Any, *, periodic: Any = None) -> None:
+        from pops.mesh.grid import PeriodicAxes
+        if periodic is not None and type(periodic) is not PeriodicAxes:
+            raise TypeError("TransportBoundarySet.periodic requires typed PeriodicAxes")
         if not isinstance(bindings, Mapping) or not bindings:
             raise TypeError("TransportBoundarySet requires a non-empty boundary mapping")
         rows = []
@@ -1245,11 +1338,13 @@ class TransportBoundarySet:
             raise ValueError("TransportBoundarySet contains duplicate geometric orientations")
         object.__setattr__(self, "entries", tuple(sorted(
             rows, key=lambda row: row[0].canonical_id)))
+        object.__setattr__(self, "periodic", periodic)
 
     def inspect(self) -> dict[str, Any]:
         return {
             "schema_version": _SCHEMA_VERSION,
             "authority_type": "transport_boundary_set_authoring",
+            "periodic": None if self.periodic is None else self.periodic.to_dict(),
             "bindings": [
                 {
                     "boundary": boundary.canonical_identity(),
@@ -1261,8 +1356,13 @@ class TransportBoundarySet:
 
     @staticmethod
     def _requirements(context: Any) -> dict[Handle, BoundaryStencilRequirement]:
+        from pops.numerics.state_storage import StateStorage
         accumulated: dict[Handle, dict[str, Any]] = {}
         for row in context.rates:
+            # A declared local-source partition shares the evolved state storage;
+            # its validated contract contains no hyperbolic flux or boundary stencil.
+            if isinstance(row.method, StateStorage):
+                continue
             state = row.method.variables.options.get("state")
             _state(state, where="FiniteVolume.variables state")
             if not state.is_resolved:
@@ -1290,6 +1390,8 @@ class TransportBoundarySet:
             BoundaryProviderRegistry,
             BoundarySide,
             BoundaryTopology,
+            PeriodicIdentification,
+            PeriodicOrientation,
         )
 
         for attribute in ("owner", "block", "frame", "rates", "resolve"):
@@ -1305,8 +1407,13 @@ class TransportBoundarySet:
             raise TypeError(
                 "TransportBoundarySet requires a frame exposing typed boundaries.all")
         authored = tuple(boundary for boundary, _ in self.entries)
-        missing = set(expected) - set(authored)
-        extra = set(authored) - set(expected)
+        periodic_axes = () if self.periodic is None else self.periodic.axes
+        if any(axis not in context.frame.axes for axis in periodic_axes):
+            raise ValueError("periodic transport axis belongs to another frame")
+        physical_geometry = tuple(face for face in expected if face.axis not in periodic_axes)
+        periodic_geometry = tuple(face for face in expected if face.axis in periodic_axes)
+        missing = set(physical_geometry) - set(authored)
+        extra = set(authored) - set(physical_geometry)
         if missing or extra:
             raise ValueError(
                 "transport boundary geometry coverage mismatch: missing=%s extra=%s"
@@ -1325,11 +1432,20 @@ class TransportBoundarySet:
                 owner=context.owner,
                 orientation=BoundaryOrientation(geometry.axis.index, side),
             )
+        pairs = []
+        for axis in periodic_axes:
+            lower = next(face for face in periodic_geometry
+                         if face.axis == axis and face.side is DomainBoundarySide.LOWER)
+            upper = next(face for face in periodic_geometry
+                         if face.axis == axis and face.side is DomainBoundarySide.UPPER)
+            pairs.append(PeriodicIdentification(low_level[lower], low_level[upper],
+                PeriodicOrientation(tuple(range(len(context.frame.axes))),
+                                    (1,) * len(context.frame.axes))))
         topology = BoundaryTopology(
             owner=context.owner,
             boundaries=tuple(low_level.values()),
-            periodic=(),
-            physical=tuple(low_level.values()),
+            periodic=tuple(pairs),
+            physical=tuple(low_level[face] for face in physical_geometry),
         )
         requirements = self._requirements(context)
         resolved_conditions = []
@@ -1355,7 +1471,7 @@ class TransportBoundarySet:
                     requirement=requirement,
                 ))
         expected_coverage = {
-            (geometry, state) for geometry in expected for state in requirements
+            (geometry, state) for geometry in physical_geometry for state in requirements
         }
         missing_coverage = expected_coverage - covered
         extra_coverage = covered - expected_coverage
@@ -1378,6 +1494,7 @@ class TransportBoundarySet:
             frame_id=context.frame.canonical_id,
             conditions=tuple(resolved_conditions),
             plan=plan,
+            periodic_faces=periodic_geometry,
         )
 
 

@@ -29,6 +29,7 @@ from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
 def _component(
     tmp_path, *, name, interface, source_suffix=b"", dimension=2,
     manifest_parameters=(), instance_parameters=None, features=(), device="cpu",
+    target_variants=None,
 ):
     root = tmp_path / name
     root.mkdir(parents=True)
@@ -43,7 +44,7 @@ def _component(
         },
         interfaces=interface.manifest_declarations(),
         parameters=manifest_parameters,
-        target={"variants": [{
+        target={"variants": target_variants if target_variants is not None else [{
             "dimension": dimension,
             "scalar": "float64",
             "device": device,
@@ -117,7 +118,7 @@ def test_external_field_solver_accepts_a_3d_pair_then_uses_the_domain_rank(tmp_p
     provider = ExternalFieldSolver(topology=topology, solver=solver)
 
     assert provider.capabilities().to_dict()["host"] is True
-    with pytest.raises(LoweringRejection, match="compatible Dim=2 float64 CPU targets"):
+    with pytest.raises(LoweringRejection, match="compatible Dim=2 float64 native targets"):
         capture_field_plans(
             _case(provider), lambda value: value, target="system",
             layout=Uniform(cartesian_grid(n=8, periodic=False)),
@@ -143,11 +144,11 @@ def test_external_pair_survives_field_lowering_with_exact_component_authorities(
     provider_authority = external.to_data()["provider"]
     assert provider_authority["use_policy"] == {
         "policy_id": "pops.fields.external-field-solver.use",
-        "version": 5,
+        "version": 6,
         "capabilities": {
             "provider_id": "pops.fields.external-field-solver",
             "provider_version": 2,
-            "adapter_identity": ("pops.fields.external-field-solver.system-amr-host@3"),
+            "adapter_identity": ("pops.fields.external-field-solver.system-amr-native-memory@4"),
             "targets": ["system", "amr_system"],
             "layout_kinds": ["uniform", "amr"],
             "max_levels": None,
@@ -160,7 +161,10 @@ def test_external_pair_survives_field_lowering_with_exact_component_authorities(
             "hierarchy_materialization": True,
             "amr_provider_bridge": True,
             "binary_coarse_fine_coverage": True,
-            "execution": "host-serial-or-declared-mpi-hierarchy-batch",
+            "execution": "native-memory-serial-or-declared-mpi-hierarchy-batch",
+            "memory_spaces": ["host", "device", "managed"],
+            "device_precision": "float64",
+            "backend_admission": "exact-native-component-pair-target-and-runtime-context",
             "components": ["FieldTopology@2", "FieldSolver@2"],
         },
     }
@@ -316,6 +320,87 @@ def test_external_field_solver_reports_mpi_only_when_both_host_variants_declare_
     mpi_provider = ExternalFieldSolver(topology=topology, solver=solver_mpi)
     assert mpi_provider.capabilities().to_dict()["mpi"] is True
     assert mpi_provider.capabilities().to_dict()["gpu"] is False
+
+
+@pytest.mark.parametrize("device", ("cuda", "hip", "sycl", "openmptarget"))
+def test_external_field_solver_declares_only_a_common_native_device_target(tmp_path, device):
+    topology = _component(
+        tmp_path, name="topology_device", interface=interfaces.FieldTopology,
+        device=device, features=("mpi",))
+    solver = _component(
+        tmp_path, name="solver_device", interface=interfaces.FieldSolver,
+        device=device, features=("mpi",))
+    provider = ExternalFieldSolver(topology=topology, solver=solver)
+    capabilities = provider.capabilities().to_dict()
+    assert capabilities["gpu"] is True  # declaration/admission, never a hardware run receipt
+    assert capabilities["host"] is False
+    assert capabilities["mpi"] is True
+    plan = capture_field_plans(
+        _case(provider), lambda value: value, target="system",
+        layout=Uniform(cartesian_grid(n=8, periodic=False)),
+    )["potential"]
+    plan.require_component_inputs((topology, solver))
+    for interface, component in ((interfaces.FieldTopology, topology), (interfaces.FieldSolver, solver)):
+        assert interface.resolve_native_target(component, dimension=2, device=device)["device"] == device
+        with pytest.raises(ValueError, match="one exact supported"):
+            interface.resolve_native_target(component, dimension=2, device="cpu")
+
+
+def test_external_field_solver_refuses_cross_backend_and_cross_rank_pairs(tmp_path):
+    topology = _component(
+        tmp_path, name="topology_cuda", interface=interfaces.FieldTopology, device="cuda")
+    solver = _component(
+        tmp_path, name="solver_hip", interface=interfaces.FieldSolver, device="hip")
+    with pytest.raises(ValueError, match="share no supported native execution target"):
+        ExternalFieldSolver(topology=topology, solver=solver)
+    other_rank = _component(
+        tmp_path, name="solver_cuda_3d", interface=interfaces.FieldSolver, device="cuda", dimension=3)
+    with pytest.raises(ValueError, match="share no supported native dimension"):
+        ExternalFieldSolver(topology=topology, solver=other_rank)
+
+
+def test_external_field_solver_device_mpi_requires_both_exact_target_features(tmp_path):
+    topology = _component(
+        tmp_path, name="topology_cuda_mpi", interface=interfaces.FieldTopology,
+        device="cuda", features=("mpi",))
+    solver = _component(
+        tmp_path, name="solver_cuda_serial", interface=interfaces.FieldSolver, device="cuda")
+    capabilities = ExternalFieldSolver(topology=topology, solver=solver).capabilities().to_dict()
+    assert capabilities["gpu"] is True
+    assert capabilities["mpi"] is False
+
+
+def test_external_field_solver_does_not_combine_disjoint_gpu_rank_or_mpi_variants(tmp_path):
+    topology = _component(
+        tmp_path, name="topology_matrix", interface=interfaces.FieldTopology,
+        target_variants=[
+            {"dimension": 2, "scalar": "float64", "device": "cpu", "features": []},
+            {"dimension": 1, "scalar": "float64", "device": "cuda", "features": ["mpi"]},
+        ])
+    solver = _component(
+        tmp_path, name="solver_matrix", interface=interfaces.FieldSolver,
+        target_variants=[
+            {"dimension": 2, "scalar": "float64", "device": "cpu", "features": ["mpi"]},
+            {"dimension": 3, "scalar": "float64", "device": "cuda", "features": ["mpi"]},
+        ])
+    provider = ExternalFieldSolver(topology=topology, solver=solver)
+    capabilities = provider.capabilities().to_dict()
+    assert capabilities["host"] is True
+    assert capabilities["gpu"] is False
+    assert capabilities["mpi"] is False
+    plan = capture_field_plans(
+        _case(provider), lambda value: value, target="system",
+        layout=Uniform(cartesian_grid(n=8, periodic=False)),
+    )["potential"]
+    plan.require_component_inputs((topology, solver))
+
+
+def test_other_native_protocols_keep_their_existing_cpu_scope(tmp_path):
+    from pops.external._package_data import ComponentPackageError
+    component = _component(
+        tmp_path, name="flux_cuda", interface=interfaces.NumericalFlux, device="cuda")
+    with pytest.raises(ComponentPackageError, match="supported float64 target"):
+        interfaces.NumericalFlux.native_target_variants(component)
 
 
 def test_external_field_solver_refuses_unsupported_hierarchy_policy_at_resolve(tmp_path):

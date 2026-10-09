@@ -13,15 +13,15 @@ _codegen_exprs, _live_prims, _prim_block, _jac_entries
 """
 from __future__ import annotations
 
+from .cpp_strings import cpp_string_expression
+
 from collections.abc import Mapping
-import json
 from typing import Any
 
 from pops._cartesian_axes import canonical_axis_mapping
 from pops.codegen.cpp_writer import (
     _cse_emit,
     _cpp_expand,
-    _cpp_identifier,
     _count_cons_denoms,
     _recip_rewrite,
 )
@@ -95,13 +95,13 @@ def _exact_brick_contract(
     lines = [
         "  [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() "
         "noexcept {",
-        "    return {%s, 1};" % json.dumps("pops.codegen.%s-brick" % family),
+        "    return {%s, 1};" % cpp_string_expression("pops.codegen.%s-brick" % family),
         "  }",
         "  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {",
         "    contract.text(\"pops.codegen.exact-physics-brick\")",
         "        .scalar(std::uint32_t{1})",
-        "        .text(%s)" % json.dumps(model_hash),
-        "        .text(%s)" % json.dumps(slot),
+        "        .text(%s)" % cpp_string_expression(model_hash),
+        "        .text(%s)" % cpp_string_expression(slot),
         "        .scalar(std::int32_t{%d})" % dimension,
         "        .scalar(std::int32_t{%d});" % n_vars,
     ]
@@ -116,6 +116,9 @@ def _exact_brick_contract(
         ]
     else:
         lines.append("    contract.scalar(std::int32_t{0});")
+    path = getattr(model, "_path_conservative", None)
+    if family == "hyperbolic" and path is not None:
+        lines.append("    contract.text(%s);" % cpp_string_expression(path["identity"]))
     lines += ["  }", ""]
     return lines
 
@@ -129,9 +132,11 @@ def _codegen_exprs(model: Any, exprs: Any, cse: Any, real: str = "pops::Real", i
     """(CSE local lines, [C++ per expr]). If cse, factor the common subexpressions
     (H, c...) into ``cseK_`` locals ; otherwise inline each expression via to_cpp."""
     from pops._ir.native_call import native_functions
-    exprs = list(exprs)
+    from pops._ir.control_expr import has_evaluation_boundary
+    from pops._ir.primitive_expansion import expand_evaluation_boundaries
+    exprs = list(expand_evaluation_boundaries(list(exprs), model.prim_defs))
     # A native result is a joint, fallible evaluation even when scalar CSE is disabled.
-    if cse or native_functions(exprs) or return_native_statuses:
+    if cse or native_functions(exprs) or return_native_statuses or has_evaluation_boundary(exprs):
         return _cse_emit(exprs, real, indent, return_native_statuses=return_native_statuses)
     return [], [_cpp_expand(e, {}, None) for e in exprs]
 
@@ -141,7 +146,9 @@ def _live_prims(model: Any, exprs: Any, seed: Any = ()) -> set:
     Closure over prim_defs: a live primitive pulls in its own primitive dependencies.
     Used to emit in a method only the primitives actually used (dead-code elimination):
     the live expressions stay identical, so the values are bit-identical."""
+    from pops._ir.primitive_expansion import expand_evaluation_boundaries
     prim = model.prim_defs
+    exprs = expand_evaluation_boundaries(exprs, prim)
     live = set()
     stack = [n for n in seed if n in prim]
     stack.extend(name for name in _dependencies(exprs) if name in prim)
@@ -150,7 +157,8 @@ def _live_prims(model: Any, exprs: Any, seed: Any = ()) -> set:
         if nm in live:
             continue
         live.add(nm)
-        stack.extend(name for name in _dependencies(prim[nm]) if name in prim)
+        recipe = expand_evaluation_boundaries(prim[nm], prim)
+        stack.extend(name for name in _dependencies(recipe) if name in prim)
     return live
 
 
@@ -159,9 +167,18 @@ def _prim_block(model: Any, live: Any = None, hoist: bool = False) -> list:
     declares only the live primitives. @p hoist: hoists at the top the reciprocal of the
     recurring conservative denominators (>= 2 uses) and replaces those divisions by
     products (OPT-IN, changes the rounding). Without @p hoist and with live=None, historical output."""
-    items = [(p, e) for p, e in model.prim_defs.items() if live is None or p in live]
+    from pops._ir.primitive_expansion import expand_evaluation_boundaries
+    from .cpp_symbols import variable_identifier
+    from pops._ir.control_expr import has_evaluation_boundary
+    items = [(p, expand_evaluation_boundaries(e, model.prim_defs))
+             for p, e in model.prim_defs.items() if live is None or p in live]
+    if any(has_evaluation_boundary(e) for _, e in items):
+        if hoist:
+            raise ValueError("reciprocal hoisting cannot cross a scientific evaluation boundary")
+        return ["    const pops::Real %s = %s;" % (variable_identifier(p,'prim'), _checked_inline_expr(e))
+                for p, e in items]
     if not hoist:
-        return ["    const pops::Real %s = %s;" % (_cpp_identifier(p), _cpp_expand(e, {}, None))
+        return ["    const pops::Real %s = %s;" % (variable_identifier(p,'prim'), _cpp_expand(e, {}, None))
                 for p, e in items]
     cons_set = set(model.cons_names)
     counts = {}
@@ -169,13 +186,22 @@ def _prim_block(model: Any, live: Any = None, hoist: bool = False) -> list:
         _count_cons_denoms(e, cons_set, counts)
     inv = [n for n in model.cons_names if counts.get(n, 0) >= 2]  # stable cons order
     inv_set = set(inv)
-    lines = ["    const pops::Real inv_%s = pops::Real(1) / %s;" % (_cpp_identifier(n),
-                                                                   _cpp_identifier(n))
+    lines = ["    const pops::Real %s = pops::Real(1) / %s;" % (variable_identifier("inv_"+n,"hoist"),
+                                                                variable_identifier(n,"cons"))
              for n in inv]
-    lines += ["    const pops::Real %s = %s;" % (_cpp_identifier(p),
+    lines += ["    const pops::Real %s = %s;" % (variable_identifier(p,"prim"),
                                                 _cpp_expand(_recip_rewrite(e, inv_set), {}, None))
               for p, e in items]
     return lines
+
+
+def _checked_inline_expr(expression):
+    """One scoped common-emitter result, including conditional finite observations."""
+    from pops._ir.control_expr import has_evaluation_boundary
+    if not has_evaluation_boundary(expression):
+        return _cpp_expand(expression, {}, None)
+    lines, (value,) = _cse_emit([expression], "pops::Real", "")
+    return "([&]() { %s return %s; }())" % (" ".join(lines), value)
 
 
 def _jac_entries(model: Any) -> list:

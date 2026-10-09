@@ -627,6 +627,14 @@ def build_operator_provider_pack(module: Any, operator: Any) -> ProviderPack:
     spaces = []
     for input_space in operator.signature.inputs:
         if getattr(input_space, "kind", None) == "field":
+            # An exact empty FieldSpace authenticates input_fields at this SSA
+            # point; it has no storage components to look up in ProviderPack.
+            # Unknown/stale declarations still take the strict select_spaces path.
+            declared = module.field_spaces().get(input_space.name)
+            if (declared is not None and not declared.components
+                    and type(input_space) is type(declared)
+                    and input_space.to_data() == declared.to_data()):
+                continue
             spaces.append(("field", input_space.name))
     owner_qid = str(module.owner_path.canonical())
     requirements = getattr(operator, "requirements", {})

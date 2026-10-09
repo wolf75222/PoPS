@@ -394,6 +394,71 @@ TEST(AnalyticExpression, ProgramViewRunsInsideRankedKokkosKernelsInOneTwoAndThre
   check_program_view_kernel<3>();
 }
 
+namespace {
+template <int Dim>
+void check_expression_constant_and_polynomial_averages() {
+  const auto box = pops::Box<Dim>::from_extents(uniform_extent<Dim>(8));
+  const auto geometry = unit_geometry(box);
+  const auto c = [](Real value) { return AnalyticNode::constant(value); };
+  const auto x = AnalyticNode::x();
+  const std::array constants{Real(.1), Real(-.7), Real(1), Real(3.25),
+                            std::numeric_limits<Real>::min(), Real(1e20)};
+  for (Real value : constants) {
+    // Equivalent public expressions in opposite operand orders, not literals.
+    for (bool reverse : {false, true}) {
+      const auto zero = binary(AnalyticOp::Mul, c(0), unary(AnalyticOp::Cos, x));
+      const auto expression = reverse ? binary(AnalyticOp::Add, zero, c(value))
+                                      : binary(AnalyticOp::Add, c(value), zero);
+      const auto program = compile_analytic_expression(expression);
+      EXPECT_GT(program.view().instruction_count, 1);
+      const pops::analytic::detail::AnalyticCellAverage<Dim> average{program.view(), geometry};
+      for_each_host_index(box, [&](const pops::Index<Dim>& index) {
+        EXPECT_EQ(average(index), value);  // exact; arbitrary constants, no ULP guard.
+      });
+    }
+  }
+  // Finite opposite-sign samples must not overflow an affine reference
+  // difference. The odd function has independently known mean zero.
+  pops::RealVector<Dim> lower{}, upper{};
+  for (int axis = 0; axis < Dim; ++axis) { lower[axis] = Real(-1); upper[axis] = Real(1); }
+  const auto wide_geometry = pops::Geometry<Dim>::from_bounds(
+      pops::Box<Dim>::from_extents(uniform_extent<Dim>(1)), lower, upper);
+  const Real amplitude = std::numeric_limits<Real>::max() * Real(.8);
+  for (bool reordered : {false, true}) {
+    const auto expression = reordered
+        ? binary(AnalyticOp::Sub, binary(AnalyticOp::Mul, c(amplitude),
+                     binary(AnalyticOp::Add, x, c(.25))), c(amplitude * Real(.25)))
+        : binary(AnalyticOp::Mul, c(amplitude), x);
+    const auto program = compile_analytic_expression(expression);
+    const pops::analytic::detail::AnalyticCellAverage<Dim> average{program.view(), wide_geometry};
+    const Real actual = average(pops::Index<Dim>{});
+    EXPECT_TRUE(std::isfinite(actual));
+    EXPECT_LE(std::abs(actual / amplitude), Real(128) * std::numeric_limits<Real>::epsilon());
+  }
+  // An independent antiderivative oracle for degree-six: the 4-point rule is
+  // exact through degree seven. Reordering addition must preserve that accuracy.
+  for (bool reverse : {false, true}) {
+    const auto power = binary(AnalyticOp::Pow, x, c(6));
+    const auto expression = reverse ? binary(AnalyticOp::Add, power, c(.3))
+                                    : binary(AnalyticOp::Add, c(.3), power);
+    const auto program = compile_analytic_expression(expression);
+    const pops::analytic::detail::AnalyticCellAverage<Dim> average{program.view(), geometry};
+    for_each_host_index(box, [&](const pops::Index<Dim>& index) {
+      const Real lo = geometry.face_coordinate(0, index[0]);
+      const Real hi = geometry.face_coordinate(0, index[0] + 1);
+      const Real expected = Real(.3) + (std::pow(hi, 7) - std::pow(lo, 7)) / (7 * (hi - lo));
+      EXPECT_NEAR(average(index), expected, Real(2e-14));
+    });
+  }
+}
+}  // namespace
+
+TEST(AnalyticExpression, ExpressionCellAveragesPreserveConstantsAndPolynomialMomentsOnHost) {
+  check_expression_constant_and_polynomial_averages<1>();
+  check_expression_constant_and_polynomial_averages<2>();
+  check_expression_constant_and_polynomial_averages<3>();
+}
+
 TEST(AnalyticExpression, InitialMaterializersAreRankGenericAndCompleteBeforeProgramsExpire) {
   check_initial_materializers<1>();
   check_initial_materializers<2>();

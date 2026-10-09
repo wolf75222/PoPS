@@ -76,6 +76,10 @@ class _Sim:
     def checkpoint_topology_epoch(self):
         return 7
 
+    def checkpoint_tag_selection_contract(self):
+        return [["pops.amr.tag-selection@1", "1"], ["tag-buffer", "0", "0"],
+                ["parent-coverage", "0", "2", "2", "1", "2", "2", "1"]]
+
     def checkpoint_temporal_relations(self):
         return [[0, 1, 2, 1, "integral_only"], [1, 2, 3, 1, "integral_only"]]
 
@@ -213,7 +217,7 @@ def _payload(sim=None):
 
 def test_contract_names_guarantee_relations_qualified_histories_and_transfer_plans():
     contract = contract_for(_Sim())
-    assert contract["schema_version"] == 7
+    assert contract["schema_version"] == 8
     assert contract["guarantee"] == "bit_identical_accepted_state"
     assert contract["ledger"]["accepted_entries"] == 1
     assert contract["ledger"]["transaction_depth"] == 0
@@ -1168,3 +1172,41 @@ def test_rank_change_restart_rolls_back_after_hierarchy_rebuild_failure(monkeypa
     assert runtime._step_controller == "accepted-step-controller"
     assert "_checkpoint_restart_python_snapshot" not in runtime.__dict__
     assert "_checkpoint_restart_committed" not in runtime.__dict__
+
+
+@pytest.mark.parametrize("legacy", (True, False))
+def test_tag_selection_contract_refused_before_native_restart(legacy):
+    payload = _payload()
+    contract = json.loads(str(payload["amr_accepted_contract"]))
+    if legacy:
+        contract.pop("tag_selection")
+        contract["schema_version"] = 7
+    else:
+        contract["tag_selection"][1][1] = "1"
+    payload["amr_accepted_contract"] = json.dumps(contract)
+    with pytest.raises((TypeError, ValueError), match="exact schema|tag_selection"):
+        preflight_contract(_Sim(), payload)
+
+
+class _StrongHaloSim(_Sim):
+    def checkpoint_accepted_halo_contract(self):
+        return [["pops.amr.accepted-halo-preparation@1", "candidate_accepted_clock", "all_state_components", "1", "1"]]
+
+
+def test_explicit_accepted_halo_contract_changes_checkpoint_schema_and_refuses_legacy_preflight():
+    # SOURCE dictionary protocol check only; no Native materialization claim.
+    current = contract_for(_StrongHaloSim())
+    assert current["schema_version"] == 9
+    assert contract_for(_Sim())["schema_version"] == 8
+    with pytest.raises(ValueError, match="accepted_halo|schema_version"):
+        preflight_contract(_StrongHaloSim(), _payload())
+
+
+@pytest.mark.parametrize("extent", ["0", "-1", "01", "2147483648", True])
+def test_accepted_halo_exact_extent_refuses_before_restart_transaction(extent):
+    payload = _payload()
+    contract = contract_for(_StrongHaloSim())
+    contract["accepted_halo"][0][3] = extent
+    payload["amr_accepted_contract"] = json.dumps(contract)
+    with pytest.raises(TypeError, match="accepted halo"):
+        preflight_contract(_StrongHaloSim(), payload)

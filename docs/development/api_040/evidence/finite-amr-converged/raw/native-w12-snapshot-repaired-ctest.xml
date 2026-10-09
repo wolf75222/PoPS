@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)"
+	tests="3"
+	failures="0"
+	disabled="0"
+	skipped="0"
+	hostname=""
+	time="5"
+	timestamp="2026-09-29T09:51:57"
+	>
+	<testcase name="ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock" classname="ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock" time="4.06953" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+[       OK ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock (17 ms)
+[----------] 1 test from ProgramRuntime (17 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (17 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox" classname="ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox" time="0.581892" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+[       OK ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox (10 ms)
+[----------] 1 test from ProgramRuntime (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_program_runtime_np2" classname="test_program_runtime_np2" time="0.618714" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;cpp-target:test_program_runtime;medium;mpi"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally:ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional:ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock:ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox:ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal:ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource:ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep:ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication:ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption:ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+[==========] Running 10 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 10 tests from ProgramRuntime
+[ RUN      ] ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource
+Note: Google T...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+</testsuite>

@@ -31,11 +31,8 @@ auto prepare_history_mutation_collectively_(Build&& build, Contract&& contract,
   } catch (...) {
     local_error = std::current_exception();
   }
-  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && local_error)
-      std::rethrow_exception(local_error);
-    throw std::runtime_error(std::string(operation) + " preparation failed collectively");
-  }
+  collectively_rethrow_exception(local_error, lane,
+                                 std::string(operation) + " preparation failed collectively");
   const std::string& exact_contract = std::invoke(contract, *result);
   if (!all_ranks_agree_exact_ordered_byte_pairs({{operation, exact_contract}}, lane))
     throw std::runtime_error(std::string(operation) +
@@ -258,10 +255,9 @@ std::pair<FluxExpression, std::uint64_t> rehydrated_history_flux_expression_(
     basis.point.physical_time =
         basis.window.begin.physical_time + basis.point.stage_fraction.value() * current_dt_;
     for (const auto& sample : basis.shared_samples) {
-      if (!sample || sample->level != active_level_)
-        throw std::invalid_argument(
-            "retained shared flux sample cannot be projected across levels");
-      facade_->authenticate_prepared_amr_interface_sample(*sample);
+      if (!sample)
+        throw std::invalid_argument("retained shared flux sample is absent");
+      (void)prepare_shared_flux_projection_(basis, *sample);
     }
     // Accepted regrid preparation has already queried the immutable physical archive for the new
     // interface geometry. A lag read only rebases clocks/identities; it performs no payload MPI.
@@ -609,9 +605,11 @@ void prepare_remapped_history_flux_faces_(
             throw std::logic_error("AMR history remap has an absent flux basis");
           candidate = std::make_shared<FluxBasis>(*term.basis);
           candidate->level = level;
-          for (const auto& sample : candidate->shared_samples)
-            if (!sample || sample->level != level)
-              throw std::invalid_argument("AMR shared history flux cannot transfer across levels");
+          for (const auto& sample : candidate->shared_samples) {
+            if (!sample)
+              throw std::invalid_argument("AMR shared history flux sample is absent");
+            (void)prepare_shared_flux_projection_(*candidate, *sample);
+          }
         });
         if (candidate->history_snapshot) {
           const CacheKey cache{candidate->history_snapshot->identity, level};

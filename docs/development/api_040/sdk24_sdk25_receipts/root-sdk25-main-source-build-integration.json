@@ -1,0 +1,173 @@
+{
+  "actual_main_native_execution": false,
+  "build_receipt_sha256": "c0358e69f3491a8a9a4e9af4b4ab70d84ad4af5d8c014265149114dd2393a83a",
+  "changed_git_and_actual_filesystem_files": {
+    "include/pops/runtime/checkpoint/uniform_migration_authority.hpp": {
+      "bytes": 4016,
+      "sha256": "ca06319f081a568f5514e4578d24950b54467cd83e77a075ae2d3d0415787b60"
+    },
+    "include/pops/runtime/system.hpp": {
+      "bytes": 120109,
+      "sha256": "da7fbf364f4a1f1f4186eb171bbeb171b523bcdf9e7162de6b4487930bb93fdf"
+    },
+    "include/pops_headers.manifest": {
+      "bytes": 21850,
+      "sha256": "3fd21570aefd22546b331478963c544692dd86d0e89560919225483da4624b36"
+    },
+    "python/bindings/core/init/init_system.cpp": {
+      "bytes": 102636,
+      "sha256": "686aa892a1f782ddfa80954967483e4435e35d3ada635ffa4718de8e1b1ba7e1"
+    },
+    "python/pops/codegen/_checkpoint_migration_uniform_v2.py": {
+      "bytes": 54029,
+      "sha256": "217479655296702b8020865a66c046d56dc5b008bddc9e92de1b532ab78493c9"
+    },
+    "python/pops/runtime/_checkpoint_program_diagnostics.py": {
+      "bytes": 6391,
+      "sha256": "622b997d8d5b9d6be9e99a3b60561926a5eb83917013724868bba9d62db524f2"
+    },
+    "python/pops/runtime/_system_io.py": {
+      "bytes": 39528,
+      "sha256": "5b6e0281410b12a35c128fd6c3442a4f61040882058c82685f6f20453534c77a"
+    },
+    "src/runtime/system/system_program.cpp": {
+      "bytes": 87163,
+      "sha256": "b472d105ea9ee04a09bad2b3e3a06949448058d2d1d294b8521c65c39e57437b"
+    },
+    "tests/python/integration/runtime/test_public_evolved_original_stage.py": {
+      "bytes": 23733,
+      "sha256": "c61b56d50a462b9ffdb1349377a6642fb788eb199758d713c1e0aab453afefb4"
+    },
+    "tests/python/integration/runtime/test_public_evolved_stage_amr_v3.py": {
+      "bytes": 9207,
+      "sha256": "585bc759151306703fb0b481af54b8ae0b94e368bc2c336fef91e8ef53f65df0"
+    },
+    "tests/python/support/uniform_checkpoint9_capture.py": {
+      "bytes": 6840,
+      "sha256": "1969806772ffa4df6431b88f9c3de41360896f1619a75ebb6d81dc01dd1ef676"
+    },
+    "tests/review/fixtures/sdk24-migration732309-authority9.npz": {
+      "bytes": 18864,
+      "sha256": "3841c3079edba2fdea4dd3c38c37a4775708d111c2ca0140fbc9fb78ed2c557f"
+    },
+    "tests/review/sol61_cp9_named_block_join.md": {
+      "bytes": 3315,
+      "sha256": "7a42c18ed30153bd65965c0ae2414b0d30af52120e0ca630edacae8f3d1d4fa9"
+    },
+    "tests/review/sol61_evolved_epoch_nonauthor.md": {
+      "bytes": 1496,
+      "sha256": "487f3307f5f263fb950ce21f7cf4ef475f78607fc5fd5973dfb8a58a2ffb77e8"
+    },
+    "tests/review/sol61_evolved_replay_epoch_consumer.json": {
+      "bytes": 521,
+      "sha256": "1bda0c4eed4945b4cef35ab13a03d1e4abbae66ec8af482f9778b98e2b4359fe"
+    },
+    "tests/review/sol61_evolved_replay_epoch_consumer.md": {
+      "bytes": 1896,
+      "sha256": "e02503b9fe14dbaebe59fcf5cdf44f09fe724dd4ee21e7bd94ba7ef03859b682"
+    },
+    "tests/review/sol61_migration_current_storage_authority.md": {
+      "bytes": 2815,
+      "sha256": "d083b000b2304a56898284094ddd4049702fd2b89f2cfa773ed3a23440e0873c"
+    },
+    "tests/review/sol61_provisional_diagnostic_capture.md": {
+      "bytes": 2973,
+      "sha256": "6db5ef2c47970a5b6484ff251d81ce325f4765123a95ddfb9518973bb5a6d350"
+    },
+    "tests/review/sol61_uniform_checkpoint9_offline_v3.py": {
+      "bytes": 10988,
+      "sha256": "38467a320844dd46d8ff440bc68eaf753798efbed8f33f3342f5bc2a7b0580d7"
+    },
+    "tests/review/test_sol61_cp9_named_block_join.py": {
+      "bytes": 3235,
+      "sha256": "4802dcd5838940dda0c3641c081488f790079e5f4af06e12b11915379c0275c3"
+    },
+    "tests/review/test_sol61_evolved_epoch_nonauthor.py": {
+      "bytes": 2312,
+      "sha256": "ce9e1a42356b3a19999538aa532e3e5acff6730c45d69d53cae502e5bf7e2876"
+    },
+    "tests/review/test_sol61_evolved_replay_epoch_consumer.py": {
+      "bytes": 3284,
+      "sha256": "b646bb472d42a3363d95dbdba16df72d9191ed6387df2dfb4af12742ba6ad68f"
+    },
+    "tests/review/test_sol61_migration_current_storage_authority.py": {
+      "bytes": 11324,
+      "sha256": "00912ed281e65f62207cccf908fb3295d8b305aa7fd16083f4da6c46ba3fa2a0"
+    },
+    "tests/review/test_sol61_provisional_diagnostic_capture.py": {
+      "bytes": 5799,
+      "sha256": "9d48bae45459938356a6912cecd85c89770b9ff92975fc8524c6ad324070900e"
+    }
+  },
+  "ci_qualified": false,
+  "header_signature": "8ee6d09b428cfe172d08008253c2ea490eb733f9b1458f6f2ed8da1584effbf5",
+  "main_and_native_tracked_clean": true,
+  "main_commit": "8be7294199266d81eeff9a9af05aa4582a0fcf55",
+  "native_loader_cases_excluded_from_source_cohort": 17,
+  "native_sha256": "a661f3b1a7440850985d44f4b3936a94edd7059e570a20633bbe3f96bc64b97e",
+  "native_source_freeze": "717936347672aeb4bc9146e2b3065bfd42cf1ef5",
+  "production_git_blobs_equal_to_actual_remote_build": 1192,
+  "schema": "root.sdk25-main-source-build-integration@1",
+  "scope": "Main production and changed test sources equal to ROMEO SDK25; Source79 retained; native receptions are separate receipts",
+  "source_cohort": {
+    "ci_qualification": false,
+    "command": [
+      "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/bin/python",
+      "-c",
+      "import sys; from pathlib import Path; sys.path.insert(0,str(Path('python').resolve())); import pops; assert Path(pops.__file__).resolve()==Path('python/pops/__init__.py').resolve(); import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+      "-q",
+      "-p",
+      "no:cacheprovider",
+      "-o",
+      "pythonpath=python .",
+      "-m",
+      "not native_loader",
+      "--junitxml=/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/sdk25-source-cohort.xml",
+      "tests/review/test_sol61_cp9_capture_nonauthor.py",
+      "tests/review/test_sol61_cp9_named_block_join.py",
+      "tests/review/test_sol61_cp9_provisional_effect_preparation.py",
+      "tests/review/test_sol61_cp9_provisional_independent.py",
+      "tests/review/test_sol61_cp9_public_clock_protocol.py",
+      "tests/review/test_sol61_evolved_epoch_nonauthor.py",
+      "tests/review/test_sol61_evolved_replay_epoch_consumer.py",
+      "tests/review/test_sol61_migration_current_storage_authority.py",
+      "tests/python/unit/codegen/test_checkpoint_migration.py",
+      "tests/review/test_sol61_provisional_diagnostic_capture.py",
+      "tests/review/test_sol61_program_diagnostic_checkpoint_native.py",
+      "tests/python/unit/runtime/test_multi_layout_checkpoint_diagnostic_capacity.py"
+    ],
+    "counts": {
+      "error": 0,
+      "failure": 0,
+      "skipped": 0,
+      "tests": 79
+    },
+    "exit": 0,
+    "native_loader_explicitly_excluded": true,
+    "native_qualification": false,
+    "prototype_imported": false,
+    "schema": "root.sdk25-source-cohort-execution@1",
+    "source_freeze": "717936347672aeb4bc9146e2b3065bfd42cf1ef5",
+    "source_test_files": {
+      "tests/python/unit/codegen/test_checkpoint_migration.py": "f18415478cdc8ffcd006f5a4710ee3a574dde0c0bd96ede8278b1dae26ff7297",
+      "tests/python/unit/runtime/test_multi_layout_checkpoint_diagnostic_capacity.py": "1aa19bee576a2127a1fcd69396d3ebc638fdf66669b3b39a5d5fb0359abdf0ff",
+      "tests/review/test_sol61_cp9_capture_nonauthor.py": "33483d97dc12523469f5f6163f25e62b9a42cecc3df00238550bc17d05ec762c",
+      "tests/review/test_sol61_cp9_named_block_join.py": "4802dcd5838940dda0c3641c081488f790079e5f4af06e12b11915379c0275c3",
+      "tests/review/test_sol61_cp9_provisional_effect_preparation.py": "bbc54d60af0c95b5f8294cc8691438e48a43db10430970eefdde3504cb0de055",
+      "tests/review/test_sol61_cp9_provisional_independent.py": "4109cf3ae3097773c6ea512df6d4b5f289319bfe1d218cb966b4567a88eb6971",
+      "tests/review/test_sol61_cp9_public_clock_protocol.py": "a34400b7c82ecc63020a1c986f22198128d5b434e46bf77a0ec8b826d8bea7e0",
+      "tests/review/test_sol61_evolved_epoch_nonauthor.py": "ce9e1a42356b3a19999538aa532e3e5acff6730c45d69d53cae502e5bf7e2876",
+      "tests/review/test_sol61_evolved_replay_epoch_consumer.py": "b646bb472d42a3363d95dbdba16df72d9191ed6387df2dfb4af12742ba6ad68f",
+      "tests/review/test_sol61_migration_current_storage_authority.py": "00912ed281e65f62207cccf908fb3295d8b305aa7fd16083f4da6c46ba3fa2a0",
+      "tests/review/test_sol61_program_diagnostic_checkpoint_native.py": "60cf30c7680f32d7853ea4e508062f13e0e0cc7f7ecf45f4f5ca39dba360550f",
+      "tests/review/test_sol61_provisional_diagnostic_capture.py": "9d48bae45459938356a6912cecd85c89770b9ff92975fc8524c6ad324070900e"
+    },
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stdout_sha256": "e332d92a19c71ee58b09b5dc7ea3ec30911064b23ea61bd4e87ddbc0a8e85080",
+    "true_package_source": "/Users/romaindespoulain/dev/tmp/pops-api040-initial-ghost-native-20261002/python/pops/__init__.py",
+    "working_directory": "/Users/romaindespoulain/dev/tmp/pops-api040-initial-ghost-native-20261002",
+    "xml_sha256": "2941cc4348dca61fa9f63eb4c0644c44a4a3b6abe86ca66e7fe4262ee668dc11"
+  },
+  "source_cohort_receipt_sha256": "ed092562f5870195a13587f464967ee6080bb5ab47b6766c5571abf287bb40bf",
+  "whole_mission_complete": false
+}

@@ -82,6 +82,10 @@ def _prepared_local_nonlinear_controls(prepared: Any, *, where: str) -> dict[str
 class _ProgramLocal(_ProgramConstants, _ProgramBase):
     """Local solves, matrix-free operators, laplacian/gradient/divergence and the coefficiented apply."""
 
+    def _build_local_product(self, problem: Any, prepared: Any, *, name: Any = None) -> Any:
+        from pops.time._program.local_product import build_local_product
+        return build_local_product(self, problem, prepared, name=name)
+
     def _solve_local_linear(self, *, operator: Any, rhs: Any, prepared: Any,
                             fields: Any = None, name: Any = None) -> Any:
         """Solve a LOCAL linear system ``operator U = rhs`` cell by cell, where
@@ -280,7 +284,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
     # / global solve, which a per-cell Newton kernel cannot evaluate at a perturbed stack state).
 
     def _solve_local_nonlinear(self, *, residual: Any, initial_guess: Any, prepared: Any,
-                               name: Any = None) -> Any:
+                               name: Any = None, captures: Any = None) -> Any:
         """Solve a LOCAL non-linear system ``residual(U) = 0`` cell by cell with a per-cell Newton
         iteration (spec op 10). Returns the converged solution State.
 
@@ -295,8 +299,10 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         kernel re-evaluates at ``U`` and at the finite-difference perturbations ``U + eps*e_j``. A
         two-argument ``residual_fn(P, U)`` (ignoring the guess) is also accepted.
 
-        @p initial_guess is the start State ``U0`` (typically ``U^n``); it seeds the immutable
-        prepared problem and the residual reads it as a frozen per-cell constant.  The solver
+        With explicit ``captures``, the callback is ``residual_fn(P, U, **captures)``;
+        every named equation input stays frozen independently of the Newton seed.
+        @p initial_guess is the start State ``U0``; the legacy three-argument callback
+        may read that seed as a frozen per-cell constant.  The solver
         descriptor contributes explicit tolerances, evaluation/iteration budgets, scaling-free
         finite-difference controls and a safeguard policy.  Those controls are hashed on the IR.
 
@@ -319,6 +325,14 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
                 "solve_local_nonlinear: recording a residual inside another sub-block (apply / while "
                 "body) is a later phase")
         block = initial_guess.block
+        captured = {} if captures is None else dict(captures)
+        for key, value in captured.items():
+            value = _resolve_handle(value)
+            require_top_level(self, value, "LocalResidual capture")
+            if value.vtype != "state" or value.block != block:
+                raise ValueError("LocalResidual capture must use the same block State support")
+            require_compatible_spaces(initial_guess.space, value.space, "LocalResidual capture", typed_pair=True)
+            captured[key] = value
         # Record the residual sub-block (like set_apply / a while body): the iterate U and the frozen
         # initial-guess U0 are State placeholders local to the sub-block; residual_fn builds r(U) from
         # them with LOCAL per-cell ops. The placeholders are NOT appended to self._values (they belong
@@ -328,11 +342,27 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         self._recording.append(sub)
         try:
             iterate = self._new(
-                "state", "state", (), {}, "newton_iterate", block, space=initial_guess.space)
+                "state", "state", (), {}, "newton_iterate", block, space=initial_guess.space,
+                point=initial_guess.point, state_ref=initial_guess.state_ref,
+                field_context=initial_guess.field_context)
             guess_ph = self._new(
-                "state", "state", (), {}, "newton_guess", block, space=initial_guess.space)
+                "state", "state", (), {}, "newton_guess", block, space=initial_guess.space,
+                point=initial_guess.point, state_ref=initial_guess.state_ref,
+                field_context=initial_guess.field_context)
             # residual_fn(P, U, U0); a two-arg residual_fn(P, U) (ignoring the guess) is also accepted.
-            r = residual(self, iterate, guess_ph) if wants_guess else residual(self, iterate)
+            if captures is None:
+                r = residual(self, iterate, guess_ph) if wants_guess else residual(self, iterate)
+            else:
+                capture_placeholders = {
+                    key: self._new("state", "state", (), {"capture_index": index},
+                                   "capture_" + key, block, space=value.space, point=value.point,
+                                   state_ref=value.state_ref, field_context=value.field_context)
+                    for index, (key, value) in enumerate(captured.items())
+                }
+                r = residual(self, iterate, **capture_placeholders)
+            from pops.time._program.expressions import is_pointwise_expression
+            if is_pointwise_expression(r):
+                r = self._pointwise_expression("local_residual", r)
         finally:
             self._recording.pop()
         if not (isinstance(r, ProgramValue) and r.vtype == "state"):
@@ -350,15 +380,18 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
                     "may use only %s (the iterate / guess State, P.source, P.apply, affine combines). "
                     "Use non-local grid and field operators outside the local residual."
                     % (w.op, sorted(self._RESIDUAL_LOCAL_OPS)))
+        from pops.time.field_context import merge_field_provenance
+        field_context = merge_field_provenance(initial_guess.field_context, r.field_context)
         token = self._new(
-            "state", "solve_local_nonlinear", (initial_guess,),
+            "state", "solve_local_nonlinear", (initial_guess, *captured.values()),
             {"residual_block": sub, "residual_region": residual_region,
              "residual": r, "iterate": iterate, "guess": guess_ph,
+             "capture_names": tuple(captured),
              **controls, "method": "newton",
              "problem_kind": "local_residual",
              "solver_identity": prepared.identity.token,
             }, name, block,
-            space=initial_guess.space)
+            space=initial_guess.space, field_context=field_context)
         from pops.time.solve_outcome import SolveOutcome
 
         outcome_name = name or "local_residual"
@@ -367,7 +400,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             return self._new(
                 "state", "solve_outcome_component", (outcome,), {"index": 0},
                 outcome_name + "_value", block, space=initial_guess.space,
-                point=initial_guess.point)
+                point=initial_guess.point, field_context=field_context)
 
         return SolveOutcome(self, token, project, outcome_name)
 

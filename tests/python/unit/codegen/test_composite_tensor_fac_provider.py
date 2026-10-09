@@ -68,6 +68,27 @@ _HIERARCHY_POTENTIAL_AMPLITUDE = 0.01
         {"coarse_cycles": "4"},
         {"coarse_cycles": -1},
         {"coarse_cycles": 1 << 31},
+        {"coarse_method": True},
+        {"coarse_method": 0},
+        {"coarse_method": None},
+        {"coarse_method": "GMRES"},
+        {"coarse_method": "cg"},
+        {"coarse_method": "gmres "},
+        {"coarse_method": "gmres", "coarse_restart": True},
+        {"coarse_method": "gmres", "coarse_restart": "64"},
+        {"coarse_method": "gmres", "coarse_restart": None},
+        {"coarse_method": "gmres", "coarse_restart": 1.5},
+        {"coarse_method": "gmres", "coarse_restart": 0},
+        {"coarse_method": "gmres", "coarse_restart": -1},
+        {"coarse_method": "gmres", "coarse_restart": 1 << 31},
+        {"coarse_method": "gauss_seidel", "coarse_restart": 32},
+        {"coarse_restart": 32},
+        {"coarse_preconditioner": True},
+        {"coarse_preconditioner": None},
+        {"coarse_preconditioner": "Polar_Poisson"},
+        {"coarse_preconditioner": "polar_poisson"},
+        {"coarse_method": "gmres", "coarse_preconditioner": "polar_poisson"},
+        {"coarse_method": "gauss_seidel", "coarse_preconditioner": "polar_poisson", "diagonal_average": "arithmetic"},
         {"coarse_rel_tol": True},
         {"coarse_rel_tol": 0},
         {"coarse_rel_tol": 1},
@@ -94,6 +115,9 @@ def test_identity_owns_complete_flat_and_refined_solve_contract():
     assert default.coarse_rel_tol is None
     assert default.coarse_abs_tol is None
     assert default.coarse_cycles is None
+    assert default.coarse_method == "gauss_seidel"
+    assert default.coarse_restart == 64
+    assert default.coarse_preconditioner == "diagonal"
     assert default.verbose is None
 
     configured = CompositeTensorFAC(
@@ -141,6 +165,237 @@ def test_identity_owns_complete_flat_and_refined_solve_contract():
     prepared = configured.prepare_program_solve()
     assert prepared.identity_data == identity
     assert prepared.identity.token == configured.identity.token
+
+
+@pytest.mark.parametrize(
+    ("options", "old_token"),
+    [
+        ({}, "3843c88c8e12550f5f2a149c27e39977f8129c8d792628eb9fb942656635746a"),
+        (
+            {"coarse_cycles": 512, "correction_damping": .5, "diagonal_average": "arithmetic"},
+            "19e9f8c60002b46716c5d835df1027af96cf51056562ab20e22c13f8981ae430",
+        ),
+    ],
+)
+def test_coarse_gauss_seidel_preserves_existing_canonical_identity(options, old_token):
+    # Independently read from the unmodified 86d42e8 baseline, including full
+    # provider authority. Adding an optional method must not rename old plans.
+    implicit = CompositeTensorFAC(**options)
+    explicit = CompositeTensorFAC(**options, coarse_method="gauss_seidel", coarse_restart=64)
+    assert implicit.identity.token == "pops.hierarchy-solver.v1:sha256:" + old_token
+    assert explicit.canonical_identity() == implicit.canonical_identity()
+    assert explicit.prepare_program_solve().identity == implicit.identity
+    assert "coarse_method" not in explicit.canonical_options()
+    assert "coarse_restart" not in explicit.canonical_options()
+
+
+def test_coarse_gmres_method_and_restart_are_owned_by_identity_and_native_emission():
+    from test_hierarchy_scoped_solve_emit import _build
+
+    descriptors = (
+        CompositeTensorFAC(),
+        CompositeTensorFAC(coarse_method="gmres"),
+        CompositeTensorFAC(coarse_method="gmres", coarse_restart=17),
+    )
+    assert len({descriptor.identity.token for descriptor in descriptors}) == 3
+    for descriptor in descriptors:
+        prepared = descriptor.prepare_program_solve()
+        assert prepared.identity_data == descriptor.canonical_identity()
+        assert prepared.identity == descriptor.identity
+        program, source = _build(descriptor)
+        solve = next(value for value in program._values if value.op == "solve_linear")
+        assert solve.attrs["hierarchy_solver_identity"] == descriptor.identity.token
+        assert solve.attrs["solver_identity"] == descriptor.identity.token
+        assert prepared_hierarchy_solver_provider_from_attrs(solve.attrs).provider_id == (
+            "pops.hierarchy.composite-tensor-fac"
+        )
+        if descriptor.coarse_method == "gauss_seidel":
+            assert "fac.coarse_method" not in source
+            assert "fac.coarse_restart" not in source
+        else:
+            assert prepared.options["coarse_method"] == "gmres"
+            assert prepared.options["coarse_restart"] == descriptor.coarse_restart
+            assert '{"fac.coarse_method", std::string{"gmres"}}' in source
+            assert ('{"fac.coarse_restart", std::int64_t{%d}}' % descriptor.coarse_restart) in source
+
+
+@pytest.mark.parametrize("restart", (1, (1 << 31)-1))
+def test_coarse_gmres_restart_accepts_exact_native_int_endpoints(restart):
+    # Authoring only: no allocation is attempted for the maximum-sized basis.
+    descriptor = CompositeTensorFAC(coarse_method="gmres", coarse_restart=restart)
+    assert descriptor.canonical_options()["coarse_restart"] == restart
+    assert descriptor.prepare_program_solve().options["coarse_restart"] == restart
+
+
+@pytest.mark.parametrize("method", ("gauss_seidel", "gmres"))
+def test_explicit_diagonal_preconditioner_preserves_default_identity_and_emission(method):
+    from test_hierarchy_scoped_solve_emit import _build
+
+    implicit = CompositeTensorFAC(coarse_method=method)
+    explicit = CompositeTensorFAC(coarse_method=method, coarse_preconditioner="diagonal")
+    assert explicit.canonical_identity() == implicit.canonical_identity()
+    assert explicit.identity == implicit.identity
+    assert "coarse_preconditioner" not in explicit.canonical_options()
+    _, implicit_source = _build(implicit)
+    _, explicit_source = _build(explicit)
+    assert "fac.coarse_preconditioner" not in implicit_source
+    assert "fac.coarse_preconditioner" not in explicit_source
+
+
+def test_polar_preconditioner_is_authenticated_and_emitted_as_a_distinct_option():
+    from test_hierarchy_scoped_solve_emit import _build
+
+    diagonal = CompositeTensorFAC(coarse_method="gmres", diagonal_average="arithmetic")
+    polar = replace(diagonal, coarse_preconditioner="polar_poisson")
+    assert polar.identity != diagonal.identity
+    prepared = polar.prepare_program_solve()
+    assert prepared.identity == polar.identity
+    assert prepared.options["coarse_preconditioner"] == "polar_poisson"
+    program, source = _build(polar)
+    assert '{"fac.coarse_preconditioner", std::string{"polar_poisson"}}' in source
+    assert '{"fac.coarse_method", std::string{"gmres"}}' in source
+    solve = next(value for value in program._values if value.op == "solve_linear")
+    assert solve.attrs["hierarchy_solver_identity"] == polar.identity.token
+    assert prepared_hierarchy_solver_provider_from_attrs(solve.attrs).provider_id == (
+        "pops.hierarchy.composite-tensor-fac"
+    )
+    provider = prepared_hierarchy_solver_provider_by_id("pops.hierarchy.composite-tensor-fac")
+    for change in ({"coarse_preconditioner": "diagonal"},
+                   {"coarse_preconditioner": "POLAR_POISSON"},
+                   {"coarse_method": "gauss_seidel"},
+                   {"diagonal_average": "harmonic"}):
+        forged = replace(prepared, _options_json=json.dumps(
+            {**prepared.options, **change}, sort_keys=True, separators=(",", ":")))
+        with pytest.raises((TypeError, ValueError)):
+            provider.authenticate_prepared(forged)
+        attrs = dict(solve.attrs)
+        attrs["hierarchy_solver_options"] = {**attrs["hierarchy_solver_options"], **change}
+        with pytest.raises((TypeError, ValueError)):
+            prepared_hierarchy_solver_provider_from_attrs(attrs)
+    attrs = dict(solve.attrs)
+    attrs["hierarchy_solver_options"] = dict(attrs["hierarchy_solver_options"])
+    del attrs["hierarchy_solver_options"]["coarse_preconditioner"]
+    with pytest.raises(ValueError, match="canonical|identity"):
+        prepared_hierarchy_solver_provider_from_attrs(attrs)
+
+
+@pytest.mark.parametrize("method", ("gauss_seidel", "gmres"))
+def test_explicit_level_stencil_coupling_preserves_default_bytes(method):
+    from test_hierarchy_scoped_solve_emit import _build
+
+    implicit = CompositeTensorFAC(coarse_method=method)
+    explicit = replace(implicit, interface_coupling="level_stencil")
+    assert explicit.canonical_identity() == implicit.canonical_identity()
+    assert explicit.identity == implicit.identity
+    assert "interface_coupling" not in explicit.canonical_options()
+    _, implicit_source = _build(implicit)
+    _, explicit_source = _build(explicit)
+    assert "fac.interface_coupling" not in implicit_source
+    assert "fac.interface_coupling" not in explicit_source
+
+
+def test_fine_flux_coupling_authenticates_changed_operator_and_native_option():
+    from test_hierarchy_scoped_solve_emit import _build
+
+    legacy = CompositeTensorFAC()
+    conservative = replace(legacy, interface_coupling="fine_flux")
+    assert conservative.identity != legacy.identity
+    prepared = conservative.prepare_program_solve()
+    assert prepared.identity == conservative.identity
+    assert prepared.options["interface_coupling"] == "fine_flux"
+    program, source = _build(conservative)
+    assert '{"fac.interface_coupling", std::string{"fine_flux"}}' in source
+    solve = next(value for value in program._values if value.op == "solve_linear")
+    assert solve.attrs["hierarchy_solver_identity"] == conservative.identity.token
+    provider = prepared_hierarchy_solver_provider_by_id("pops.hierarchy.composite-tensor-fac")
+    for value in ("level_stencil", "FINE_FLUX", True, 1, None):
+        change = {"interface_coupling": value}
+        forged = replace(prepared, _options_json=json.dumps(
+            {**prepared.options, **change}, sort_keys=True, separators=(",", ":")))
+        with pytest.raises((TypeError, ValueError)):
+            provider.authenticate_prepared(forged)
+        attrs = dict(solve.attrs)
+        attrs["hierarchy_solver_options"] = {**attrs["hierarchy_solver_options"], **change}
+        with pytest.raises((TypeError, ValueError)):
+            prepared_hierarchy_solver_provider_from_attrs(attrs)
+    attrs = dict(solve.attrs)
+    attrs["hierarchy_solver_options"] = dict(attrs["hierarchy_solver_options"])
+    del attrs["hierarchy_solver_options"]["interface_coupling"]
+    with pytest.raises(ValueError, match="canonical|identity"):
+        prepared_hierarchy_solver_provider_from_attrs(attrs)
+
+
+@pytest.mark.parametrize("value", ("FINE_FLUX", "reflux", "", True, 1, None))
+def test_fine_flux_coupling_refuses_invalid_authored_values(value):
+    with pytest.raises(ValueError, match="interface_coupling"):
+        CompositeTensorFAC(interface_coupling=value)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"coarse_restart": 32},
+        {"coarse_method": "gauss_seidel", "coarse_restart": 64},
+        {"coarse_method": True},
+        {"coarse_restart": True},
+        {"coarse_restart": "64"},
+        {"coarse_restart": 1 << 31},
+    ],
+)
+def test_coarse_gmres_rejects_tampered_prepared_options_before_codegen(change):
+    from test_hierarchy_scoped_solve_emit import _build
+
+    prepared = CompositeTensorFAC(coarse_method="gmres").prepare_program_solve()
+    options = {**prepared.options, **change}
+    forged = replace(prepared, _options_json=json.dumps(options, sort_keys=True, separators=(",", ":")))
+    provider = prepared_hierarchy_solver_provider_by_id("pops.hierarchy.composite-tensor-fac")
+    with pytest.raises((TypeError, ValueError)):
+        provider.authenticate_prepared(forged)
+
+    class ForgedDescriptor:
+        def prepare_program_solve(self):
+            return forged
+
+    with pytest.raises((TypeError, ValueError)):
+        _build(ForgedDescriptor())
+
+
+@pytest.mark.parametrize(
+    ("method", "change"),
+    [
+        ("gmres", {"coarse_restart": 32}),
+        ("gmres", {"coarse_method": "gauss_seidel", "coarse_restart": 64}),
+        ("gmres", {"coarse_method": "GMRES"}),
+        ("gmres", {"coarse_restart": False}),
+        ("gmres", {"coarse_restart": "64"}),
+        ("gmres", {"coarse_restart": 0}),
+        ("gmres", {"coarse_restart": 1 << 31}),
+        ("gauss_seidel", {"coarse_restart": 32}),
+        ("gauss_seidel", {"coarse_method": "gauss_seidel", "coarse_restart": 64}),
+    ],
+)
+def test_coarse_method_wire_options_cannot_disagree_with_prepared_authority(method, change):
+    from test_hierarchy_scoped_solve_emit import _build
+
+    program, _ = _build(CompositeTensorFAC(coarse_method=method))
+    solve = next(value for value in program._values if value.op == "solve_linear")
+    attrs = dict(solve.attrs)
+    attrs["hierarchy_solver_options"] = {**attrs["hierarchy_solver_options"], **change}
+    with pytest.raises((TypeError, ValueError)):
+        prepared_hierarchy_solver_provider_from_attrs(attrs)
+
+
+@pytest.mark.parametrize("missing", ("coarse_method", "coarse_restart"))
+def test_coarse_gmres_wire_does_not_infer_omitted_authority(missing):
+    from test_hierarchy_scoped_solve_emit import _build
+
+    program, _ = _build(CompositeTensorFAC(coarse_method="gmres"))
+    solve = next(value for value in program._values if value.op == "solve_linear")
+    attrs = dict(solve.attrs)
+    attrs["hierarchy_solver_options"] = dict(attrs["hierarchy_solver_options"])
+    del attrs["hierarchy_solver_options"][missing]
+    with pytest.raises(ValueError, match="canonical|identity"):
+        prepared_hierarchy_solver_provider_from_attrs(attrs)
 
 
 @pytest.mark.parametrize(

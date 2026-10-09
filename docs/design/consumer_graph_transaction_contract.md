@@ -111,10 +111,15 @@ idempotent at the public writer-session boundary, and releases rollback-only res
 retained staging file descriptor. HDF5, NPZ, ParaView, external native writers and checkpoint
 providers all live behind this boundary.
 
-`ConsumerTransaction` prepares every effect while the step attempt is provisional. `reject()`
-discards all temporaries, publishes nothing, and returns the original cursor set. `accept()` is the
-only publication path. A cursor advances only after a matching receipt authenticates both the exact
-effect and payload.
+`ConsumerTransaction` requires the execution-owned `ConsumerCursorAuthority` shared by all roots of
+one `RuntimeInstance`. It prepares every effect while the step attempt is provisional. `reject()`
+discards all temporaries, publishes nothing, and reports its staged cursor snapshot without changing
+the authority. `accept()` is the
+only publication path. Immediately before the first public effect it atomically reserves the
+consumer IDs and compares their cursor values against the current authority. Conflicting or stale
+roots fail before publication; disjoint roots may proceed together. A cursor advances only after a
+matching receipt authenticates both the exact effect and payload. The resulting cursor commit
+updates only that root's consumer IDs.
 
 Failure actions are exact:
 
@@ -126,7 +131,12 @@ Failure actions are exact:
 
 Receipted artifacts remain compensatable until the enclosing accepted-step transaction seals. If a
 later publication in that transaction fails, the runtime rolls earlier artifacts back in reverse
-dependency order and restores the original cursor set. `ConsumerTransaction.seal()` first makes the
+dependency order and restores only that root's cursor IDs, preserving any accepted disjoint root.
+The reservation remains held until compensation or sealing. If compensation cannot remove a public
+artifact, the affected consumer becomes terminal for that runtime incarnation: further publication
+and checkpoint cursor reset refuse explicitly. Artifact recovery alone does not rearm the consumer;
+after authenticated recovery, a new `RuntimeInstance` is required.
+`ConsumerTransaction.seal()` first makes the
 transaction non-compensatable, then finalizes every accepted publication and drops its rollback
 ownership. The native step's successful finalization is the irreversible `native_finalized`
 boundary: release failures and contract violations are attached to the accepted report as
@@ -135,6 +145,11 @@ They can never trigger consumer abort, native rollback, envelope restoration or 
 After sealing, those receipts are final and are never removed by a later independent transaction.
 No artifact is considered complete without its receipt, and no failed or skipped sample advances
 its scheduling cursor.
+
+Checkpoint restoration uses an execution-only cursor revision compare-and-swap. It refuses to
+replace the cursor set if another root committed after the restore snapshot, and a reset revokes
+previously staged roots even when restored cursor values happen to be identical. This authority is
+not part of the durable checkpoint payload.
 
 A quarantine race is not reduced to diagnostic text. The transaction transfers its typed recovery
 authority into the owning `RuntimeInstance`; `consumer_recoveries` exposes immutable inspection

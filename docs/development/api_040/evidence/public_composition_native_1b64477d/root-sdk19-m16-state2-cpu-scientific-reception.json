@@ -1,0 +1,258 @@
+{
+  "build_receipt_sha256": "5e48488724fc719ad3e4febf394ea3867e34f55fe1975242d16ada1c9e199566",
+  "expected_adversary_count": 9,
+  "independent_adversaries_report_sha256": "7a70c60ac38d28d8d5044e48c844586baac13e0d31a2ee478457a3e238a293ed",
+  "independent_directory": "/Users/romaindespoulain/dev/tmp/sol61-sdk19-m16-uniform-independent-20261003",
+  "independent_pins_reverified": 74,
+  "independent_pins_sha256": "765efe0a7ef7823e878114f727737c8cd56025ad4554249779b538f27903fde1",
+  "independent_report_sha256": "b8b32ec2080c031e64bc30cc7e81eca417f3390b2fe5f8b15a28f509c7c3ab99",
+  "pops_imported_by_reception": false,
+  "reader_actually_replayed": true,
+  "replayed_report_byte_identical": true,
+  "schema": "root.sdk19-m16-state2-cpu-scoped-scientific-reception@1",
+  "scientific_scope": {
+    "build_receipt_sha256": "5e48488724fc719ad3e4febf394ea3867e34f55fe1975242d16ada1c9e199566",
+    "cases": [
+      {
+        "JUnit_seconds_by_rank": {
+          "pytest.xml": 116.097
+        },
+        "cases": [
+          {
+            "Program_IR_sha256": "2e64ed9dfc977285e9fd09e1ea9e55470e7d3c371cd03580d4803a3341727403",
+            "Program_binary_sha256": "4830cd57e5d1729b2d879e0957a68acb655a0704c49dc276293d59e310f925fb",
+            "Program_cpp_sha256": "fefc1918645c682b6972b022aadfe0a441d707424dfc83047e876b0df38b26a3",
+            "actual_model_records": [
+              {
+                "binary_sha256": "2c25b6a4cbfd8748c521a18aff37ed27c1fd6d399a603782bfdacd7077970df0",
+                "block": "spectator",
+                "compiler_sha256_recorded": "e802ef021bccd09d2ae1dae3f9400e53ab2c2c7bc2b4e47dc29a81c7ec3bcd31",
+                "record_sha256": "d84808df731a3723ebeedbf97b3886f80bd9b9c0d7d644dcab78e3448fc74369",
+                "source_sha256": "343e7e998a04a4c7420de5b6fc887a90a35a346676997c8cff1a83daf14b35ed",
+                "states": [
+                  "earlier_state"
+                ]
+              },
+              {
+                "binary_sha256": "077ca2175ce01fa9be60082407248290cf2470de0e5b7b09b3edd98903cd5e4f",
+                "block": "population",
+                "compiler_sha256_recorded": "e802ef021bccd09d2ae1dae3f9400e53ab2c2c7bc2b4e47dc29a81c7ec3bcd31",
+                "record_sha256": "04e76189869b60101813db635c88dee15f32e1bef5578cbc531bd4b38b6cea11",
+                "source_sha256": "b4e5c10a079d18780f947d18578e95a095a0db406a02d2c6f18321aeb4eb6aff",
+                "states": [
+                  "selected_state"
+                ]
+              }
+            ],
+            "actual_model_sources": 2,
+            "compiler_to_binary_semantic_proof": false,
+            "kind": "second-state21",
+            "phases": [
+              {
+                "carrier": {
+                  "grown_values": 828,
+                  "patches": [
+                    {
+                      "axes": [
+                        [
+                          0,
+                          3,
+                          -1,
+                          4
+                        ],
+                        [
+                          0,
+                          3,
+                          -1,
+                          4
+                        ]
+                      ],
+                      "components": 2,
+                      "key": [
+                        0,
+                        0,
+                        0
+                      ],
+                      "owner": -1
+                    },
+                    {
+                      "axes": [
+                        [
+                          0,
+                          3,
+                          -1,
+                          4
+                        ],
+                        [
+                          0,
+                          3,
+                          -1,
+                          4
+                        ]
+                      ],
+                      "components": 21,
+                      "key": [
+                        1,
+                        0,
+                        0
+                      ],
+                      "owner": -1
+                    }
+                  ]
+                },
+                "clock": [
+                  0.0,
+                  0,
+                  1
+                ],
+                "full_carrier_sha256": "fa3568e04718c327735f1da7b74f1610f86120ea0782abc43acea18f33231858",
+                "max_abs_error": 0.0,
+                "phase": "before"
+              },
+              {
+                "carrier": {
+                  "grown_values": 828,
+                  "patches": [
+                    {
+                      "axes": [
+                        [
+                          0,
+                          3,
+                          -1,
+                          4
+                        ],
+                        [
+                          0,
+                          3,
+                          -1,
+                          4
+                        ]
+                      ],
+                      "components": 2,
+                      "key": [
+                        0,
+                        0,
+                        0
+                      ],
+                      "owner": -1
+                    },
+                    {
+                      "axes": [
+                        [
+                          0,
+                          3,
+                          -1,
+                          4
+                        ],
+                        [
+                          0,
+                          3,
+                          -1,
+                          4
+                        ]
+                      ],
+                      "components": 21,
+                      "key": [
+                        1,
+                        0,
+                        0
+                      ],
+                      "owner": -1
+                    }
+                  ]
+                },
+                "clock": [
+                  0.125,
+                  1,
+                  1
+                ],
+                "full_carrier_sha256": "cf4176e07a4c9a2e76f105e7a958baaf652e4320b3d6466e1f7afcc9a75cb563",
+                "max_abs_error": 4.440892098500626e-16,
+                "phase": "after"
+              }
+            ]
+          }
+        ],
+        "identity": {
+          "abi_key": "compiler=15.3.0;std=202002L;headers=2d3aa1140e6b24d30cdb501d70012b700b1ce70ce36871756f2e7cffda7d828d;kokkos=1;stdlib=libstdc++_20260612;mpi=1;mpi_abi=f0d5c4a08c55d4d84a14c6cfd4d12d992c3afa7c5f9c2ca3ee140e5d87a0fa9e;dim=2",
+          "doctor": {
+            "compilateur": [
+              true,
+              "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/bin/g++ [baked by the _pops build] ; -std=c++20 accepted"
+            ],
+            "headers_sync": [
+              true,
+              "headers == module build (sig 2d3aa1140e6b...)"
+            ],
+            "include": [
+              true,
+              "/project/r250127/api040-composition15-mpich-20261002-v15/source/include"
+            ],
+            "interpreteur": [
+              true,
+              "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/bin/python (3.12) ; extension /gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so"
+            ],
+            "kokkos": [
+              true,
+              "Kokkos module (thread/device resources selected before initialization)"
+            ],
+            "kokkos_root": [
+              true,
+              "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15"
+            ],
+            "numpy": [
+              true,
+              "2.5.3"
+            ],
+            "threads": [
+              true,
+              "OMP_NUM_THREADS=1 ; first System created=False"
+            ]
+          },
+          "execution_environment": {
+            "FI_PROVIDER": null,
+            "FI_TCP_IFACE": null,
+            "OMP_NUM_THREADS": "1",
+            "OMP_PROC_BIND": "false",
+            "POPS_THREADS": "1"
+          },
+          "native_file": "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so",
+          "native_sha256": "4efc61b3a4a01ed82e41ef1eac4baaa450914afa516e806b88e282a0ac8fc0b7",
+          "package_file": "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages/pops/__init__.py",
+          "package_version": "1.1.0",
+          "python": "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/bin/python",
+          "schema_version": 2,
+          "scope": "installed production PoPS, local CPU Kokkos, MPI-enabled Dim=2",
+          "source_commit": "1b64477d2f1c93e856e996a4c83e506fcc91b386",
+          "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "source_files_sha256": "3a555a75268830b2b7073a33040562ab181af1600b67a28d73d4d28f93043cfa",
+          "sys_path": [
+            "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/source/scripts",
+            "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/source",
+            "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/source/docs/development/api_040",
+            "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python312.zip",
+            "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12",
+            "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/lib-dynload",
+            "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages"
+          ],
+          "verified_source_files": 1147
+        },
+        "limits": "valid-state math only; grown storage finite/correspondence, no Ghost readiness; MPI2 one-node requires independent launcher/node/rank authentication outside this case reader; no performance/GPU/inter-node/fullM16 qualification",
+        "logical_scenarios": 1,
+        "root_seal": false,
+        "root_transfer_sha256": "09fb60270ce53df755bddb88480cb01b73b8c6747b8846a47641a8dc030bb356",
+        "schema": "sol61-sdk19-wave-second-state-offline@2",
+        "transfer_sha256": "dcc733bcea8948ec21382a552648e0e2acb416dca313c04ec95f5ab1355422ac",
+        "world": 1
+      }
+    ],
+    "root_seal": false,
+    "schema": "sol61-sdk19-two-witnesses-independent@2",
+    "scope": "one logical M16 CPU single-process witness on MPI-enabled installation; no actual MPI2 received"
+  },
+  "scope": "one installed SDK19 M16 affine21 second-state FE step with full carriers",
+  "source_freeze": "1b64477d2f1c93e856e996a4c83e506fcc91b386",
+  "symlink_targets_reverified": 1,
+  "whole_mission_complete": false,
+  "world_size": 1
+}

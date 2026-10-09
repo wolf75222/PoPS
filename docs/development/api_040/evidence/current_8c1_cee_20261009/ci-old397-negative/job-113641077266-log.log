@@ -1,0 +1,1379 @@
+﻿2026-10-09T02:30:24.4060723Z Current runner version: '2.337.0'
+2026-10-09T02:30:24.4086953Z ##[group]Runner Image Provisioner
+2026-10-09T02:30:24.4087908Z Hosted Compute Agent
+2026-10-09T02:30:24.4088557Z Version: 20261002.596
+2026-10-09T02:30:24.4089297Z Commit: c3d12f3313a95f25162a1503be624f3b0617f8c0
+2026-10-09T02:30:24.4090057Z Build Date: 2026-10-02T22:28:27Z
+2026-10-09T02:30:24.4090808Z Worker ID: {e5b97822-9ddb-4d5f-97c6-06b695308a98}
+2026-10-09T02:30:24.4091616Z Region: westcentralus
+2026-10-09T02:30:24.4092224Z Cloud: Azure
+2026-10-09T02:30:24.4093029Z ##[endgroup]
+2026-10-09T02:30:24.4094382Z ##[group]Operating System
+2026-10-09T02:30:24.4095007Z Ubuntu
+2026-10-09T02:30:24.4095780Z 24.04.5
+2026-10-09T02:30:24.4096380Z LTS
+2026-10-09T02:30:24.4096985Z ##[endgroup]
+2026-10-09T02:30:24.4097580Z ##[group]Runner Image
+2026-10-09T02:30:24.4098184Z Image: ubuntu-24.04
+2026-10-09T02:30:24.4098885Z Version: 20261004.327.1
+2026-10-09T02:30:24.4100192Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261004.327/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-09T02:30:24.4101852Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261004.327
+2026-10-09T02:30:24.4103025Z ##[endgroup]
+2026-10-09T02:30:24.4104330Z ##[group]GITHUB_TOKEN Permissions
+2026-10-09T02:30:24.4106254Z Contents: read
+2026-10-09T02:30:24.4106987Z Metadata: read
+2026-10-09T02:30:24.4107582Z ##[endgroup]
+2026-10-09T02:30:24.4109758Z Secret source: Actions
+2026-10-09T02:30:24.4110820Z Cache mode: write
+2026-10-09T02:30:24.4111568Z Prepare workflow directory
+2026-10-09T02:30:24.4721855Z Prepare all required actions
+2026-10-09T02:30:24.4794860Z Getting action download info
+2026-10-09T02:30:24.7711969Z Download action repository 'actions/checkout@v7' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-10-09T02:30:24.8465668Z Download action repository 'actions/download-artifact@v8' (SHA:9000827ccba6bdab643e8b6fd33ac0654aef8333)
+2026-10-09T02:30:25.4736734Z Download action repository 'actions/upload-artifact@v7' (SHA:cf430e030ddbb5b0abf93d22962f4752f3646cd9)
+2026-10-09T02:30:26.1723554Z Download action repository 'actions/setup-python@v7' (SHA:5fda3b95a4ea91299a34e894583c3862153e4b97)
+2026-10-09T02:30:26.2944195Z Download action repository 'actions/cache@v6' (SHA:55cc8345863c7cc4c66a329aec7e433d2d1c52a9)
+2026-10-09T02:30:26.5971581Z Complete job name: ubuntu-latest / Kokkos Serial (Python) shard 52
+2026-10-09T02:30:26.6778847Z ##[group]Run actions/checkout@v7
+2026-10-09T02:30:26.6779412Z with:
+2026-10-09T02:30:26.6779649Z   fetch-depth: 1
+2026-10-09T02:30:26.6779904Z   repository: wolf75222/PoPS
+2026-10-09T02:30:26.6782724Z   token: ***
+2026-10-09T02:30:26.6782964Z   ssh-strict: true
+2026-10-09T02:30:26.6783207Z   ssh-user: git
+2026-10-09T02:30:26.6783447Z   persist-credentials: true
+2026-10-09T02:30:26.6783712Z   clean: true
+2026-10-09T02:30:26.6783953Z   sparse-checkout-cone-mode: true
+2026-10-09T02:30:26.6784244Z   fetch-tags: false
+2026-10-09T02:30:26.6784484Z   show-progress: true
+2026-10-09T02:30:26.6784710Z   lfs: false
+2026-10-09T02:30:26.6784949Z   submodules: false
+2026-10-09T02:30:26.6785184Z   set-safe-directory: true
+2026-10-09T02:30:26.6785462Z   allow-unsafe-pr-checkout: false
+2026-10-09T02:30:26.6785915Z env:
+2026-10-09T02:30:26.6786128Z   PYTHONUNBUFFERED: 1
+2026-10-09T02:30:26.6786430Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T02:30:26.6786813Z   CCACHE_MAXSIZE: 2G
+2026-10-09T02:30:26.6787123Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T02:30:26.6787498Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T02:30:26.6787804Z   CCACHE_NOHASHDIR: true
+2026-10-09T02:30:26.6788060Z   CCACHE_SLOPPINESS: locale
+2026-10-09T02:30:26.6788310Z   SHARD_INDEX: 52
+2026-10-09T02:30:26.6788544Z   SHARD_TOTAL: 70
+2026-10-09T02:30:26.6788855Z   POPS_CACHE_DIR: /home/runner/work/PoPS/PoPS/.pops-dsl-cache
+2026-10-09T02:30:26.6789215Z   POPS_KEEP_GENERATED: 1
+2026-10-09T02:30:26.6789470Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T02:30:26.6789727Z ##[endgroup]
+2026-10-09T02:30:26.7950691Z Syncing repository: wolf75222/PoPS
+2026-10-09T02:30:26.7952845Z ##[group]Getting Git version info
+2026-10-09T02:30:26.7953440Z Working directory is '/home/runner/work/PoPS/PoPS'
+2026-10-09T02:30:26.7954485Z [command]/usr/bin/git version
+2026-10-09T02:30:26.8008481Z git version 2.55.0
+2026-10-09T02:30:26.8060150Z ##[endgroup]
+2026-10-09T02:30:26.8071147Z Temporarily overriding HOME='/home/runner/work/_temp/4fa73bb0-7dd5-44e1-ba56-f029741d896f' before making global git config changes
+2026-10-09T02:30:26.8072869Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-09T02:30:26.8077659Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/PoPS/PoPS
+2026-10-09T02:30:26.8123836Z Deleting the contents of '/home/runner/work/PoPS/PoPS'
+2026-10-09T02:30:26.8127626Z ##[group]Determining repository object format
+2026-10-09T02:30:26.8129211Z ##[endgroup]
+2026-10-09T02:30:26.8129973Z ##[group]Initializing the repository
+2026-10-09T02:30:26.8133870Z [command]/usr/bin/git init /home/runner/work/PoPS/PoPS
+2026-10-09T02:30:26.8215394Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-09T02:30:26.8216509Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-09T02:30:26.8218493Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-09T02:30:26.8219281Z hint: call:
+2026-10-09T02:30:26.8220020Z hint:
+2026-10-09T02:30:26.8220525Z hint: 	git config --global init.defaultBranch <name>
+2026-10-09T02:30:26.8221052Z hint:
+2026-10-09T02:30:26.8221566Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-09T02:30:26.8222395Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-09T02:30:26.8223234Z hint:
+2026-10-09T02:30:26.8223641Z hint: 	git branch -m <name>
+2026-10-09T02:30:26.8224013Z hint:
+2026-10-09T02:30:26.8224536Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-09T02:30:26.8225425Z Initialized empty Git repository in /home/runner/work/PoPS/PoPS/.git/
+2026-10-09T02:30:26.8230146Z [command]/usr/bin/git remote add origin https://github.com/wolf75222/PoPS
+2026-10-09T02:30:26.8274499Z ##[endgroup]
+2026-10-09T02:30:26.8275149Z ##[group]Disabling automatic garbage collection
+2026-10-09T02:30:26.8279988Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-09T02:30:26.8312377Z ##[endgroup]
+2026-10-09T02:30:26.8313204Z ##[group]Setting up auth
+2026-10-09T02:30:26.8313681Z Removing SSH command configuration
+2026-10-09T02:30:26.8319382Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-09T02:30:26.8354767Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-09T02:30:26.8699173Z Removing HTTP extra header
+2026-10-09T02:30:26.8707251Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-09T02:30:26.8749793Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-09T02:30:26.9010073Z Removing includeIf entries pointing to credentials config files
+2026-10-09T02:30:26.9016620Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-09T02:30:26.9055364Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-09T02:30:26.9303206Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-eabb0b73-78f7-4b12-9fc6-0e74f9dcde60.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-09T02:30:26.9345041Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/PoPS/PoPS/.git.path /home/runner/work/_temp/git-credentials-eabb0b73-78f7-4b12-9fc6-0e74f9dcde60.config
+2026-10-09T02:30:26.9381892Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/PoPS/PoPS/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-eabb0b73-78f7-4b12-9fc6-0e74f9dcde60.config
+2026-10-09T02:30:26.9421652Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-eabb0b73-78f7-4b12-9fc6-0e74f9dcde60.config
+2026-10-09T02:30:26.9460060Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-eabb0b73-78f7-4b12-9fc6-0e74f9dcde60.config
+2026-10-09T02:30:26.9494435Z ##[endgroup]
+2026-10-09T02:30:26.9495054Z ##[group]Fetching the repository
+2026-10-09T02:30:26.9503529Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +3c40c75431dc1942e6b38cc5a1eb3c870fdeca93:refs/remotes/pull/681/merge
+2026-10-09T02:30:28.1473945Z From https://github.com/wolf75222/PoPS
+2026-10-09T02:30:28.1474596Z  * [new ref]         3c40c75431dc1942e6b38cc5a1eb3c870fdeca93 -> pull/681/merge
+2026-10-09T02:30:28.1480147Z ##[endgroup]
+2026-10-09T02:30:28.1480806Z ##[group]Determining the checkout info
+2026-10-09T02:30:28.1481680Z ##[endgroup]
+2026-10-09T02:30:28.1489138Z [command]/usr/bin/git sparse-checkout disable
+2026-10-09T02:30:28.1552266Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-09T02:30:28.1591730Z ##[group]Checking out the ref
+2026-10-09T02:30:28.1597917Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/681/merge
+2026-10-09T02:30:28.6754812Z Note: switching to 'refs/remotes/pull/681/merge'.
+2026-10-09T02:30:28.6755425Z 
+2026-10-09T02:30:28.6755761Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-09T02:30:28.6756551Z changes and commit them, and you can discard any commits you make in this
+2026-10-09T02:30:28.6757325Z state without impacting any branches by switching back to a branch.
+2026-10-09T02:30:28.6757823Z 
+2026-10-09T02:30:28.6758138Z If you want to create a new branch to retain commits you create, you may
+2026-10-09T02:30:28.6758855Z do so (now or later) by using -c with the switch command. Example:
+2026-10-09T02:30:28.6759303Z 
+2026-10-09T02:30:28.6759471Z   git switch -c <new-branch-name>
+2026-10-09T02:30:28.6759763Z 
+2026-10-09T02:30:28.6760221Z Or undo this operation with:
+2026-10-09T02:30:28.6760493Z 
+2026-10-09T02:30:28.6760657Z   git switch -
+2026-10-09T02:30:28.6760858Z 
+2026-10-09T02:30:28.6761236Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-09T02:30:28.6761766Z 
+2026-10-09T02:30:28.6762361Z HEAD is now at 3c40c75 Merge 397626de9e003ab15a076319d2ee4c3d227a389c into bb9aea0cc56fabe6b003bfbee5daee28d38ac7e7
+2026-10-09T02:30:28.6831248Z ##[endgroup]
+2026-10-09T02:30:28.6836779Z [command]/usr/bin/git log -1 --format=%H
+2026-10-09T02:30:28.6868097Z 3c40c75431dc1942e6b38cc5a1eb3c870fdeca93
+2026-10-09T02:30:28.7107212Z ##[group]Run actions/download-artifact@v8
+2026-10-09T02:30:28.7107550Z with:
+2026-10-09T02:30:28.7107762Z   name: ci-plan
+2026-10-09T02:30:28.7107975Z   path: ci-plan
+2026-10-09T02:30:28.7108190Z   merge-multiple: false
+2026-10-09T02:30:28.7108434Z   repository: wolf75222/PoPS
+2026-10-09T02:30:28.7108696Z   run-id: 37874700424
+2026-10-09T02:30:28.7108944Z   skip-decompress: false
+2026-10-09T02:30:28.7109213Z   digest-mismatch: error
+2026-10-09T02:30:28.7109446Z env:
+2026-10-09T02:30:28.7109653Z   PYTHONUNBUFFERED: 1
+2026-10-09T02:30:28.7109937Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T02:30:28.7110260Z   CCACHE_MAXSIZE: 2G
+2026-10-09T02:30:28.7110548Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T02:30:28.7110918Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T02:30:28.7111227Z   CCACHE_NOHASHDIR: true
+2026-10-09T02:30:28.7111494Z   CCACHE_SLOPPINESS: locale
+2026-10-09T02:30:28.7111737Z   SHARD_INDEX: 52
+2026-10-09T02:30:28.7111989Z   SHARD_TOTAL: 70
+2026-10-09T02:30:28.7112442Z   POPS_CACHE_DIR: /home/runner/work/PoPS/PoPS/.pops-dsl-cache
+2026-10-09T02:30:28.7113008Z   POPS_KEEP_GENERATED: 1
+2026-10-09T02:30:28.7113251Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T02:30:28.7113498Z ##[endgroup]
+2026-10-09T02:30:28.8447457Z Downloading single artifact
+2026-10-09T02:30:29.0388141Z Preparing to download the following artifacts:
+2026-10-09T02:30:29.0393726Z - ci-plan (ID: 11592121966, Size: 188988, Expected Digest: sha256:1804459f32d7772362fce31d1a434743c028062154e22797fdb6d0fe182c2ca2)
+2026-10-09T02:30:29.4427181Z Redirecting to blob download url: https://productionresultssa1.blob.core.windows.net/actions-results/fccbdf31-5f88-8997-bbca-7bae8558756e/workflow-job-run-dc437e22-e1d5-580e-a7d7-4fcb04f6c37e/artifacts/3b076a65d2d8667cb2f2bad67341bd7595d87db66bf4af5fbc6bb81e76c53249.zip
+2026-10-09T02:30:29.4428778Z Starting download of artifact to: /home/runner/work/PoPS/PoPS/ci-plan
+2026-10-09T02:30:29.6193865Z (node:2431) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+2026-10-09T02:30:29.6195460Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-09T02:30:29.7381502Z SHA256 digest of downloaded artifact is 1804459f32d7772362fce31d1a434743c028062154e22797fdb6d0fe182c2ca2
+2026-10-09T02:30:29.7382111Z Artifact download completed successfully.
+2026-10-09T02:30:29.7382446Z Total of 1 artifact(s) downloaded
+2026-10-09T02:30:29.7385439Z Download artifact has finished successfully
+2026-10-09T02:30:29.7547890Z ##[group]Run force_args=()
+2026-10-09T02:30:29.7548262Z [36;1mforce_args=()[0m
+2026-10-09T02:30:29.7548541Z [36;1mif [ "true" = "true" ]; then[0m
+2026-10-09T02:30:29.7548837Z [36;1m  force_args+=(--force-all)[0m
+2026-10-09T02:30:29.7549094Z [36;1mfi[0m
+2026-10-09T02:30:29.7549367Z [36;1mpython3 scripts/ci_select_tests.py python \[0m
+2026-10-09T02:30:29.7549787Z [36;1m  --changed-files ci-plan/python-changed-files.txt \[0m
+2026-10-09T02:30:29.7550247Z [36;1m  --explain-file "$RUNNER_TEMP/python-test-plan.json" \[0m
+2026-10-09T02:30:29.7550644Z [36;1m  --tests-file "$RUNNER_TEMP/python-tests.txt" \[0m
+2026-10-09T02:30:29.7550987Z [36;1m  --shard-index "$SHARD_INDEX" \[0m
+2026-10-09T02:30:29.7551274Z [36;1m  --shard-total "$SHARD_TOTAL" \[0m
+2026-10-09T02:30:29.7551575Z [36;1m  --github-output "$GITHUB_OUTPUT" \[0m
+2026-10-09T02:30:29.7551867Z [36;1m  "${force_args[@]}"[0m
+2026-10-09T02:30:29.7552258Z [36;1mecho "tests_file=$RUNNER_TEMP/python-tests.txt" >> "$GITHUB_OUTPUT"[0m
+2026-10-09T02:30:29.7552920Z [36;1mpython3 scripts/ci_python_dimensions.py \[0m
+2026-10-09T02:30:29.7553390Z [36;1m  --selected-file "$RUNNER_TEMP/python-tests.txt" --github-output "$GITHUB_OUTPUT"[0m
+2026-10-09T02:30:29.7553856Z [36;1mpython3 scripts/ci_pytest_timings.py \[0m
+2026-10-09T02:30:29.7554215Z [36;1m  --selected-file "$RUNNER_TEMP/python-tests.txt" \[0m
+2026-10-09T02:30:29.7554625Z [36;1m  --shard-index "$SHARD_INDEX" --github-output "$GITHUB_OUTPUT"[0m
+2026-10-09T02:30:29.7555156Z [36;1mpython_summary=$(grep '^python_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)[0m
+2026-10-09T02:30:29.7555719Z [36;1mpython_areas=$(grep '^python_areas=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)[0m
+2026-10-09T02:30:29.7556133Z [36;1m{[0m
+2026-10-09T02:30:29.7556355Z [36;1m  echo "### affected Python tests"[0m
+2026-10-09T02:30:29.7556639Z [36;1m  echo ""[0m
+2026-10-09T02:30:29.7556869Z [36;1m  echo "- ${python_summary}"[0m
+2026-10-09T02:30:29.7557160Z [36;1m  echo "- areas: ${python_areas}"[0m
+2026-10-09T02:30:29.7557525Z [36;1m  echo "- plan: artifact \`gate-python-test-plan-shard-52\`"[0m
+2026-10-09T02:30:29.7557896Z [36;1m} >> "$GITHUB_STEP_SUMMARY"[0m
+2026-10-09T02:30:29.7781828Z shell: /usr/bin/bash -e {0}
+2026-10-09T02:30:29.7782123Z env:
+2026-10-09T02:30:29.7782344Z   PYTHONUNBUFFERED: 1
+2026-10-09T02:30:29.7782810Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T02:30:29.7783136Z   CCACHE_MAXSIZE: 2G
+2026-10-09T02:30:29.7783659Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T02:30:29.7784045Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T02:30:29.7784346Z   CCACHE_NOHASHDIR: true
+2026-10-09T02:30:29.7784586Z   CCACHE_SLOPPINESS: locale
+2026-10-09T02:30:29.7784825Z   SHARD_INDEX: 52
+2026-10-09T02:30:29.7785027Z   SHARD_TOTAL: 70
+2026-10-09T02:30:29.7785298Z   POPS_CACHE_DIR: /home/runner/work/PoPS/PoPS/.pops-dsl-cache
+2026-10-09T02:30:29.7785631Z   POPS_KEEP_GENERATED: 1
+2026-10-09T02:30:29.7785880Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T02:30:29.7786121Z ##[endgroup]
+2026-10-09T02:30:30.0022346Z all: 882/882 Python test files [why: broad-file,force-all] (12 in shard 52/70)
+2026-10-09T02:30:30.0023434Z tests/python/integration/dsl/test_dsl_jacobian_fd_public.py
+2026-10-09T02:30:30.0024298Z tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py
+2026-10-09T02:30:30.0025231Z tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py
+2026-10-09T02:30:30.0026110Z tests/python/integration/runtime/test_m18_w09_declared_domain_runtime.py
+2026-10-09T02:30:30.0027013Z tests/python/integration/runtime/test_user_reconstruction_adversarial_runtime.py
+2026-10-09T02:30:30.0027810Z tests/python/unit/codegen/test_artifact_migration.py
+2026-10-09T02:30:30.0028468Z tests/python/unit/codegen/test_lowering_coverage_report.py
+2026-10-09T02:30:30.0029096Z tests/python/unit/descriptors/test_pops_inspect.py
+2026-10-09T02:30:30.0029669Z tests/python/unit/numerics/test_coordinated_face.py
+2026-10-09T02:30:30.0030700Z tests/python/unit/output/test_async_scientific_output_diagnostics.py
+2026-10-09T02:30:30.0031443Z tests/python/unit/runtime/test_consumer_publication_c34.py
+2026-10-09T02:30:30.0032036Z tests/python/unit/runtime/test_inspection.py
+2026-10-09T02:30:30.0818601Z Python shard 52: 12 files; modeled 2097.0s; test watchdog 45m
+2026-10-09T02:30:30.1011385Z ##[group]Run actions/upload-artifact@v7
+2026-10-09T02:30:30.1011686Z with:
+2026-10-09T02:30:30.1011938Z   name: gate-python-test-plan-shard-52
+2026-10-09T02:30:30.1012273Z   path: /home/runner/work/_temp/python-test-plan.json
+2026-10-09T02:30:30.1012876Z   if-no-files-found: warn
+2026-10-09T02:30:30.1013128Z   compression-level: 6
+2026-10-09T02:30:30.1013359Z   overwrite: false
+2026-10-09T02:30:30.1013584Z   include-hidden-files: false
+2026-10-09T02:30:30.1013844Z   archive: true
+2026-10-09T02:30:30.1014049Z env:
+2026-10-09T02:30:30.1014250Z   PYTHONUNBUFFERED: 1
+2026-10-09T02:30:30.1014523Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T02:30:30.1014835Z   CCACHE_MAXSIZE: 2G
+2026-10-09T02:30:30.1015134Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T02:30:30.1015501Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T02:30:30.1015793Z   CCACHE_NOHASHDIR: true
+2026-10-09T02:30:30.1016038Z   CCACHE_SLOPPINESS: locale
+2026-10-09T02:30:30.1016321Z   SHARD_INDEX: 52
+2026-10-09T02:30:30.1016540Z   SHARD_TOTAL: 70
+2026-10-09T02:30:30.1016816Z   POPS_CACHE_DIR: /home/runner/work/PoPS/PoPS/.pops-dsl-cache
+2026-10-09T02:30:30.1017171Z   POPS_KEEP_GENERATED: 1
+2026-10-09T02:30:30.1017416Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T02:30:30.1017670Z ##[endgroup]
+2026-10-09T02:30:30.2403206Z With the provided path, there will be 1 file uploaded
+2026-10-09T02:30:30.2413233Z Artifact name is valid!
+2026-10-09T02:30:30.2423555Z Root directory input is valid!
+2026-10-09T02:30:30.5269969Z Uploading artifact: gate-python-test-plan-shard-52.zip
+2026-10-09T02:30:30.5310842Z Beginning upload of artifact content to blob storage
+2026-10-09T02:30:30.7783552Z Uploaded bytes 20822
+2026-10-09T02:30:30.8294317Z Finished uploading artifact content to blob storage!
+2026-10-09T02:30:30.8295299Z SHA256 digest of uploaded artifact is 1d85963305f266d56ec3f7132d4f43f67aa61442ba800c114878fb50661d9473
+2026-10-09T02:30:30.8296151Z Finalizing artifact upload
+2026-10-09T02:30:31.1648217Z Artifact gate-python-test-plan-shard-52 successfully finalized. Artifact ID 11591483912
+2026-10-09T02:30:31.1650049Z Artifact gate-python-test-plan-shard-52 has been successfully uploaded! Final size is 20822 bytes. Artifact ID is 11591483912
+2026-10-09T02:30:31.1651850Z Artifact download URL: https://github.com/wolf75222/PoPS/actions/runs/37874700424/artifacts/11591483912
+2026-10-09T02:30:31.1776556Z ##[group]Run force_args=()
+2026-10-09T02:30:31.1776873Z [36;1mforce_args=()[0m
+2026-10-09T02:30:31.1777144Z [36;1mif [ "true" = "true" ]; then[0m
+2026-10-09T02:30:31.1777442Z [36;1m  force_args+=(--force-all)[0m
+2026-10-09T02:30:31.1777709Z [36;1mfi[0m
+2026-10-09T02:30:31.1777978Z [36;1mpython3 scripts/ci_select_tests.py verify \[0m
+2026-10-09T02:30:31.1778386Z [36;1m  --changed-files ci-plan/python-changed-files.txt \[0m
+2026-10-09T02:30:31.1778768Z [36;1m  --shard-total "$SHARD_TOTAL" \[0m
+2026-10-09T02:30:31.1779058Z [36;1m  "${force_args[@]}"[0m
+2026-10-09T02:30:31.1847759Z shell: /usr/bin/bash -e {0}
+2026-10-09T02:30:31.1848042Z env:
+2026-10-09T02:30:31.1848265Z   PYTHONUNBUFFERED: 1
+2026-10-09T02:30:31.1848584Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T02:30:31.1848924Z   CCACHE_MAXSIZE: 2G
+2026-10-09T02:30:31.1849224Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T02:30:31.1849672Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T02:30:31.1849980Z   CCACHE_NOHASHDIR: true
+2026-10-09T02:30:31.1850242Z   CCACHE_SLOPPINESS: locale
+2026-10-09T02:30:31.1850488Z   SHARD_INDEX: 52
+2026-10-09T02:30:31.1850707Z   SHARD_TOTAL: 70
+2026-10-09T02:30:31.1851003Z   POPS_CACHE_DIR: /home/runner/work/PoPS/PoPS/.pops-dsl-cache
+2026-10-09T02:30:31.1851351Z   POPS_KEEP_GENERATED: 1
+2026-10-09T02:30:31.1851606Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T02:30:31.1851858Z ##[endgroup]
+2026-10-09T02:30:31.4069730Z partition OK: all selection of 882 files (881 sharded across 70 + 1 in the dedicated compile-cache job) is an exact cover
+2026-10-09T02:30:31.4071511Z per-shard file counts: 1, 1, 1, 1, 1, 13, 11, 13, 13, 13, 13, 13, 10, 11, 14, 14, 14, 14, 11, 12, 12, 12, 13, 12, 14, 15, 15, 15, 14, 12, 12, 13, 15, 13, 13, 12, 15, 13, 14, 14, 14, 9, 10, 11, 13, 14, 14, 8, 8, 10, 11, 12, 12, 12, 12, 15, 16, 16, 16, 16, 16, 15, 16, 17, 17, 18, 18, 18, 17, 18
+2026-10-09T02:30:31.4073405Z dedicated-job files (excluded from shards): tests/python/integration/mpi/test_dsl_compile_cache.py
+2026-10-09T02:30:31.4320029Z Prepare all required actions
+2026-10-09T02:30:31.4320605Z Getting action download info
+2026-10-09T02:30:31.5479806Z ##[group]Run ./.github/actions/setup-kokkos
+2026-10-09T02:30:31.5480128Z with:
+2026-10-09T02:30:31.5480351Z   extra-apt: mold
+2026-10-09T02:30:31.5480598Z   kokkos-version: 4.4.01
+2026-10-09T02:30:31.5480914Z   kokkos-commit: 15dc143e5f39949eece972a798e175c4b463d4b8
+2026-10-09T02:30:31.5481276Z   compiler: gcc
+2026-10-09T02:30:31.5481501Z   exec-space: serial
+2026-10-09T02:30:31.5481734Z env:
+2026-10-09T02:30:31.5481944Z   PYTHONUNBUFFERED: 1
+2026-10-09T02:30:31.5482230Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T02:30:31.5482753Z   CCACHE_MAXSIZE: 2G
+2026-10-09T02:30:31.5483082Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T02:30:31.5483469Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T02:30:31.5483778Z   CCACHE_NOHASHDIR: true
+2026-10-09T02:30:31.5484031Z   CCACHE_SLOPPINESS: locale
+2026-10-09T02:30:31.5484331Z   SHARD_INDEX: 52
+2026-10-09T02:30:31.5484562Z   SHARD_TOTAL: 70
+2026-10-09T02:30:31.5484853Z   POPS_CACHE_DIR: /home/runner/work/PoPS/PoPS/.pops-dsl-cache
+2026-10-09T02:30:31.5485210Z   POPS_KEEP_GENERATED: 1
+2026-10-09T02:30:31.5485457Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T02:30:31.5485714Z ##[endgroup]
+2026-10-09T02:30:31.5545563Z ##[start-action display=Run echo "prefix=/home/runner/work/PoPS/PoPS/.kokkos-install" >> "$GITHUB_OUTPUT";id=kokkos.paths]
+2026-10-09T02:30:31.5591512Z ##[group]Run echo "prefix=/home/runner/work/PoPS/PoPS/.kokkos-install" >> "$GITHUB_OUTPUT"
+2026-10-09T02:30:31.5592132Z [36;1mecho "prefix=/home/runner/work/PoPS/PoPS/.kokkos-install" >> "$GITHUB_OUTPUT"[0m
+2026-10-09T02:30:31.5662928Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-09T02:30:31.5663290Z env:
+2026-10-09T02:30:31.5663519Z   PYTHONUNBUFFERED: 1
+2026-10-09T02:30:31.5663818Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T02:30:31.5664144Z   CCACHE_MAXSIZE: 2G
+2026-10-09T02:30:31.5664463Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T02:30:31.5664842Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T02:30:31.5665154Z   CCACHE_NOHASHDIR: true
+2026-10-09T02:30:31.5665404Z   CCACHE_SLOPPINESS: locale
+2026-10-09T02:30:31.5665651Z   SHARD_INDEX: 52
+2026-10-09T02:30:31.5665876Z   SHARD_TOTAL: 70
+2026-10-09T02:30:31.5666160Z   POPS_CACHE_DIR: /home/runner/work/PoPS/PoPS/.pops-dsl-cache
+2026-10-09T02:30:31.5666506Z   POPS_KEEP_GENERATED: 1
+2026-10-09T02:30:31.5666764Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T02:30:31.5667022Z ##[endgroup]
+2026-10-09T02:30:31.5764666Z ##[end-action id=kokkos.paths;outcome=success;conclusion=success;duration_ms=21]
+2026-10-09T02:30:31.5766911Z ##[start-action display=Install deps;id=kokkos.__run]
+2026-10-09T02:30:31.5785826Z ##[group]Run sudo apt-get update
+2026-10-09T02:30:31.5786140Z [36;1msudo apt-get update[0m
+2026-10-09T02:30:31.5786656Z [36;1m# exec-space=openmp : le backend OpenMP clang a besoin de libomp LLVM (libgomp gcc n'est pas[0m
+2026-10-09T02:30:31.5787210Z [36;1m# TSan-aware, cf. job tsan). En serial, rien de plus.[0m
+2026-10-09T02:30:31.5787568Z [36;1mOMP_DEP=""[0m
+2026-10-09T02:30:31.5787895Z [36;1mif [ "serial" = "openmp" ]; then OMP_DEP="libomp-dev"; fi[0m
+2026-10-09T02:30:31.5788392Z [36;1msudo apt-get install -y libeigen3-dev ninja-build ccache $OMP_DEP mold[0m
+2026-10-09T02:30:31.5850241Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-09T02:30:31.5850601Z env:
+2026-10-09T02:30:31.5850814Z   PYTHONUNBUFFERED: 1
+2026-10-09T02:30:31.5851104Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T02:30:31.5851435Z   CCACHE_MAXSIZE: 2G
+2026-10-09T02:30:31.5851740Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T02:30:31.5852114Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T02:30:31.5852416Z   CCACHE_NOHASHDIR: true
+2026-10-09T02:30:31.5852846Z   CCACHE_SLOPPINESS: locale
+2026-10-09T02:30:31.5853097Z   SHARD_INDEX: 52
+2026-10-09T02:30:31.5853503Z   SHARD_TOTAL: 70
+2026-10-09T02:30:31.5853792Z   POPS_CACHE_DIR: /home/runner/work/PoPS/PoPS/.pops-dsl-cache
+2026-10-09T02:30:31.5854147Z   POPS_KEEP_GENERATED: 1
+2026-10-09T02:30:31.5854394Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T02:30:31.5854651Z ##[endgroup]
+2026-10-09T02:30:31.7876211Z Get:1 https://packages.microsoft.com/ubuntu/24.04/prod noble InRelease [3600 B]
+2026-10-09T02:30:31.8135463Z Get:2 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+2026-10-09T02:30:31.8490159Z Hit:3 http://azure.archive.ubuntu.com/ubuntu noble InRelease
+2026-10-09T02:30:31.8513386Z Get:4 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+2026-10-09T02:30:31.8603544Z Get:5 http://azure.archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+2026-10-09T02:30:31.8704762Z Get:6 http://azure.archive.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+2026-10-09T02:30:31.9720408Z Get:7 https://packages.microsoft.com/ubuntu/24.04/prod noble/main arm64 Packages [474 kB]
+2026-10-09T02:30:31.9925764Z Get:8 https://packages.microsoft.com/ubuntu/24.04/prod noble/main amd64 Packages [531 kB]
+2026-10-09T02:30:31.9980129Z Get:9 https://packages.microsoft.com/ubuntu/24.04/prod noble/main all Packages [640 B]
+2026-10-09T02:30:32.0007240Z Get:10 https://packages.microsoft.com/ubuntu/24.04/prod noble/main armhf Packages [12.3 kB]
+2026-10-09T02:30:32.1140759Z Get:11 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [1375 kB]
+2026-10-09T02:30:32.1224392Z Get:12 http://azure.archive.ubuntu.com/ubuntu noble-updates/main Translation-en [306 kB]
+2026-10-09T02:30:32.1294815Z Get:13 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [1702 kB]
+2026-10-09T02:30:32.1383535Z Get:14 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe Translation-en [342 kB]
+2026-10-09T02:30:32.1443520Z Get:15 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [1761 kB]
+2026-10-09T02:30:32.1551044Z Get:16 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted Translation-en [401 kB]
+2026-10-09T02:30:32.1593746Z Get:17 http://azure.archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Packages [55.0 kB]
+2026-10-09T02:30:32.1604611Z Get:18 http://azure.archive.ubuntu.com/ubuntu noble-updates/multiverse Translation-en [14.3 kB]
+2026-10-09T02:30:32.2454011Z Get:19 http://azure.archive.ubuntu.com/ubuntu noble-security/main amd64 Packages [1118 kB]
+2026-10-09T02:30:32.2563190Z Get:20 http://azure.archive.ubuntu.com/ubuntu noble-security/main Translation-en [228 kB]
+2026-10-09T02:30:32.3017808Z Get:21 http://azure.archive.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1220 kB]
+2026-10-09T02:30:32.3087834Z Get:22 http://azure.archive.ubuntu.com/ubuntu noble-security/universe Translation-en [245 kB]
+2026-10-09T02:30:32.3106576Z Get:23 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [1667 kB]
+2026-10-09T02:30:32.3212412Z Get:24 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted Translation-en [383 kB]
+2026-10-09T02:30:32.3242399Z Get:25 http://azure.archive.ubuntu.com/ubuntu noble-security/multiverse amd64 Packages [49.8 kB]
+2026-10-09T02:30:32.3260267Z Get:26 http://azure.archive.ubuntu.com/ubuntu noble-security/multiverse Translation-en [12.4 kB]
+2026-10-09T02:30:37.8924373Z Fetched 12.3 MB in 1s (8374 kB/s)
+2026-10-09T02:30:38.7085294Z Reading package lists...
+2026-10-09T02:30:38.7414015Z Reading package lists...
+2026-10-09T02:30:38.9298208Z Building dependency tree...
+2026-10-09T02:30:38.9305827Z Reading state information...
+2026-10-09T02:30:39.0831537Z The following additional packages will be installed:
+2026-10-09T02:30:39.0835478Z   libhiredis1.1.0
+2026-10-09T02:30:39.0840643Z Suggested packages:
+2026-10-09T02:30:39.0841089Z   distcc | icecc libeigen3-doc libmpfrc++-dev
+2026-10-09T02:30:39.1234186Z The following NEW packages will be installed:
+2026-10-09T02:30:39.1239859Z   ccache libeigen3-dev libhiredis1.1.0 mold ninja-build
+2026-10-09T02:30:39.1420473Z 0 upgraded, 5 newly installed, 0 to remove and 23 not upgraded.
+2026-10-09T02:30:39.1420915Z Need to get 4347 kB of archives.
+2026-10-09T02:30:39.1421296Z After this operation, 30.3 MB of additional disk space will be used.
+2026-10-09T02:30:39.1421748Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+2026-10-09T02:30:39.2074845Z Get:2 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libhiredis1.1.0 amd64 1.2.0-6ubuntu3 [41.4 kB]
+2026-10-09T02:30:39.2591780Z Get:3 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 ccache amd64 4.9.1-1 [592 kB]
+2026-10-09T02:30:39.3574920Z Get:4 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 mold amd64 2.30.0+dfsg-1build1 [2529 kB]
+2026-10-09T02:30:39.6179538Z Get:5 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 ninja-build amd64 1.11.1-2 [129 kB]
+2026-10-09T02:30:39.6767289Z Get:6 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 libeigen3-dev all 3.4.0-4build0.1 [1057 kB]
+2026-10-09T02:30:40.0588799Z Fetched 4347 kB in 1s (6962 kB/s)
+2026-10-09T02:30:40.0998351Z Selecting previously unselected package libhiredis1.1.0:amd64.
+2026-10-09T02:30:40.1715128Z (Reading database ... 
+2026-10-09T02:30:40.1718033Z (Reading database ... 5%
+2026-10-09T02:30:40.1718436Z (Reading database ... 10%
+2026-10-09T02:30:40.1718819Z (Reading database ... 15%
+2026-10-09T02:30:40.1719135Z (Reading database ... 20%
+2026-10-09T02:30:40.1719363Z (Reading database ... 25%
+2026-10-09T02:30:40.1719599Z (Reading database ... 30%
+2026-10-09T02:30:40.1719823Z (Reading database ... 35%
+2026-10-09T02:30:40.1720053Z (Reading database ... 40%
+2026-10-09T02:30:40.1720282Z (Reading database ... 45%
+2026-10-09T02:30:40.1720509Z (Reading database ... 50%
+2026-10-09T02:30:40.2285519Z (Reading database ... 55%
+2026-10-09T02:30:40.6978617Z (Reading database ... 60%
+2026-10-09T02:30:40.9800542Z (Reading database ... 65%
+2026-10-09T02:30:41.2874382Z (Reading database ... 70%
+2026-10-09T02:30:41.6396055Z (Reading database ... 75%
+2026-10-09T02:30:42.0402958Z (Reading database ... 80%
+2026-10-09T02:30:42.9633246Z (Reading database ... 85%
+2026-10-09T02:30:43.6703371Z (Reading database ... 90%
+2026-10-09T02:30:44.3541763Z (Reading database ... 95%
+2026-10-09T02:30:44.3542240Z (Reading database ... 100%
+2026-10-09T02:30:44.3542967Z (Reading database ... 203191 files and directories currently installed.)
+2026-10-09T02:30:44.3588918Z Preparing to unpack .../libhiredis1.1.0_1.2.0-6ubuntu3_amd64.deb ...
+2026-10-09T02:30:44.3621806Z Unpacking libhiredis1.1.0:amd64 (1.2.0-6ubuntu3) ...
+2026-10-09T02:30:44.3881652Z Selecting previously unselected package ccache.
+2026-10-09T02:30:44.4011128Z Preparing to unpack .../ccache_4.9.1-1_amd64.deb ...
+2026-10-09T02:30:44.4017741Z Unpacking ccache (4.9.1-1) ...
+2026-10-09T02:30:44.4941085Z Selecting previously unselected package mold.
+2026-10-09T02:30:44.5073073Z Preparing to unpack .../mold_2.30.0+dfsg-1build1_amd64.deb ...
+2026-10-09T02:30:44.5079306Z Unpacking mold (2.30.0+dfsg-1build1) ...
+2026-10-09T02:30:44.5826478Z Selecting previously unselected package ninja-build.
+2026-10-09T02:30:44.5959155Z Preparing to unpack .../ninja-build_1.11.1-2_amd64.deb ...
+2026-10-09T02:30:44.5965661Z Unpacking ninja-build (1.11.1-2) ...
+2026-10-09T02:30:44.6344803Z Selecting previously unselected package libeigen3-dev.
+2026-10-09T02:30:44.6473204Z Preparing to unpack .../libeigen3-dev_3.4.0-4build0.1_all.deb ...
+2026-10-09T02:30:44.6478343Z Unpacking libeigen3-dev (3.4.0-4build0.1) ...
+2026-10-09T02:30:44.7823272Z Setting up ninja-build (1.11.1-2) ...
+2026-10-09T02:30:44.7839181Z Setting up mold (2.30.0+dfsg-1build1) ...
+2026-10-09T02:30:44.7855702Z Setting up libeigen3-dev (3.4.0-4build0.1) ...
+2026-10-09T02:30:44.7870802Z Setting up libhiredis1.1.0:amd64 (1.2.0-6ubuntu3) ...
+2026-10-09T02:30:44.7886819Z Setting up ccache (4.9.1-1) ...
+2026-10-09T02:30:44.7906954Z Updating symlinks in /usr/lib/ccache ...
+2026-10-09T02:30:44.8120351Z Processing triggers for libc-bin (2.39-0ubuntu8.9) ...
+2026-10-09T02:30:44.8714700Z Processing triggers for man-db (2.12.0-4build2) ...
+2026-10-09T02:30:44.8735406Z Not building database; man-db/auto-update is not 'true'.
+2026-10-09T02:30:46.3470157Z 
+2026-10-09T02:30:46.3470816Z Running kernel seems to be up-to-date.
+2026-10-09T02:30:46.3471100Z 
+2026-10-09T02:30:46.3471214Z No services need to be restarted.
+2026-10-09T02:30:46.3471414Z 
+2026-10-09T02:30:46.3471525Z No containers need to be restarted.
+2026-10-09T02:30:46.3471711Z 
+2026-10-09T02:30:46.3471841Z No user sessions are running outdated binaries.
+2026-10-09T02:30:46.3472070Z 
+2026-10-09T02:30:46.3472285Z No VM guests are running outdated hypervisor (qemu) binaries on this host.
+2026-10-09T02:30:47.2444138Z ##[end-action id=kokkos.__run;outcome=success;conclusion=success;duration_ms=15667]
+2026-10-09T02:30:47.2447603Z ##[start-action display=Resolve runner and compiler cache identity;id=kokkos.cache-platform]
+2026-10-09T02:30:47.2469592Z ##[group]Run case "gcc" in
+2026-10-09T02:30:47.2469915Z [36;1mcase "gcc" in[0m
+2026-10-09T02:30:47.2470179Z [36;1m  gcc)   CXX_BIN=g++ ;;[0m
+2026-10-09T02:30:47.2470493Z [36;1m  clang) CXX_BIN=clang++ ;;[0m
+2026-10-09T02:30:47.2470856Z [36;1m  *) echo "unsupported Kokkos compiler: gcc" >&2; exit 2 ;;[0m
+2026-10-09T02:30:47.2471246Z [36;1mesac[0m
+2026-10-09T02:30:47.2471483Z [36;1mimage="${ImageOS:-}"[0m
+2026-10-09T02:30:47.2471758Z [36;1mif [ -z "$image" ]; then[0m
+2026-10-09T02:30:47.2472043Z [36;1m  . /etc/os-release[0m
+2026-10-09T02:30:47.2472314Z [36;1m  image="${ID}${VERSION_ID}"[0m
+2026-10-09T02:30:47.2472809Z [36;1mfi[0m
+2026-10-09T02:30:47.2473143Z [36;1mversion="$("$CXX_BIN" -dumpfullversion -dumpversion 2>/dev/null \[0m
+2026-10-09T02:30:47.2473547Z [36;1m  || "$CXX_BIN" -dumpversion)"[0m
+2026-10-09T02:30:47.2473920Z [36;1mversion="$(printf '%s' "$version" | tr -c 'A-Za-z0-9._-' '-')"[0m
+2026-10-09T02:30:47.2474651Z [36;1mecho "key=${image}-${RUNNER_ARCH}-gcc-${version}" >> "$GITHUB_OUTPUT"[0m
+2026-10-09T02:30:47.2544105Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-09T02:30:47.2544461Z env:
+2026-10-09T02:30:47.2544695Z   PYTHONUNBUFFERED: 1
+2026-10-09T02:30:47.2544995Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T02:30:47.2545323Z   CCACHE_MAXSIZE: 2G
+2026-10-09T02:30:47.2545635Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T02:30:47.2546005Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T02:30:47.2546302Z   CCACHE_NOHASHDIR: true
+2026-10-09T02:30:47.2546560Z   CCACHE_SLOPPINESS: locale
+2026-10-09T02:30:47.2546803Z   SHARD_INDEX: 52
+2026-10-09T02:30:47.2547015Z   SHARD_TOTAL: 70
+2026-10-09T02:30:47.2547311Z   POPS_CACHE_DIR: /home/runner/work/PoPS/PoPS/.pops-dsl-cache
+2026-10-09T02:30:47.2547655Z   POPS_KEEP_GENERATED: 1
+2026-10-09T02:30:47.2547907Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T02:30:47.2548168Z ##[endgroup]
+2026-10-09T02:30:47.3213068Z ##[end-action id=kokkos.cache-platform;outcome=success;conclusion=success;duration_ms=76]
+2026-10-09T02:30:47.3216876Z ##[start-action display=Cache Kokkos install (serial 4.4.01, gcc);id=kokkos.kokkos-cache]
+2026-10-09T02:30:47.3260032Z ##[group]Run actions/cache@v6
+2026-10-09T02:30:47.3260306Z with:
+2026-10-09T02:30:47.3260573Z   path: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T02:30:47.3261202Z   key: kokkos-Linux-ubuntu24-X64-gcc-13.3.0-4.4.01-15dc143e5f39949eece972a798e175c4b463d4b8-serial-cxx20-pic
+2026-10-09T02:30:47.3261763Z   enableCrossOsArchive: false
+2026-10-09T02:30:47.3262039Z   fail-on-cache-miss: false
+2026-10-09T02:30:47.3262301Z   lookup-only: false
+2026-10-09T02:30:47.3262806Z   save-always: false
+2026-10-09T02:30:47.3263104Z env:
+2026-10-09T02:30:47.3263326Z   PYTHONUNBUFFERED: 1
+2026-10-09T02:30:47.3263608Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T02:30:47.3263946Z   CCACHE_MAXSIZE: 2G
+2026-10-09T02:30:47.3264244Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T02:30:47.3264621Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T02:30:47.3264932Z   CCACHE_NOHASHDIR: true
+2026-10-09T02:30:47.3265191Z   CCACHE_SLOPPINESS: locale
+2026-10-09T02:30:47.3265651Z   SHARD_INDEX: 52
+2026-10-09T02:30:47.3265885Z   SHARD_TOTAL: 70
+2026-10-09T02:30:47.3266175Z   POPS_CACHE_DIR: /home/runner/work/PoPS/PoPS/.pops-dsl-cache
+2026-10-09T02:30:47.3266528Z   POPS_KEEP_GENERATED: 1
+2026-10-09T02:30:47.3266779Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T02:30:47.3267034Z ##[endgroup]
+2026-10-09T02:30:47.6002334Z Cache hit for: kokkos-Linux-ubuntu24-X64-gcc-13.3.0-4.4.01-15dc143e5f39949eece972a798e175c4b463d4b8-serial-cxx20-pic
+2026-10-09T02:30:48.3645959Z Received 1029868 of 1029868 (100.0%), 1.8 MBs/sec
+2026-10-09T02:30:48.3646582Z Cache Size: ~1 MB (1029868 B)
+2026-10-09T02:30:48.3670144Z [command]/usr/bin/tar -xf /home/runner/work/_temp/1c39d53e-f88e-4ac0-8928-cda7bdf04dd1/cache.tzst -P -C /home/runner/work/PoPS/PoPS --use-compress-program unzstd
+2026-10-09T02:30:48.4010678Z Cache restored successfully
+2026-10-09T02:30:48.4089141Z Cache restored from key: kokkos-Linux-ubuntu24-X64-gcc-13.3.0-4.4.01-15dc143e5f39949eece972a798e175c4b463d4b8-serial-cxx20-pic
+2026-10-09T02:30:48.4165316Z ##[end-action id=kokkos.kokkos-cache;outcome=success;conclusion=success;duration_ms=1094]
+2026-10-09T02:30:48.4169176Z ##[start-action display=Build + install Kokkos (serial, PIC, gcc);id=kokkos.__run_2]
+2026-10-09T02:30:48.4175944Z ##[end-action id=kokkos.__run_2;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-09T02:30:48.4291221Z ##[group]Run actions/setup-python@v7
+2026-10-09T02:30:48.4291536Z with:
+2026-10-09T02:30:48.4291764Z   python-version: 3.12
+2026-10-09T02:30:48.4292015Z   cache: pip
+2026-10-09T02:30:48.4292238Z   check-latest: false
+2026-10-09T02:30:48.4295121Z   token: ***
+2026-10-09T02:30:48.4295365Z   update-environment: true
+2026-10-09T02:30:48.4295905Z   allow-prereleases: false
+2026-10-09T02:30:48.4296162Z   freethreaded: false
+2026-10-09T02:30:48.4296393Z env:
+2026-10-09T02:30:48.4296608Z   PYTHONUNBUFFERED: 1
+2026-10-09T02:30:48.4296892Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T02:30:48.4297227Z   CCACHE_MAXSIZE: 2G
+2026-10-09T02:30:48.4297529Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T02:30:48.4297915Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T02:30:48.4298228Z   CCACHE_NOHASHDIR: true
+2026-10-09T02:30:48.4298486Z   CCACHE_SLOPPINESS: locale
+2026-10-09T02:30:48.4298741Z   SHARD_INDEX: 52
+2026-10-09T02:30:48.4299010Z   SHARD_TOTAL: 70
+2026-10-09T02:30:48.4299306Z   POPS_CACHE_DIR: /home/runner/work/PoPS/PoPS/.pops-dsl-cache
+2026-10-09T02:30:48.4299665Z   POPS_KEEP_GENERATED: 1
+2026-10-09T02:30:48.4299922Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T02:30:48.4300186Z ##[endgroup]
+2026-10-09T02:30:48.5468386Z ##[group]Installed versions
+2026-10-09T02:30:48.5539334Z Successfully set up CPython (3.12.15)
+2026-10-09T02:30:48.5540094Z ##[endgroup]
+2026-10-09T02:30:49.5481539Z [command]/opt/hostedtoolcache/Python/3.12.15/x64/bin/pip cache dir
+2026-10-09T02:30:51.0422370Z /home/runner/.cache/pip
+2026-10-09T02:30:51.2635404Z Cache hit for: setup-python-Linux-x64-24.04-Ubuntu-python-3.12.15-pip-7015f4bcc5f2bd795e6383da1db091377db2a52a265b633f77681b0d590a646f
+2026-10-09T02:30:52.3660776Z Received 18973191 of 18973191 (100.0%), 20.6 MBs/sec
+2026-10-09T02:30:52.3661552Z Cache Size: ~18 MB (18973191 B)
+2026-10-09T02:30:52.3693616Z [command]/usr/bin/tar -xf /home/runner/work/_temp/2943b7c5-d5f1-4f4c-b8ed-1c19f92c8e87/cache.tzst -P -C /home/runner/work/PoPS/PoPS --use-compress-program unzstd
+2026-10-09T02:30:52.4076720Z Cache restored successfully
+2026-10-09T02:30:52.4091599Z Cache restored from key: setup-python-Linux-x64-24.04-Ubuntu-python-3.12.15-pip-7015f4bcc5f2bd795e6383da1db091377db2a52a265b633f77681b0d590a646f
+2026-10-09T02:30:52.4335751Z ##[group]Run actions/download-artifact@v8
+2026-10-09T02:30:52.4336102Z with:
+2026-10-09T02:30:52.4336365Z   name: gate-python-build-kokkos-py-dim2
+2026-10-09T02:30:52.4336706Z   path: .pops-ci/python-packages/dim2
+2026-10-09T02:30:52.4337020Z   merge-multiple: false
+2026-10-09T02:30:52.4337301Z   repository: wolf75222/PoPS
+2026-10-09T02:30:52.4337581Z   run-id: 37874700424
+2026-10-09T02:30:52.4337829Z   skip-decompress: false
+2026-10-09T02:30:52.4338105Z   digest-mismatch: error
+2026-10-09T02:30:52.4338355Z env:
+2026-10-09T02:30:52.4338571Z   PYTHONUNBUFFERED: 1
+2026-10-09T02:30:52.4338875Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T02:30:52.4339225Z   CCACHE_MAXSIZE: 2G
+2026-10-09T02:30:52.4339540Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T02:30:52.4339937Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T02:30:52.4340258Z   CCACHE_NOHASHDIR: true
+2026-10-09T02:30:52.4340510Z   CCACHE_SLOPPINESS: locale
+2026-10-09T02:30:52.4340829Z   SHARD_INDEX: 52
+2026-10-09T02:30:52.4341070Z   SHARD_TOTAL: 70
+2026-10-09T02:30:52.4341389Z   POPS_CACHE_DIR: /home/runner/work/PoPS/PoPS/.pops-dsl-cache
+2026-10-09T02:30:52.4341759Z   POPS_KEEP_GENERATED: 1
+2026-10-09T02:30:52.4342026Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T02:30:52.4342374Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:30:52.4343036Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib/pkgconfig
+2026-10-09T02:30:52.4343507Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:30:52.4343926Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:30:52.4344332Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:30:52.4344738Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
+2026-10-09T02:30:52.4345088Z ##[endgroup]
+2026-10-09T02:30:52.5742440Z Downloading single artifact
+2026-10-09T02:30:52.7858081Z Preparing to download the following artifacts:
+2026-10-09T02:30:52.7859412Z - gate-python-build-kokkos-py-dim2 (ID: 11591169557, Size: 9536661, Expected Digest: sha256:62b69a9c0732dd054fb0e34e748f5c67e4c0a1b789d6578e7afae45f8d8928d4)
+2026-10-09T02:30:53.1686818Z Redirecting to blob download url: https://productionresultssa1.blob.core.windows.net/actions-results/fccbdf31-5f88-8997-bbca-7bae8558756e/workflow-job-run-57287ed2-19ab-50da-aed9-f2fa5611aabe/artifacts/ecc096170b94c4124a1647bf71b918acd528399a1674ff9b9a701ca360e13c00.zip
+2026-10-09T02:30:53.1688492Z Starting download of artifact to: /home/runner/work/PoPS/PoPS/.pops-ci/python-packages/dim2
+2026-10-09T02:30:53.3941402Z (node:2993) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+2026-10-09T02:30:53.3943240Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-09T02:30:54.1267989Z SHA256 digest of downloaded artifact is 62b69a9c0732dd054fb0e34e748f5c67e4c0a1b789d6578e7afae45f8d8928d4
+2026-10-09T02:30:54.1269001Z Artifact download completed successfully.
+2026-10-09T02:30:54.1269531Z Total of 1 artifact(s) downloaded
+2026-10-09T02:30:54.1273110Z Download artifact has finished successfully
+2026-10-09T02:30:54.1418006Z ##[group]Run actions/cache@v6
+2026-10-09T02:30:54.1418317Z with:
+2026-10-09T02:30:54.1418598Z   path: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T02:30:54.1419189Z   key: ccache-Linux-python-runtime-shard52-refs/pull/681/merge-3c40c75431dc1942e6b38cc5a1eb3c870fdeca93
+2026-10-09T02:30:54.1420466Z   restore-keys: ccache-Linux-python-runtime-shard52-refs/pull/681/merge-
+ccache-Linux-python-runtime-shard52-refs/heads/master-
+ccache-Linux-python-build-refs/pull/681/merge-
+ccache-Linux-python-build-refs/heads/master-
+ccache-Linux-python-
+
+2026-10-09T02:30:54.1421510Z   enableCrossOsArchive: false
+2026-10-09T02:30:54.1421807Z   fail-on-cache-miss: false
+2026-10-09T02:30:54.1422084Z   lookup-only: false
+2026-10-09T02:30:54.1422335Z   save-always: false
+2026-10-09T02:30:54.1422788Z env:
+2026-10-09T02:30:54.1423022Z   PYTHONUNBUFFERED: 1
+2026-10-09T02:30:54.1423350Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T02:30:54.1423698Z   CCACHE_MAXSIZE: 2G
+2026-10-09T02:30:54.1424052Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T02:30:54.1424468Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T02:30:54.1424800Z   CCACHE_NOHASHDIR: true
+2026-10-09T02:30:54.1425071Z   CCACHE_SLOPPINESS: locale
+2026-10-09T02:30:54.1425342Z   SHARD_INDEX: 52
+2026-10-09T02:30:54.1425582Z   SHARD_TOTAL: 70
+2026-10-09T02:30:54.1425892Z   POPS_CACHE_DIR: /home/runner/work/PoPS/PoPS/.pops-dsl-cache
+2026-10-09T02:30:54.1426264Z   POPS_KEEP_GENERATED: 1
+2026-10-09T02:30:54.1426530Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T02:30:54.1426884Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:30:54.1427348Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib/pkgconfig
+2026-10-09T02:30:54.1427808Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:30:54.1428223Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:30:54.1428634Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:30:54.1429055Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
+2026-10-09T02:30:54.1429415Z ##[endgroup]
+2026-10-09T02:30:54.4301400Z Cache hit for restore-key: ccache-Linux-python-build-dim3-refs/pull/681/merge-3c40c75431dc1942e6b38cc5a1eb3c870fdeca93-37874700424-1
+2026-10-09T02:30:55.6458980Z Received 37748736 of 53728009 (70.3%), 36.0 MBs/sec
+2026-10-09T02:30:55.6987091Z Received 53728009 of 53728009 (100.0%), 48.6 MBs/sec
+2026-10-09T02:30:55.6989245Z Cache Size: ~51 MB (53728009 B)
+2026-10-09T02:30:55.7028810Z [command]/usr/bin/tar -xf /home/runner/work/_temp/fc50e253-adf3-44ac-8add-d646e09f0654/cache.tzst -P -C /home/runner/work/PoPS/PoPS --use-compress-program unzstd
+2026-10-09T02:30:55.8003026Z Cache restored successfully
+2026-10-09T02:30:55.8111625Z Cache restored from key: ccache-Linux-python-build-dim3-refs/pull/681/merge-3c40c75431dc1942e6b38cc5a1eb3c870fdeca93-37874700424-1
+2026-10-09T02:30:55.8250685Z ##[group]Run # The full gate exercises the serial HDF5 writer used by the final examples. h5py remains
+2026-10-09T02:30:55.8251465Z [36;1m# The full gate exercises the serial HDF5 writer used by the final examples. h5py remains[0m
+2026-10-09T02:30:55.8252140Z [36;1m# an optional user dependency; CI installs that capability explicitly instead of skipping.[0m
+2026-10-09T02:30:55.8253098Z [36;1m# mpmath supplies the independent precision oracle in the Fan–Li native witnesses.[0m
+2026-10-09T02:30:55.8253700Z [36;1mpip install --upgrade pip numpy pytest h5py 'mpmath>=1.3.0'[0m
+2026-10-09T02:30:55.8254280Z [36;1m# PoPS est Kokkos-only : les tests DSL qui compilent un loader/.so production ou son ABI[0m
+2026-10-09T02:30:55.8254954Z [36;1m# incluent les en-tetes pops (-> for_each, #error sans Kokkos). Ils lisent le Kokkos a utiliser[0m
+2026-10-09T02:30:55.8255615Z [36;1m# via Kokkos_ROOT / POPS_KOKKOS_ROOT : on pointe le MEME Kokkos Serial que le module _pops.[0m
+2026-10-09T02:30:55.8256267Z [36;1mexport Kokkos_ROOT="${KOKKOS_PREFIX}" POPS_KOKKOS_ROOT="${KOKKOS_PREFIX}"[0m
+2026-10-09T02:30:55.8256887Z [36;1m# ADC-548 (b): ensure the pinned DSL cache dir exists so any codegen sidecars land in a known[0m
+2026-10-09T02:30:55.8257534Z [36;1m# place for the on-failure upload (empty when this shard runs no DSL-compiling test).[0m
+2026-10-09T02:30:55.8258022Z [36;1mmkdir -p "$POPS_CACHE_DIR"[0m
+2026-10-09T02:30:55.8258333Z [36;1mSECONDS=0[0m
+2026-10-09T02:30:55.8258779Z [36;1m# ADC-366 sharded runner. The selected file list is produced by scripts/ci_select_tests.py,[0m
+2026-10-09T02:30:55.8259414Z [36;1m# then one pytest process per declared dimension owns collection and reporting.[0m
+2026-10-09T02:30:55.8259914Z [36;1m: "${SHARD_INDEX:=0}" "${SHARD_TOTAL:=1}"[0m
+2026-10-09T02:30:55.8260338Z [36;1mtimings="$RUNNER_TEMP/pytimings"; mkdir -p "$timings"[0m
+2026-10-09T02:30:55.8260803Z [36;1mselected="/home/runner/work/_temp/python-tests.txt"[0m
+2026-10-09T02:30:55.8261205Z [36;1mif [ ! -s "$selected" ]; then[0m
+2026-10-09T02:30:55.8261666Z [36;1m  echo "No affected Python tests selected for shard ${SHARD_INDEX}/${SHARD_TOTAL}."[0m
+2026-10-09T02:30:55.8262122Z [36;1m  exit 0[0m
+2026-10-09T02:30:55.8262364Z [36;1mfi[0m
+2026-10-09T02:30:55.8262823Z [36;1mmapfile -t selected_tests < "$selected"[0m
+2026-10-09T02:30:55.8263258Z [36;1mprintf '%s\n' "${selected_tests[@]}" > "$timings/selected.txt"[0m
+2026-10-09T02:30:55.8263640Z [36;1mset +e[0m
+2026-10-09T02:30:55.8264032Z [36;1mpython3 scripts/ci_python_dimensions.py --selected-file "$selected" \[0m
+2026-10-09T02:30:55.8264625Z [36;1m  --packages-root "$PWD/.pops-ci/python-packages" --timings-dir "$timings"[0m
+2026-10-09T02:30:55.8265065Z [36;1mrc=$?[0m
+2026-10-09T02:30:55.8265304Z [36;1mset -e[0m
+2026-10-09T02:30:55.8265548Z [36;1mtest_s=$SECONDS[0m
+2026-10-09T02:30:55.8265916Z [36;1mprintf '{"shard":%s,"total":%s,"seconds":%s,"files":%s}\n' \[0m
+2026-10-09T02:30:55.8266494Z [36;1m  "$SHARD_INDEX" "$SHARD_TOTAL" "$test_s" "$(wc -l < "$selected")" > "$timings/shard-summary.json"[0m
+2026-10-09T02:30:55.8266964Z [36;1m{[0m
+2026-10-09T02:30:55.8267379Z [36;1m  echo "### gate-python shard ${SHARD_INDEX}/${SHARD_TOTAL} (module _pops, Kokkos Serial)"[0m
+2026-10-09T02:30:55.8267850Z [36;1m  echo ""[0m
+2026-10-09T02:30:55.8268115Z [36;1m  echo "| Phase | Duree (s) |"[0m
+2026-10-09T02:30:55.8268436Z [36;1m  echo "| --- | --- |"[0m
+2026-10-09T02:30:55.8268787Z [36;1m  echo "| tests (python, this shard) | ${test_s} |"[0m
+2026-10-09T02:30:55.8269535Z [36;1m  echo "| selection | all: 882/882 Python test files [why: broad-file,force-all] (12 in shard 52/70) |"[0m
+2026-10-09T02:30:55.8270356Z [36;1m  echo ""[0m
+2026-10-09T02:30:55.8270815Z [36;1m  echo "Selected test files (first 25):"[0m
+2026-10-09T02:30:55.8271415Z [36;1m  echo '```'[0m
+2026-10-09T02:30:55.8271843Z [36;1m  head -25 "$timings/selected.txt"[0m
+2026-10-09T02:30:55.8272367Z [36;1m  echo '```'[0m
+2026-10-09T02:30:55.8273329Z [36;1m  echo "Hit-rate ccache :"[0m
+2026-10-09T02:30:55.8273871Z [36;1m  echo '```'[0m
+2026-10-09T02:30:55.8274329Z [36;1m  ccache -s | grep -i hits || true[0m
+2026-10-09T02:30:55.8274831Z [36;1m  echo '```'[0m
+2026-10-09T02:30:55.8275272Z [36;1m} >> "$GITHUB_STEP_SUMMARY"[0m
+2026-10-09T02:30:55.8275801Z [36;1mexit $rc[0m
+2026-10-09T02:30:55.8346596Z shell: /usr/bin/bash -e {0}
+2026-10-09T02:30:55.8347087Z env:
+2026-10-09T02:30:55.8347539Z   PYTHONUNBUFFERED: 1
+2026-10-09T02:30:55.8348030Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T02:30:55.8348603Z   CCACHE_MAXSIZE: 2G
+2026-10-09T02:30:55.8349130Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T02:30:55.8349749Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T02:30:55.8350240Z   CCACHE_NOHASHDIR: true
+2026-10-09T02:30:55.8350722Z   CCACHE_SLOPPINESS: locale
+2026-10-09T02:30:55.8351196Z   SHARD_INDEX: 52
+2026-10-09T02:30:55.8351642Z   SHARD_TOTAL: 70
+2026-10-09T02:30:55.8352135Z   POPS_CACHE_DIR: /home/runner/work/PoPS/PoPS/.pops-dsl-cache
+2026-10-09T02:30:55.8352965Z   POPS_KEEP_GENERATED: 1
+2026-10-09T02:30:55.8353396Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T02:30:55.8353949Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:30:55.8354618Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib/pkgconfig
+2026-10-09T02:30:55.8355276Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:30:55.8355914Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:30:55.8356531Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:30:55.8357139Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
+2026-10-09T02:30:55.8357703Z ##[endgroup]
+2026-10-09T02:30:56.8481600Z Requirement already satisfied: pip in /opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages (26.2.1)
+2026-10-09T02:30:57.1711630Z Collecting numpy
+2026-10-09T02:30:57.1725835Z   Using cached numpy-2.5.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (6.6 kB)
+2026-10-09T02:30:57.2168331Z Collecting pytest
+2026-10-09T02:30:57.2181153Z   Using cached pytest-9.1.1-py3-none-any.whl.metadata (7.6 kB)
+2026-10-09T02:30:57.2966477Z Collecting h5py
+2026-10-09T02:30:57.3899223Z   Downloading h5py-3.16.0-cp312-cp312-manylinux_2_28_x86_64.whl.metadata (3.0 kB)
+2026-10-09T02:30:57.4196333Z Collecting mpmath>=1.3.0
+2026-10-09T02:30:57.4396089Z   Downloading mpmath-1.4.1-py3-none-any.whl.metadata (9.1 kB)
+2026-10-09T02:30:57.4745578Z Collecting iniconfig>=1.0.1 (from pytest)
+2026-10-09T02:30:57.4757449Z   Using cached iniconfig-2.3.1-py3-none-any.whl.metadata (2.8 kB)
+2026-10-09T02:30:57.5029951Z Collecting packaging>=22 (from pytest)
+2026-10-09T02:30:57.5041655Z   Using cached packaging-26.3-py3-none-any.whl.metadata (3.5 kB)
+2026-10-09T02:30:57.5301031Z Collecting pluggy<2,>=1.5 (from pytest)
+2026-10-09T02:30:57.5312825Z   Using cached pluggy-1.6.0-py3-none-any.whl.metadata (4.8 kB)
+2026-10-09T02:30:57.5631393Z Collecting pygments>=2.7.2 (from pytest)
+2026-10-09T02:30:57.5643634Z   Using cached pygments-2.21.0-py3-none-any.whl.metadata (2.5 kB)
+2026-10-09T02:30:57.5714203Z Using cached numpy-2.5.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (16.7 MB)
+2026-10-09T02:30:57.5784845Z Using cached pytest-9.1.1-py3-none-any.whl (386 kB)
+2026-10-09T02:30:57.5797627Z Using cached pluggy-1.6.0-py3-none-any.whl (20 kB)
+2026-10-09T02:30:57.5990560Z Downloading h5py-3.16.0-cp312-cp312-manylinux_2_28_x86_64.whl (5.4 MB)
+2026-10-09T02:30:57.7770268Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.4/5.4 MB 41.6 MB/s  0:00:00
+2026-10-09T02:30:57.7995454Z Downloading mpmath-1.4.1-py3-none-any.whl (567 kB)
+2026-10-09T02:30:57.8044500Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 567.8/567.8 kB 114.2 MB/s  0:00:00
+2026-10-09T02:30:57.8055988Z Using cached iniconfig-2.3.1-py3-none-any.whl (7.6 kB)
+2026-10-09T02:30:57.8067070Z Using cached packaging-26.3-py3-none-any.whl (129 kB)
+2026-10-09T02:30:57.8079079Z Using cached pygments-2.21.0-py3-none-any.whl (1.3 MB)
+2026-10-09T02:30:58.0144192Z Installing collected packages: pygments, pluggy, packaging, numpy, mpmath, iniconfig, pytest, h5py
+2026-10-09T02:31:01.9671760Z 
+2026-10-09T02:31:01.9686593Z Successfully installed h5py-3.16.0 iniconfig-2.3.1 mpmath-1.4.1 numpy-2.5.3 packaging-26.3 pluggy-1.6.0 pygments-2.21.0 pytest-9.1.1
+2026-10-09T02:31:05.0982994Z Processing /home/runner/work/_temp/pops-installed-dimensions/wheel-dim2/pops-1.1.0-cp312-cp312-linux_x86_64.whl
+2026-10-09T02:31:05.1189219Z Installing collected packages: pops
+2026-10-09T02:31:07.3731644Z Successfully installed pops-1.1.0
+2026-10-09T02:31:07.5152086Z 
+2026-10-09T02:31:07.5153330Z [notice] A new release of pip is available: 25.0.1 -> 26.2.1
+2026-10-09T02:31:07.5154064Z [notice] To update, run: python -m pip install --upgrade pip
+2026-10-09T02:31:08.4679890Z installed native Dim=2 extension: /home/runner/work/_temp/pops-installed-dimensions/dim2/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so
+2026-10-09T02:31:09.2063131Z ============================= test session starts ==============================
+2026-10-09T02:31:09.2065316Z platform linux -- Python 3.12.15, pytest-9.1.1, pluggy-1.6.0 -- /home/runner/work/_temp/pops-installed-dimensions/dim2/bin/python
+2026-10-09T02:31:09.2067093Z cachedir: /home/runner/work/_temp/pytimings/dim2/pytest-cache
+2026-10-09T02:31:09.2067745Z rootdir: /home/runner/work/PoPS/PoPS
+2026-10-09T02:31:09.2068165Z configfile: pyproject.toml
+2026-10-09T02:31:12.4268741Z collecting ... collected 58 items
+2026-10-09T02:31:12.4276789Z 
+2026-10-09T02:32:42.4263494Z tests/python/integration/dsl/test_dsl_jacobian_fd_public.py::test_final_case_consumes_partitioned_fd_jacobian_speeds_in_hll PASSED [  1%]
+2026-10-09T02:32:42.4748156Z tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py::test_installed_gpu_external_field_dispatch_rollback_retry[positive] FAILED [  3%]
+2026-10-09T02:32:42.4993751Z tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py::test_installed_gpu_external_field_dispatch_rollback_retry[callback_throw] FAILED [  5%]
+2026-10-09T02:32:42.5252706Z tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py::test_installed_gpu_external_field_dispatch_rollback_retry[table_preparation] FAILED [  6%]
+2026-10-09T02:32:42.5496369Z tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py::test_installed_gpu_external_field_dispatch_rollback_retry[nonfinite] FAILED [  8%]
+2026-10-09T02:32:42.5610585Z tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py::test_mixed_linear_three_grids_and_permutation_from_saved_c_and_mu FAILED [ 10%]
+2026-10-09T02:32:42.5720863Z tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py::test_one_iteration_gmres_collectively_refuses_without_accepted_publication FAILED [ 12%]
+2026-10-09T02:33:09.6643412Z tests/python/integration/runtime/test_m18_w09_declared_domain_runtime.py::test_declared_quadrature_near_boundary_and_w09[0.49-None] PASSED [ 13%]
+2026-10-09T02:33:36.8696661Z tests/python/integration/runtime/test_m18_w09_declared_domain_runtime.py::test_declared_quadrature_near_boundary_and_w09[0.5-upper_support_finite_dual_not_certified] PASSED [ 15%]
+2026-10-09T02:34:04.1678436Z tests/python/integration/runtime/test_m18_w09_declared_domain_runtime.py::test_declared_quadrature_near_boundary_and_w09[0.9-upper_support_target_infeasible] PASSED [ 17%]
+2026-10-09T02:34:34.8777837Z tests/python/integration/runtime/test_user_reconstruction_adversarial_runtime.py::test_authored_reconstruction_matches_two_component_two_axis_fv_oracle[both_orientations] PASSED [ 18%]
+2026-10-09T02:35:05.5495311Z tests/python/integration/runtime/test_user_reconstruction_adversarial_runtime.py::test_authored_reconstruction_matches_two_component_two_axis_fv_oracle[axes_and_components_permuted] PASSED [ 20%]
+2026-10-09T02:35:36.2551846Z tests/python/integration/runtime/test_user_reconstruction_adversarial_runtime.py::test_authored_reconstruction_matches_two_component_two_axis_fv_oracle[inactive_singularity] PASSED [ 22%]
+2026-10-09T02:35:36.2590517Z tests/python/unit/codegen/test_artifact_migration.py::test_offline_migration_is_deterministic_idempotent_and_changes_identity PASSED [ 24%]
+2026-10-09T02:35:36.2624958Z tests/python/unit/codegen/test_artifact_migration.py::test_offline_migration_requires_non_derivable_metadata PASSED [ 25%]
+2026-10-09T02:35:36.2657734Z tests/python/unit/codegen/test_artifact_migration.py::test_offline_migration_never_overwrites_legacy_source PASSED [ 27%]
+2026-10-09T02:35:36.2683118Z tests/python/unit/codegen/test_lowering_coverage_report.py::test_report_is_canonical_immutable_and_bidirectional PASSED [ 29%]
+2026-10-09T02:35:36.2713411Z tests/python/unit/codegen/test_lowering_coverage_report.py::test_row_validation_is_strict[row0-disposition] PASSED [ 31%]
+2026-10-09T02:35:36.2738218Z tests/python/unit/codegen/test_lowering_coverage_report.py::test_row_validation_is_strict[row1-at least one target] PASSED [ 32%]
+2026-10-09T02:35:36.2763981Z tests/python/unit/codegen/test_lowering_coverage_report.py::test_row_validation_is_strict[row2-derivation rule] PASSED [ 34%]
+2026-10-09T02:35:36.2789521Z tests/python/unit/codegen/test_lowering_coverage_report.py::test_row_validation_is_strict[row3-cannot name behavior targets] PASSED [ 36%]
+2026-10-09T02:35:36.2815009Z tests/python/unit/codegen/test_lowering_coverage_report.py::test_row_validation_is_strict[row4-cannot name targets] PASSED [ 37%]
+2026-10-09T02:35:36.2841834Z tests/python/unit/codegen/test_lowering_coverage_report.py::test_row_validation_is_strict[row5-rejection gate] PASSED [ 39%]
+2026-10-09T02:35:36.2869895Z tests/python/unit/codegen/test_lowering_coverage_report.py::test_report_rejects_duplicate_sources_and_noncanonical_wire_order PASSED [ 41%]
+2026-10-09T02:35:36.2893610Z tests/python/unit/descriptors/test_pops_inspect.py::test_inspect_is_the_single_public_structured_view PASSED [ 43%]
+2026-10-09T02:35:36.2958064Z tests/python/unit/descriptors/test_pops_inspect.py::test_inspect_dispatches_to_a_descriptor PASSED [ 44%]
+2026-10-09T02:35:36.2997695Z tests/python/unit/descriptors/test_pops_inspect.py::test_inspect_case_is_json_ready_and_does_not_compile PASSED [ 46%]
+2026-10-09T02:35:36.3022828Z tests/python/unit/descriptors/test_pops_inspect.py::test_inspect_plain_object_never_runs_numerics PASSED [ 48%]
+2026-10-09T02:35:38.5185846Z tests/python/unit/numerics/test_coordinated_face.py::test_public_hydrostatic_case_retains_complete_method_identity_through_loader[order0] PASSED [ 50%]
+2026-10-09T02:35:40.7569938Z tests/python/unit/numerics/test_coordinated_face.py::test_public_hydrostatic_case_retains_complete_method_identity_through_loader[order1] PASSED [ 51%]
+2026-10-09T02:35:40.7806957Z tests/python/unit/numerics/test_coordinated_face.py::test_rejects_foreign_leaves_and_nonzero_conservative_side PASSED [ 53%]
+2026-10-09T02:35:40.7979884Z tests/python/unit/numerics/test_coordinated_face.py::test_complete_balance_cannot_be_omitted_or_counted_twice PASSED [ 55%]
+2026-10-09T02:35:40.9887447Z tests/python/unit/numerics/test_coordinated_face.py::test_host_face_keeps_asymmetric_signs_and_refuses_active_invalid_tuple_atomically PASSED [ 56%]
+2026-10-09T02:35:41.1707549Z tests/python/unit/numerics/test_coordinated_face.py::test_negative_numerical_bound_cannot_publish_finite_outputs PASSED [ 58%]
+2026-10-09T02:35:42.6690100Z tests/python/unit/numerics/test_coordinated_face.py::test_runtime_capture_is_qualified_and_lowered_without_baking_its_value[False] PASSED [ 60%]
+2026-10-09T02:35:42.8850983Z tests/python/unit/numerics/test_coordinated_face.py::test_runtime_capture_is_qualified_and_lowered_without_baking_its_value[True] PASSED [ 62%]
+2026-10-09T02:35:42.8882353Z tests/python/unit/numerics/test_coordinated_face.py::test_actual_generated_composite_selects_and_executes_its_exact_policy[False] FAILED [ 63%]
+2026-10-09T02:35:42.8914620Z tests/python/unit/numerics/test_coordinated_face.py::test_actual_generated_composite_selects_and_executes_its_exact_policy[True] FAILED [ 65%]
+2026-10-09T02:35:43.0221657Z tests/python/unit/output/test_async_scientific_output_diagnostics.py::test_async_scientific_output_accepts_diagnostic_only_and_resolves_balance PASSED [ 67%]
+2026-10-09T02:35:43.0288410Z tests/python/unit/output/test_async_scientific_output_diagnostics.py::test_async_scientific_output_requires_a_field_or_diagnostic_and_matching_cadence PASSED [ 68%]
+2026-10-09T02:35:43.2052901Z tests/python/unit/output/test_async_scientific_output_diagnostics.py::test_generic_monitor_cannot_smuggle_diagnostic_providers PASSED [ 70%]
+2026-10-09T02:35:43.2077315Z tests/python/unit/output/test_async_scientific_output_diagnostics.py::test_selected_native_balance_forwards_exact_owner_coordinates PASSED [ 72%]
+2026-10-09T02:35:43.4289042Z tests/python/unit/output/test_async_scientific_output_diagnostics.py::test_async_worker_receives_detached_balance_payload_without_reopening_mailbox PASSED [ 74%]
+2026-10-09T02:35:43.4583779Z tests/python/unit/runtime/test_consumer_publication_c34.py::test_disjoint_roots_keep_both_artifacts_and_cursors PASSED [ 75%]
+2026-10-09T02:35:43.4845667Z tests/python/unit/runtime/test_consumer_publication_c34.py::test_conflicting_roots_refuse_before_second_publication PASSED [ 77%]
+2026-10-09T02:35:43.5013486Z tests/python/unit/runtime/test_consumer_publication_c34.py::test_stale_plan_rejected_at_construction PASSED [ 79%]
+2026-10-09T02:35:43.5273788Z tests/python/unit/runtime/test_consumer_publication_c34.py::test_prepared_stale_root_refuses_before_publication_after_other_seals PASSED [ 81%]
+2026-10-09T02:35:43.5560519Z tests/python/unit/runtime/test_consumer_publication_c34.py::test_disjoint_rollback_does_not_restore_over_other_root PASSED [ 82%]
+2026-10-09T02:35:43.5853811Z tests/python/unit/runtime/test_consumer_publication_c34.py::test_compensation_restores_exact_row_membership_with_disjoint_commit[False-False] PASSED [ 84%]
+2026-10-09T02:35:43.6147837Z tests/python/unit/runtime/test_consumer_publication_c34.py::test_compensation_restores_exact_row_membership_with_disjoint_commit[False-True] PASSED [ 86%]
+2026-10-09T02:35:43.6439315Z tests/python/unit/runtime/test_consumer_publication_c34.py::test_compensation_restores_exact_row_membership_with_disjoint_commit[True-False] PASSED [ 87%]
+2026-10-09T02:35:43.6730656Z tests/python/unit/runtime/test_consumer_publication_c34.py::test_compensation_restores_exact_row_membership_with_disjoint_commit[True-True] PASSED [ 89%]
+2026-10-09T02:35:43.7012785Z tests/python/unit/runtime/test_consumer_publication_c34.py::test_failed_publication_releases_cursor_for_real_retry PASSED [ 91%]
+2026-10-09T02:35:43.7114914Z tests/python/unit/runtime/test_inspection.py::test_program_dump_operator_ir_shows_the_lowering PASSED [ 93%]
+2026-10-09T02:35:43.7203332Z tests/python/unit/runtime/test_inspection.py::test_program_dump_board_and_cpp_plan PASSED [ 94%]
+2026-10-09T02:35:43.7432459Z tests/python/unit/runtime/test_inspection.py::test_model_dump_module_ir_lists_spaces_and_operators PASSED [ 96%]
+2026-10-09T02:35:43.9830022Z tests/python/unit/runtime/test_inspection.py::test_explicit_program_binding_rejects_out_of_order_registry_replacement PASSED [ 98%]
+2026-10-09T02:35:44.0100964Z tests/python/unit/runtime/test_inspection.py::test_model_dump_physics_and_capabilities PASSED [100%]
+2026-10-09T02:35:44.0101729Z 
+2026-10-09T02:35:44.0102014Z =================================== FAILURES ===================================
+2026-10-09T02:35:44.0103113Z _____ test_installed_gpu_external_field_dispatch_rollback_retry[positive] ______
+2026-10-09T02:35:44.0103688Z 
+2026-10-09T02:35:44.0104245Z tmp_path = PosixPath('/home/runner/work/_temp/pytimings/dim2/pytest-tmp/test_installed_gpu_external_fi0')
+2026-10-09T02:35:44.0105146Z fault = 'positive'
+2026-10-09T02:35:44.0105780Z monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f39d3858f80>
+2026-10-09T02:35:44.0106333Z 
+2026-10-09T02:35:44.0106526Z     @pytest.mark.compiler
+2026-10-09T02:35:44.0106999Z     @pytest.mark.native_loader
+2026-10-09T02:35:44.0108281Z     @pytest.mark.parametrize('fault', ('positive', 'callback_throw', 'table_preparation', 'nonfinite'))
+2026-10-09T02:35:44.0109466Z     def test_installed_gpu_external_field_dispatch_rollback_retry(tmp_path, fault,
+2026-10-09T02:35:44.0110369Z             isolated_native_cache, native_cxx, kokkos_root, monkeypatch):
+2026-10-09T02:35:44.0111129Z         del isolated_native_cache, native_cxx, kokkos_root
+2026-10-09T02:35:44.0111854Z         from pops._native_selector import select_native_dimension
+2026-10-09T02:35:44.0112792Z         from pops.codegen._native_mpi import native_mpi_communicator
+2026-10-09T02:35:44.0113459Z         native=select_native_dimension(2)
+2026-10-09T02:35:44.0114266Z         world=native.mpi_world() if native_mpi_communicator(native)=='MPI_COMM_WORLD' else None
+2026-10-09T02:35:44.0115120Z         rank=0 if world is None else int(world.rank)
+2026-10-09T02:35:44.0115728Z         ranks=1 if world is None else int(world.size)
+2026-10-09T02:35:44.0116294Z         with collective_check(world):
+2026-10-09T02:35:44.0116806Z             assert ranks in (1,2)
+2026-10-09T02:35:44.0117550Z             assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+2026-10-09T02:35:44.0118528Z             assert Path(native.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+2026-10-09T02:35:44.0119567Z             assert isinstance(native.__spec__.loader,importlib.machinery.ExtensionFileLoader)
+2026-10-09T02:35:44.0120556Z             from pops._generated_release_contract import NATIVE_ABI_VERSION
+2026-10-09T02:35:44.0121333Z             caps=dict(native.module_capabilities('production'))
+2026-10-09T02:35:44.0122170Z             assert type(caps['abi_version']) is int and caps['abi_version']==NATIVE_ABI_VERSION
+2026-10-09T02:35:44.0123367Z >           assert caps['supports_gpu'] is True and caps['dimension']==2 and caps['real_bytes']==8
+2026-10-09T02:35:44.0124145Z E           assert (False is True)
+2026-10-09T02:35:44.0124466Z 
+2026-10-09T02:35:44.0125036Z tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py:45: AssertionError
+2026-10-09T02:35:44.0125767Z 
+2026-10-09T02:35:44.0126107Z During handling of the above exception, another exception occurred:
+2026-10-09T02:35:44.0126596Z 
+2026-10-09T02:35:44.0127158Z tmp_path = PosixPath('/home/runner/work/_temp/pytimings/dim2/pytest-tmp/test_installed_gpu_external_fi0')
+2026-10-09T02:35:44.0128044Z fault = 'positive'
+2026-10-09T02:35:44.0128670Z monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f39d3858f80>
+2026-10-09T02:35:44.0129212Z 
+2026-10-09T02:35:44.0129404Z     @pytest.mark.compiler
+2026-10-09T02:35:44.0129870Z     @pytest.mark.native_loader
+2026-10-09T02:35:44.0130693Z     @pytest.mark.parametrize('fault', ('positive', 'callback_throw', 'table_preparation', 'nonfinite'))
+2026-10-09T02:35:44.0131795Z     def test_installed_gpu_external_field_dispatch_rollback_retry(tmp_path, fault,
+2026-10-09T02:35:44.0132844Z             isolated_native_cache, native_cxx, kokkos_root, monkeypatch):
+2026-10-09T02:35:44.0133610Z         del isolated_native_cache, native_cxx, kokkos_root
+2026-10-09T02:35:44.0134332Z         from pops._native_selector import select_native_dimension
+2026-10-09T02:35:44.0135096Z         from pops.codegen._native_mpi import native_mpi_communicator
+2026-10-09T02:35:44.0135761Z         native=select_native_dimension(2)
+2026-10-09T02:35:44.0136539Z         world=native.mpi_world() if native_mpi_communicator(native)=='MPI_COMM_WORLD' else None
+2026-10-09T02:35:44.0137383Z         rank=0 if world is None else int(world.rank)
+2026-10-09T02:35:44.0138000Z         ranks=1 if world is None else int(world.size)
+2026-10-09T02:35:44.0138572Z >       with collective_check(world):
+2026-10-09T02:35:44.0139061Z              ^^^^^^^^^^^^^^^^^^^^^^^
+2026-10-09T02:35:44.0139373Z 
+2026-10-09T02:35:44.0139846Z tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py:37: 
+2026-10-09T02:35:44.0140748Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+2026-10-09T02:35:44.0141847Z /opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/contextlib.py:158: in __exit__
+2026-10-09T02:35:44.0143065Z     self.gen.throw(value)
+2026-10-09T02:35:44.0143607Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+2026-10-09T02:35:44.0144059Z 
+2026-10-09T02:35:44.0144209Z world = None
+2026-10-09T02:35:44.0144425Z 
+2026-10-09T02:35:44.0144589Z     @contextmanager
+2026-10-09T02:35:44.0145003Z     def collective_check(world):
+2026-10-09T02:35:44.0145722Z         """Converge assertions and other exceptions from a local-only block."""
+2026-10-09T02:35:44.0146354Z         failure = None
+2026-10-09T02:35:44.0146751Z         try:
+2026-10-09T02:35:44.0147111Z             yield
+2026-10-09T02:35:44.0147527Z         except Exception as error:
+2026-10-09T02:35:44.0148254Z             failure = (type(error).__name__, str(error), isinstance(error, RuntimeError))
+2026-10-09T02:35:44.0149002Z         failures = _gather(world, failure)
+2026-10-09T02:35:44.0149514Z >       assert not any(failures), failures
+2026-10-09T02:35:44.0150020Z                ^^^^^^^^^^^^^^^^^
+2026-10-09T02:35:44.0150692Z E       AssertionError: (('AssertionError', 'assert (False is True)', False),)
+2026-10-09T02:35:44.0151243Z 
+2026-10-09T02:35:44.0151572Z tests/python/support/collective_checks.py:44: AssertionError
+2026-10-09T02:35:44.0152458Z __ test_installed_gpu_external_field_dispatch_rollback_retry[callback_throw] ___
+2026-10-09T02:35:44.0153216Z 
+2026-10-09T02:35:44.0153798Z tmp_path = PosixPath('/home/runner/work/_temp/pytimings/dim2/pytest-tmp/test_installed_gpu_external_fi1')
+2026-10-09T02:35:44.0154671Z fault = 'callback_throw'
+2026-10-09T02:35:44.0155307Z monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f39d3858140>
+2026-10-09T02:35:44.0155818Z 
+2026-10-09T02:35:44.0155995Z     @pytest.mark.compiler
+2026-10-09T02:35:44.0156445Z     @pytest.mark.native_loader
+2026-10-09T02:35:44.0157213Z     @pytest.mark.parametrize('fault', ('positive', 'callback_throw', 'table_preparation', 'nonfinite'))
+2026-10-09T02:35:44.0158213Z     def test_installed_gpu_external_field_dispatch_rollback_retry(tmp_path, fault,
+2026-10-09T02:35:44.0159032Z             isolated_native_cache, native_cxx, kokkos_root, monkeypatch):
+2026-10-09T02:35:44.0159711Z         del isolated_native_cache, native_cxx, kokkos_root
+2026-10-09T02:35:44.0160345Z         from pops._native_selector import select_native_dimension
+2026-10-09T02:35:44.0161025Z         from pops.codegen._native_mpi import native_mpi_communicator
+2026-10-09T02:35:44.0161623Z         native=select_native_dimension(2)
+2026-10-09T02:35:44.0162325Z         world=native.mpi_world() if native_mpi_communicator(native)=='MPI_COMM_WORLD' else None
+2026-10-09T02:35:44.0163244Z         rank=0 if world is None else int(world.rank)
+2026-10-09T02:35:44.0163823Z         ranks=1 if world is None else int(world.size)
+2026-10-09T02:35:44.0164324Z         with collective_check(world):
+2026-10-09T02:35:44.0164762Z             assert ranks in (1,2)
+2026-10-09T02:35:44.0165392Z             assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+2026-10-09T02:35:44.0166269Z             assert Path(native.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+2026-10-09T02:35:44.0167191Z             assert isinstance(native.__spec__.loader,importlib.machinery.ExtensionFileLoader)
+2026-10-09T02:35:44.0168025Z             from pops._generated_release_contract import NATIVE_ABI_VERSION
+2026-10-09T02:35:44.0168701Z             caps=dict(native.module_capabilities('production'))
+2026-10-09T02:35:44.0169423Z             assert type(caps['abi_version']) is int and caps['abi_version']==NATIVE_ABI_VERSION
+2026-10-09T02:35:44.0170313Z >           assert caps['supports_gpu'] is True and caps['dimension']==2 and caps['real_bytes']==8
+2026-10-09T02:35:44.0170996Z E           assert (False is True)
+2026-10-09T02:35:44.0171274Z 
+2026-10-09T02:35:44.0171773Z tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py:45: AssertionError
+2026-10-09T02:35:44.0172424Z 
+2026-10-09T02:35:44.0173222Z During handling of the above exception, another exception occurred:
+2026-10-09T02:35:44.0173660Z 
+2026-10-09T02:35:44.0174156Z tmp_path = PosixPath('/home/runner/work/_temp/pytimings/dim2/pytest-tmp/test_installed_gpu_external_fi1')
+2026-10-09T02:35:44.0174948Z fault = 'callback_throw'
+2026-10-09T02:35:44.0175515Z monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f39d3858140>
+2026-10-09T02:35:44.0175987Z 
+2026-10-09T02:35:44.0176150Z     @pytest.mark.compiler
+2026-10-09T02:35:44.0176561Z     @pytest.mark.native_loader
+2026-10-09T02:35:44.0177274Z     @pytest.mark.parametrize('fault', ('positive', 'callback_throw', 'table_preparation', 'nonfinite'))
+2026-10-09T02:35:44.0178213Z     def test_installed_gpu_external_field_dispatch_rollback_retry(tmp_path, fault,
+2026-10-09T02:35:44.0178998Z             isolated_native_cache, native_cxx, kokkos_root, monkeypatch):
+2026-10-09T02:35:44.0179645Z         del isolated_native_cache, native_cxx, kokkos_root
+2026-10-09T02:35:44.0180281Z         from pops._native_selector import select_native_dimension
+2026-10-09T02:35:44.0180941Z         from pops.codegen._native_mpi import native_mpi_communicator
+2026-10-09T02:35:44.0181519Z         native=select_native_dimension(2)
+2026-10-09T02:35:44.0182201Z         world=native.mpi_world() if native_mpi_communicator(native)=='MPI_COMM_WORLD' else None
+2026-10-09T02:35:44.0183118Z         rank=0 if world is None else int(world.rank)
+2026-10-09T02:35:44.0183638Z         ranks=1 if world is None else int(world.size)
+2026-10-09T02:35:44.0184128Z >       with collective_check(world):
+2026-10-09T02:35:44.0184579Z              ^^^^^^^^^^^^^^^^^^^^^^^
+2026-10-09T02:35:44.0184834Z 
+2026-10-09T02:35:44.0185232Z tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py:37: 
+2026-10-09T02:35:44.0186004Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+2026-10-09T02:35:44.0186730Z /opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/contextlib.py:158: in __exit__
+2026-10-09T02:35:44.0187405Z     self.gen.throw(value)
+2026-10-09T02:35:44.0187858Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+2026-10-09T02:35:44.0188246Z 
+2026-10-09T02:35:44.0188391Z world = None
+2026-10-09T02:35:44.0188584Z 
+2026-10-09T02:35:44.0188733Z     @contextmanager
+2026-10-09T02:35:44.0189106Z     def collective_check(world):
+2026-10-09T02:35:44.0189701Z         """Converge assertions and other exceptions from a local-only block."""
+2026-10-09T02:35:44.0190318Z         failure = None
+2026-10-09T02:35:44.0190705Z         try:
+2026-10-09T02:35:44.0191114Z             yield
+2026-10-09T02:35:44.0191472Z         except Exception as error:
+2026-10-09T02:35:44.0208535Z             failure = (type(error).__name__, str(error), isinstance(error, RuntimeError))
+2026-10-09T02:35:44.0209222Z         failures = _gather(world, failure)
+2026-10-09T02:35:44.0209693Z >       assert not any(failures), failures
+2026-10-09T02:35:44.0210136Z                ^^^^^^^^^^^^^^^^^
+2026-10-09T02:35:44.0210747Z E       AssertionError: (('AssertionError', 'assert (False is True)', False),)
+2026-10-09T02:35:44.0211222Z 
+2026-10-09T02:35:44.0211513Z tests/python/support/collective_checks.py:44: AssertionError
+2026-10-09T02:35:44.0212283Z _ test_installed_gpu_external_field_dispatch_rollback_retry[table_preparation] _
+2026-10-09T02:35:44.0212933Z 
+2026-10-09T02:35:44.0213426Z tmp_path = PosixPath('/home/runner/work/_temp/pytimings/dim2/pytest-tmp/test_installed_gpu_external_fi2')
+2026-10-09T02:35:44.0214211Z fault = 'table_preparation'
+2026-10-09T02:35:44.0214796Z monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f39c2779ee0>
+2026-10-09T02:35:44.0215265Z 
+2026-10-09T02:35:44.0215423Z     @pytest.mark.compiler
+2026-10-09T02:35:44.0215829Z     @pytest.mark.native_loader
+2026-10-09T02:35:44.0216560Z     @pytest.mark.parametrize('fault', ('positive', 'callback_throw', 'table_preparation', 'nonfinite'))
+2026-10-09T02:35:44.0217504Z     def test_installed_gpu_external_field_dispatch_rollback_retry(tmp_path, fault,
+2026-10-09T02:35:44.0218660Z             isolated_native_cache, native_cxx, kokkos_root, monkeypatch):
+2026-10-09T02:35:44.0219315Z         del isolated_native_cache, native_cxx, kokkos_root
+2026-10-09T02:35:44.0219920Z         from pops._native_selector import select_native_dimension
+2026-10-09T02:35:44.0220594Z         from pops.codegen._native_mpi import native_mpi_communicator
+2026-10-09T02:35:44.0221179Z         native=select_native_dimension(2)
+2026-10-09T02:35:44.0221896Z         world=native.mpi_world() if native_mpi_communicator(native)=='MPI_COMM_WORLD' else None
+2026-10-09T02:35:44.0222819Z         rank=0 if world is None else int(world.rank)
+2026-10-09T02:35:44.0223359Z         ranks=1 if world is None else int(world.size)
+2026-10-09T02:35:44.0223845Z         with collective_check(world):
+2026-10-09T02:35:44.0224280Z             assert ranks in (1,2)
+2026-10-09T02:35:44.0224891Z             assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+2026-10-09T02:35:44.0225782Z             assert Path(native.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+2026-10-09T02:35:44.0226679Z             assert isinstance(native.__spec__.loader,importlib.machinery.ExtensionFileLoader)
+2026-10-09T02:35:44.0227511Z             from pops._generated_release_contract import NATIVE_ABI_VERSION
+2026-10-09T02:35:44.0228179Z             caps=dict(native.module_capabilities('production'))
+2026-10-09T02:35:44.0228912Z             assert type(caps['abi_version']) is int and caps['abi_version']==NATIVE_ABI_VERSION
+2026-10-09T02:35:44.0229796Z >           assert caps['supports_gpu'] is True and caps['dimension']==2 and caps['real_bytes']==8
+2026-10-09T02:35:44.0230461Z E           assert (False is True)
+2026-10-09T02:35:44.0230737Z 
+2026-10-09T02:35:44.0231218Z tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py:45: AssertionError
+2026-10-09T02:35:44.0231842Z 
+2026-10-09T02:35:44.0232137Z During handling of the above exception, another exception occurred:
+2026-10-09T02:35:44.0232720Z 
+2026-10-09T02:35:44.0233211Z tmp_path = PosixPath('/home/runner/work/_temp/pytimings/dim2/pytest-tmp/test_installed_gpu_external_fi2')
+2026-10-09T02:35:44.0233997Z fault = 'table_preparation'
+2026-10-09T02:35:44.0234563Z monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f39c2779ee0>
+2026-10-09T02:35:44.0235019Z 
+2026-10-09T02:35:44.0235174Z     @pytest.mark.compiler
+2026-10-09T02:35:44.0235576Z     @pytest.mark.native_loader
+2026-10-09T02:35:44.0236291Z     @pytest.mark.parametrize('fault', ('positive', 'callback_throw', 'table_preparation', 'nonfinite'))
+2026-10-09T02:35:44.0237251Z     def test_installed_gpu_external_field_dispatch_rollback_retry(tmp_path, fault,
+2026-10-09T02:35:44.0238042Z             isolated_native_cache, native_cxx, kokkos_root, monkeypatch):
+2026-10-09T02:35:44.0238688Z         del isolated_native_cache, native_cxx, kokkos_root
+2026-10-09T02:35:44.0239309Z         from pops._native_selector import select_native_dimension
+2026-10-09T02:35:44.0239997Z         from pops.codegen._native_mpi import native_mpi_communicator
+2026-10-09T02:35:44.0240575Z         native=select_native_dimension(2)
+2026-10-09T02:35:44.0241249Z         world=native.mpi_world() if native_mpi_communicator(native)=='MPI_COMM_WORLD' else None
+2026-10-09T02:35:44.0242022Z         rank=0 if world is None else int(world.rank)
+2026-10-09T02:35:44.0242703Z         ranks=1 if world is None else int(world.size)
+2026-10-09T02:35:44.0243228Z >       with collective_check(world):
+2026-10-09T02:35:44.0243668Z              ^^^^^^^^^^^^^^^^^^^^^^^
+2026-10-09T02:35:44.0243946Z 
+2026-10-09T02:35:44.0244360Z tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py:37: 
+2026-10-09T02:35:44.0245139Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+2026-10-09T02:35:44.0245911Z /opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/contextlib.py:158: in __exit__
+2026-10-09T02:35:44.0246590Z     self.gen.throw(value)
+2026-10-09T02:35:44.0247490Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+2026-10-09T02:35:44.0247869Z 
+2026-10-09T02:35:44.0248024Z world = None
+2026-10-09T02:35:44.0248216Z 
+2026-10-09T02:35:44.0248370Z     @contextmanager
+2026-10-09T02:35:44.0248735Z     def collective_check(world):
+2026-10-09T02:35:44.0249326Z         """Converge assertions and other exceptions from a local-only block."""
+2026-10-09T02:35:44.0249938Z         failure = None
+2026-10-09T02:35:44.0250287Z         try:
+2026-10-09T02:35:44.0250616Z             yield
+2026-10-09T02:35:44.0250983Z         except Exception as error:
+2026-10-09T02:35:44.0251593Z             failure = (type(error).__name__, str(error), isinstance(error, RuntimeError))
+2026-10-09T02:35:44.0252226Z         failures = _gather(world, failure)
+2026-10-09T02:35:44.0252833Z >       assert not any(failures), failures
+2026-10-09T02:35:44.0253266Z                ^^^^^^^^^^^^^^^^^
+2026-10-09T02:35:44.0253824Z E       AssertionError: (('AssertionError', 'assert (False is True)', False),)
+2026-10-09T02:35:44.0254292Z 
+2026-10-09T02:35:44.0254573Z tests/python/support/collective_checks.py:44: AssertionError
+2026-10-09T02:35:44.0255308Z _____ test_installed_gpu_external_field_dispatch_rollback_retry[nonfinite] _____
+2026-10-09T02:35:44.0255792Z 
+2026-10-09T02:35:44.0256268Z tmp_path = PosixPath('/home/runner/work/_temp/pytimings/dim2/pytest-tmp/test_installed_gpu_external_fi3')
+2026-10-09T02:35:44.0257010Z fault = 'nonfinite'
+2026-10-09T02:35:44.0257532Z monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f39d3859a60>
+2026-10-09T02:35:44.0257987Z 
+2026-10-09T02:35:44.0258147Z     @pytest.mark.compiler
+2026-10-09T02:35:44.0258542Z     @pytest.mark.native_loader
+2026-10-09T02:35:44.0259236Z     @pytest.mark.parametrize('fault', ('positive', 'callback_throw', 'table_preparation', 'nonfinite'))
+2026-10-09T02:35:44.0260163Z     def test_installed_gpu_external_field_dispatch_rollback_retry(tmp_path, fault,
+2026-10-09T02:35:44.0260927Z             isolated_native_cache, native_cxx, kokkos_root, monkeypatch):
+2026-10-09T02:35:44.0261566Z         del isolated_native_cache, native_cxx, kokkos_root
+2026-10-09T02:35:44.0262169Z         from pops._native_selector import select_native_dimension
+2026-10-09T02:35:44.0262985Z         from pops.codegen._native_mpi import native_mpi_communicator
+2026-10-09T02:35:44.0263565Z         native=select_native_dimension(2)
+2026-10-09T02:35:44.0264246Z         world=native.mpi_world() if native_mpi_communicator(native)=='MPI_COMM_WORLD' else None
+2026-10-09T02:35:44.0264966Z         rank=0 if world is None else int(world.rank)
+2026-10-09T02:35:44.0265499Z         ranks=1 if world is None else int(world.size)
+2026-10-09T02:35:44.0265985Z         with collective_check(world):
+2026-10-09T02:35:44.0266419Z             assert ranks in (1,2)
+2026-10-09T02:35:44.0267028Z             assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+2026-10-09T02:35:44.0267871Z             assert Path(native.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+2026-10-09T02:35:44.0268780Z             assert isinstance(native.__spec__.loader,importlib.machinery.ExtensionFileLoader)
+2026-10-09T02:35:44.0269591Z             from pops._generated_release_contract import NATIVE_ABI_VERSION
+2026-10-09T02:35:44.0270245Z             caps=dict(native.module_capabilities('production'))
+2026-10-09T02:35:44.0270967Z             assert type(caps['abi_version']) is int and caps['abi_version']==NATIVE_ABI_VERSION
+2026-10-09T02:35:44.0271836Z >           assert caps['supports_gpu'] is True and caps['dimension']==2 and caps['real_bytes']==8
+2026-10-09T02:35:44.0272658Z E           assert (False is True)
+2026-10-09T02:35:44.0272933Z 
+2026-10-09T02:35:44.0273399Z tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py:45: AssertionError
+2026-10-09T02:35:44.0274001Z 
+2026-10-09T02:35:44.0274292Z During handling of the above exception, another exception occurred:
+2026-10-09T02:35:44.0274709Z 
+2026-10-09T02:35:44.0275527Z tmp_path = PosixPath('/home/runner/work/_temp/pytimings/dim2/pytest-tmp/test_installed_gpu_external_fi3')
+2026-10-09T02:35:44.0276276Z fault = 'nonfinite'
+2026-10-09T02:35:44.0276804Z monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f39d3859a60>
+2026-10-09T02:35:44.0277260Z 
+2026-10-09T02:35:44.0277429Z     @pytest.mark.compiler
+2026-10-09T02:35:44.0277831Z     @pytest.mark.native_loader
+2026-10-09T02:35:44.0278508Z     @pytest.mark.parametrize('fault', ('positive', 'callback_throw', 'table_preparation', 'nonfinite'))
+2026-10-09T02:35:44.0279432Z     def test_installed_gpu_external_field_dispatch_rollback_retry(tmp_path, fault,
+2026-10-09T02:35:44.0280218Z             isolated_native_cache, native_cxx, kokkos_root, monkeypatch):
+2026-10-09T02:35:44.0280854Z         del isolated_native_cache, native_cxx, kokkos_root
+2026-10-09T02:35:44.0281466Z         from pops._native_selector import select_native_dimension
+2026-10-09T02:35:44.0282123Z         from pops.codegen._native_mpi import native_mpi_communicator
+2026-10-09T02:35:44.0282845Z         native=select_native_dimension(2)
+2026-10-09T02:35:44.0283499Z         world=native.mpi_world() if native_mpi_communicator(native)=='MPI_COMM_WORLD' else None
+2026-10-09T02:35:44.0284179Z         rank=0 if world is None else int(world.rank)
+2026-10-09T02:35:44.0284671Z         ranks=1 if world is None else int(world.size)
+2026-10-09T02:35:44.0285129Z >       with collective_check(world):
+2026-10-09T02:35:44.0285535Z              ^^^^^^^^^^^^^^^^^^^^^^^
+2026-10-09T02:35:44.0285788Z 
+2026-10-09T02:35:44.0286170Z tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py:37: 
+2026-10-09T02:35:44.0286902Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+2026-10-09T02:35:44.0287602Z /opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/contextlib.py:158: in __exit__
+2026-10-09T02:35:44.0288280Z     self.gen.throw(value)
+2026-10-09T02:35:44.0288752Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+2026-10-09T02:35:44.0289130Z 
+2026-10-09T02:35:44.0289280Z world = None
+2026-10-09T02:35:44.0289478Z 
+2026-10-09T02:35:44.0289626Z     @contextmanager
+2026-10-09T02:35:44.0289990Z     def collective_check(world):
+2026-10-09T02:35:44.0290572Z         """Converge assertions and other exceptions from a local-only block."""
+2026-10-09T02:35:44.0291178Z         failure = None
+2026-10-09T02:35:44.0291533Z         try:
+2026-10-09T02:35:44.0291851Z             yield
+2026-10-09T02:35:44.0292213Z         except Exception as error:
+2026-10-09T02:35:44.0292957Z             failure = (type(error).__name__, str(error), isinstance(error, RuntimeError))
+2026-10-09T02:35:44.0293603Z         failures = _gather(world, failure)
+2026-10-09T02:35:44.0294057Z >       assert not any(failures), failures
+2026-10-09T02:35:44.0294488Z                ^^^^^^^^^^^^^^^^^
+2026-10-09T02:35:44.0295049Z E       AssertionError: (('AssertionError', 'assert (False is True)', False),)
+2026-10-09T02:35:44.0295504Z 
+2026-10-09T02:35:44.0295789Z tests/python/support/collective_checks.py:44: AssertionError
+2026-10-09T02:35:44.0296512Z ______ test_mixed_linear_three_grids_and_permutation_from_saved_c_and_mu _______
+2026-10-09T02:35:44.0296973Z 
+2026-10-09T02:35:44.0297453Z tmp_path = PosixPath('/home/runner/work/_temp/pytimings/dim2/pytest-tmp/test_mixed_linear_three_grids_0')
+2026-10-09T02:35:44.0298368Z monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f39c277aab0>
+2026-10-09T02:35:44.0298815Z 
+2026-10-09T02:35:44.0299229Z     def test_mixed_linear_three_grids_and_permutation_from_saved_c_and_mu(tmp_path, monkeypatch):
+2026-10-09T02:35:44.0300032Z         from pops._native_selector import select_native_dimension
+2026-10-09T02:35:44.0300543Z     
+2026-10-09T02:35:44.0300875Z >       native = select_native_dimension(1)
+2026-10-09T02:35:44.0301330Z                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-10-09T02:35:44.0301601Z 
+2026-10-09T02:35:44.0301958Z tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py:26: 
+2026-10-09T02:35:44.0303222Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+2026-10-09T02:35:44.0303497Z 
+2026-10-09T02:35:44.0303607Z dimension = 1
+2026-10-09T02:35:44.0303748Z 
+2026-10-09T02:35:44.0303980Z     def select_native_dimension(dimension: Any) -> ModuleType:
+2026-10-09T02:35:44.0304502Z         """Load and freeze the specialization derived from one verified resolved plan."""
+2026-10-09T02:35:44.0305105Z         selected_dimension = _exact_dimension(dimension, where="resolved native dimension")
+2026-10-09T02:35:44.0305611Z         global _STATE, _MODULE, _DIMENSION, _FAILURE
+2026-10-09T02:35:44.0305951Z     
+2026-10-09T02:35:44.0306174Z         with _LOCK:
+2026-10-09T02:35:44.0306437Z             if _STATE == _POISONED:
+2026-10-09T02:35:44.0306746Z                 raise RuntimeError(
+2026-10-09T02:35:44.0307186Z                     "native specialization loading previously failed; this process is sealed"
+2026-10-09T02:35:44.0307643Z                 ) from _FAILURE
+2026-10-09T02:35:44.0307990Z             if _STATE == _LOADING:
+2026-10-09T02:35:44.0308423Z                 raise RuntimeError("recursive native specialization loading is forbidden")
+2026-10-09T02:35:44.0308863Z             if _STATE == _SELECTED:
+2026-10-09T02:35:44.0309181Z                 if _DIMENSION != selected_dimension:
+2026-10-09T02:35:44.0309518Z >                   raise RuntimeError(
+2026-10-09T02:35:44.0309964Z                         "this process already selected PoPS Dim=%d and cannot switch to Dim=%d; "
+2026-10-09T02:35:44.0310497Z                         "use a separate process" % (_DIMENSION, selected_dimension))
+2026-10-09T02:35:44.0311138Z E                   RuntimeError: this process already selected PoPS Dim=2 and cannot switch to Dim=1; use a separate process
+2026-10-09T02:35:44.0311598Z 
+2026-10-09T02:35:44.0311992Z ../../_temp/pops-installed-dimensions/dim2/lib/python3.12/site-packages/pops/_native_selector.py:245: RuntimeError
+2026-10-09T02:35:44.0312840Z __ test_one_iteration_gmres_collectively_refuses_without_accepted_publication __
+2026-10-09T02:35:44.0313186Z 
+2026-10-09T02:35:44.0313422Z monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f39c277ac00>
+2026-10-09T02:35:44.0313737Z 
+2026-10-09T02:35:44.0313986Z     def test_one_iteration_gmres_collectively_refuses_without_accepted_publication(
+2026-10-09T02:35:44.0314431Z             monkeypatch):
+2026-10-09T02:35:44.0314787Z         from pops._native_selector import select_native_dimension
+2026-10-09T02:35:44.0315242Z         from pops.codegen._native_mpi import native_mpi_communicator
+2026-10-09T02:35:44.0315614Z     
+2026-10-09T02:35:44.0315855Z >       native = select_native_dimension(1)
+2026-10-09T02:35:44.0316179Z                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-10-09T02:35:44.0316366Z 
+2026-10-09T02:35:44.0316618Z tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py:55: 
+2026-10-09T02:35:44.0317129Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+2026-10-09T02:35:44.0317391Z 
+2026-10-09T02:35:44.0317501Z dimension = 1
+2026-10-09T02:35:44.0317642Z 
+2026-10-09T02:35:44.0317833Z     def select_native_dimension(dimension: Any) -> ModuleType:
+2026-10-09T02:35:44.0318347Z         """Load and freeze the specialization derived from one verified resolved plan."""
+2026-10-09T02:35:44.0318946Z         selected_dimension = _exact_dimension(dimension, where="resolved native dimension")
+2026-10-09T02:35:44.0319435Z         global _STATE, _MODULE, _DIMENSION, _FAILURE
+2026-10-09T02:35:44.0319752Z     
+2026-10-09T02:35:44.0319972Z         with _LOCK:
+2026-10-09T02:35:44.0320234Z             if _STATE == _POISONED:
+2026-10-09T02:35:44.0320534Z                 raise RuntimeError(
+2026-10-09T02:35:44.0320970Z                     "native specialization loading previously failed; this process is sealed"
+2026-10-09T02:35:44.0321422Z                 ) from _FAILURE
+2026-10-09T02:35:44.0321714Z             if _STATE == _LOADING:
+2026-10-09T02:35:44.0322295Z                 raise RuntimeError("recursive native specialization loading is forbidden")
+2026-10-09T02:35:44.0322993Z             if _STATE == _SELECTED:
+2026-10-09T02:35:44.0323330Z                 if _DIMENSION != selected_dimension:
+2026-10-09T02:35:44.0323670Z >                   raise RuntimeError(
+2026-10-09T02:35:44.0324118Z                         "this process already selected PoPS Dim=%d and cannot switch to Dim=%d; "
+2026-10-09T02:35:44.0324654Z                         "use a separate process" % (_DIMENSION, selected_dimension))
+2026-10-09T02:35:44.0325296Z E                   RuntimeError: this process already selected PoPS Dim=2 and cannot switch to Dim=1; use a separate process
+2026-10-09T02:35:44.0325734Z 
+2026-10-09T02:35:44.0326151Z ../../_temp/pops-installed-dimensions/dim2/lib/python3.12/site-packages/pops/_native_selector.py:245: RuntimeError
+2026-10-09T02:35:44.0326848Z _ test_actual_generated_composite_selects_and_executes_its_exact_policy[False] _
+2026-10-09T02:35:44.0328412Z POPS_REQUIRE_NATIVE_TESTS=1 forbids skips for native-gated tests: tests/python/unit/numerics/test_coordinated_face.py::test_actual_generated_composite_selects_and_executes_its_exact_policy[False] (('/home/runner/work/PoPS/PoPS/tests/python/unit/numerics/test_coordinated_face.py', 203, 'Skipped: host generated-brick check requires the configured Kokkos SDK'))
+2026-10-09T02:35:44.0330035Z _ test_actual_generated_composite_selects_and_executes_its_exact_policy[True] __
+2026-10-09T02:35:44.0331523Z POPS_REQUIRE_NATIVE_TESTS=1 forbids skips for native-gated tests: tests/python/unit/numerics/test_coordinated_face.py::test_actual_generated_composite_selects_and_executes_its_exact_policy[True] (('/home/runner/work/PoPS/PoPS/tests/python/unit/numerics/test_coordinated_face.py', 203, 'Skipped: host generated-brick check requires the configured Kokkos SDK'))
+2026-10-09T02:35:44.0333014Z =============================== warnings summary ===============================
+2026-10-09T02:35:44.0333704Z tests/python/integration/runtime/test_m18_w09_declared_domain_runtime.py::test_declared_quadrature_near_boundary_and_w09[0.49-None]
+2026-10-09T02:35:44.0334742Z tests/python/integration/runtime/test_m18_w09_declared_domain_runtime.py::test_declared_quadrature_near_boundary_and_w09[0.5-upper_support_finite_dual_not_certified]
+2026-10-09T02:35:44.0335848Z tests/python/integration/runtime/test_m18_w09_declared_domain_runtime.py::test_declared_quadrature_near_boundary_and_w09[0.9-upper_support_target_infeasible]
+2026-10-09T02:35:44.0336995Z   tests/python/integration/runtime/test_m18_w09_declared_domain_runtime.py:18: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+2026-10-09T02:35:44.0338088Z     @pytest.mark.parametrize('moment,diagnostic',[(.49,None),(.5,'upper_support_finite_dual_not_certified'),(.9,'upper_support_target_infeasible')])
+2026-10-09T02:35:44.0338614Z 
+2026-10-09T02:35:44.0338868Z -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2026-10-09T02:35:44.0339422Z ----- generated xml file: /home/runner/work/_temp/pytimings/dim2/junit.xml -----
+2026-10-09T02:35:44.0339908Z ============================= slowest 20 durations =============================
+2026-10-09T02:35:44.0340592Z 89.99s call     tests/python/integration/dsl/test_dsl_jacobian_fd_public.py::test_final_case_consumes_partitioned_fd_jacobian_speeds_in_hll
+2026-10-09T02:35:44.0341697Z 30.71s call     tests/python/integration/runtime/test_user_reconstruction_adversarial_runtime.py::test_authored_reconstruction_matches_two_component_two_axis_fv_oracle[both_orientations]
+2026-10-09T02:35:44.0343071Z 30.70s call     tests/python/integration/runtime/test_user_reconstruction_adversarial_runtime.py::test_authored_reconstruction_matches_two_component_two_axis_fv_oracle[inactive_singularity]
+2026-10-09T02:35:44.0344388Z 30.67s call     tests/python/integration/runtime/test_user_reconstruction_adversarial_runtime.py::test_authored_reconstruction_matches_two_component_two_axis_fv_oracle[axes_and_components_permuted]
+2026-10-09T02:35:44.0345808Z 27.29s call     tests/python/integration/runtime/test_m18_w09_declared_domain_runtime.py::test_declared_quadrature_near_boundary_and_w09[0.9-upper_support_target_infeasible]
+2026-10-09T02:35:44.0347114Z 27.20s call     tests/python/integration/runtime/test_m18_w09_declared_domain_runtime.py::test_declared_quadrature_near_boundary_and_w09[0.5-upper_support_finite_dual_not_certified]
+2026-10-09T02:35:44.0348199Z 27.09s call     tests/python/integration/runtime/test_m18_w09_declared_domain_runtime.py::test_declared_quadrature_near_boundary_and_w09[0.49-None]
+2026-10-09T02:35:44.0349193Z 2.24s call     tests/python/unit/numerics/test_coordinated_face.py::test_public_hydrostatic_case_retains_complete_method_identity_through_loader[order1]
+2026-10-09T02:35:44.0350199Z 2.21s call     tests/python/unit/numerics/test_coordinated_face.py::test_public_hydrostatic_case_retains_complete_method_identity_through_loader[order0]
+2026-10-09T02:35:44.0351185Z 1.50s call     tests/python/unit/numerics/test_coordinated_face.py::test_runtime_capture_is_qualified_and_lowered_without_baking_its_value[False]
+2026-10-09T02:35:44.0352118Z 0.24s call     tests/python/unit/runtime/test_inspection.py::test_explicit_program_binding_rejects_out_of_order_registry_replacement
+2026-10-09T02:35:44.0353236Z 0.22s call     tests/python/unit/output/test_async_scientific_output_diagnostics.py::test_async_worker_receives_detached_balance_payload_without_reopening_mailbox
+2026-10-09T02:35:44.0354259Z 0.21s call     tests/python/unit/numerics/test_coordinated_face.py::test_runtime_capture_is_qualified_and_lowered_without_baking_its_value[True]
+2026-10-09T02:35:44.0355227Z 0.19s call     tests/python/unit/numerics/test_coordinated_face.py::test_host_face_keeps_asymmetric_signs_and_refuses_active_invalid_tuple_atomically
+2026-10-09T02:35:44.0356142Z 0.18s call     tests/python/unit/numerics/test_coordinated_face.py::test_negative_numerical_bound_cannot_publish_finite_outputs
+2026-10-09T02:35:44.0357045Z 0.17s call     tests/python/unit/output/test_async_scientific_output_diagnostics.py::test_generic_monitor_cannot_smuggle_diagnostic_providers
+2026-10-09T02:35:44.0358049Z 0.13s call     tests/python/unit/output/test_async_scientific_output_diagnostics.py::test_async_scientific_output_accepts_diagnostic_only_and_resolves_balance
+2026-10-09T02:35:44.0359005Z 0.03s call     tests/python/unit/runtime/test_consumer_publication_c34.py::test_disjoint_roots_keep_both_artifacts_and_cursors
+2026-10-09T02:35:44.0359937Z 0.03s call     tests/python/unit/runtime/test_consumer_publication_c34.py::test_compensation_restores_exact_row_membership_with_disjoint_commit[False-True]
+2026-10-09T02:35:44.0360968Z 0.03s call     tests/python/unit/runtime/test_consumer_publication_c34.py::test_compensation_restores_exact_row_membership_with_disjoint_commit[False-False]
+2026-10-09T02:35:44.0361705Z =========================== short test summary info ============================
+2026-10-09T02:35:44.0362848Z FAILED tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py::test_installed_gpu_external_field_dispatch_rollback_retry[positive] - AssertionError: (('AssertionError', 'assert (False is True)', False),)
+2026-10-09T02:35:44.0364451Z FAILED tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py::test_installed_gpu_external_field_dispatch_rollback_retry[callback_throw] - AssertionError: (('AssertionError', 'assert (False is True)', False),)
+2026-10-09T02:35:44.0366054Z FAILED tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py::test_installed_gpu_external_field_dispatch_rollback_retry[table_preparation] - AssertionError: (('AssertionError', 'assert (False is True)', False),)
+2026-10-09T02:35:44.0367628Z FAILED tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py::test_installed_gpu_external_field_dispatch_rollback_retry[nonfinite] - AssertionError: (('AssertionError', 'assert (False is True)', False),)
+2026-10-09T02:35:44.0369397Z FAILED tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py::test_mixed_linear_three_grids_and_permutation_from_saved_c_and_mu - RuntimeError: this process already selected PoPS Dim=2 and cannot switch to Dim=1; use a separate process
+2026-10-09T02:35:44.0371236Z FAILED tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py::test_one_iteration_gmres_collectively_refuses_without_accepted_publication - RuntimeError: this process already selected PoPS Dim=2 and cannot switch to Dim=1; use a separate process
+2026-10-09T02:35:44.0373874Z FAILED tests/python/unit/numerics/test_coordinated_face.py::test_actual_generated_composite_selects_and_executes_its_exact_policy[False] - POPS_REQUIRE_NATIVE_TESTS=1 forbids skips for native-gated tests: tests/python/unit/numerics/test_coordinated_face.py::test_actual_generated_composite_selects_and_executes_its_exact_policy[False] (('/home/runner/work/PoPS/PoPS/tests/python/unit/numerics/test_coordinated_face.py', 203, 'Skipped: host generated-brick check requires the configured Kokkos SDK'))
+2026-10-09T02:35:44.0377132Z FAILED tests/python/unit/numerics/test_coordinated_face.py::test_actual_generated_composite_selects_and_executes_its_exact_policy[True] - POPS_REQUIRE_NATIVE_TESTS=1 forbids skips for native-gated tests: tests/python/unit/numerics/test_coordinated_face.py::test_actual_generated_composite_selects_and_executes_its_exact_policy[True] (('/home/runner/work/PoPS/PoPS/tests/python/unit/numerics/test_coordinated_face.py', 203, 'Skipped: host generated-brick check requires the configured Kokkos SDK'))
+2026-10-09T02:35:44.0378978Z ============= 8 failed, 50 passed, 3 warnings in 274.81s (0:04:34) =============
+2026-10-09T02:35:44.1881757Z ##[error]Process completed with exit code 1.
+2026-10-09T02:35:44.1963648Z ##[group]Run actions/upload-artifact@v7
+2026-10-09T02:35:44.1963985Z with:
+2026-10-09T02:35:44.1964244Z   name: gate-python-timings-shard52
+2026-10-09T02:35:44.1964582Z   path: /home/runner/work/_temp/pytimings/
+2026-10-09T02:35:44.1964916Z   if-no-files-found: ignore
+2026-10-09T02:35:44.1965228Z   compression-level: 6
+2026-10-09T02:35:44.1965491Z   overwrite: false
+2026-10-09T02:35:44.1965747Z   include-hidden-files: false
+2026-10-09T02:35:44.1966032Z   archive: true
+2026-10-09T02:35:44.1966269Z env:
+2026-10-09T02:35:44.1966496Z   PYTHONUNBUFFERED: 1
+2026-10-09T02:35:44.1966808Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T02:35:44.1967161Z   CCACHE_MAXSIZE: 2G
+2026-10-09T02:35:44.1967486Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T02:35:44.1967890Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T02:35:44.1968225Z   CCACHE_NOHASHDIR: true
+2026-10-09T02:35:44.1968503Z   CCACHE_SLOPPINESS: locale
+2026-10-09T02:35:44.1968812Z   SHARD_INDEX: 52
+2026-10-09T02:35:44.1969055Z   SHARD_TOTAL: 70
+2026-10-09T02:35:44.1969365Z   POPS_CACHE_DIR: /home/runner/work/PoPS/PoPS/.pops-dsl-cache
+2026-10-09T02:35:44.1969742Z   POPS_KEEP_GENERATED: 1
+2026-10-09T02:35:44.1970033Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T02:35:44.1970391Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:35:44.1970868Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib/pkgconfig
+2026-10-09T02:35:44.1971338Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:35:44.1971766Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:35:44.1972186Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:35:44.1972997Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
+2026-10-09T02:35:44.1973377Z ##[endgroup]
+2026-10-09T02:35:44.4188191Z With the provided path, there will be 310 files uploaded
+2026-10-09T02:35:44.4195711Z Artifact name is valid!
+2026-10-09T02:35:44.4196532Z Root directory input is valid!
+2026-10-09T02:35:44.7457713Z Uploading artifact: gate-python-timings-shard52.zip
+2026-10-09T02:35:44.7499901Z Beginning upload of artifact content to blob storage
+2026-10-09T02:35:46.4750565Z Uploaded bytes 7986789
+2026-10-09T02:35:46.5314628Z Finished uploading artifact content to blob storage!
+2026-10-09T02:35:46.5316190Z SHA256 digest of uploaded artifact is cb78caa59c9c6de83d867cf0b41cff6a05861a1b46ec5b70352058b0ab194afe
+2026-10-09T02:35:46.5317075Z Finalizing artifact upload
+2026-10-09T02:35:46.8677787Z Artifact gate-python-timings-shard52 successfully finalized. Artifact ID 11591983365
+2026-10-09T02:35:46.8679091Z Artifact gate-python-timings-shard52 has been successfully uploaded! Final size is 7986789 bytes. Artifact ID is 11591983365
+2026-10-09T02:35:46.8681793Z Artifact download URL: https://github.com/wolf75222/PoPS/actions/runs/37874700424/artifacts/11591983365
+2026-10-09T02:35:46.8855567Z ##[group]Run actions/upload-artifact@v7
+2026-10-09T02:35:46.8855921Z with:
+2026-10-09T02:35:46.8856179Z   name: codegen-debug-shard52
+2026-10-09T02:35:46.8856950Z   path: /home/runner/work/PoPS/PoPS/.pops-dsl-cache/**/*.cpp
+/home/runner/work/PoPS/PoPS/.pops-dsl-cache/**/*.cachekey
+/home/runner/work/PoPS/PoPS/.pops-dsl-cache/**/*.json
+
+2026-10-09T02:35:46.8857704Z   if-no-files-found: ignore
+2026-10-09T02:35:46.8858015Z   retention-days: 7
+2026-10-09T02:35:46.8858279Z   compression-level: 6
+2026-10-09T02:35:46.8858546Z   overwrite: false
+2026-10-09T02:35:46.8858810Z   include-hidden-files: false
+2026-10-09T02:35:46.8859094Z   archive: true
+2026-10-09T02:35:46.8859337Z env:
+2026-10-09T02:35:46.8859577Z   PYTHONUNBUFFERED: 1
+2026-10-09T02:35:46.8859902Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T02:35:46.8860261Z   CCACHE_MAXSIZE: 2G
+2026-10-09T02:35:46.8860590Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T02:35:46.8861032Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T02:35:46.8861378Z   CCACHE_NOHASHDIR: true
+2026-10-09T02:35:46.8861664Z   CCACHE_SLOPPINESS: locale
+2026-10-09T02:35:46.8861941Z   SHARD_INDEX: 52
+2026-10-09T02:35:46.8862190Z   SHARD_TOTAL: 70
+2026-10-09T02:35:46.8862733Z   POPS_CACHE_DIR: /home/runner/work/PoPS/PoPS/.pops-dsl-cache
+2026-10-09T02:35:46.8863141Z   POPS_KEEP_GENERATED: 1
+2026-10-09T02:35:46.8863436Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T02:35:46.8863797Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:35:46.8864277Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib/pkgconfig
+2026-10-09T02:35:46.8864760Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:35:46.8865193Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:35:46.8865616Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:35:46.8866039Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
+2026-10-09T02:35:46.8866414Z ##[endgroup]
+2026-10-09T02:35:47.0263466Z No files were found with the provided path: /home/runner/work/PoPS/PoPS/.pops-dsl-cache/**/*.cpp
+2026-10-09T02:35:47.0264376Z /home/runner/work/PoPS/PoPS/.pops-dsl-cache/**/*.cachekey
+2026-10-09T02:35:47.0265155Z /home/runner/work/PoPS/PoPS/.pops-dsl-cache/**/*.json. No artifacts will be uploaded.
+2026-10-09T02:35:47.0397084Z ##[group]Run if command -v ccache >/dev/null 2>&1; then
+2026-10-09T02:35:47.0397582Z [36;1mif command -v ccache >/dev/null 2>&1; then[0m
+2026-10-09T02:35:47.0397930Z [36;1m  ccache -s[0m
+2026-10-09T02:35:47.0398189Z [36;1melse[0m
+2026-10-09T02:35:47.0398605Z [36;1m  echo "ccache was not installed because this job stopped before dependency setup"[0m
+2026-10-09T02:35:47.0399067Z [36;1mfi[0m
+2026-10-09T02:35:47.0469127Z shell: /usr/bin/bash -e {0}
+2026-10-09T02:35:47.0469436Z env:
+2026-10-09T02:35:47.0469685Z   PYTHONUNBUFFERED: 1
+2026-10-09T02:35:47.0470033Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T02:35:47.0470409Z   CCACHE_MAXSIZE: 2G
+2026-10-09T02:35:47.0470750Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T02:35:47.0471165Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T02:35:47.0471502Z   CCACHE_NOHASHDIR: true
+2026-10-09T02:35:47.0471783Z   CCACHE_SLOPPINESS: locale
+2026-10-09T02:35:47.0472105Z   SHARD_INDEX: 52
+2026-10-09T02:35:47.0472354Z   SHARD_TOTAL: 70
+2026-10-09T02:35:47.0473113Z   POPS_CACHE_DIR: /home/runner/work/PoPS/PoPS/.pops-dsl-cache
+2026-10-09T02:35:47.0473508Z   POPS_KEEP_GENERATED: 1
+2026-10-09T02:35:47.0473800Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T02:35:47.0474165Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:35:47.0474644Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib/pkgconfig
+2026-10-09T02:35:47.0475113Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:35:47.0475544Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:35:47.0475971Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T02:35:47.0476394Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
+2026-10-09T02:35:47.0476760Z ##[endgroup]
+2026-10-09T02:35:47.0670217Z Local storage:
+2026-10-09T02:35:47.0670690Z   Cache size (GB): 0.0 / 2.0 ( 0.18%)
+2026-10-09T02:35:47.0819859Z Post job cleanup.
+2026-10-09T02:35:47.0824637Z ##[start-action display=Cache Kokkos install (serial 4.4.01, gcc);id=__ddba06af-e61a-4c20-8e94-f24119a8830a.kokkos-cache]
+2026-10-09T02:35:47.0827022Z ##[end-action id=__ddba06af-e61a-4c20-8e94-f24119a8830a.kokkos-cache;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-09T02:35:47.0898737Z Post job cleanup.
+2026-10-09T02:35:47.1767176Z [command]/usr/bin/git version
+2026-10-09T02:35:47.1809811Z git version 2.55.0
+2026-10-09T02:35:47.1849928Z Temporarily overriding HOME='/home/runner/work/_temp/49bcb555-f12c-4806-b6e5-5f0012916228' before making global git config changes
+2026-10-09T02:35:47.1851504Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-09T02:35:47.1857123Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/PoPS/PoPS
+2026-10-09T02:35:47.1900004Z Removing SSH command configuration
+2026-10-09T02:35:47.1909523Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-09T02:35:47.1958281Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-09T02:35:47.2317509Z Removing HTTP extra header
+2026-10-09T02:35:47.2333955Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-09T02:35:47.2376705Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-09T02:35:47.2747522Z Removing includeIf entries pointing to credentials config files
+2026-10-09T02:35:47.2748639Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-09T02:35:47.2788167Z includeif.gitdir:/home/runner/work/PoPS/PoPS/.git.path
+2026-10-09T02:35:47.2790542Z includeif.gitdir:/home/runner/work/PoPS/PoPS/.git/worktrees/*.path
+2026-10-09T02:35:47.2791472Z includeif.gitdir:/github/workspace/.git.path
+2026-10-09T02:35:47.2792347Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-09T02:35:47.2801365Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/PoPS/PoPS/.git.path
+2026-10-09T02:35:47.2838776Z /home/runner/work/_temp/git-credentials-eabb0b73-78f7-4b12-9fc6-0e74f9dcde60.config
+2026-10-09T02:35:47.2873259Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/PoPS/PoPS/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-eabb0b73\-78f7\-4b12\-9fc6\-0e74f9dcde60\.config
+2026-10-09T02:35:47.2947875Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/PoPS/PoPS/.git/worktrees/*.path
+2026-10-09T02:35:47.2978273Z /home/runner/work/_temp/git-credentials-eabb0b73-78f7-4b12-9fc6-0e74f9dcde60.config
+2026-10-09T02:35:47.2988808Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/PoPS/PoPS/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-eabb0b73\-78f7\-4b12\-9fc6\-0e74f9dcde60\.config
+2026-10-09T02:35:47.3033025Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-09T02:35:47.3061553Z /github/runner_temp/git-credentials-eabb0b73-78f7-4b12-9fc6-0e74f9dcde60.config
+2026-10-09T02:35:47.3069256Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-eabb0b73\-78f7\-4b12\-9fc6\-0e74f9dcde60\.config
+2026-10-09T02:35:47.3107750Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-09T02:35:47.3139593Z /github/runner_temp/git-credentials-eabb0b73-78f7-4b12-9fc6-0e74f9dcde60.config
+2026-10-09T02:35:47.3149090Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-eabb0b73\-78f7\-4b12\-9fc6\-0e74f9dcde60\.config
+2026-10-09T02:35:47.3195519Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-09T02:35:47.3447899Z Removing credentials config '/home/runner/work/_temp/git-credentials-eabb0b73-78f7-4b12-9fc6-0e74f9dcde60.config'
+2026-10-09T02:35:47.3594286Z Cleaning up orphan processes

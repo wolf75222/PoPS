@@ -1,0 +1,10 @@
+...                                                                      [100%]
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_public_three_stage_screened_fields.py::test_public_three_stage_screened_fields[representative]
+tests/python/integration/runtime/test_public_three_stage_screened_fields.py::test_public_three_stage_screened_fields[rename]
+tests/python/integration/runtime/test_public_three_stage_screened_fields.py::test_public_three_stage_screened_fields[decay]
+  tests/python/integration/runtime/test_public_three_stage_screened_fields.py:42: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.parametrize('variant',('representative','rename','decay'))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+3 passed, 3 warnings in 100.46s (0:01:40)

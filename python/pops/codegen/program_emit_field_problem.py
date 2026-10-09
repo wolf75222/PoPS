@@ -14,6 +14,11 @@ def hierarchy_field_solve(value: Any) -> Any:
     if value.op == "field_component":
         from pops.fields._observation_contract import validate_field_observation
         return validate_field_observation(value)[2]
+    if value.op == "field_problem_coefficients":
+        from pops.codegen.program_emit_amr_original_field import original_field_consumer
+        original = original_field_consumer(value)
+        if original is not None:
+            return original
     matches = []
     for solve in value.prog._values:
         if solve.op != "solve_linear" or solve.attrs.get("hierarchy_field_identity") != value.attrs.get("field_problem_identity"):
@@ -31,13 +36,31 @@ def hierarchy_field_solve(value: Any) -> Any:
     return matches[0]
 
 
+def guard_candidate_allocations(rows: list[str]) -> list[str]:
+    """Local allocations only; boundary builders keep their own collective protocol."""
+    result = []
+    for row in rows:
+        if not row.startswith("auto ") or "prepare_mesh_boundary_session" in row:
+            result.append(row)
+            continue
+        name, expression = row[5:-1].split(" = ", 1)
+        result += ["decltype(%s) %s;" % (expression, name),
+                   "std::exception_ptr %s_allocation_error;" % name,
+                   "try { %s = %s; } catch (...) { %s_allocation_error = std::current_exception(); }" % (name, expression, name),
+                   "try { Kokkos::fence(); } catch (...) { if (!%s_allocation_error) %s_allocation_error = std::current_exception(); }" % (name, name),
+                   'pops::collectively_rethrow_exception(%s_allocation_error, ctx.prepared_execution_lane(), "candidate field local allocation");' % name]
+    return result
+
+
 def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: Any,
                              *, target: str) -> None:
     if target not in ("system", "amr_system") or prelude is None:
         raise NotImplementedError("field expression storage requires a supported native Program body")
     hierarchy = target == "amr_system"
     if hierarchy and value.op != "field_component" and value.attrs.get("scope") != "hierarchy":
-        raise ValueError("AMR general fields require a synchronized hierarchy numerical solver")
+        from pops.codegen.program_emit_amr_original_field import original_field_consumer
+        if value.op != "field_problem_coefficients" or original_field_consumer(value) is None:
+            raise ValueError("AMR general fields require a synchronized hierarchy numerical solver")
     identity = Identity.from_token(value.attrs.get("field_problem_identity"))
     if identity.domain != "field-problem":
         raise ValueError("field expression lost its physical field-problem identity")
@@ -45,7 +68,26 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
     if type(ncomp) is not int or ncomp < 1:
         raise ValueError("field expression requires a positive exact component count")
     component = value.op == "field_component"
+    original_hierarchy = False
+    if hierarchy:
+        original_hierarchy = hierarchy_field_solve(value).op == "solve_spatial_field"
+        if original_hierarchy:
+            from pops.codegen.program_emit_solve import _solve_stage_fraction
+            stage = _solve_stage_fraction(hierarchy_field_solve(value))
+            lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
     sources = tuple(value.inputs)
+    deferred = value.attrs.get("coefficient_evaluation") is not None
+    unknowns = ()
+    if deferred:
+        from pops.codegen.program_emit_amr_original_field import original_field_consumer
+        from pops.model import Handle
+        solve = original_field_consumer(value)
+        if solve is None or solve.attrs.get("coefficient_evaluation") != value.attrs["coefficient_evaluation"]:
+            raise ValueError("deferred candidate coefficient requires its exact consuming residual")
+        unknowns = tuple(Handle.from_canonical_identity(_json_ready(item))
+                         for item in solve.attrs["source_contract"]["unknown_components"])
+    from pops.fields._evolved_stage_contract import emit_issued_duration
+    duration = emit_issued_duration(value.attrs.get("temporal_tau"), value.prog, value.point, "program_field_%d_issued_dt" % value.id, lines, operation_id=value.id)
     expressions = []
     if component:
         from pops.fields._observation_contract import validate_field_observation
@@ -61,7 +103,7 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
         reads = {}
         for expression in encoded:
             code, dependencies = field_expression_cpp(
-                expression, sources, views=tuple("input%d" % i for i in range(len(sources))))
+                expression, sources, views=tuple("input%d" % i for i in range(len(sources))), unknowns=unknowns, duration_name=duration)
             expressions.append(code)
             for handle in dependencies:
                 reads[handle.qualified_id] = handle.canonical_identity()
@@ -84,10 +126,14 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
                      (token, solve.id, value.id))
         pointer = "(&%s)" % token
     else:
+        allocation_start = len(prelude)
         prelude.append("auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
                        "ctx.alloc_scalar_field(%d, 1));" % (token, ncomp))
-        prelude.append("auto %s_status = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-                       "ctx.alloc_scalar_field(1, 0));" % token)
+        if not deferred:
+            prelude.append("auto %s_status = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+                           "ctx.alloc_scalar_field(1, 0));" % token)
+        if deferred:
+            prelude[allocation_start:] = guard_candidate_allocations(prelude[allocation_start:])
         pointer = token
     var[value.id] = "(*%s)" % pointer
     var[("field_pointer", value.id)] = pointer
@@ -95,6 +141,10 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
         # This token is a reference to context-owned storage, even though the ordinary
         # expression spelling uses a pointer wrapper. Continuations retain the object by reference.
         var[("continuation_reference", value.id)] = token
+    if deferred:
+        # This descriptor allocates storage only. No physical coefficient is evaluated
+        # until the native full-residual callback owns a synchronized candidate.
+        return
     if component:
         var[("field_observation", value.id)] = identity.token
     destination = "(*%s)" % pointer
@@ -116,6 +166,10 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
     lines.extend([
         "  if (pops::all_reduce_max(field_layout_invalid, ctx.prepared_execution_lane()) != 0)",
         '    throw std::invalid_argument("field expression inputs require exact layout/distribution identity");',
+    ])
+    if original_hierarchy:
+        lines += ["  pops::Real field_value_invalid = 0;", "  ctx.prepare_spatial_collectively([&] {"]
+    lines.extend([
         "  for (std::size_t li = 0; li < %s.local_size(); ++li) {" % destination,
         "    auto output = %s.fab(li).view();" % destination,
         "    auto status = %s_status->fab(li).view();" % token,
@@ -133,8 +187,13 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
         "      status(index, 0) = finite ? pops::Real(0) : pops::Real(1);",
         "    });",
         "  }",
-        "  if (pops::all_reduce_max(pops::reduce_max_local(*%s_status), "
-        "ctx.prepared_execution_lane()) > 0)" % token,
+    ])
+    if original_hierarchy:
+        lines += ["    field_value_invalid = std::max(pops::Real(0), pops::reduce_max_local(*%s_status));" % token,
+                  "    Kokkos::fence();", "  });"]
+    local_invalid = "field_value_invalid" if original_hierarchy else "pops::reduce_max_local(*%s_status)" % token
+    lines.extend([
+        "  if (pops::all_reduce_max(%s, ctx.prepared_execution_lane()) > 0)" % local_invalid,
         "    throw pops::runtime::program::StepAttemptRejected("
         "pops::SolveStatus::kInvalidEvaluation, "
         "pops::runtime::program::StepAttemptDisposition::kReject, 0, "

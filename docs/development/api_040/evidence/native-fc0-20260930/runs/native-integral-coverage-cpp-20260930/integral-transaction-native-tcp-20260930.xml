@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)"
+	tests="8"
+	failures="0"
+	disabled="0"
+	skipped="0"
+	hostname=""
+	time="10"
+	timestamp="2026-09-30T10:05:11"
+	>
+	<testcase name="ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock" classname="ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock" time="8.00159" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
+[       OK ] ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock (18 ms)
+[----------] 1 test from ProgramRuntime (18 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (18 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox" classname="ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox" time="0.600476" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_runtime;integration;medium;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramRuntime
+[ RUN      ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox
+[       OK ] ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox (9 ms)
+[----------] 1 test from ProgramRuntime (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges" classname="ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges" time="0.973971" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_context_contract;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramContextContract
+[ RUN      ] ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges
+[       OK ] ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges (11 ms)
+[----------] 1 test from ProgramContextContract (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent" classname="ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent" time="0.0604495" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_context_contract;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramContextContract
+[ RUN      ] ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent
+[       OK ] ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent (6 ms)
+[----------] 1 test from ProgramContextContract (6 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption" classname="ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption" time="0.0615045" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_context_contract;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramContextContract
+[ RUN      ] ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption
+[       OK ] ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption (8 ms)
+[----------] 1 test from ProgramContextContract (8 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (8 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation" classname="ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation" time="0.0598676" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_program_context_contract;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ProgramContextContract
+[ RUN      ] ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation
+[       OK ] ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation (6 ms)
+[----------] 1 test from ProgramContextContract (6 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_program_runtime_np2" classname="test_program_runtime_np2" time="0.69662" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;cpp-target:test_program_runtime;medium;mpi"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally:ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional:ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock:ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox:ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal:ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource:ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep:ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication:ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption:ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching
+[==========] Running 10 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 10 tests from ProgramRuntime
+[ RUN      ] ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource
+Note: Google T...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="test_program_context_contract_np2" classname="test_program_context_contract_np2" time="0.351356" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;cpp-target:test_program_context_contract;medium;mpi"/>
+		</properties>
+		<system-out>Note: Google Test filter = ProgramContextContract.AuxiliaryNumericalFailurePreservesSolveActionAndHardContractErrors:ProgramContextContract.AuxiliaryPublicationRefusesRankDivergentTransactionBeforeNoWorkBranch:ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection:ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation:ProgramContextContract.NestedAcceptedSubstepsRestoreFieldsHistoriesAndExchanges:ProgramContextContract.IntegralStateConsumesExactAcceptedTraceAndRollsBackParent:ProgramContextContract.IntegralStateCollectiveRefusalsPreserveValueAndConsumption:ProgramContextContract.NativeEvaluationFailureIsCollectiveAndCannotPublishWork:ProgramContextContract.TransactionScopeDivergenceRefusesBeforeMutation:ProgramContextContract.ConsumedFieldPublicationIsExactCollectiveAndTransactional:ProgramContextContract.AmrProgramTopologyPublishesAndRollsBackExactContracts:ProgramContextContract.AmrProgramSingleCarrierTopologyRejectsMultiple...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+</testsuite>

@@ -9,7 +9,7 @@
 //   2. Round-trip M * M^{-1} == I to round-off for a general 2x2 and 3x3.
 //   3. 3x3 vs the generic mat_inverse<N> agree to round-off (the closed form is a bit-stable fast
 //      path, not a different result).
-//   4. block_inverse<4> falls through to mat_inverse<4> (the >3 generic path).
+//   4. The balanced generic N=4 inverse satisfies the original matrix relation.
 //   5. Singular block: det ~ 0 returns false without writing inv.
 
 #include <gtest/gtest.h>
@@ -179,19 +179,26 @@ TEST(test_block_inverse, BlockDiagonalRotation3x3) {
   EXPECT_TRUE(dabs(Mi[0][2]) < EPS_MACHINE && dabs(Mi[2][0]) < EPS_MACHINE) << "no x-z coupling";
 }
 
-// Test 4 : block_inverse<4> falls through to mat_inverse<4> (the generic >3 path, same result).
-TEST(test_block_inverse, N4FallsThroughToMatInverse) {
+// Test 4: equilibration changes rounding, so verify the original relation rather
+// than requiring byte identity with a different Gauss-Jordan operation tree.
+TEST(test_block_inverse, N4BalancedInverseSatisfiesOriginalMatrix) {
   const Real M[4][4] = {{Real(3), Real(1), Real(0), Real(2)},
                         {Real(0), Real(4), Real(1), Real(0)},
                         {Real(1), Real(0), Real(5), Real(1)},
                         {Real(0), Real(2), Real(0), Real(6)}};
   Real Mi[4][4];
-  Real Mg[4][4];
   ASSERT_TRUE(block_inverse<4>(M, Mi));
-  ASSERT_TRUE(mat_inverse<4>(M, Mg));
   for (int i = 0; i < 4; ++i)
-    for (int j = 0; j < 4; ++j)
-      EXPECT_EQ(Mi[i][j], Mg[i][j]) << "fallthrough is mat_inverse [" << i << "][" << j << "]";
+    for (int j = 0; j < 4; ++j) {
+      Real residual = i == j ? Real(-1) : Real(0);
+      Real magnitude = Real(1);
+      for (int k = 0; k < 4; ++k) {
+        const Real term = M[i][k] * Mi[k][j];
+        residual += term;
+        magnitude += std::fabs(term);
+      }
+      EXPECT_LE(std::fabs(residual), Real(4 * 8) * std::numeric_limits<Real>::epsilon() * magnitude);
+    }
 }
 
 // Test 5 : a singular block returns false and does not write inv.
@@ -257,4 +264,82 @@ TEST(test_block_inverse, ApplyInverse3x3AndSingular) {
   Real out[3] = {Real(-9), Real(-9), Real(-9)};  // sentinel
   EXPECT_FALSE(block_apply_inverse<3>(S, v, out)) << "singular 3x3 -> false";
   EXPECT_EQ(out[0], Real(-9)) << "out untouched on singular";
+}
+
+TEST(test_block_inverse, ExtremeIndependentRowScalesAndPermutation) {
+  const Real large = std::numeric_limits<Real>::max() / Real(4);
+  const Real small = Real(1) / large;
+  const Real diagonal[3] = {large, small, Real(3)};
+  for (int shift = 0; shift < 3; ++shift) {
+    Real matrix[3][3]{};
+    for (int row = 0; row < 3; ++row)
+      matrix[row][(row + shift) % 3] = diagonal[row];
+    Real inverse[3][3];
+    ASSERT_TRUE(block_inverse(matrix, inverse));
+    for (int row = 0; row < 3; ++row)
+      for (int column = 0; column < 3; ++column)
+        EXPECT_NEAR(inverse[(row + shift) % 3][column] * diagonal[column],
+                    row == column ? Real(1) : Real(0),
+                    Real(8) * std::numeric_limits<Real>::epsilon());
+    Real result[3];
+    ASSERT_TRUE(pops::detail::block_apply_inverse(matrix, diagonal, result));
+    for (Real value : result)
+      EXPECT_EQ(value, Real(1));
+  }
+}
+
+TEST(test_block_inverse, SubnormalApplyDoesNotRequireRepresentableInverse) {
+  const Real tiny = std::numeric_limits<Real>::denorm_min() * Real(1024);
+  const Real matrix[2][2] = {{tiny, 0}, {0, tiny}};
+  Real inverse[2][2] = {{7, 7}, {7, 7}};
+  EXPECT_FALSE(block_inverse(matrix, inverse));
+  for (const auto& row : inverse)
+    for (Real value : row)
+      EXPECT_EQ(value, Real(7));
+  Real right[2] = {tiny, -tiny};
+  ASSERT_TRUE(pops::detail::block_apply_inverse(matrix, right, right));
+  EXPECT_EQ(right[0], Real(1));
+  EXPECT_EQ(right[1], Real(-1));
+}
+
+TEST(test_block_inverse, FiniteCancellationAvoidsIntermediateOverflow) {
+  const Real large = std::numeric_limits<Real>::max() * Real(.75);
+  const Real matrix[3][3] = {{1, -1, 1}, {0, 1, 0}, {0, 0, 1}};
+  const Real right[3] = {large, large, large};
+  Real result[3] = {-7, -7, -7};
+  ASSERT_TRUE(pops::detail::block_apply_inverse(matrix, right, result));
+  for (Real value : result)
+    EXPECT_EQ(value, large);
+}
+
+TEST(test_block_inverse, RelativePivotDecisionIsIndependentOfRowUnits) {
+  const Real epsilon = std::numeric_limits<Real>::epsilon();
+  const Real large = std::sqrt(std::numeric_limits<Real>::max());
+  const Real small = Real(1) / large;
+  for (Real scale : {small, Real(1), large}) {
+    const Real matrix[2][2] = {{scale, scale}, {1, Real(1) + Real(8)*epsilon}};
+    Real inverse[2][2] = {{9, 9}, {9, 9}};
+    EXPECT_FALSE(block_inverse(matrix, inverse, Real(64)*epsilon));
+    for (const auto& row : inverse)
+      for (Real value : row)
+        EXPECT_EQ(value, Real(9));
+  }
+}
+
+TEST(test_block_inverse, SingularGenericInverseAndInvalidInputDoNotPublish) {
+  Real singular[4][4]{};
+  Real inverse[4][4];
+  for (auto& row : inverse)
+    for (Real& value : row)
+      value = Real(6);
+  EXPECT_FALSE(block_inverse(singular, inverse));
+  for (const auto& row : inverse)
+    for (Real value : row)
+      EXPECT_EQ(value, Real(6));
+  const Real matrix[2][2] = {{1, 0}, {0, 1}};
+  const Real right[2] = {std::numeric_limits<Real>::quiet_NaN(), 1};
+  Real out[2] = {8, 8};
+  EXPECT_FALSE(pops::detail::block_apply_inverse(matrix, right, out));
+  EXPECT_EQ(out[0], Real(8));
+  EXPECT_EQ(out[1], Real(8));
 }

@@ -1,0 +1,35 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 4 items
+
+tests/python/integration/runtime/test_local_residual_product_runtime.py::test_joint_product_rebind_or_atomic_failure[False-False] PASSED [ 25%]
+tests/python/integration/runtime/test_api040_m22_h05_runtime.py::test_h05_original_residual_rebind_and_domain_rollback[False] PASSED [ 50%]
+tests/python/integration/runtime/test_local_product_operators_runtime.py::test_public_source_apply_product_rebind_and_incompatible_equation_rollback[False] PASSED [ 75%]
+tests/python/integration/runtime/test_local_product_readonly_runtime.py::test_readonly_capture_binds_without_becoming_an_unknown_or_commit[False] FAILED [100%]
+
+=================================== FAILURES ===================================
+___ test_readonly_capture_binds_without_becoming_an_unknown_or_commit[False] ___
+tests/python/integration/runtime/test_local_product_readonly_runtime.py:30: in test_readonly_capture_binds_without_becoming_an_unknown_or_commit
+    runtime = pops.bind(artifact, initial_state={"dual": .9 * exact, "target": target.copy()},
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:91: in bind
+    return phase(artifact, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:571: in bind
+    raise ValueError(
+E   ValueError: InitialConditionPlan is the single layout initialization authority; initial_state cannot duplicate it
+----------------------------- Captured stdout call -----------------------------
+[rank 0] readonly-local-product-False: compile and publish start
+[rank 0] readonly-local-product-False: compile and publish done
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_local_product_operators_runtime.py::test_public_source_apply_product_rebind_and_incompatible_equation_rollback[False]
+  tests/python/integration/runtime/test_local_product_operators_runtime.py:39: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.parametrize("reverse", (False, True))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-fc0d6f4c-native-smoke/pytest.xml -
+=========================== short test summary info ============================
+FAILED tests/python/integration/runtime/test_local_product_readonly_runtime.py::test_readonly_capture_binds_without_becoming_an_unknown_or_commit[False]
+============== 1 failed, 3 passed, 1 warning in 79.90s (0:01:19) ===============

@@ -25,9 +25,18 @@ _LEGACY_ROUTES = {
 
 def native_route(module: Any, operator: Any) -> tuple[str | None, str | None]:
     """Current checked adapter vocabulary; no capability follows from a type name alone."""
+    if operator.lowering.get("principal_balance") or (
+            operator.kind == "grid_operator" and
+            sum(space.kind == "state" for space in operator.signature.inputs) > 1):
+        return "program:principal_finite_volume", None
     from pops._ir.balance import source_balance_supported
     if source_balance_supported(operator.lowering.get("physical_balance")):
         return "program:source_balance", None
+    from pops.numerics.nonconservative import path_balance_supported
+    if path_balance_supported(operator.lowering.get("physical_balance")):
+        return "program:path_conservative_rhs", None
+    if operator.lowering.get("nonconservative_law") is not None:
+        return "program:nonconservative_constitutive_law", None
     from pops.numerics.diffusion import diffusion_balance_supported
     from pops.numerics.scharfetter_gummel import fitted_balance_supported
     if diffusion_balance_supported(operator.lowering.get("physical_balance")) or fitted_balance_supported(operator.lowering.get("physical_balance")):
@@ -223,7 +232,7 @@ def derive_inputs(module: Any, operator: Any, packs: Any, *, boundary_data: Any 
         if isinstance(value, Handle):
             from pops.model.handles import OperatorHandle
 
-            if isinstance(value, OperatorHandle) or value.kind in {"flux", "source"}:
+            if isinstance(value, OperatorHandle) or value.kind in {"flux", "source", "nonconservative_product"}:
                 return  # Scientific declaration dependency, not a numerical quantity read.
             add(value, by_handle.get(_reference(value)), None, sample, origin,
                 complete=_reference(value) in by_handle)
@@ -327,7 +336,8 @@ def derive_inputs(module: Any, operator: Any, packs: Any, *, boundary_data: Any 
                          "balance_contribution")
     walk(boundary_data, "boundary", "physical_boundary")
     if operator.kind == "grid_operator":
-        walk(getattr(module, "_eigenvalues", None), sampling, "wave_speed")
+        from pops.model.flux_waves import flux_waves
+        walk(flux_waves(module, operator), sampling, "wave_speed")
     # Explicit provider requirements are additional native dependencies, not a
     # reason to retain every unused FieldSpace component of a transparent body.
     required = operator.requirements.get("aux", ())
@@ -356,7 +366,8 @@ def _occurrences(module: Any, operator: Any, identity: str) -> tuple[TermOccurre
     from pops.model.spaces import FieldSpace
 
     if ((operator.kind == "field_operator" or operator.lowering.get("diffusive_law") is not None
-         or operator.lowering.get("drift_law") is not None)
+         or operator.lowering.get("drift_law") is not None
+         or operator.lowering.get("nonconservative_law") is not None)
             and isinstance(target_space, FieldSpace)
             and target_space.name not in module.field_spaces()):
         # A field provider may project one result from a shared registered
@@ -400,7 +411,7 @@ def _derive_effects(module: Any, operator: Any, boundary_data: Any) -> tuple[str
     """
     from pops._ir.application import OperatorApplication
     from pops._ir.native_call import NativeCall
-    from pops._ir.expr import Const, Div, Expr, Pow, Sqrt, Var
+    from pops._ir.expr import Const, Div, Exp, Expr, Pow, Sqrt, Var
     from pops._ir.visitors import _children
     from pops.model.handles import Handle
 
@@ -430,7 +441,7 @@ def _derive_effects(module: Any, operator: Any, boundary_data: Any) -> tuple[str
             # A precise read footprint does not establish purity or successful evaluation.
             retain("opaque", "fallible")
         elif isinstance(value, Expr):
-            if isinstance(value, (Div, Sqrt, Pow)):
+            if isinstance(value, (Div, Exp, Sqrt, Pow)):
                 retain("fallible")
             if isinstance(value, OperatorApplication):
                 retain(*value.effects)
@@ -486,7 +497,8 @@ def _derive_effects(module: Any, operator: Any, boundary_data: Any) -> tuple[str
                 if dependency is not None:
                     visit(dependency)
         if declaration.kind == "grid_operator":
-            walk(getattr(module, "_eigenvalues", None), opaque=True)
+            from pops.model.flux_waves import flux_waves
+            walk(flux_waves(module, declaration), opaque=True)
 
     visit(operator)
     walk(boundary_data, opaque=True)
@@ -505,7 +517,7 @@ def derive_module_operations(module: Any, packs: Any, *, boundary_data: Any = ()
         route, refusal = native_route(module, operator)
         effects = _derive_effects(module, operator, boundary_data)
         exchanges = tuple(ExchangeRecord(term.identity, term.target)
-                          for term in occurrences if term.kind in {"flux", "transport", "diffusion", "drift", "grid_operator"})
+                          for term in occurrences if term.kind in {"flux", "transport", "diffusion", "coupled_gradient", "drift", "grid_operator"})
         operations.append(NumericalConstruction(
             identity, evaluation, tuple(term.identity for term in occurrences),
             inputs=derive_inputs(module, operator, packs, boundary_data=boundary_data),

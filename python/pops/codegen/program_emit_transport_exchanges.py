@@ -10,22 +10,34 @@ def emit_transport_exchanges(
     # its actual measure in the ledger; -div(F) reverses the diffusive incidence sign.
     active = active_field or "ctx.state(%d)" % program_block
     active_name = faces + "_active"
+    coverage_name = faces + "_coverage"
     local_name = faces + "_local"
     return [
         "{",
         "const pops::MultiFab<pops::kNativeDimension>* %s = nullptr;" % active_name,
+        "const pops::MultiFab<pops::kNativeDimension>* %s = nullptr;" % coverage_name,
         "std::exception_ptr accepted_mask_error;",
         "long accepted_mask_layout_error = 0;",
+        "bool accepted_owner_contributes = false;",
+        "std::optional<pops::Geometry<pops::kNativeDimension>> accepted_geometry;",
+        "std::optional<decltype(ctx.prepare_external_trace_face_predicate())> accepted_external_face;",
         "try {",
+        "  accepted_geometry.emplace(ctx.geometry());",
+        "  accepted_external_face.emplace(ctx.prepare_external_trace_face_predicate());",
         "  pops::sync_host();",
         "  %s = ctx.pointwise_active_mask(%d, %s);" % (active_name, program_block, active),
-        "  if (%s != nullptr) {" % active_name,
+        "  %s = ctx.pointwise_exchange_coverage_mask(%d, %s);" % (
+            coverage_name, program_block, active),
+        "  accepted_owner_contributes = pops::runtime::program::accepted_exchange_contributes(%s, ctx.prepared_execution_lane());" % active,
+        "  for (const auto* mask : {%s, %s}) {" % (active_name, coverage_name),
+        "  if (mask != nullptr) {",
         "    pops::sync_host();",
-        "    if (%s->local_size() != %s.size()) accepted_mask_layout_error = 1;"
-        % (active_name, faces),
+        "    if (mask->local_size() != %s.size()) accepted_mask_layout_error = 1;"
+        % faces,
         "    else for (std::size_t local = 0; local < %s.size(); ++local)" % faces,
-        "      if (%s->box(local) != %s[local].cell_box()) accepted_mask_layout_error = 1;"
-        % (active_name, faces),
+        "      if (mask->box(local) != %s[local].cell_box()) accepted_mask_layout_error = 1;"
+        % faces,
+        "  }",
         "  }",
         "} catch (...) { accepted_mask_error = std::current_exception(); }",
         "if (pops::all_reduce_max(accepted_mask_error ? 1L : 0L, ctx.prepared_execution_lane()) != 0) {",
@@ -36,6 +48,7 @@ def emit_transport_exchanges(
         "if (pops::all_reduce_max(accepted_mask_layout_error, ctx.prepared_execution_lane()) != 0)",
         '  throw std::invalid_argument("accepted transport face mask differs from local patches collectively");',
         "ctx.stage_exchange_batch([&](auto&& stage_exchange) {",
+        "if (!accepted_owner_contributes) return;",
         "for (std::size_t %s = 0; %s < %s.size(); ++%s) {"
         % (local_name, local_name, faces, local_name),
         "  const auto& accepted_faces = %s[%s];" % (faces, local_name),
@@ -45,6 +58,9 @@ def emit_transport_exchanges(
         "  const auto active_values = %s == nullptr" % active_name,
         "      ? pops::FieldView<const pops::Real, pops::kNativeDimension>{}",
         "      : std::as_const(*%s).fab(%s).view();" % (active_name, local_name),
+        "  const auto coverage_values = %s == nullptr" % coverage_name,
+        "      ? pops::FieldView<const pops::Real, pops::kNativeDimension>{}",
+        "      : std::as_const(*%s).fab(%s).view();" % (coverage_name, local_name),
         "  for (std::int64_t ordinal = 0; ordinal < cells.numPts(); ++ordinal) {",
         "    auto remainder = ordinal;",
         "    auto cell = cells.lo;",
@@ -53,10 +69,12 @@ def emit_transport_exchanges(
         "      remainder /= extent[axis];",
         "    }",
         "    if (%s != nullptr && active_values(cell,0) < 0.5) continue;" % active_name,
+        "    if (%s != nullptr && coverage_values(cell,0) < 0.5) continue;"
+        % coverage_name,
         "    for (int axis = 0; axis < pops::kNativeDimension; ++axis) {",
         "      pops::Real measure = 1;",
         "      for (int tangent = 0; tangent < pops::kNativeDimension; ++tangent)",
-        "        if (tangent != axis) measure *= ctx.geometry().spacing(tangent);",
+        "        if (tangent != axis) measure *= accepted_geometry->spacing(tangent);",
         "      for (int side = 0; side < 2; ++side) {",
         "        auto face = cell; face[axis] += side;",
         '        std::string quadrature = "cell";',
@@ -68,7 +86,8 @@ def emit_transport_exchanges(
         '            : quadrature + "/component:" + std::to_string(component);',
         "        stage_exchange(pops::runtime::program::ExchangeRecord{%s, %s, %s, component_quadrature,"
         % (json.dumps(operation), json.dumps(occurrence), json.dumps(evaluation)),
-        "            side == 0 ? 1 : -1, measure, face_values.axes[axis](face, component)/measure, %s, 1});"
+        "            side == 0 ? 1 : -1, measure, face_values.axes[axis](face, component)/measure, %s, 1,"
+        " axis, side, component, (*accepted_external_face)(axis, side, cell)});"
         % weight,
         "        }",
         "      }",

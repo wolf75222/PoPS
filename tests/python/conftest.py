@@ -76,6 +76,19 @@ class PythonProcessItem(pytest.Item):
                 str(native_dimension),
                 str(self.path),
             ]
+        if env.get("POPS_CI_TEST_EXECUTION") == "installed":
+            # Installed-distribution contract keeps test helpers visible without PYTHONPATH or
+            # source-package precedence. This is an execution mode, not a physical test selector.
+            env.pop("PYTHONPATH", None)
+            helpers = _process_pythonpath(None, native_dimension=None).split(os.pathsep)
+            bootstrap = "import runpy,sys; sys.path[:0]=" + repr(helpers) + "; "
+            if native_dimension is not None:
+                bootstrap += (
+                    "from pops._native_selector import select_native_dimension; "
+                    "select_native_dimension(" + str(native_dimension) + "); "
+                )
+            bootstrap += "runpy.run_path(sys.argv[1],run_name='__main__')"
+            command = [sys.executable, "-c", bootstrap, str(self.path)]
         result = subprocess.run(
             command,
             cwd=REPO_ROOT,
@@ -378,8 +391,10 @@ def _process_pythonpath(
     authority. Otherwise exercise the freshly installed wheel while keeping repository/test helpers
     visible.
     """
-    source_usable = native_dimension is not None and _source_python_has_native_variant(
-        native_dimension
+    source_usable = (
+        os.environ.get("POPS_CI_TEST_EXECUTION") != "installed"
+        and native_dimension is not None
+        and _source_python_has_native_variant(native_dimension)
     )
     entries: list[str] = []
     if existing:

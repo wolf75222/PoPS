@@ -33,6 +33,8 @@ from typing import Any
 
 from pops.identity.scalar import scalar_cpp
 from pops.codegen.cpp_writer import _cpp_identifier
+from .cpp_symbols import printer_scope,variable_identifier
+from .cpp_strings import cpp_string_literal
 
 # Re-export the moved helpers + the brick emitter so the public surface of
 # ``pops.codegen.module_codegen`` is unchanged (every name resolves here).
@@ -54,6 +56,7 @@ from pops.codegen.module_emit_brick import emit_cpp_brick  # noqa: F401
 # emit_cpp
 # ---------------------------------------------------------------------------
 
+@printer_scope
 def emit_cpp(model: Any, func: Any = None, cse: bool = True) -> str:
     """Generates a compilable C++ function computing the physical flux from the symbolic
     tree (each Expr node knows how to write itself in C++ via to_cpp).
@@ -95,7 +98,7 @@ def emit_cpp(model: Any, func: Any = None, cse: bool = True) -> str:
         )
     nc = model.n_vars
     out = [
-        "// genere depuis le modele symbolique '%s' (pops.dsl.emit_cpp)" % model.name,
+        "// genere depuis le modele symbolique '%s' (pops.dsl.emit_cpp)" % cpp_string_literal(model.name, ensure_ascii=False)[1:-1],
         "// flux physique F = flux<Axis>(U) sur %d axes ; U et F de taille %d."
         % (len(axes), nc),
         "#include <cmath>",
@@ -104,8 +107,9 @@ def emit_cpp(model: Any, func: Any = None, cse: bool = True) -> str:
         "  static_assert(Axis >= 0 && Axis < %d, \"flux axis is outside the emitted rank\");"
         % len(axes),
     ]
-    out += ["  const Real %s = U[%d];" % (c, i) for i, c in enumerate(model.cons_names)]
-    out += ["  const Real %s = %s;" % (p, e.to_cpp()) for p, e in model.prim_defs.items()]
+    out += ["  const Real %s = U[%d];" % (variable_identifier(c,'cons'), i) for i, c in enumerate(model.cons_names)]
+    from .cpp_writer import _cpp_expand
+    out += ["  const Real %s = %s;" % (variable_identifier(p,'prim'), _cpp_expand(e,{},None)) for p, e in model.prim_defs.items()]
     for ordinal, axis in enumerate(axes):
         out.append("  if constexpr (Axis == %d) {" % ordinal)
         tl, cpps = _codegen_exprs(
@@ -122,6 +126,7 @@ def emit_cpp(model: Any, func: Any = None, cse: bool = True) -> str:
 # emit_cpp_source
 # ---------------------------------------------------------------------------
 
+@printer_scope
 def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generated", cse: bool = True,
                     hoist_reciprocals: bool = False, *, native_input_plan: Any = None) -> str:
     """Generate a composable C++ SOURCE BRICK (in the pops sense) from model._source.
@@ -149,7 +154,7 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
     nc = model.n_vars
 
     def cons_locals() -> list:
-        return ["    const pops::Real %s = U[%d];" % (_cpp_identifier(c), i)
+        return ["    const pops::Real %s = U[%d];" % (variable_identifier(c,'cons'), i)
                 for i, c in enumerate(model.cons_names)]
 
     def prim_locals(live: Any = None) -> list:
@@ -167,7 +172,7 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
         "#include <cmath>",  # self-sufficient for std::sqrt / std::pow
         "#include <pops/core/identity/prepared_provider.hpp>",
         "// brique de SOURCE generee depuis le modele symbolique '%s' (pops.dsl.emit_cpp_source)."
-        % model.name,
+        % cpp_string_literal(model.name, ensure_ascii=False)[1:-1],
         "// apply(U, a) -> terme source S(U, aux) ; aux via le ProviderPack exact.",
     ]
     if rt_member:  # RuntimeParams header only if a formula reads a runtime param
@@ -290,6 +295,20 @@ def _emit_bricks(model: Any, name: Any = None, hoist_reciprocals: bool = False) 
             model, fld, "%sEll_%s" % (nm, fld), hoist_reciprocals=hoist_reciprocals))
     composite = ("pops::CompositeModel<pops_generated::%sHyp, %s, pops_generated::%sEll>"
                  % (nm, src_type, nm))
+    if model._elliptic is not None:
+        provider_count, _ = _elliptic_provider_locals(
+            model, "fields_from_state", model._elliptic)
+        parts.append(_emit_cpp_field_rhs_model(
+            model, model._elliptic, "fields_from_state", nm + "Ell_DefaultRhs",
+            hoist_reciprocals=hoist_reciprocals))
+        if provider_count:
+            # The default RHS is a distinct State+Aux operation. Its formula remains in the
+            # Ell brick and standalone attachment; the aggregate State-only route is forbidden.
+            attached_model = nm + "AttachedEllipticModel"
+            parts.append("namespace pops_generated { struct %s : %s {\n"
+                         "  static constexpr unsigned prepared_default_field_rhs_input_contract_version = 2;\n"
+                         "}; }\n" % (attached_model, composite))
+            composite = "pops_generated::" + attached_model
     return nv, "".join(parts), composite
 
 
@@ -375,7 +394,7 @@ def _emit_metadata(model: Any, model_alias: Any) -> str:
 
     out += (
         'extern "C" const char* pops_compiled_aux_provider_pack() { return %s; }\n'
-        % json.dumps(json.dumps(provider_metadata, sort_keys=True, separators=(",", ":")))
+        % cpp_string_literal(json.dumps(provider_metadata, sort_keys=True, separators=(",", ":")))
     )
     consumer_plans = getattr(model, "_component_operator_consumer_plans", None)
     flux_plan = getattr(model, "_component_flux_consumer_plan", None)
@@ -385,7 +404,7 @@ def _emit_metadata(model: Any, model_alias: Any) -> str:
         )
     out += (
         'extern "C" const char* pops_compiled_aux_consumer_plans() { return %s; }\n'
-        % json.dumps(json.dumps(
+        % cpp_string_literal(json.dumps(
             plain({"by_operator": consumer_plans, "physical_flux": flux_plan}),
             sort_keys=True, separators=(",", ":"),
         ))
@@ -397,6 +416,29 @@ def _emit_metadata(model: Any, model_alias: Any) -> str:
 # emit_cpp_elliptic
 # ---------------------------------------------------------------------------
 
+def _elliptic_provider_locals(model: Any, operator: str, rhs: Any) -> tuple[int, list[str]]:
+    """Bind RHS reads to the operator's exact compact, qualified provider plan."""
+    used = tuple(model._aux_requirements((rhs,)).get("aux", ()))
+    if not used:
+        return 0, []
+    plans = getattr(model, "_component_operator_consumer_plans", None)
+    if plans is None or operator not in plans:
+        raise ValueError("Field RHS requires its exact resolved provider consumer plan")
+    plan = plans[operator]
+    rows = []
+    for name in used:
+        slot = model._consumer_provider_slot(operator, name)
+        row = plan[slot]
+        if row["key"]["space_kind"] != "aux":
+            raise ValueError("Field RHS State+Aux inputs cannot consume a solved FieldSpace")
+        rows.append((slot, name))
+    return len(plan), [
+        "    const pops::Real %s = pops::provider_value<%d>(a);"
+        % (variable_identifier(name, "aux"), slot) for slot, name in sorted(rows)
+    ]
+
+
+@printer_scope
 def emit_cpp_elliptic(model: Any, name: Any = None, namespace: str = "pops_generated", cse: bool = True,
                       hoist_reciprocals: bool = False) -> str:
     """Generates a composable elliptic RIGHT-HAND SIDE BRICK from model._elliptic.
@@ -408,12 +450,14 @@ def emit_cpp_elliptic(model: Any, name: Any = None, namespace: str = "pops_gener
     if model._elliptic is None:
         raise ValueError("emit_cpp_elliptic: call set_elliptic_rhs(...) first")
     nm = _cpp_identifier(name or (model.name.capitalize() + "Elliptic"))
+    provider_count, provider_locals = _elliptic_provider_locals(
+        model, "fields_from_state", model._elliptic)
     rt_member = model._runtime_params_member()  # P7-b: runtime indices BEFORE any to_cpp()
     out = [
         "#include <cmath>",  # self-sufficient for std::sqrt / std::pow
         "#include <pops/core/identity/prepared_provider.hpp>",
         "// brique de SECOND MEMBRE elliptique generee depuis '%s' (pops.dsl.emit_cpp_elliptic)."
-        % model.name,
+        % cpp_string_literal(model.name, ensure_ascii=False)[1:-1],
         "// rhs(U) -> Real : second membre f(U) de l'operateur elliptique (p.ex. densite de charge).",
     ]
     if rt_member:  # RuntimeParams header only if a formula reads a runtime param
@@ -431,12 +475,15 @@ def emit_cpp_elliptic(model: Any, name: Any = None, namespace: str = "pops_gener
         n_vars=model.n_vars,
         runtime_params=bool(rt_member),
     )
-    out += [
-        "  template <class State>",
-        "  POPS_HD pops::Real rhs(const State& U) const {",
-    ]
-    out += ["    const pops::Real %s = U[%d];" % (_cpp_identifier(c), i)
+    if provider_count:
+        out.append("  static constexpr int n_providers = %d;" % provider_count)
+    out += ["  template <class State>",
+            ("  POPS_HD pops::Real rhs(const State& U, const pops::ProviderValues<%d>& a) const {"
+             % provider_count if provider_count else
+             "  POPS_HD pops::Real rhs(const State& U) const {")]
+    out += ["    const pops::Real %s = U[%d];" % (variable_identifier(c,'cons'), i)
             for i, c in enumerate(model.cons_names)]
+    out += provider_locals
     out += _prim_block(model, _live_prims(model, [model._elliptic]), hoist_reciprocals)
     tl, cpps = _codegen_exprs(model, [model._elliptic], cse)
     out += tl
@@ -448,19 +495,23 @@ def emit_cpp_elliptic(model: Any, name: Any = None, namespace: str = "pops_gener
 # emit_cpp_elliptic_field
 # ---------------------------------------------------------------------------
 
+@printer_scope
 def emit_cpp_elliptic_field(model: Any, field: Any, struct_name: Any, namespace: str = "pops_generated",
                             hoist_reciprocals: bool = False, cse: bool = True) -> str:
-    """Generates a SELF-CONTAINED elliptic RHS brick for the NAMED field @p field (ADC-428).
+    """Emit a scalar RHS operation with separate physical State and exact Aux inputs."""
+    return _emit_cpp_field_rhs_model(
+        model, model._elliptic_fields[field]["rhs"], field, struct_name, namespace,
+        hoist_reciprocals=hoist_reciprocals, cse=cse)
 
-    Unlike emit_cpp_elliptic (which emits only ``rhs(U)``, consumed by CompositeModel), this brick
-    is shaped like a minimal Model so the runtime can pair it with pops::make_poisson_rhs directly:
-    it declares ``n_vars`` + ``State`` (so load_state<Brick> reads the conservative state) and
-    exposes ``elliptic_rhs(State)`` (what detail::PoissonRhs<Brick> calls per cell). The native
-    loader builds one std::function per named field via make_poisson_rhs(Brick{}) and attaches it to
-    the block (System::set_block_elliptic_field). The RHS reads ONLY the conservative state (+
-    primitives), never the aux (enforced at declaration). Reuses _codegen_exprs / _prim_block so the
-    formula lowers IDENTICALLY to the default elliptic brick."""
-    spec = model._elliptic_fields[field]
+
+def _emit_cpp_field_rhs_model(model: Any, rhs: Any, field: str, struct_name: str,
+                             namespace: str = "pops_generated", *,
+                             hoist_reciprocals: bool = False, cse: bool = True) -> str:
+    provider_count, provider_locals = _elliptic_provider_locals(model, field, rhs)
+    from .state_read_extent import cell_state_read_extent
+    plans = getattr(model, "_component_operator_provider_packs", {})
+    state_reach = (cell_state_read_extent(model, rhs, provider_pack=plans.get(field))
+                   if provider_count else cell_state_read_extent(model, rhs))
     rt_member = model._runtime_params_member()  # runtime indices BEFORE any to_cpp()
     out = ["#include <cmath>",
            "#include <pops/core/identity/prepared_provider.hpp>",
@@ -473,6 +524,13 @@ def emit_cpp_elliptic_field(model: Any, field: Any, struct_name: Any, namespace:
             "  static constexpr int dimension = %d;" % len(_ranked_axes(model)),
             "  static constexpr int n_vars = %d;" % model.n_vars,
             "  using State = pops::StateVec<%d>;" % model.n_vars]
+    out.append("  static constexpr int n_providers = %d;" % provider_count)
+    if state_reach is not None:
+        out.append("  static constexpr unsigned prepared_field_rhs_read_contract_version = %d;"
+                   % (2 if provider_count else 1))
+        if provider_count:
+            out.append("  static constexpr unsigned prepared_field_rhs_input_contract_version = 2;")
+        out.append("  static constexpr unsigned prepared_field_rhs_state_read_cells = 0;")
     if rt_member:
         out.append(rt_member.rstrip("\n"))
     out += _exact_brick_contract(
@@ -483,11 +541,14 @@ def emit_cpp_elliptic_field(model: Any, field: Any, struct_name: Any, namespace:
         runtime_params=bool(rt_member),
         slot=field,
     )
-    out += ["  POPS_HD pops::Real elliptic_rhs(const State& U) const {"]
-    out += ["    const pops::Real %s = U[%d];" % (_cpp_identifier(c), i)
+    out += [("  POPS_HD pops::Real elliptic_rhs(const State& U, const pops::ProviderValues<%d>& a) const {"
+             % provider_count if provider_count else
+             "  POPS_HD pops::Real elliptic_rhs(const State& U) const {")]
+    out += ["    const pops::Real %s = U[%d];" % (variable_identifier(c,'cons'), i)
             for i, c in enumerate(model.cons_names)]
-    out += _prim_block(model, _live_prims(model, [spec["rhs"]]), hoist_reciprocals)
-    tl, cpps = _codegen_exprs(model, [spec["rhs"]], cse)
+    out += provider_locals
+    out += _prim_block(model, _live_prims(model, [rhs]), hoist_reciprocals)
+    tl, cpps = _codegen_exprs(model, [rhs], cse)
     out += tl
     out += ["    return %s;" % cpps[0], "  }", "};", "}  // namespace %s" % namespace]
     return "\n".join(out) + "\n"

@@ -9,8 +9,12 @@ def emit_map_port(value, var, lines, block_indices):
         var[value.id] = var[value.inputs[0].id]
     else:
         var[value.id] = "u%d" % value.id
-        lines.append("auto& %s = ctx.scratch_state(%d, 0, %s);" %
-                     (var[value.id], value.id, var[value.inputs[0].id]))
+        if value.attrs.get("contract") == "mapped-consumed-output@1":
+            from pops.codegen.program_emit_mapped_field import scalar_candidate_rows
+            lines.extend(scalar_candidate_rows(var[value.id], value.id, 0, var[value.inputs[0].id]))
+        else:
+            lines.append("auto& %s = ctx.scratch_state(%d, 0, %s);" %
+                         (var[value.id], value.id, var[value.inputs[0].id]))
 
 
 def continuation_capture(values, var):

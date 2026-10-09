@@ -1,0 +1,68 @@
+{
+  "utc": "2026-10-09T03:45:22.386468+00:00",
+  "run": 37874700424,
+  "expected_Source": "397626de9e003ab15a076319d2ee4c3d227a389c",
+  "results": [
+    [
+      {
+        "argv": [
+          "rtk",
+          "proxy",
+          "gh",
+          "api",
+          "repos/wolf75222/PoPS/actions/jobs/113641077266"
+        ],
+        "exit": 0,
+        "stdout": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-old397-ci-first-errors-20261009/job-113641077266-api.json",
+        "stdout_bytes": 4561,
+        "stdout_sha256": "102713c3e1f9e0e0609c40b08bcde218340c4b3dd785d7ae2dff8cceb35338c2",
+        "stderr": ""
+      },
+      {
+        "argv": [
+          "rtk",
+          "proxy",
+          "gh",
+          "api",
+          "repos/wolf75222/PoPS/actions/jobs/113641077266/logs"
+        ],
+        "exit": 0,
+        "stdout": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-old397-ci-first-errors-20261009/job-113641077266-log.log",
+        "stdout_bytes": 120246,
+        "stdout_sha256": "96faf7235f96d3313e41544c1623129bb0ae41b8e0113eb134778646b2155ed8",
+        "stderr": ""
+      }
+    ],
+    [
+      {
+        "argv": [
+          "rtk",
+          "proxy",
+          "gh",
+          "api",
+          "repos/wolf75222/PoPS/actions/jobs/113641077493"
+        ],
+        "exit": 0,
+        "stdout": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-old397-ci-first-errors-20261009/job-113641077493-api.json",
+        "stdout_bytes": 4561,
+        "stdout_sha256": "6c0944def62a8269303d20682de53494a2286a6e01f9dffc5a91aed1aa427a6a",
+        "stderr": ""
+      },
+      {
+        "argv": [
+          "rtk",
+          "proxy",
+          "gh",
+          "api",
+          "repos/wolf75222/PoPS/actions/jobs/113641077493/logs"
+        ],
+        "exit": 0,
+        "stdout": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-old397-ci-first-errors-20261009/job-113641077493-log.log",
+        "stdout_bytes": 137714,
+        "stdout_sha256": "2fb545f7bb3759c5ab64e33cdce36f709e59e2a2ab39751c01fa9703cfbac1d4",
+        "stderr": ""
+      }
+    ]
+  ],
+  "scope": "Read-only GH API actualcompletedjob logs, distinct from currentSourcee27; noedit/testskip/gategreen claim"
+}

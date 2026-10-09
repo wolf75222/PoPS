@@ -68,6 +68,7 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
             owner=self._m.owner_path, mutation_guard=self._guard_mutable
         )
         self._module_cache = None
+        self._physical_global_quantities = {}
 
     def _invalidate_authoring_views(self) -> None:
         self._module_cache = None
@@ -605,10 +606,13 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
             value_shape=fs.value_shape,
             domain=fs.domain,
         )
+        for auxiliary in self._m._auxiliary_spaces.values():
+            mod._declare_descriptor(mod._aux, mod._aux_handles, auxiliary, "aux field", "aux")
         # ``module`` is a typed view of this exact model definition, not another
         # declaration owner. Share the one registry so handles never acquire a
         # parallel authority with merely equal-looking IDs.
         mod._param_registry = self._param_registry
+        mod._global_quantities = dict(self._physical_global_quantities)
         if self._m.gamma is not None:
             mod.constitutive(gamma=self._m.gamma)
         mod.set_primitive_recipes(self._m.prim_defs)

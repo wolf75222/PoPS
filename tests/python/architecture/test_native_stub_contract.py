@@ -48,6 +48,10 @@ AMR_CONFIG_FIELDS = {
     "transition_ratios": "tuple[tuple[int, ...], ...]",
     "transition_buffers": "tuple[tuple[int, ...], ...]",
     "transition_lookaheads": "tuple[tuple[int, ...], ...]",
+    "accepted_halo_contract_version": "int",
+    "accepted_halo_extent": "tuple[int, ...]",
+    "tag_selection_contract_version": "int",
+    "tag_selection_buffer": "tuple[int, ...]",
     "explicit_bootstrap": "bool",
     "periodicity": "tuple[bool, ...]", "distribute_coarse": "bool",
     "coarse_max_grid": "tuple[int, ...]",
@@ -164,7 +168,25 @@ def test_every_native_plugin_compile_route_uses_the_central_loader_manifest():
                 for child in ast.walk(node)
                 if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
             }
-            if "_run_compile" not in called:
+            # The evidence wrapper forwards the same real runner without a direct call.
+            # Authenticate its lexical import and argument position; arbitrary callbacks
+            # cannot make an otherwise unknown compiler route pass this fence.
+            retained_runner = any(
+                isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+                and child.func.id == "retain" and len(child.args) == 5
+                and isinstance(child.args[-1], ast.Name)
+                and child.args[-1].id == "_run_compile"
+                for child in ast.walk(node)
+            )
+            if retained_runner:
+                assert any(
+                    isinstance(child, ast.ImportFrom)
+                    and child.module == "pops.codegen.model_compile_evidence"
+                    and any(alias.name == "retain" and alias.asname is None
+                            for alias in child.names)
+                    for child in ast.walk(node)
+                ), (str(path.relative_to(REPO_ROOT)), node.name)
+            if "_run_compile" not in called and not retained_runner:
                 continue
             route = (str(path.relative_to(REPO_ROOT)), node.name)
             routes.add(route)

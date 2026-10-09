@@ -988,6 +988,20 @@ typedef struct PopsGhostBoundaryApiV1 {{
   PopsApplyRegionBatchFnV1 apply_region_batch;
 }} PopsGhostBoundaryApiV1;
 
+// Additive capability: non-integrating accepted initial evaluation only.
+// The callback borrows the same prepared provider state as GhostBoundaryV1.
+typedef struct PopsAcceptedInitialGhostRequestV1 {{
+  uint32_t struct_size;
+  uint32_t point_contract_version;
+  PopsGhostBoundaryRequestV1 region_request;
+}} PopsAcceptedInitialGhostRequestV1;
+typedef int32_t (*PopsApplyInitialRegionBatchFnV1)(
+    void*, const PopsAcceptedInitialGhostRequestV1*, PopsComponentStatusV1*);
+typedef struct PopsAcceptedInitialGhostApiV1 {{
+  PopsComponentTableHeaderV1 header;
+  PopsApplyInitialRegionBatchFnV1 apply_initial_region_batch;
+}} PopsAcceptedInitialGhostApiV1;
+
 typedef struct PopsBoundaryFluxRequestV1 {{
   uint32_t struct_size;
   const char* provider_identity;

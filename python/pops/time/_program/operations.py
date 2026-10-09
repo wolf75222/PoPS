@@ -466,6 +466,15 @@ class _ProgramCore(
             expected_kinds="local_linear_operator")
         return self._linear_source(resolved.name, operator_handle=operator)
 
+    def evaluate_source(self, operator, state, fields=None, *, global_inputs):
+        """Evaluate the original source body with explicitly scoped global inputs."""
+        from collections.abc import Mapping
+        if not isinstance(global_inputs, Mapping):
+            raise TypeError("evaluate_source requires an explicit global_inputs mapping")
+        state, fields = _resolve_handle(state), _resolve_handle(fields)
+        arguments = (state,) if fields is None else (state, fields)
+        return self._call(operator, *arguments, _global_inputs=global_inputs)
+
     def source(self, operator: Any, state: Any = None, fields: Any = None) -> Any:
         """Evaluate one typed model source ``S(U, fields)`` on its own.
 
@@ -493,7 +502,7 @@ class _ProgramCore(
             source_name, state=state, fields=fields, operator_handle=operator)
 
     def _source(self, name: Any, state: Any = None, fields: Any = None,
-                operator_handle: Any = None) -> Any:
+                operator_handle: Any = None, *, global_bindings=(), global_captures=()) -> Any:
         """Private lowering seam for a registry-local source name."""
         state, fields = _resolve_handle(state), _resolve_handle(fields)
         if not isinstance(name, str) or not name:
@@ -508,6 +517,11 @@ class _ProgramCore(
             field_context = require_field_read(fields, state, "source")
         inputs = (state, fields) if fields is not None else (state,)
         attrs = {"source": name}
+        if global_bindings:
+            offset = len(inputs)
+            attrs["physical_global_inputs_v1"] = tuple({**row, "input": row["input"]+offset}
+                                                        for row in global_bindings)
+            inputs = inputs + global_captures
         if operator_handle is not None:
             attrs["operator_handle"] = operator_handle
         return self._new(

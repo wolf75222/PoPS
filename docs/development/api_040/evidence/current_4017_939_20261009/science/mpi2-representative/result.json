@@ -1,0 +1,89 @@
+{
+  "schema_version": 3,
+  "status": "passed",
+  "pytest_base_temps": [
+    "rank0-tmp",
+    "rank1-tmp"
+  ],
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/mpiexec",
+    "-n",
+    "2",
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/docs/development/api_040/run_installed_mpi_checks.py",
+    "--worker",
+    "--output",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-representative/run",
+    "--ranks",
+    "2",
+    "--dimension",
+    "2",
+    "--test",
+    "tests/python/integration/runtime/test_imex_nonautonomous_field.py::test_public_nonautonomous_imex_field_reads_explicit_time",
+    "--test",
+    "tests/python/integration/runtime/test_public_diffusion_field_predictor.py::test_public_diffusion_predictor_is_field_rhs[euler]"
+  ],
+  "returncode": 0,
+  "timeout": false,
+  "seconds": 74.80449516700173,
+  "ranks": 2,
+  "threads": 2,
+  "dimension": 2,
+  "authentication_before": 0,
+  "authentication_after": 0,
+  "same_installation": true,
+  "test_sources_unchanged": true,
+  "rank_test_parity": true,
+  "rank_results": [
+    {
+      "rank": 0,
+      "counts": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_imex_nonautonomous_field",
+          "test_public_nonautonomous_imex_field_reads_explicit_time"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_predictor",
+          "test_public_diffusion_predictor_is_field_rhs[euler]"
+        ]
+      ],
+      "xml_sha256": "5e755b92998992bcd74c6dfdf07bf3bb9698fa723224522d403b8ba61b5856f7",
+      "log_sha256": "37b1b99a2a301178a3c67fd57b178ed4a2657aad9f53651d721bd8fe74748237"
+    },
+    {
+      "rank": 1,
+      "counts": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_imex_nonautonomous_field",
+          "test_public_nonautonomous_imex_field_reads_explicit_time"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_predictor",
+          "test_public_diffusion_predictor_is_field_rhs[euler]"
+        ]
+      ],
+      "xml_sha256": "94b12207ce2056e8e663785a41b48be02db0e8ed1df030c9b702d5f80f10b4a4",
+      "log_sha256": "44c58cd89412f2473dc78e163166485c711784064ae86aa23b52dee9e5592f05"
+    }
+  ],
+  "native_sha256": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+  "execution_environment": {
+    "FI_PROVIDER": "tcp",
+    "FI_TCP_IFACE": null,
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_THREADS": "2"
+  }
+}

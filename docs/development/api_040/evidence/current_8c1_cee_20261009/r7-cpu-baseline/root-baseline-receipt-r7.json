@@ -1,0 +1,60 @@
+{
+  "Native": "cee947c25c771f8c5a155e5f4cb990de308de14fe77e9f55c654e3b3837dee6f",
+  "SDK": "087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626",
+  "Source": "e27d065a5eb7c086ced60b751a2468f729361ff0",
+  "actual_independent_cpu_receipts": [
+    {
+      "limits": [
+        "Representative CPU MPI world1 one macro step only; no renamed/changed variant, MPI2/GPU/3D or refinement/convergence qualification.",
+        "No persisted CG iterations/status/true residual reports; independent discrete residual and pre-Native budgets verified, generated success guards inspected separately.",
+        "No persisted per-stage field publication clocks; actual Program/CPP stage offsets plus independent stage arrays/last-writer resident fields agree. History sample identity is not a stage clock.",
+        "No complete frontend-to-binary graph proof. Retained actual C++/model companion receipts/DSOs/SDK and binary identity verified.",
+        "SSP coefficient1 certificate inherits only applicable Forward Euler premises; no unconditional positivity/entropy theorem."
+      ],
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/independent-reception-ready.json",
+      "sha256": "9573299df4fd52b3e192fecc50936247a80f3a284d443c94364871d163045cf6",
+      "verdict": "ACCEPT_REPRESENTATIVE_CPU_WORLD1_WITH_LIMITS"
+    },
+    {
+      "limits": [
+        "Public-three original cohort is 2PASS/1Source-grammarFAIL with process exit1; valid-label rename is a distinct later closed0 capture, not a rewrite of original failure.",
+        "CPU MPI world1 one macro step only; no MPI2/GPU/3D/refinement/longtime result.",
+        "No persisted CG reports, stage publication clocks, complete frontend-to-binary graph or unconditional FE positivity theorem.",
+        "Rename checkpoint semantic numerical members match; renamed identifiers/envelopes and opaque carriers may differ legitimately."
+      ],
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/variants/variant-reception-ready.json",
+      "sha256": "2516af9a674cfc2414a48e0dcf14db7be6a93fc8c62fdf1306a8079588c22883",
+      "verdict": "ACCEPT_RENAME_AND_CHANGED_DECAY_CPU_WORLD1_WITH_LIMITS"
+    },
+    {
+      "limits": [
+        "Three genuine new public tests pass CPUworld1; this is local runtime evidence, not GitHub CI or GPU/MPI2/longtime/refinement qualification.",
+        "Native remains compiled Source8c1f; e27d is metadata/CI/test-label Source and is not relabeled as a newly compiled Native build. Core1221 and installed/wheel1175 remain exact.",
+        "No persisted CG reports or per-stage publication clocks; no complete frontend-to-binary graph; conditional FE coefficient1 only, not unconditional positivity/entropy.",
+        "Original failed public-three cohort is preserved separately; this new3/3 capture does not rewrite its2PASS/1SourcegrammarFAIL."
+      ],
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/public-three-valid-e27d/public-three-reception-ready.json",
+      "sha256": "e6761566bf450d6b1c1c336349b791d9b1dfcd97d6f92c35271768241b21b7aa",
+      "verdict": "ACCEPT_THREE_PUBLIC_NATIVE_TESTS_CURRENT_CAPTURE_WITH_LIMITS"
+    }
+  ],
+  "contract": "pops.root-r7-reviewed-cpu-baseline@1",
+  "core_files_rehashed": 1221,
+  "core_fingerprint": "95d0ccaa1e7aa39f9cbb01d539c4e31a5a7e6e143207b088fd9c2730482963f5",
+  "cpu_core_manifest_original_sha256": "5fcfc6d232566649395de58bdf6a019d1fcf35f3abce35462a92921946a7a28a",
+  "full_94_obligations_closed": false,
+  "gpu_native_or_pde_accepted": false,
+  "public_native_test_counts": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 3
+  },
+  "qualified_cpu_native_build_Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "r7_core_manifest_sha256": "2d05ef81eb08e09a3ee98b4c2c9e7009c846c0902857c4698f866ef53e2d98ca",
+  "r7_core_manifest_source_metadata_only_changed": true,
+  "r7_dispatch_go": false,
+  "scope": "Root admission of actual CPU world1 scientific baseline and native public controls. Current Source metadata e27 is distinguished from the compiled CPU Source8c. New R7 manifest authenticates the same 1221 physical core bytes under current Source. No R7 dispatch, dependency, quota, GPU compilation, GPU Native or PDE acceptance is conveyed.",
+  "status": "ROOT_REVIEWED_BASELINE_PASS",
+  "timestamp_utc": "2026-10-09T03:46:47.549045+00:00"
+}

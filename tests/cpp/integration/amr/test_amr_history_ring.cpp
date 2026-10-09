@@ -98,14 +98,18 @@ struct Fixture {
   pops::AmrSystem<Dim> system;
   std::shared_ptr<pops::runtime::program::AmrProgramContext<Dim>> context;
 
-  Fixture() : system(config()) {
+  explicit Fixture(bool restart_ready = false) : system(config()) {
     pops::test::install_amr_runtime_authority(system, "test.amr-history.fixture/runtime@1");
     system.install_block_state_route("tracer", "state/tracer");
     install_advection(system);
     system.set_conservative_state("tracer", std::vector<double>(cell_count(config().shape), 1.0));
     (void)system.engine();
     system.set_program_block_map({0});
-    context = pops::runtime::program::make_program_execution_provider(&system);
+    // A restart seals the Program's history/flux capacity, so the restart witnesses need
+    // a real installed body and its declared budget before registering any history.
+    context = restart_ready
+                  ? pops::test::install_forward_euler_program_context(system, false, "clock.macro")
+                  : pops::runtime::program::make_program_execution_provider(&system);
     context->configure_primary_clock("clock.macro");
     context->declare_clock_relation("clock.macro", "clock.fast", 2);
   }
@@ -189,6 +193,73 @@ TEST(test_amr_history_ring, FacadeTransactionRestoresAcceptedHistoryImage) {
 
   EXPECT_EQ(pops::reduce_min_local(fixture.context->history("tracer.rate", 1, 0)), pops::Real(3));
   EXPECT_EQ(pops::reduce_max_local(fixture.context->history("tracer.rate", 1, 0)), pops::Real(3));
+}
+
+TEST(test_amr_history_ring, RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction) {
+  constexpr int Dim = pops::kNativeDimension;
+  Fixture<Dim> fixture(true);
+  fixture.register_history();
+  auto sample = fixture.context->scratch_state_like(fixture.context->state(0));
+  sample.set_val(pops::Real(7));
+  const auto epoch = fixture.system.checkpoint_topology_epoch();
+
+  fixture.system.begin_restart_transaction();
+  fixture.context->begin_step(0.125);
+  fixture.context->store_history("tracer.rate", sample, 0);
+  EXPECT_ANY_THROW(fixture.system.begin_restart_regrid_history_sequence());
+  fixture.system.rollback_restart_transaction();
+  EXPECT_EQ(fixture.system.checkpoint_topology_epoch(), epoch);
+  EXPECT_FALSE(fixture.system.history_initialized("tracer.rate", 0));
+
+  // An accepted sample is a valid source. Aborting its restart must release the frozen image;
+  // the next restart is a new authority even when its topology epoch is numerically identical.
+  fixture.context->begin_step(0.125);
+  fixture.context->store_history("tracer.rate", sample, 0);
+  fixture.context->rotate_histories("clock.macro");
+  fixture.system.begin_restart_transaction();
+  ASSERT_NO_THROW(fixture.system.begin_restart_regrid_history_sequence());
+  fixture.system.rollback_restart_transaction();
+  fixture.system.begin_restart_transaction();
+  EXPECT_NO_THROW(fixture.system.begin_restart_regrid_history_sequence());
+  fixture.system.commit_restart_transaction();
+  fixture.system.finalize_restart_transaction();
+
+  fixture.system.begin_restart_transaction();
+  EXPECT_NO_THROW(fixture.system.begin_restart_regrid_history_sequence());
+  fixture.system.rollback_restart_transaction();
+  EXPECT_EQ(fixture.system.checkpoint_topology_epoch(), epoch);
+  EXPECT_EQ(pops::reduce_min_local(fixture.context->history("tracer.rate", 1, 0)), pops::Real(7));
+}
+
+TEST(test_amr_history_ring, FrozenRestartImageRefusesLaterStoreRotationAndRestore) {
+  constexpr int Dim = pops::kNativeDimension;
+  Fixture<Dim> fixture(true);
+  fixture.register_history();
+  auto sample = fixture.context->scratch_state_like(fixture.context->state(0));
+  fixture.context->begin_step(0.125);
+  sample.set_val(pops::Real(7));
+  fixture.context->store_history("tracer.rate", sample, 0);
+  fixture.context->rotate_histories("clock.macro");
+  const auto accepted = fixture.system.history_global("tracer.rate", 0, 0);
+  const auto fill = fixture.system.history_fill_count("tracer.rate", 0);
+
+  fixture.system.begin_restart_transaction();
+  ASSERT_NO_THROW(fixture.system.begin_restart_regrid_history_sequence());
+  fixture.context->begin_step(0.125);
+  sample.set_val(pops::Real(19));
+  EXPECT_THROW(fixture.context->store_history("tracer.rate", sample, 0), std::logic_error);
+  EXPECT_THROW(fixture.context->rotate_histories("clock.macro"), std::logic_error);
+  EXPECT_THROW(fixture.system.restore_history_fill_count("tracer.rate", 0, fill),
+               std::logic_error);
+  EXPECT_EQ(fixture.system.history_global("tracer.rate", 0, 0), accepted);
+  EXPECT_EQ(fixture.system.history_fill_count("tracer.rate", 0), fill);
+  ASSERT_NO_THROW(fixture.system.rollback_restart_transaction());
+
+  // Normal authoring resumes once rollback releases the frozen-image authority.
+  fixture.context->begin_step(0.125);
+  EXPECT_NO_THROW(fixture.context->store_history("tracer.rate", sample, 0));
+  EXPECT_NO_THROW(fixture.context->rotate_histories("clock.macro"));
+  EXPECT_EQ(pops::reduce_min_local(fixture.context->history("tracer.rate", 1, 0)), pops::Real(19));
 }
 
 TEST(test_amr_history_ring, RegisteredHistoryRejectsTopologyPublicationBeforeMutation) {
@@ -302,4 +373,204 @@ TEST(test_amr_history_ring, ThreeLevelProgramFailsClosedWithoutExactFluxExpressi
     EXPECT_EQ(pops::reduce_min_local(runtime->hierarchy().state(level)), pops::Real(1));
     EXPECT_EQ(pops::reduce_max_local(runtime->hierarchy().state(level)), pops::Real(1));
   }
+}
+
+
+namespace {
+constexpr int M2Dim = pops::kNativeDimension;
+using M2System = pops::AmrSystem<M2Dim>;
+using M2Context = pops::runtime::program::AmrProgramContext<M2Dim>;
+
+struct M2AcceptedFacadeImage {
+  std::uint64_t epoch;
+  std::vector<pops::AmrPatch<M2Dim>> boxes;
+  std::vector<std::uint8_t> state, program, history_bits, history_identity;
+  std::vector<std::vector<std::string>> clocks;
+  std::vector<int> history_fill;
+  std::vector<double> history_dt;
+  double time;
+  int macro_step;
+  bool operator==(const M2AcceptedFacadeImage&) const = default;
+};
+
+M2AcceptedFacadeImage m2_accepted_facade_image(M2System& system) {
+  M2AcceptedFacadeImage image;
+  image.epoch = system.checkpoint_topology_epoch();
+  image.boxes = system.patch_boxes();
+  image.state = system.checkpoint_state_carriers();
+  image.program = system.program_accepted_state();
+  image.clocks = system.program_clock_manifest();
+  image.time = system.time();
+  image.macro_step = system.macro_step();
+  for (int level : system.history_levels("m2.accepted-history")) {
+    image.history_fill.push_back(system.history_fill_count("m2.accepted-history", level));
+    const auto identity = system.history_sample_identity("m2.accepted-history", level);
+    image.history_identity.insert(image.history_identity.end(), identity.begin(), identity.end());
+    for (int slot = 0; slot < system.history_depth("m2.accepted-history"); ++slot) {
+      const auto values = system.history_global("m2.accepted-history", level, slot);
+      for (const auto byte : std::as_bytes(std::span(values)))
+        image.history_bits.push_back(std::to_integer<std::uint8_t>(byte));
+      image.history_dt.push_back(system.history_slot_dt("m2.accepted-history", level, slot));
+    }
+  }
+  return image;
+}
+
+struct M2FacadeFixture {
+  M2System system;
+  std::shared_ptr<M2Context> context;
+  int reject_level = -1;
+  std::array<int, 2> completed_levels{};
+  bool coarse_candidate_changed = false;
+  bool nonfinite_injected = false;
+
+  static pops::AmrSystemConfig<M2Dim> configuration() {
+    auto config = Fixture<M2Dim>::config();
+    config.regrid_every = 0;
+    for (int axis = 0; axis < M2Dim; ++axis) {
+      config.transition_buffers.front()[axis] = 0;
+      config.transition_lookaheads.front()[axis] = 0;
+    }
+    return config;
+  }
+  M2FacadeFixture() : system(configuration()) {
+    pops::test::install_amr_runtime_authority(system, "tests.m2.facade/owned-runtime@1");
+    system.set_temporal_relations({2}, {1}, {"integral_only"});
+    system.install_block_state_route("tracer", "tests.m2.facade/tracer-state@1");
+    install_advection(system);
+    system.set_conservative_state("tracer",
+                                  std::vector<double>(cell_count(configuration().shape), 1.0));
+    pops::test::install_prepared_refine_coarsen_threshold(
+        system, {"tracer", "u", .5, pops::test::PreparedThresholdRelation::Above},
+        {"tracer", "u", .5, pops::test::PreparedThresholdRelation::Below},
+        "tests.m2.facade/prepared-tagging@1");
+    if (system.engine()->hierarchy().num_levels() != 2)
+      throw std::runtime_error("M2 witness requires a genuinely materialized fine level");
+    context = pops::runtime::program::make_program_execution_provider(&system);
+    context->configure_primary_clock("clock.macro");
+    context->declare_clock_relation("clock.macro", "clock.fast", 2);
+    context->install(
+        [this](double macro_dt) {
+          context->advance_hierarchy(macro_dt, [&](double dt) {
+            context->set_stage_time(0, 1);
+            auto& state = context->state(0);
+            auto& rhs = context->rhs_scratch(9700, 0, state);
+            context->rhs_into(0, state, rhs, 9701);
+            auto candidate = context->scratch_state_like(state);
+            context->copy_grown_component_span(candidate, 0, state, 0, state.ncomp());
+            context->axpy(candidate, pops::Real(dt), rhs);
+            if (context->level() == reject_level) {
+              candidate.set_val(std::numeric_limits<pops::Real>::quiet_NaN());
+              nonfinite_injected = true;
+            }
+            context->commit_many({{&state, &candidate}});
+            context->store_history("m2.accepted-history", state, 0);
+            context->rotate_histories("clock.macro");
+            ++completed_levels.at(static_cast<std::size_t>(context->level()));
+            if (context->level() == 0)
+              coarse_candidate_changed = pops::norm_inf(rhs) > pops::Real(0);
+          });
+        },
+        context);
+    system.set_program_block_map({0});
+    using Budget = M2System::PreparedAmrProgramFluxExpressionBlockBudget;
+    system.install_prepared_amr_program_flux_expression_budget(
+        "tests.m2.facade/physical-advection-budget@1", std::vector<Budget>{{1, 1}}, 0, 0);
+    context->for_each_program_resource_level([&](int) {
+      context->register_history("m2.accepted-history", 2, 1, 0, "tests.m2.facade/tracer-state@1",
+                                "cell.conservative", "clock.macro", "dense.linear");
+    });
+    system.step(1e-3);
+    for (int level : system.history_levels("m2.accepted-history"))
+      if (!system.history_initialized("m2.accepted-history", level))
+        throw std::runtime_error("M2 accepted image must contain populated real history samples");
+    completed_levels.fill(0);
+  }
+  void change_fine_topology_inside_attempt() {
+    std::vector<double> partial(cell_count(configuration().shape), .25);
+    std::size_t center = 0, stride = 1;
+    for (int axis = 0; axis < M2Dim; ++axis) {
+      center += static_cast<std::size_t>(configuration().shape[axis] / 2) * stride;
+      stride *= static_cast<std::size_t>(configuration().shape[axis]);
+    }
+    partial[center] = 1;
+    system.set_conservative_state("tracer", partial);
+    system.execute_prepared_tagging(0);
+    if (!system.regrid_from_prepared_tagging(0))
+      throw std::runtime_error("M2 transaction witness did not publish a real changed topology");
+  }
+};
+}  // namespace
+
+TEST(test_amr_history_ring, AcceptedFacadeTransactionCommitsTopologyStateHistoryAndClock) {
+  M2FacadeFixture fixture;
+  const auto before = m2_accepted_facade_image(fixture.system);
+  fixture.system.begin_step_transaction();
+  fixture.change_fine_topology_inside_attempt();
+  EXPECT_NE(fixture.system.patch_boxes(), before.boxes);
+  EXPECT_GT(fixture.system.checkpoint_topology_epoch(), before.epoch);
+  fixture.system.step(1e-3);
+  EXPECT_GT(fixture.completed_levels[0], 0);
+  EXPECT_GT(fixture.completed_levels[1], 0);
+  fixture.system.commit_step_transaction();
+  fixture.system.finalize_step_transaction();
+  const auto committed = m2_accepted_facade_image(fixture.system);
+  EXPECT_NE(committed.state, before.state);
+  EXPECT_NE(committed.history_bits, before.history_bits);
+  EXPECT_NE(committed.history_identity, before.history_identity);
+  EXPECT_NE(committed.clocks, before.clocks);
+  EXPECT_NE(committed.boxes, before.boxes);
+  EXPECT_EQ(committed.macro_step, before.macro_step + 1);
+  EXPECT_DOUBLE_EQ(committed.time, before.time + 1e-3);
+  fixture.system.begin_step_transaction();
+  fixture.system.rollback_step_transaction();
+  EXPECT_EQ(m2_accepted_facade_image(fixture.system), committed);
+}
+
+TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAndClock) {
+  M2FacadeFixture fixture;
+  const auto before = m2_accepted_facade_image(fixture.system);
+  fixture.system.begin_step_transaction();
+  fixture.change_fine_topology_inside_attempt();
+  ASSERT_NE(fixture.system.patch_boxes(), before.boxes);
+  fixture.reject_level = 0;
+  std::string refusal;
+  try {
+    fixture.system.step(1e-3);
+    ADD_FAILURE() << "nonfinite native candidate was accepted";
+  } catch (const std::exception& error) {
+    refusal = error.what();
+  }
+  EXPECT_NE(refusal.find("prepared ND hyperbolic face evaluation refused publication status=1"),
+            std::string::npos);
+  RecordProperty("nonfinite_refusal", refusal);
+  EXPECT_TRUE(fixture.nonfinite_injected);
+  fixture.system.rollback_step_transaction();
+  EXPECT_EQ(fixture.system.step_transaction_depth(), 0U);
+  EXPECT_EQ(m2_accepted_facade_image(fixture.system), before);
+}
+
+TEST(test_amr_history_ring, FineNonFiniteAfterCoarseSuccessRestoresCompleteAcceptedState) {
+  M2FacadeFixture fixture;
+  const auto before = m2_accepted_facade_image(fixture.system);
+  fixture.system.begin_step_transaction();
+  fixture.change_fine_topology_inside_attempt();
+  ASSERT_NE(fixture.system.patch_boxes(), before.boxes);
+  fixture.reject_level = 1;
+  std::string refusal;
+  try {
+    fixture.system.step(1e-3);
+    ADD_FAILURE() << "nonfinite native candidate was accepted";
+  } catch (const std::exception& error) {
+    refusal = error.what();
+  }
+  EXPECT_NE(refusal.find("prepared ND hyperbolic face evaluation refused publication status=1"),
+            std::string::npos);
+  RecordProperty("nonfinite_refusal", refusal);
+  EXPECT_TRUE(fixture.nonfinite_injected);
+  EXPECT_GT(fixture.completed_levels[0], 0);
+  EXPECT_TRUE(fixture.coarse_candidate_changed);
+  fixture.system.rollback_step_transaction();
+  EXPECT_EQ(fixture.system.step_transaction_depth(), 0U);
+  EXPECT_EQ(m2_accepted_facade_image(fixture.system), before);
 }

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 import math
+import struct
 from typing import Any
 
 
@@ -14,11 +16,15 @@ def _runtime_data(layout: Any) -> dict[str, Any]:
             "adaptive runtime layouts must implement runtime_layout_data(); "
             "concrete layout classes are not dispatched centrally"
         )
-    first, second = protocol(), protocol()
-    if type(first) is not dict or first != second:
+    first = deepcopy(protocol())
+    second = protocol()
+    if type(first) is not dict or type(second) is not dict or first != second:
         raise TypeError("runtime_layout_data() must return one deterministic dict")
     if first.get("schema_version") != 1 or first.get("layout_type") != "adaptive_cartesian":
         raise ValueError("adaptive runtime layout uses an unsupported protocol schema")
+    from pops.amr._execution_contract import validate_execution_data
+    first = dict(first)
+    first["execution"] = validate_execution_data(first["execution"])
     return first
 
 
@@ -172,7 +178,7 @@ def _native_load_balance_options(options: dict[str, Any]) -> dict[str, Any]:
 def _install_native_hierarchy_config(
     config: Any, lowering: Any, *, dimension: int
 ) -> None:
-    """Install every hierarchy-v2 transition without reducing ranked facts to scalars."""
+    """Install every hierarchy-v3 transition without reducing ranked facts to scalars."""
     from pops.mesh._amr.hierarchy_native import PreparedHierarchyNativeLowering
 
     if type(lowering) is not PreparedHierarchyNativeLowering:
@@ -191,10 +197,35 @@ def _install_native_hierarchy_config(
     )
 
 
+def _install_native_tag_selection_config(config: Any, tagging: Any, *, dimension: int) -> None:
+    """Carry the exact authored Buffer, independently of numerical nesting."""
+    from pops.amr._resolution import ResolvedTaggingAuthority
+
+    if type(tagging) is not ResolvedTaggingAuthority:
+        raise TypeError("native tag selection requires an exact ResolvedTaggingAuthority")
+    if type(dimension) is not int or dimension not in (1, 2, 3):
+        raise ValueError("native tag selection requires spatial dimension 1, 2, or 3")
+    cells = tagging.buffer_cells
+    if type(cells) is not int or cells < 0:
+        raise ValueError("native tag selection Buffer must be an exact non-negative integer")
+    if cells > 2_147_483_647:
+        raise OverflowError("native tag selection Buffer exceeds signed 32-bit coordinates")
+    if (2*cells+1)**dimension > (1 << (8*struct.calcsize("P"))) - 1:
+        raise OverflowError("native tag selection neighborhood exceeds size_t")
+    # Pybind exposes exact version/ranked setters. An older DSO cannot silently
+    # accept a Python-only attribute as a replacement for this native contract.
+    if not hasattr(type(config), "tag_selection_contract_version") \
+            or not hasattr(type(config), "tag_selection_buffer"):
+        raise TypeError("native AMR config lacks pops.amr.tag-selection@1")
+    config.tag_selection_contract_version = 1
+    config.tag_selection_buffer = (cells,) * dimension
+
+
 def amr_config_from_layout(
     layout: Any,
     *,
     hierarchy: Any = None,
+    tagging: Any = None,
     native_layout: Any,
 ) -> Any:
     """Build ``AmrSystemConfig`` without inferring or dropping authored facts."""
@@ -203,6 +234,8 @@ def amr_config_from_layout(
 
     data = _runtime_data(layout)
     cells, lower, upper, periodicity = _native_amr_grid_values(native_layout)
+    from pops.amr._execution_contract import validate_execution_data
+    data["execution"] = validate_execution_data(data["execution"], dimension=len(cells))
     if type(hierarchy) is not ResolvedHierarchy:
         raise TypeError("adaptive runtime requires an exact resolved hierarchy")
     from pops.mesh._amr.hierarchy_native import lower_native_hierarchy
@@ -217,8 +250,20 @@ def amr_config_from_layout(
     _install_native_hierarchy_config(
         cfg, native_hierarchy, dimension=len(cells)
     )
+    _install_native_tag_selection_config(cfg, tagging, dimension=len(cells))
     cfg.regrid_every = _regrid_every(data)
     cfg.explicit_bootstrap = True
+    halo = data["execution"].get("accepted_halo")
+    if halo is not None:
+        if type(halo) is not dict or set(halo) != {"schema_version", "effect", "point_authority", "cells", "components"} or halo["schema_version"] != 1 or halo["effect"] != "prepare_accepted_halo" or halo["point_authority"] != "candidate_accepted_clock" or halo["components"] != "all_state_components":
+            raise ValueError("unsupported exact accepted halo preparation authority")
+        widths = (halo["cells"],) * len(cells) if type(halo["cells"]) is int else tuple(halo["cells"])
+        if len(widths) != len(cells) or any(type(v) is not int or not 0 < v <= 2147483647 for v in widths):
+            raise ValueError("accepted halo preparation requires positive ranked native extents")
+        if not hasattr(type(cfg), "accepted_halo_contract_version"):
+            raise RuntimeError("native SDK lacks accepted halo preparation contract")
+        cfg.accepted_halo_contract_version = 1
+        cfg.accepted_halo_extent = widths
 
     cluster = hierarchy.plan.clustering.options.to_data()
     clustering_provider = cluster.get("provider")

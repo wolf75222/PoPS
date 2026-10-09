@@ -462,12 +462,28 @@ inline int evaluate_faces(const PopsNumericalFluxApiV1& api, void* state,
   return api.evaluate_faces(state, &request, &result);
 }
 
-inline int apply_ghost_boundary(const PopsGhostBoundaryApiV1& api, void* state,
-                                const PopsGhostBoundaryRequestV1& request,
-                                PopsComponentStatusV1& status) {
-  require_operation(api.apply_region_batch != nullptr, "apply_region_batch");
+inline void validate_accepted_initial_evaluation_point(const PopsLogicalTimeV1& point, std::uint32_t version) {
+  validate_logical_time(point);
+  if (version != 1 || point.tick != 0 || point.substep != 0 || point.stage != 0 ||
+      point.fraction_numerator != 0 || point.fraction_denominator != 1 ||
+      point.dt != 0.0 || std::signbit(point.dt))
+    throw std::invalid_argument("accepted initial evaluation requires non-integrating initial point@1");
+}
+
+inline void validate_accepted_initial_ghost_point(const PopsLogicalTimeV1& point, std::uint32_t version) {
+  validate_accepted_initial_evaluation_point(point, version);
+}
+
+inline void require_initial_ghost_provider_lifecycle(const PopsAcceptedInitialGhostApiV1& initial,
+                                                     const PopsGhostBoundaryApiV1& ordinary) {
+  if (initial.header.prepare != ordinary.header.prepare ||
+      initial.header.destroy != ordinary.header.destroy)
+    throw std::invalid_argument("accepted initial Ghost capability must share exact provider lifecycle");
+  require_operation(initial.apply_initial_region_batch != nullptr, "apply_initial_region_batch");
+}
+
+inline void validate_ghost_region_storage(const PopsGhostBoundaryRequestV1& request) {
   validate_noncollective_execution_context(request.execution);
-  validate_logical_time(request.logical_time);
   validate_boundary_region(request.region);
   if (!component_text(request.producer_identity) || !component_text(request.state_identity) ||
       !component_text(request.ghost_identity))
@@ -486,7 +502,29 @@ inline int apply_ghost_boundary(const PopsGhostBoundaryApiV1& api, void* state,
     validate_execution_field(request.execution, request.dependencies[index].values,
                              "ghost boundary dependency");
   validate_scalars(request.parameters, request.parameter_count, "ghost boundary parameters");
+}
+
+inline int apply_ghost_boundary(const PopsGhostBoundaryApiV1& api, void* state,
+                                const PopsGhostBoundaryRequestV1& request,
+                                PopsComponentStatusV1& status) {
+  require_operation(api.apply_region_batch != nullptr, "apply_region_batch");
+  validate_logical_time(request.logical_time);
+  if (!(request.logical_time.dt > 0.0))
+    throw std::invalid_argument("GhostBoundaryV1 requires a positive numerical interval");
+  validate_ghost_region_storage(request);
   return api.apply_region_batch(state, &request, &status);
+}
+
+inline int apply_accepted_initial_ghost(const PopsAcceptedInitialGhostApiV1& api, void* state,
+                                      const PopsAcceptedInitialGhostRequestV1& request,
+                                      PopsComponentStatusV1& status) {
+  require_operation(api.apply_initial_region_batch != nullptr, "apply_initial_region_batch");
+  if (request.struct_size < sizeof(PopsAcceptedInitialGhostRequestV1) ||
+      request.region_request.struct_size < sizeof(PopsGhostBoundaryRequestV1))
+    throw std::invalid_argument("accepted initial ghost request is truncated");
+  validate_accepted_initial_ghost_point(request.region_request.logical_time, request.point_contract_version);
+  validate_ghost_region_storage(request.region_request);
+  return api.apply_initial_region_batch(state, &request, &status);
 }
 
 inline int transform_boundary_flux(const PopsBoundaryFluxApiV1& api, void* state,

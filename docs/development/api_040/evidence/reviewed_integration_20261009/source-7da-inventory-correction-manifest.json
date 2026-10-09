@@ -1,0 +1,40 @@
+{
+  "Source": "7daee302e5af72d4c9b43c77167e349ddb21da5b",
+  "original_cohort": {
+    "pass": 903,
+    "fail": 1,
+    "errors": 0,
+    "skips": 0,
+    "total": 904
+  },
+  "cause": "Strict ordered conditional declaration list omitted exactly four added Norm2Ownership C++ tests",
+  "correction": "Exactly four declaration identities added; equality and all gates unchanged",
+  "scope": "Non-author Root compares exact declarations with source. Targeted candidate pytest1PASS; full next commit Source cohort still pending; no Native science qualification.",
+  "files": [
+    {
+      "file": "source-7da-source-cohort-receipt.json",
+      "source": "/Users/romaindespoulain/dev/tmp/sol61-final-main-source-validation-7daee302-20261009/source-cohort-receipt.json",
+      "sha256": "6f3a59cbb8e7c6fd71eefba8ade68aa048a8e39c368621d999403be3f44ee674"
+    },
+    {
+      "file": "source-7da-failure-diagnosis.json",
+      "source": "/Users/romaindespoulain/dev/tmp/sol61-final-main-source-validation-7daee302-20261009/failure-diagnosis.json",
+      "sha256": "f9acf7989dbd8cff84b1dd0b569226f75ce54a7132cdc46803de733b9915bc86"
+    },
+    {
+      "file": "source-7da-norm2-inventory-targeted-proof.json",
+      "source": "/Users/romaindespoulain/dev/tmp/sol61-final-main-source-validation-7daee302-20261009/norm2-inventory-targeted-proof.json",
+      "sha256": "ce47e885d7ba52a0e299c3d78d27f9b1361e02644ab94c6c9c289cf3e7480ac2"
+    },
+    {
+      "file": "source-7da-targeted-inventory-pytest-receipt.json",
+      "source": "/Users/romaindespoulain/dev/tmp/sol61-final-main-source-validation-7daee302-20261009/targeted-inventory-pytest-receipt.json",
+      "sha256": "261402703e14ef5dfd7dedfaec63a63ee5ff2eab86220da7e1de9d382c22423e"
+    },
+    {
+      "file": "source-7da-targeted-inventory.xml",
+      "source": "/Users/romaindespoulain/dev/tmp/sol61-final-main-source-validation-7daee302-20261009/targeted-inventory.xml",
+      "sha256": "596bdb65aa4608861a827f04bd33d7efad0489aaa3ca406e7a2a7ca28c3dd09c"
+    }
+  ]
+}

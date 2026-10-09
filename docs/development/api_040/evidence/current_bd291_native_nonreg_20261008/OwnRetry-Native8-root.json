@@ -1,0 +1,18 @@
+{
+  "date_utc": "2026-10-08T20:47:16.011972+00:00",
+  "Source": "e01eb5b8b39b20762639be1e7dde45d12542b770",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "core": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "peer_directory": "/Users/romaindespoulain/dev/tmp/PoPS-independent-current-core-OwnRetry-Native8-e01-ed2-reception-20261008",
+  "physical_files_rehashed": 300,
+  "counts": {
+    "tests": 9,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "checkpoint_scope": "23positive archives and1121CBORpayload/restart identities;9deliberatelycorrupt archives pinned separately notpositive",
+  "fail_first": "Root tool command declared PYTEST_ADDOPTS=-x; producercommand/identitydidnotlogthisenvironmentkey; no independent instrumentation claimed",
+  "GO": "CurrentcoreoriginalPDE1 and OwnRetryNative8 independentlyreceived; preserve acceptance scopes and requalify after anycorechange",
+  "scope": "world1OpenMP2/nativeDim2 only; no MPI/GPU/3D/full94 transfer"
+}

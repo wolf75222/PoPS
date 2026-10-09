@@ -1,0 +1,91 @@
+{
+  "author_host_receipts": {
+    "dimension_gates": {
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/composed-host-dimension-gates-v1.json",
+      "sha256": "4d27d09cc364f682af412450b6cb16f878fcbb0dcc89c5d1449bbe473621378e"
+    },
+    "registry21": {
+      "count": 21,
+      "receipt_sha256": "b013953a8a690b09fd921d2bc1731fdf45468fedb31e936c0c56dce72d6d3ddf",
+      "xml": "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/strict-exact-aux.xml",
+      "xml_sha256": "9c6675247deb92f6ddf25feb18482bbb7914c8d988825572a4b24222962ec21f"
+    }
+  },
+  "baseline_files": {
+    "include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp": "e7eca41b2af25412a410f3191b4c729b3f377e0ccb2fb6f4f8018f99318d2361",
+    "include/pops/runtime/program/program_context_moving_projection.inc": "6955ba6941f42d455f5b3a518d28a57dbb056e01f067b4ec5e9867d895df501e",
+    "src/runtime/system/system_fields.cpp": "567ee1da5cab9deb037a41bc297e44ec2a739206d0e81758c53c43391424094c"
+  },
+  "candidate_files": {
+    "include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp": "bb33d7367bd54cdfeb8041f5916e1bb149b1a23223dad7a058e3cb99c44146c7",
+    "include/pops/runtime/program/program_context_moving_projection.inc": "d11715b287f2d9d8459ff0546169f87daddfe0bbe1ab04859795b150525eba10",
+    "src/runtime/system/system_fields.cpp": "45a5b7a96ea60a4ee5438c6643e4d6bfa0c67ac002c48eaaa184a7c5f4f90efc"
+  },
+  "independent_host_registry_replay": {
+    "binary": "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/strict-exact-aux",
+    "dimensions_in_case": [
+      1,
+      2,
+      3
+    ],
+    "exit": 0,
+    "previous_zero_matching_filters_not_counted": [
+      "AcceptedDirtySetExcludesNeverPublishedProviders",
+      "UnpublishedDependentsAreDueWithoutStalePublication"
+    ],
+    "scope": "existing host exact-registry test executable, no installed Native or System producer pipeline",
+    "test": "ExactAuxiliaryRegistryNd.UnpublishedDependentsRemainDueWithoutCheckpointInvalidations",
+    "tests": 1
+  },
+  "independent_host_replay": {
+    "binary": "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/copy-bit-gate",
+    "binary_sha256": "471dda1b0ce098b1ef9f5a5b94e517208577775b792d8dbe2c5054eac0f58663",
+    "dimensions": [
+      1,
+      2,
+      3
+    ],
+    "exit": 0,
+    "observations": "exact signed-zero/finite/subnormal/Inf/NaN bit patterns; component counts1/Dim/5; asymmetric bounds; ghost sentinels; existing host executable only"
+  },
+  "limitations": [
+    "No Main/source/Native mutation or new compilation by reviewer",
+    "Host Dim syntax and registry units do not qualify installed System producer or PDE",
+    "Kept NVCC O0 AArch64 object does not qualify full O3 GPU7+17, wheel or scientific pipeline",
+    "Uniform capacity/capture pending-input clock authority remains explicitly incomplete"
+  ],
+  "patch": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/composed-source-repairs-v1.patch",
+    "sha256": "d419d3f90ab8a8b4e267eb16bd70112760247498403c63292543e2a1ecad3167"
+  },
+  "physical_GPU_source": {
+    "all383_signature_flags_valid": true,
+    "all_seven_physical_manifest_pins_independently_verified": true,
+    "baseline_exit": 2,
+    "before_after_metadata_equal": true,
+    "candidate_exit": 0,
+    "compiler": "NVCC12.6.85 from physical version receipt",
+    "job": 737990,
+    "object": {
+      "ELF_class": 64,
+      "endianness": "little",
+      "machine": 183,
+      "path": "/Users/romaindespoulain/dev/tmp/sol61-composite-fac-copy-cuda-db206-20261008/job737990-monitor/received/run/candidate.o",
+      "sha256": "443ad21ef9f1edd12e8bbbe81141aff39237221644a68d7bb83f6e29fc028273",
+      "type": 1
+    },
+    "optimization": "O0",
+    "result": "/Users/romaindespoulain/dev/tmp/sol61-composite-fac-copy-cuda-db206-20261008/job737990-monitor/received/result.json",
+    "result_sha256": "39993a4bee48ba2b904b92c344e00181cf75f1656974c1afa8ee6d3f9a680efd",
+    "scope": "CompositeC2 single-unit compiler differential only; separate Moving/Aux changes not CUDA qualified"
+  },
+  "reviewer_Main_changed": false,
+  "roundtrip_original_exact": true,
+  "source_findings": [
+    "Named copy functor copies same const source view into same mutable destination view over identical valid-cell box, component ascending order, layout/component checks and final Kokkos fence; no arithmetic introduced",
+    "Typed arrays preserve ordered hierarchy and three connection key/value byte pairs, call phase and exact lane; string_views borrow stable member strings/literals synchronously during agreement",
+    "Explicit MovingIntervalInputs<Dim> return only corrects throw-only lambda deduction; all Dim1 formula text and pre-device geometry refusal remain unchanged",
+    "accepted_dependent query preserves full topological dependency closure then retains only nonnull last accepted points; dormant first reads remain due, strict epoch/schema/pending-input checks unchanged"
+  ],
+  "status": "ADMIT_SOURCE_ONLY"
+}

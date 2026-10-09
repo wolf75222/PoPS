@@ -1,0 +1,52 @@
+{
+  "latest_accepted_slot": 1,
+  "native": {
+    "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=dfcd85eba73c963aaceeaf85738296e5a46272e3f76aff1890a2f7850c4b94d8;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+    "native_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+    "package_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py",
+    "package_version": "1.1.0"
+  },
+  "trajectories": {
+    "plateau": [
+      {
+        "H": 2.0,
+        "T0": 1.0,
+        "T1": 1.0,
+        "accepted_steps": 1,
+        "f0": 0.0,
+        "f1": 0.0,
+        "time": 0.125
+      },
+      {
+        "H": 2.5,
+        "T0": 1.0,
+        "T1": 1.0,
+        "accepted_steps": 1,
+        "f0": 0.0,
+        "f1": 0.16666666666666666,
+        "time": 0.25
+      }
+    ],
+    "sensible": [
+      {
+        "H": 1.53125,
+        "T0": 0.765625,
+        "T1": 0.765625,
+        "accepted_steps": 1,
+        "f0": 0.0,
+        "f1": 0.0,
+        "time": 0.125
+      },
+      {
+        "H": 1.5625,
+        "T0": 0.765625,
+        "T1": 0.78125,
+        "accepted_steps": 1,
+        "f0": 0.0,
+        "f1": 0.0,
+        "time": 0.25
+      }
+    ]
+  }
+}

@@ -1,0 +1,899 @@
+{
+  "installed-amr-flat-authority-repaired": {
+    "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+    "cases": [
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_flat_adaptive_transfer_keeps_exact_subjects_and_only_level_zero_initialization",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_flat_bootstrap_still_requires_exact_initial_subject_coverage",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_uniform_layout_cannot_authorize_empty_amr_transfers",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_flat_layout_normalization_rejects_inconsistent_capability_evidence[level_count]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_flat_layout_normalization_rejects_inconsistent_capability_evidence[missing_transition]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_flat_layout_normalization_rejects_inconsistent_capability_evidence[dimension]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_flat_explicit_layout_does_not_admit_a_foreign_physical_subject",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_flat_plan_still_requires_a_matching_resolved_state_method",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_flat_plan_rejects_incompatible_provider_dimension_and_unknown_policy",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_empty_manifest_needs_explicit_flat_layout_and_physical_authority",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_flat_layout_authority_is_immutable_and_content_authenticates_geometry",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_refined_transfer_canonical_schema_and_requirements_are_unchanged",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_public_flat_hierarchy_resolves_without_coarse_fine_authority",
+        "status": "passed"
+      }
+    ],
+    "counts": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 13
+    },
+    "duration_seconds": 5.1948364158160985,
+    "native_sha256": "aed8c1582c3344bd5afb19ab784adec260bcdbd4bf944b26a29242b53889c862",
+    "passed": 13,
+    "returncode": 0,
+    "source_commit": "954b7dcf08d0642db4f3556cafbf7f994b5374b1",
+    "source_files_sha256": "6c432f8e7005a26400f852e24d3f11b9443eeac0d79cac2985fc549f869c13fc"
+  },
+  "installed-finite-amr-native-serial": {
+    "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+    "cases": [
+      {
+        "classname": "tests.python.integration.runtime.test_finite_m09_runtime",
+        "failure_message": "RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).\nCommand: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG=\"396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI=\"f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5\" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpfehwrre7/problem.d -MT /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat0/pops-native-cache/.2378fefc747b28c4c6296d1370c81f92a1a2f2a3211827fe80b9c7ea6a17912a.pops-stage-m_jwfqx7.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpfehwrre7/problem.cpp -o /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat0/pops-native-cache/.2378fefc747b28c4c6296d1370c81f92a1a2f2a3211827fe80b9c7ea6a17912a.pops-stage-m_jwfqx7.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so\nCompiler output:\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpfehwrre7/problem.cpp:487:59: error: use of undeclared identifier 'expression_active_12'; did you mean 'expression_status_12'?\n  487 |     if (ctx.pointwise_status_max(0, expression_status_12, expression_active_12, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n      |                                                           expression_status_12\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpfehwrre7/problem.cpp:391:45: note: 'expression_status_12' declared here\n  391 |     pops::MultiFab<pops::kNativeDimension>& expression_status_12 = ctx.scalar_scratch(12, 1, ci8_velocity, 1, 0);\n      |                                             ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpfehwrre7/problem.cpp:487:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')\n  487 |     if (ctx.pointwise_status_max(0, expression_status_12, expression_active_12, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here\n  902 |                             const field_type* active_cells, const ExecutionLane& lane) const {\n      |                                               ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpfehwrre7/problem.cpp:566:59: error: use of undeclared identifier 'expression_active_13'; did you mean 'expression_status_13'?\n  566 |     if (ctx.pointwise_status_max(1, expression_status_13, expression_active_13, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n      |                                                           expression_status_13\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpfehwrre7/problem.cpp:493:45: note: 'expression_status_13' declared here\n  493 |     pops::MultiFab<pops::kNativeDimension>& expression_status_13 = ctx.scalar_scratch(13, 1, ci8_velocity, 1, 0);\n      |                                             ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpfehwrre7/problem.cpp:566:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')\n  566 |     if (ctx.pointwise_status_max(1, expression_status_13, expression_active_13, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here\n  902 |                             const field_type* active_cells, const ExecutionLane& lane) const {\n      |                                               ^\n4 errors generated.\nHints: `python -c \"import pops; pops.doctor()\"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.\nThis is GENERATED code emitted by pops.time.Program 'finite_monolithic'; the failing source was written to /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat0/pops-native-cache/2378fefc747b28c4c6296d1370c81f92a1a2f2a3211827fe80b9c7ea6a17912a.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).",
+        "name": "test_finite_w06_original_equations_and_reconstruction[False-False]",
+        "status": "failed"
+      },
+      {
+        "classname": "tests.python.integration.runtime.test_finite_m09_runtime",
+        "failure_message": "RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).\nCommand: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG=\"396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI=\"f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5\" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.d -MT /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat1/pops-native-cache/.6ec7af7ad82577cb64955bcbeeaee59a69262ed70dc09966158210e5ce5193d8.pops-stage-vfsqkldi.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp -o /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat1/pops-native-cache/.6ec7af7ad82577cb64955bcbeeaee59a69262ed70dc09966158210e5ce5193d8.pops-stage-vfsqkldi.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so\nCompiler output:\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp:416:59: error: use of undeclared identifier 'expression_active_10'; did you mean 'expression_status_10'?\n  416 |     if (ctx.pointwise_status_max(0, expression_status_10, expression_active_10, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n      |                                                           expression_status_10\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp:338:45: note: 'expression_status_10' declared here\n  338 |     pops::MultiFab<pops::kNativeDimension>& expression_status_10 = ctx.scalar_scratch(10, 1, u0, 1, 0);\n      |                                             ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp:416:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')\n  416 |     if (ctx.pointwise_status_max(0, expression_status_10, expression_active_10, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here\n  902 |                             const field_type* active_cells, const ExecutionLane& lane) const {\n      |                                               ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp:518:59: error: use of undeclared identifier 'expression_active_11'; did you mean 'expression_status_11'?\n  518 |     if (ctx.pointwise_status_max(0, expression_status_11, expression_active_11, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n      |                                                           expression_status_11\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp:422:45: note: 'expression_status_11' declared here\n  422 |     pops::MultiFab<pops::kNativeDimension>& expression_status_11 = ctx.scalar_scratch(11, 1, u10, 1, 0);\n      |                                             ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp:518:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')\n  518 |     if (ctx.pointwise_status_max(0, expression_status_11, expression_active_11, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here\n  902 |                             const field_type* active_cells, const ExecutionLane& lane) const {\n      |                                               ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp:597:59: error: use of undeclared identifier 'expression_active_12'; did you mean 'expression_status_12'?\n  597 |     if (ctx.pointwise_status_max(1, expression_status_12, expression_active_12, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n      |                                                           expression_status_12\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp:524:45: note: 'expression_status_12' declared here\n  524 |     pops::MultiFab<pops::kNativeDimension>& expression_status_12 = ctx.scalar_scratch(12, 1, u10, 1, 0);\n      |                                             ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp:\nHints: `python -c \"import pops; pops.doctor()\"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.\nThis is GENERATED code emitted by pops.time.Program 'finite_condensed'; the failing source was written to /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat1/pops-native-cache/6ec7af7ad82577cb64955bcbeeaee59a69262ed70dc09966158210e5ce5193d8.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).",
+        "name": "test_finite_w06_original_equations_and_reconstruction[False-True]",
+        "status": "failed"
+      },
+      {
+        "classname": "tests.python.integration.runtime.test_finite_m09_runtime",
+        "failure_message": "RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).\nCommand: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG=\"396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI=\"f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5\" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp39mp9dbf/problem.d -MT /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat2/pops-native-cache/.d59e1712c8c94f0357cdb0d69274660b344b5f154455e03ecbd4dd27d8df3227.pops-stage-swqpqrqd.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp39mp9dbf/problem.cpp -o /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat2/pops-native-cache/.d59e1712c8c94f0357cdb0d69274660b344b5f154455e03ecbd4dd27d8df3227.pops-stage-swqpqrqd.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so\nCompiler output:\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp39mp9dbf/problem.cpp:487:59: error: use of undeclared identifier 'expression_active_12'; did you mean 'expression_status_12'?\n  487 |     if (ctx.pointwise_status_max(0, expression_status_12, expression_active_12, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n      |                                                           expression_status_12\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp39mp9dbf/problem.cpp:391:45: note: 'expression_status_12' declared here\n  391 |     pops::MultiFab<pops::kNativeDimension>& expression_status_12 = ctx.scalar_scratch(12, 1, ci8_velocity, 1, 0);\n      |                                             ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp39mp9dbf/problem.cpp:487:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')\n  487 |     if (ctx.pointwise_status_max(0, expression_status_12, expression_active_12, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here\n  902 |                             const field_type* active_cells, const ExecutionLane& lane) const {\n      |                                               ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp39mp9dbf/problem.cpp:566:59: error: use of undeclared identifier 'expression_active_13'; did you mean 'expression_status_13'?\n  566 |     if (ctx.pointwise_status_max(1, expression_status_13, expression_active_13, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n      |                                                           expression_status_13\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp39mp9dbf/problem.cpp:493:45: note: 'expression_status_13' declared here\n  493 |     pops::MultiFab<pops::kNativeDimension>& expression_status_13 = ctx.scalar_scratch(13, 1, ci8_velocity, 1, 0);\n      |                                             ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp39mp9dbf/problem.cpp:566:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')\n  566 |     if (ctx.pointwise_status_max(1, expression_status_13, expression_active_13, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here\n  902 |                             const field_type* active_cells, const ExecutionLane& lane) const {\n      |                                               ^\n4 errors generated.\nHints: `python -c \"import pops; pops.doctor()\"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.\nThis is GENERATED code emitted by pops.time.Program 'finite_monolithic'; the failing source was written to /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat2/pops-native-cache/d59e1712c8c94f0357cdb0d69274660b344b5f154455e03ecbd4dd27d8df3227.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).",
+        "name": "test_finite_w06_original_equations_and_reconstruction[True-False]",
+        "status": "failed"
+      },
+      {
+        "classname": "tests.python.integration.runtime.test_finite_m09_runtime",
+        "failure_message": "RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).\nCommand: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG=\"396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI=\"f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5\" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.d -MT /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat3/pops-native-cache/.907aae1583dc0d03bddde02646db56ef987d1987c8c73ad6ce7a67ca52bb9d40.pops-stage-ostmjzmv.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp -o /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat3/pops-native-cache/.907aae1583dc0d03bddde02646db56ef987d1987c8c73ad6ce7a67ca52bb9d40.pops-stage-ostmjzmv.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so\nCompiler output:\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp:416:59: error: use of undeclared identifier 'expression_active_10'; did you mean 'expression_status_10'?\n  416 |     if (ctx.pointwise_status_max(0, expression_status_10, expression_active_10, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n      |                                                           expression_status_10\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp:338:45: note: 'expression_status_10' declared here\n  338 |     pops::MultiFab<pops::kNativeDimension>& expression_status_10 = ctx.scalar_scratch(10, 1, u0, 1, 0);\n      |                                             ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp:416:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')\n  416 |     if (ctx.pointwise_status_max(0, expression_status_10, expression_active_10, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here\n  902 |                             const field_type* active_cells, const ExecutionLane& lane) const {\n      |                                               ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp:518:59: error: use of undeclared identifier 'expression_active_11'; did you mean 'expression_status_11'?\n  518 |     if (ctx.pointwise_status_max(0, expression_status_11, expression_active_11, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n      |                                                           expression_status_11\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp:422:45: note: 'expression_status_11' declared here\n  422 |     pops::MultiFab<pops::kNativeDimension>& expression_status_11 = ctx.scalar_scratch(11, 1, u10, 1, 0);\n      |                                             ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp:518:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')\n  518 |     if (ctx.pointwise_status_max(0, expression_status_11, expression_active_11, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here\n  902 |                             const field_type* active_cells, const ExecutionLane& lane) const {\n      |                                               ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp:597:59: error: use of undeclared identifier 'expression_active_12'; did you mean 'expression_status_12'?\n  597 |     if (ctx.pointwise_status_max(1, expression_status_12, expression_active_12, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n      |                                                           expression_status_12\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp:524:45: note: 'expression_status_12' declared here\n  524 |     pops::MultiFab<pops::kNativeDimension>& expression_status_12 = ctx.scalar_scratch(12, 1, u10, 1, 0);\n      |                                             ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp:\nHints: `python -c \"import pops; pops.doctor()\"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.\nThis is GENERATED code emitted by pops.time.Program 'finite_condensed'; the failing source was written to /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat3/pops-native-cache/907aae1583dc0d03bddde02646db56ef987d1987c8c73ad6ce7a67ca52bb9d40.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).",
+        "name": "test_finite_w06_original_equations_and_reconstruction[True-True]",
+        "status": "failed"
+      },
+      {
+        "classname": "tests.python.integration.runtime.test_finite_m09_runtime",
+        "failure_message": "RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).\nCommand: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG=\"396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI=\"f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5\" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp21z7syuc/problem.d -MT /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_singular_elimination_pivo0/pops-native-cache/.ca653bcc70ca0abfb6f913ddf9bb5e946da05bc08fb8a275dd57bf2dacc5bc1f.pops-stage-x30cveci.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp21z7syuc/problem.cpp -o /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_singular_elimination_pivo0/pops-native-cache/.ca653bcc70ca0abfb6f913ddf9bb5e946da05bc08fb8a275dd57bf2dacc5bc1f.pops-stage-x30cveci.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so\nCompiler output:\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp21z7syuc/problem.cpp:487:59: error: use of undeclared identifier 'expression_active_12'; did you mean 'expression_status_12'?\n  487 |     if (ctx.pointwise_status_max(0, expression_status_12, expression_active_12, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n      |                                                           expression_status_12\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp21z7syuc/problem.cpp:391:45: note: 'expression_status_12' declared here\n  391 |     pops::MultiFab<pops::kNativeDimension>& expression_status_12 = ctx.scalar_scratch(12, 1, ci8_velocity, 1, 0);\n      |                                             ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp21z7syuc/problem.cpp:487:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')\n  487 |     if (ctx.pointwise_status_max(0, expression_status_12, expression_active_12, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here\n  902 |                             const field_type* active_cells, const ExecutionLane& lane) const {\n      |                                               ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp21z7syuc/problem.cpp:566:59: error: use of undeclared identifier 'expression_active_13'; did you mean 'expression_status_13'?\n  566 |     if (ctx.pointwise_status_max(1, expression_status_13, expression_active_13, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n      |                                                           expression_status_13\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp21z7syuc/problem.cpp:493:45: note: 'expression_status_13' declared here\n  493 |     pops::MultiFab<pops::kNativeDimension>& expression_status_13 = ctx.scalar_scratch(13, 1, ci8_velocity, 1, 0);\n      |                                             ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp21z7syuc/problem.cpp:566:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')\n  566 |     if (ctx.pointwise_status_max(1, expression_status_13, expression_active_13, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here\n  902 |                             const field_type* active_cells, const ExecutionLane& lane) const {\n      |                                               ^\n4 errors generated.\nHints: `python -c \"import pops; pops.doctor()\"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.\nThis is GENERATED code emitted by pops.time.Program 'finite_monolithic'; the failing source was written to /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_singular_elimination_pivo0/pops-native-cache/ca653bcc70ca0abfb6f913ddf9bb5e946da05bc08fb8a275dd57bf2dacc5bc1f.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).",
+        "name": "test_singular_elimination_pivot_is_not_a_monolithic_singularity[False]",
+        "status": "failed"
+      },
+      {
+        "classname": "tests.python.integration.runtime.test_finite_m09_runtime",
+        "failure_message": "RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).\nCommand: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG=\"396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c\" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI=\"f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5\" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.d -MT /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_singular_elimination_pivo1/pops-native-cache/.f21fd3ce9b11d408a2d0dda073ea554d3db0c1708181d138ab16a2a1ef776a2a.pops-stage-i8zh_b7w.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp -o /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_singular_elimination_pivo1/pops-native-cache/.f21fd3ce9b11d408a2d0dda073ea554d3db0c1708181d138ab16a2a1ef776a2a.pops-stage-i8zh_b7w.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so\nCompiler output:\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp:416:59: error: use of undeclared identifier 'expression_active_10'; did you mean 'expression_status_10'?\n  416 |     if (ctx.pointwise_status_max(0, expression_status_10, expression_active_10, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n      |                                                           expression_status_10\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp:338:45: note: 'expression_status_10' declared here\n  338 |     pops::MultiFab<pops::kNativeDimension>& expression_status_10 = ctx.scalar_scratch(10, 1, u0, 1, 0);\n      |                                             ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp:416:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')\n  416 |     if (ctx.pointwise_status_max(0, expression_status_10, expression_active_10, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here\n  902 |                             const field_type* active_cells, const ExecutionLane& lane) const {\n      |                                               ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp:518:59: error: use of undeclared identifier 'expression_active_11'; did you mean 'expression_status_11'?\n  518 |     if (ctx.pointwise_status_max(0, expression_status_11, expression_active_11, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n      |                                                           expression_status_11\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp:422:45: note: 'expression_status_11' declared here\n  422 |     pops::MultiFab<pops::kNativeDimension>& expression_status_11 = ctx.scalar_scratch(11, 1, u10, 1, 0);\n      |                                             ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp:518:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')\n  518 |     if (ctx.pointwise_status_max(0, expression_status_11, expression_active_11, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here\n  902 |                             const field_type* active_cells, const ExecutionLane& lane) const {\n      |                                               ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp:597:59: error: use of undeclared identifier 'expression_active_12'; did you mean 'expression_status_12'?\n  597 |     if (ctx.pointwise_status_max(1, expression_status_12, expression_active_12, ctx.prepared_execution_lane()) != pops::Real(0)) {\n      |                                                           ^~~~~~~~~~~~~~~~~~~~\n      |                                                           expression_status_12\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp:524:45: note: 'expression_status_12' declared here\n  524 |     pops::MultiFab<pops::kNativeDimension>& expression_status_12 = ctx.scalar_scratch(12, 1, u10, 1, 0);\n      |                                             ^\n/var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp:\nHints: `python -c \"import pops; pops.doctor()\"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.\nThis is GENERATED code emitted by pops.time.Program 'finite_condensed'; the failing source was written to /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_singular_elimination_pivo1/pops-native-cache/f21fd3ce9b11d408a2d0dda073ea554d3db0c1708181d138ab16a2a1ef776a2a.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).",
+        "name": "test_singular_elimination_pivot_is_not_a_monolithic_singularity[True]",
+        "status": "failed"
+      },
+      {
+        "classname": "tests.python.integration.runtime.test_affine_push_forward_amr_runtime",
+        "failure_message": null,
+        "name": "test_public_affine_body_and_local_solve_match_particles_on_amr[1]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.integration.runtime.test_affine_push_forward_amr_runtime",
+        "failure_message": "AssertionError: AssertionError: a real coarse/fine interface is required\n  assert np.int64(256) < 256\n   +  where np.int64(256) = <built-in method sum of numpy.ndarray object at 0x1227855f0>()\n   +    where <built-in method sum of numpy.ndarray object at 0x1227855f0> = array([[ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True]]).sum\n   +  and   256 = array([[ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True]]).size\nassert not 'AssertionError: a real coarse/fine interface is required\\nassert np.int64(256) < 256\\n +  where np.int64(256) = <built-in method sum of numpy.ndarray object at 0x1227855f0>()\\n +    where <built-in method sum of numpy.ndarray object at 0x1227855f0> = array([[ True,  True,  True,  True,  True,  True,  True,  True,  True,\\\\n         True,  True,  True,  True,  True,  True,  True],\\\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\\\n         True,  True,  True,  True,  True,  True,  True],\\\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\\\n         True,  True,  True,  True,  True,  True,  True],\\\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\\\n         True,  True,  True,  True,  True,  True,  True],\\\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\\\n         True,  True,  True,  True,  True,  True,  True],\\\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\\\n         True,  True,  True,  True,  True,  True,  True],\\\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\\\n         True,  True,  True,  True,  True,  True,  True],\\\\n       [ True, ...     [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\\\n         True,  True,  True,  True,  True,  True,  True],\\\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\\\n         True,  True,  True,  True,  True,  True,  True],\\\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\\\n         True,  True,  True,  True,  True,  True,  True],\\\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\\\n         True,  True,  True,  True,  True,  True,  True],\\\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\\\n         True,  True,  True,  True,  True,  True,  True],\\\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\\\n         True,  True,  True,  True,  True,  True,  True],\\\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\\\n         True,  True,  True,  True,  True,  True,  True],\\\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\\\n         True,  True,  True,  True,  True,  True,  True],\\\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\\\n         True,  True,  True,  True,  True,  True,  True]]).size'",
+        "name": "test_public_affine_body_and_local_solve_match_particles_on_amr[2]",
+        "status": "failed"
+      },
+      {
+        "classname": "tests.python.integration.runtime.test_affine_push_forward_amr_runtime",
+        "failure_message": null,
+        "name": "test_impossible_local_residual_rejects_without_amr_publication",
+        "status": "passed"
+      }
+    ],
+    "counts": {
+      "errors": 0,
+      "failures": 7,
+      "skipped": 0,
+      "tests": 9
+    },
+    "duration_seconds": 173.8308314580936,
+    "native_sha256": "aed8c1582c3344bd5afb19ab784adec260bcdbd4bf944b26a29242b53889c862",
+    "passed": 2,
+    "returncode": 1,
+    "source_commit": "70c4724835cfad79cd10d0aed9ae1a8278304f3d",
+    "source_files_sha256": "6c432f8e7005a26400f852e24d3f11b9443eeac0d79cac2985fc549f869c13fc"
+  },
+  "installed-finite-amr-units": {
+    "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+    "cases": [
+      {
+        "classname": "tests.python.unit.numerics.test_finite_linear_maps",
+        "failure_message": null,
+        "name": "test_rectangular_supports_and_order_are_exact",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.numerics.test_finite_linear_maps",
+        "failure_message": null,
+        "name": "test_coefficients_and_labels_are_frozen_and_invalid_inputs_refused",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.codegen.test_finite_m09_source",
+        "failure_message": null,
+        "name": "test_true_finite_w06_routes_to_existing_native_provider[False-False]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.codegen.test_finite_m09_source",
+        "failure_message": null,
+        "name": "test_true_finite_w06_routes_to_existing_native_provider[False-True]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.codegen.test_finite_m09_source",
+        "failure_message": null,
+        "name": "test_true_finite_w06_routes_to_existing_native_provider[True-False]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.codegen.test_finite_m09_source",
+        "failure_message": null,
+        "name": "test_true_finite_w06_routes_to_existing_native_provider[True-True]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.codegen.test_finite_m09_source",
+        "failure_message": null,
+        "name": "test_finite_materialization_requires_exact_output_and_owned_captures",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.codegen.test_finite_m09_source",
+        "failure_message": null,
+        "name": "test_native_materialization_votes_before_any_fab_access",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.codegen.test_finite_m09_host",
+        "failure_message": null,
+        "name": "test_real_original_residual_and_native_condensation[False-False]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.codegen.test_finite_m09_host",
+        "failure_message": null,
+        "name": "test_real_original_residual_and_native_condensation[False-True]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.codegen.test_finite_m09_host",
+        "failure_message": null,
+        "name": "test_real_original_residual_and_native_condensation[True-False]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.codegen.test_finite_m09_host",
+        "failure_message": null,
+        "name": "test_real_original_residual_and_native_condensation[True-True]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.codegen.test_finite_m09_host",
+        "failure_message": null,
+        "name": "test_inactive_singular_solve_is_lazy_and_active_solve_is_rejected",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.codegen.test_finite_m09_host",
+        "failure_message": null,
+        "name": "test_singular_pivot_refuses_while_full_native_system_solves",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_local_state_storage_amr",
+        "failure_message": null,
+        "name": "test_local_affine_product_resolves_full_amr_authorities[1]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_local_state_storage_amr",
+        "failure_message": null,
+        "name": "test_local_affine_product_resolves_full_amr_authorities[2]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_local_state_storage_amr",
+        "failure_message": null,
+        "name": "test_local_storage_authority_rejects_another_resolved_state",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_local_state_storage_amr",
+        "failure_message": null,
+        "name": "test_impossible_original_residual_still_resolves_and_emits",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_local_state_storage_amr",
+        "failure_message": null,
+        "name": "test_independent_particle_oracle_has_exact_amr_cell_axes",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_local_state_storage_amr",
+        "failure_message": null,
+        "name": "test_transfer_does_not_reduce_a_deeper_exact_storage_halo",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_local_state_storage_adversarial",
+        "failure_message": null,
+        "name": "test_mixed_numerical_neighbor_does_not_replace_local_storage_authority",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_local_state_storage_adversarial",
+        "failure_message": null,
+        "name": "test_local_storage_cannot_authenticate_a_numerical_neighbor",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_local_state_storage_adversarial",
+        "failure_message": null,
+        "name": "test_halo_beyond_native_coarse_fine_routes_refuses_exactly",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_patch_layout_requires_an_exact_bool[0]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_patch_layout_requires_an_exact_bool[1]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_patch_layout_requires_an_exact_bool[true]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_patch_layout_requires_an_exact_bool[None]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_patch_layout_requires_an_exact_bool[value4]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_patch_layout_rejects_non_exact_integer_tile_sizes[True]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_patch_layout_rejects_non_exact_integer_tile_sizes[False]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_patch_layout_rejects_non_exact_integer_tile_sizes[1.0]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_patch_layout_rejects_non_exact_integer_tile_sizes[8]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_patch_layout_rejects_non_exact_integer_tile_sizes[value4]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_patch_layout_requires_a_positive_explicit_tile_size[0]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_patch_layout_requires_a_positive_explicit_tile_size[-1]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_public_patch_layout_roundtrips_through_resolution_and_native_lowering",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_native_lowering_carries_rectangular_grid_without_collapsing_axes",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_public_load_balance_roundtrips_exact_identity[SpaceFillingCurve-space_filling_curve-True]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_public_load_balance_roundtrips_exact_identity[Knapsack-knapsack-True]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_public_load_balance_roundtrips_exact_identity[MeasuredKnapsack-measured_knapsack-True]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_public_load_balance_roundtrips_exact_identity[RoundRobin-round_robin-False]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_measured_knapsack_roundtrips_exact_native_decision_policy",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_measured_knapsack_rejects_invalid_decision_policy[minimum_improvement_ppm-True]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_measured_knapsack_rejects_invalid_decision_policy[minimum_improvement_ppm-1000000]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_measured_knapsack_rejects_invalid_decision_policy[amortization_steps-0]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_measured_knapsack_rejects_invalid_decision_policy[migration_bandwidth_bytes_per_second-0]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_measured_knapsack_rejects_invalid_decision_policy[per_patch_migration_latency_nanoseconds--1]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_load_balance_extension_protocol_needs_no_core_class_branch",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_load_balance_protocol_rejects_identity_not_covering_options",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_load_balance_protocol_rejects_raw_float_options",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_patch_layout_protocol_refuses_noncanonical_options",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_patch_layout_protocol_refuses_unstable_options",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_regrid_authority_requires_the_exact_public_type_before_resolution",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_final_amr_authorities_derive_discrete_context_and_nesting",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_gradient_tagging_fails_at_resolve_without_context_or_one_consumer_layout",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_temporal_relations_are_exact_explicit_and_independent_from_spatial_ratios",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_runtime_authority_installs_exact_temporal_relation_without_spatial_inference",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_tagging_resolution_preserves_native_persistent_hysteresis",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_tagging_authority_requires_exact_explicit_policy_types",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_public_resolve_derives_every_amr_authority_without_manual_injection",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_runtime_tagging_compiles_refine_and_coarsen_to_data_only_vm",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_layout_preserves_heterogeneous_exact_rank_transitions",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_public_amr_resolution",
+        "failure_message": null,
+        "name": "test_symbolic_gradient_indicator_cannot_escape_discrete_resolution",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_value_expr_tagging_protocol",
+        "failure_message": null,
+        "name": "test_value_expr_delegates_to_the_open_indicator_context",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_value_expr_tagging_protocol",
+        "failure_message": null,
+        "name": "test_value_indicator_refuses_unresolved_and_foreign_case_handles[None]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_value_expr_tagging_protocol",
+        "failure_message": null,
+        "name": "test_value_indicator_refuses_unresolved_and_foreign_case_handles[u]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_value_expr_tagging_protocol",
+        "failure_message": null,
+        "name": "test_tagging_dimensions_keep_exact_powers_and_canonical_identity",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_value_expr_tagging_protocol",
+        "failure_message": null,
+        "name": "test_tagging_identity_distinguishes_unknown_dimensionless_and_all_component_units",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_value_expr_tagging_protocol",
+        "failure_message": null,
+        "name": "test_tagging_expression_identity_rejects_unknown_objects_with_serialization_hooks",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_value_expr_tagging_protocol",
+        "failure_message": null,
+        "name": "test_tagging_full_space_identity_preserves_support_and_each_semantic_field",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_value_expr_tagging_protocol",
+        "failure_message": null,
+        "name": "test_tagging_does_not_invoke_subclass_physical_descriptor_protocols[dimension]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_value_expr_tagging_protocol",
+        "failure_message": null,
+        "name": "test_tagging_does_not_invoke_subclass_physical_descriptor_protocols[support]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_vector_component_tagging",
+        "failure_message": null,
+        "name": "test_selected_component_reaches_resolved_graph_and_native_vm[mx-mx-False]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_vector_component_tagging",
+        "failure_message": null,
+        "name": "test_selected_component_reaches_resolved_graph_and_native_vm[mx-mx-True]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_vector_component_tagging",
+        "failure_message": null,
+        "name": "test_selected_component_reaches_resolved_graph_and_native_vm[2-my-False]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_vector_component_tagging",
+        "failure_message": null,
+        "name": "test_selected_component_reaches_resolved_graph_and_native_vm[2-my-True]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_vector_component_tagging",
+        "failure_message": null,
+        "name": "test_two_component_state_with_full_physical_type_resolves_its_selected_indicator[False]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_vector_component_tagging",
+        "failure_message": null,
+        "name": "test_two_component_state_with_full_physical_type_resolves_its_selected_indicator[True]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_vector_component_tagging",
+        "failure_message": null,
+        "name": "test_component_selection_changes_the_authenticated_graph_identity",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_vector_component_tagging",
+        "failure_message": null,
+        "name": "test_vector_indicator_requires_explicit_selection[False]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_vector_component_tagging",
+        "failure_message": null,
+        "name": "test_vector_indicator_requires_explicit_selection[True]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_vector_component_tagging",
+        "failure_message": null,
+        "name": "test_component_selector_rejects_invalid_or_implicit_coercions[missing-ValueError]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_vector_component_tagging",
+        "failure_message": null,
+        "name": "test_component_selector_rejects_invalid_or_implicit_coercions[-1-IndexError]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_vector_component_tagging",
+        "failure_message": null,
+        "name": "test_component_selector_rejects_invalid_or_implicit_coercions[3-IndexError]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_vector_component_tagging",
+        "failure_message": null,
+        "name": "test_component_selector_rejects_invalid_or_implicit_coercions[True-TypeError]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_vector_component_tagging",
+        "failure_message": null,
+        "name": "test_component_selector_rejects_invalid_or_implicit_coercions[1.0-TypeError]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_vector_component_tagging",
+        "failure_message": null,
+        "name": "test_component_selector_rejects_invalid_or_implicit_coercions[component5-TypeError]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_vector_component_tagging",
+        "failure_message": null,
+        "name": "test_selected_component_keeps_physical_frame_qualification[False]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_vector_component_tagging",
+        "failure_message": null,
+        "name": "test_selected_component_keeps_physical_frame_qualification[True]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.amr.test_vector_component_tagging",
+        "failure_message": null,
+        "name": "test_native_tagging_reads_the_selected_last_component",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_flat_adaptive_transfer_keeps_exact_subjects_and_only_level_zero_initialization",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_flat_bootstrap_still_requires_exact_initial_subject_coverage",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_uniform_layout_cannot_authorize_empty_amr_transfers",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_flat_layout_normalization_rejects_inconsistent_capability_evidence[level_count]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_flat_layout_normalization_rejects_inconsistent_capability_evidence[missing_transition]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_flat_layout_normalization_rejects_inconsistent_capability_evidence[dimension]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_flat_explicit_layout_does_not_admit_a_foreign_physical_subject",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": "AssertionError: Regex pattern did not match.\n  Expected regex: 'no exact resolved spatial method'\n  Actual message: 'AMR cell state pops.handle.v1::model_definition:flat::state::U has no exact resolved spatial or local storage authority; coarse/fine accuracy cannot be lowered by default'",
+        "name": "test_flat_plan_still_requires_a_matching_resolved_state_method",
+        "status": "failed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_flat_plan_rejects_incompatible_provider_dimension_and_unknown_policy",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_empty_manifest_needs_explicit_flat_layout_and_physical_authority",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_flat_layout_authority_is_immutable_and_content_authenticates_geometry",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_refined_transfer_canonical_schema_and_requirements_are_unchanged",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_flat_transfer_contract",
+        "failure_message": null,
+        "name": "test_public_flat_hierarchy_resolves_without_coarse_fine_authority",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_hierarchy_contract",
+        "failure_message": null,
+        "name": "test_three_level_hierarchy_is_explicit_and_level_count_is_strictly_derived",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_hierarchy_contract",
+        "failure_message": null,
+        "name": "test_native_hierarchy_lowering_dispatches_to_an_opaque_provider_route",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_hierarchy_contract",
+        "failure_message": null,
+        "name": "test_shared_native_hierarchy_preserves_every_ranked_transition[1]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_hierarchy_contract",
+        "failure_message": null,
+        "name": "test_shared_native_hierarchy_preserves_every_ranked_transition[2]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_hierarchy_contract",
+        "failure_message": null,
+        "name": "test_shared_native_hierarchy_preserves_every_ranked_transition[3]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_hierarchy_contract",
+        "failure_message": null,
+        "name": "test_transition_fields_change_identity_or_are_rejected",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_hierarchy_contract",
+        "failure_message": null,
+        "name": "test_every_component_and_requirement_source_changes_plan_identity",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_hierarchy_contract",
+        "failure_message": null,
+        "name": "test_authoring_contracts_are_deeply_immutable_and_data_only",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_hierarchy_contract",
+        "failure_message": null,
+        "name": "test_resolution_is_pre_runtime_and_requires_a_synchronized_dynamic_schedule",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_hierarchy_contract",
+        "failure_message": null,
+        "name": "test_frozen_hierarchy_resolves_without_runtime_regrid_capabilities",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_hierarchy_contract",
+        "failure_message": null,
+        "name": "test_provider_refuses_anisotropy_3d_and_three_levels_with_capability_evidence",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_hierarchy_contract",
+        "failure_message": null,
+        "name": "test_hierarchy_resolves_exact_rank_isotropic_defaults[1-ratio0]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_hierarchy_contract",
+        "failure_message": null,
+        "name": "test_hierarchy_resolves_exact_rank_isotropic_defaults[2-ratio1]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_hierarchy_contract",
+        "failure_message": null,
+        "name": "test_hierarchy_resolves_exact_rank_isotropic_defaults[3-ratio2]",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_hierarchy_contract",
+        "failure_message": null,
+        "name": "test_nesting_and_dynamic_provider_requirements_fail_before_artifact",
+        "status": "passed"
+      },
+      {
+        "classname": "tests.python.unit.mesh.amr.test_hierarchy_contract",
+        "failure_message": null,
+        "name": "test_provider_capability_fields_change_identity",
+        "status": "passed"
+      }
+    ],
+    "counts": {
+      "errors": 0,
+      "failures": 1,
+      "skipped": 0,
+      "tests": 119
+    },
+    "duration_seconds": 103.46187849994749,
+    "native_sha256": "aed8c1582c3344bd5afb19ab784adec260bcdbd4bf944b26a29242b53889c862",
+    "passed": 118,
+    "returncode": 1,
+    "source_commit": "70c4724835cfad79cd10d0aed9ae1a8278304f3d",
+    "source_files_sha256": "6c432f8e7005a26400f852e24d3f11b9443eeac0d79cac2985fc549f869c13fc"
+  }
+}

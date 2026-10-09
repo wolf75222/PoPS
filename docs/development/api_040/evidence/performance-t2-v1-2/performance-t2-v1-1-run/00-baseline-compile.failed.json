@@ -1,0 +1,8 @@
+{
+  "status": "failed",
+  "lane": "baseline",
+  "phase": "compile",
+  "exit_code": 1,
+  "stdout": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/performance-t2-v1-1-run/00-baseline-compile.stdout.log",
+  "stderr": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/performance-t2-v1-1-run/00-baseline-compile.stderr.log"
+}

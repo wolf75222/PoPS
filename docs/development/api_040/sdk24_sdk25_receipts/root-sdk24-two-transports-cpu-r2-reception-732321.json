@@ -1,0 +1,76 @@
+{
+  "actual_independent_readers_replayed": true,
+  "backend": "CPU OpenMP one thread, Dim2",
+  "build_test_source_join": {
+    "contract": "sol61.sdk24.two-transports-equivalence-supplement@1",
+    "equivalence_sha256": "7d70cdd594cc8fd55a97f465a4925a86f683f2b1be479f8439ff22aad5dbaf97",
+    "installed_equal_files": 1156,
+    "job": 732321,
+    "original_169_pins_unchanged": true,
+    "production_equal_files": 1191,
+    "root_seal": false,
+    "scope": "append-only installed/source equivalence, not additional SCI/math qualification"
+  },
+  "ci_qualified": false,
+  "field_history_qualified": false,
+  "ghost_formula_qualified": false,
+  "gpu_qualified": false,
+  "independent_artifacts_rewritten": false,
+  "independent_pins": {
+    "equivalence": {
+      "directory": "/Users/romaindespoulain/dev/tmp/sol61-sdk24-two-transports-cpu-r2-equivalence-supplement-732321",
+      "sha256": "3df78210c8e1a225b335ef5b6763e5e9642e43446b52992628bd56abb64564a0",
+      "verified": 8
+    },
+    "state": {
+      "directory": "/Users/romaindespoulain/dev/tmp/sol61-sdk24-two-transports-cpu-r2-independent-732321",
+      "sha256": "8bfe72e25fd047959b1bac5be843102ff6efb987f16908fbe885c32fc5a30492",
+      "verified": 169
+    }
+  },
+  "independent_transport_pde_oracle_recomputed": false,
+  "installed_build_source": "7bccf27064624d5e3d81f81732d0cdbdd52f304d",
+  "job": 732321,
+  "mpi_transport_qualified": false,
+  "native_sha256": "504c2418b028d408652426e66619d953e11a0d48d5792414090688de19dccfbd",
+  "performance_at_comparable_calculation_qualified": false,
+  "reports_identical_on_replay": true,
+  "root_approval": true,
+  "schema": "root.sdk24-two-transports-cpu-r2-reception@1",
+  "scope": "13 authentic local/complete/valid State phases; qualified block-name joins, complete CP9 grown storage, refusal/restoration and bit-identical replay",
+  "storage": {
+    "JUnit_case_seconds": "127.772",
+    "before_after_exact": true,
+    "contract": "sol61.sdk24.two-transports-cpu-r2-reception@1",
+    "installed_matches_actual_sdk24_build": true,
+    "installed_native_sha256": "504c2418b028d408652426e66619d953e11a0d48d5792414090688de19dccfbd",
+    "job": 732321,
+    "limitations": [
+      "Pure State receipt: no independent transport PDE evolution oracle invoked",
+      "No Field/history/cache/Ghost formula qualification",
+      "No MPI2/inter-node/GPU/performance qualification",
+      "C25 retained compile evidence is not cryptographic semantic compiler-to-DSO proof"
+    ],
+    "logical_scenarios": 1,
+    "mathematical_reference_recomputed": false,
+    "production_matches_actual_sdk24_build": true,
+    "root_seal": false,
+    "source": "65b1063bf3dcd0b749ccfd99d8c2f66f4f2dbdca",
+    "state": {
+      "field_history_cache_qualified": false,
+      "ghost_formula_qualified": false,
+      "global_state_storage_exact": true,
+      "phases": 13,
+      "profile": "two-transports",
+      "rank_local_join_qualified": true,
+      "root_approval": false,
+      "schema": "sol61.uniform-checkpoint9-offline@3",
+      "signed_zero_observed": false
+    },
+    "world": 1
+  },
+  "test_source_freeze": "65b1063bf3dcd0b749ccfd99d8c2f66f4f2dbdca",
+  "verdict": "SCOPED_CP9_STATE_RESTORE_AND_REPLAY_APPROVED",
+  "whole_mission_complete": false,
+  "world": 1
+}

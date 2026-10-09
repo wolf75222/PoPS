@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest.xml",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-original-PDE-current-core-e01-ed2-20261008/pytest-tmp",
+    "tests/python/integration/runtime/test_imex_nonautonomous_field.py"
+  ],
+  "returncode": 0,
+  "pytest_base_temp": "pytest-tmp",
+  "duration_seconds": 36.98297724999793,
+  "counts": {
+    "tests": 1,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "passed",
+  "identity_sha256": "1c64900ebf736f1fa62b197e2b4f5fab6a36c28b4b31053482739ebf19faa251",
+  "log_sha256": "3e421409e223b5a76900dfae1277fc5525f9e7914ab061d2e84a96e7f822ead6"
+}

@@ -14,6 +14,7 @@ from pops._bootstrap import StepAttemptRejected
 from pops.time.solve_outcome import SOLVE_STATUSES
 from pops.time._step.strategy import (
     AdaptiveCFL,
+    ComputedDt,
     ErrorControlledDt,
     ExternalTimeGrid,
     FixedDt,
@@ -126,9 +127,9 @@ def _control_identity(controls: Mapping[str, Any] | None) -> tuple[tuple[str, An
     ))
 
 
-def _attempt_world(engine: Any) -> Any:
+def _attempt_world(engine: Any, *, preparing: bool = False) -> Any:
     """Return the authenticated MPI world for one installed engine, if distributed."""
-    if getattr(engine, "_collective_step_envelope_active", False) is not True:
+    if not preparing and getattr(engine, "_collective_step_envelope_active", False) is not True:
         return None
     context = getattr(engine, "_execution_context", None)
     resource = getattr(context, "communicator", None)
@@ -286,7 +287,7 @@ def _record_failure(engine: Any, error: BaseException, attempts: int) -> None:
 
 def _native_attempt(
     engine: Any, native: Any, advance: Any, *, queued_event: Any = None,
-    fixed_dt_grid: Any = None,
+    fixed_dt_grid: Any = None, external_frontier: Any = None, program_frontier: Any = None,
 ) -> Any:
     temporal = getattr(engine, "_temporal_restart_state", None)
     before_time, before_step = native.time(), native.macro_step()
@@ -320,6 +321,8 @@ def _native_attempt(
             time=native.time(), macro_step=native.macro_step(),
             consumed_event=queued_event,
             **({"fixed_dt_grid": fixed_dt_grid} if fixed_dt_grid is not None else {}),
+            **({"external_frontier": external_frontier} if external_frontier is not None else {}),
+            **({"program_frontier": program_frontier} if program_frontier is not None else {}),
         )
     return result
 
@@ -685,34 +688,170 @@ class ErrorControlledDtController(StepController[ErrorControlledDt]):
             self.prepare_attempts(engine, native, t_end=t_end))
 
 
+class ComputedDtController(StepController[ComputedDt]):
+    """A native Program returns a Scalar duration; the host owns acceptance/rollback."""
+
+    def prepare_attempts(self, engine: Any, native: Any, *, t_end: float) -> _PreparedStepAttempts:
+        now, step = float(native.time()), int(native.macro_step())
+        local_error = None
+        contract = None
+        try:
+            if not math.isfinite(t_end) or not t_end > now:
+                raise RuntimeError("ComputedDt requires a finite future run frontier")
+            temporal = getattr(engine, "_temporal_restart_state", None)
+            prior = None
+            if temporal is not None:
+                from pops.runtime._temporal_restart import (
+                    _validate_controller_state, _validate_controller_events,
+                )
+                _validate_controller_state(temporal.controller_state)
+                _validate_controller_events([], strategy=temporal.strategy,
+                    controller=temporal.controller_state, time_hex=now.hex(), macro_step=step)
+                prior = temporal.controller_state.get("program_frontier")
+            contract = (self.strategy.to_data(), now.hex(), step, float(t_end).hex(), prior)
+        except BaseException as error:
+            local_error = error
+        world = _attempt_world(engine, preparing=True)
+        if world is not None and int(world.size) > 1:
+            from pops._native_collectives import allgather_value
+            rows = allgather_value(world, {"contract": contract,
+                "error": None if local_error is None else str(local_error)})
+            if any(row["error"] is not None for row in rows):
+                raise RuntimeError("collective ComputedDt preparation failed")
+            if any(row["contract"] != contract for row in rows):
+                raise RuntimeError("collective ComputedDt preparation differs between ranks")
+        if local_error is not None:
+            raise local_error
+        receipt = {}
+        requested_dt = self.strategy.dt
+        rejected = 0
+
+        def advance() -> None:
+            native.step(requested_dt)
+            getter = getattr(engine, "program_diagnostics", None)
+            if not callable(getter):
+                raise TypeError("ComputedDt lacks its native Program frontier result")
+            diagnostics = getter()
+            if "pops.frontier.duration" not in diagnostics:
+                raise RuntimeError("ComputedDt Program did not return its effective duration")
+            duration = float(diagnostics["pops.frontier.duration"])
+            reached = float(native.time())
+            if not math.isfinite(duration) or not duration > 0.0 or now + duration != reached \
+                    or reached <= now or int(native.macro_step()) != step + 1:
+                raise RuntimeError("ComputedDt native reached clock disagrees with its Scalar duration")
+            upper = float(t_end)
+            for _ in range(self.strategy.endpoint_ulps):
+                upper = math.nextafter(upper, math.inf)
+            if reached > upper:
+                raise RuntimeError("ComputedDt reached endpoint crosses the declared run frontier: "
+                    f"start={now.hex()} requested_duration={requested_dt.hex()} "
+                    f"effective_duration={duration.hex()} reached={reached.hex()} "
+                    f"run_limit={float(t_end).hex()} allowed_upper={upper.hex()}")
+            receipt.update(schema_version=1, start=now.hex(), requested_duration=requested_dt.hex(), rejections=rejected,
+                           duration=duration.hex(), reached=reached.hex(), limit=float(t_end).hex())
+
+        def retry(error: BaseException, attempts: int) -> bool:
+            nonlocal requested_dt, rejected
+            del error, attempts
+            proposed = requested_dt * self.strategy.shrink
+            if not math.isfinite(proposed) or not 0.0 < proposed < requested_dt or now + proposed <= now:
+                return False
+            requested_dt = proposed
+            rejected += 1
+            return True
+
+        return _PreparedStepAttempts(engine=engine, controller=self,
+            attempt=lambda: _native_attempt(engine, native, advance, program_frontier=receipt),
+            retry=retry, retry_budget=self.strategy.max_rejections)
+
+    def execute(self, engine: Any, native: Any, *, t_end: float) -> int:
+        return _execute_prepared_attempts(self.prepare_attempts(engine, native, t_end=t_end))
+
+
 class ExternalTimeGridController(StepController[ExternalTimeGrid]):
     def __init__(self, strategy: ExternalTimeGrid, grid: tuple[float, ...]) -> None:
         super().__init__(strategy, {strategy.grid_id: grid})
         self.grid = grid
 
-    @staticmethod
-    def _same_time(left: float, right: float) -> bool:
-        scale = max(1.0, abs(left), abs(right))
-        return abs(left - right) <= 4.0 * math.ulp(scale)
-
     def prepare_attempts(
         self, engine: Any, native: Any, *, t_end: float,
     ) -> _PreparedStepAttempts:
-        now = float(native.time())
-        index = bisect.bisect_left(self.grid, now)
-        if index == len(self.grid) or not self._same_time(self.grid[index], now):
-            if index and self._same_time(self.grid[index - 1], now):
-                index -= 1
-            else:
+        local_error = None
+        contract = None
+        try:
+            now = float(native.time())
+            step = int(native.macro_step())
+            temporal = getattr(engine, "_temporal_restart_state", None)
+            prior = None if temporal is None else temporal.controller_state.get("external_frontier")
+            entry = now
+            if self.strategy.frontier == "computed" and temporal is not None:
+                from pops.runtime._temporal_restart import (
+                    _validate_controller_state, _validate_controller_events,
+                )
+                _validate_controller_state(temporal.controller_state)
+                _validate_controller_events([], strategy=temporal.strategy,
+                    controller=temporal.controller_state, time_hex=now.hex(), macro_step=step)
+                if prior is not None:
+                    if prior["reached"] != now.hex():
+                        raise RuntimeError("ExternalTimeGrid computed frontier differs from native clock")
+                    entry = float.fromhex(prior["requested"])
+            index = bisect.bisect_left(self.grid, entry)
+            # These are authored binary64 points, not approximate samples of another clock.
+            # A tolerance here can skip a distinct nearby point or cross the run frontier.
+            if index == len(self.grid) or self.grid[index] != entry:
                 raise RuntimeError("ExternalTimeGrid current time is not a declared grid point")
-        if index + 1 >= len(self.grid):
-            raise RuntimeError("ExternalTimeGrid is exhausted")
-        next_time = self.grid[index + 1]
-        if next_time > t_end and not self._same_time(next_time, t_end):
-            raise RuntimeError("ExternalTimeGrid final time is not a declared grid point")
+            if index + 1 >= len(self.grid):
+                raise RuntimeError("ExternalTimeGrid is exhausted")
+            next_time = self.grid[index + 1]
+            if next_time > t_end:
+                raise RuntimeError("ExternalTimeGrid final time is not a declared grid point")
+            dt = next_time - now
+            reached = now + dt
+            if not math.isfinite(dt) or not dt > 0.0 or not math.isfinite(reached) or reached <= now:
+                raise RuntimeError("ExternalTimeGrid has no representable native interval to its next point")
+            lower = upper = next_time
+            for _ in range(self.strategy.endpoint_ulps):
+                lower = math.nextafter(lower, -math.inf)
+                upper = math.nextafter(upper, math.inf)
+            if reached < lower or reached > upper:
+                raise RuntimeError("ExternalTimeGrid has no representable native interval to its next point")
+            receipt = {"schema_version": 2, "start": now.hex(), "requested": next_time.hex(),
+                       "reached": reached.hex(), "duration": dt.hex(), "index": index + 1}
+            contract = (self.controls, now.hex(), step, index, next_time.hex(), dt.hex(),
+                        float(t_end).hex())
+            if self.strategy.frontier == "computed":
+                contract += (self.strategy.to_data(), reached.hex(), prior)
+        except BaseException as error:
+            local_error = error
+        # Preparation runs before RuntimeInstance opens its attempt envelope. Use the
+        # same authenticated communicator explicitly, never an implicit world fallback.
+        world = _attempt_world(engine, preparing=True)
+        if world is not None and int(world.size) > 1:
+            from pops._native_collectives import allgather_value
+
+            rows = allgather_value(world, {
+                "contract": contract,
+                "error": None if local_error is None else str(local_error),
+            })
+            failures = [(rank, row["error"]) for rank, row in enumerate(rows)
+                        if row["error"] is not None]
+            if failures:
+                raise RuntimeError("collective ExternalTimeGrid preparation failed: " + "; ".join(
+                    "rank %d: %s" % (rank, message) for rank, message in failures))
+            if any(row["contract"] != contract for row in rows):
+                raise RuntimeError("collective ExternalTimeGrid preparation differs between ranks")
+        if local_error is not None:
+            raise local_error
+        def advance() -> None:
+            native.step(dt)
+            if float(native.time()) != reached or int(native.macro_step()) != step + 1:
+                raise RuntimeError("ExternalTimeGrid reached clock differs from its declared next point")
 
         def attempt() -> None:
-            _native_attempt(engine, native, lambda: native.step(next_time - now))
+            # Check inside the collective attempt, before temporal acceptance. The enclosing
+            # RuntimeInstance transaction restores every rank on a wrong native landing.
+            _native_attempt(engine, native, advance, external_frontier=(
+                receipt if self.strategy.frontier == "computed" else None))
 
         return _PreparedStepAttempts(
             engine=engine,
@@ -752,6 +891,14 @@ def _error_controlled_dt_controller(
     if type(strategy) is not ErrorControlledDt:
         raise TypeError("ErrorControlledDt controller factory received another strategy type")
     return ErrorControlledDtController(strategy)
+
+
+@register_step_controller_factory(ComputedDt)
+def _computed_dt_controller(strategy: StepStrategy, controls: Mapping[str, Any] | None) -> StepController[Any]:
+    del controls
+    if type(strategy) is not ComputedDt:
+        raise TypeError("ComputedDt controller factory received another strategy type")
+    return ComputedDtController(strategy)
 
 
 @register_step_controller_factory(ExternalTimeGrid)
@@ -851,6 +998,23 @@ class PreparedProgramRun:
             "strategy": self.control_payload,
             "program_schedule": json.loads(self._schedule_json),
         }
+
+    def pending(self, native: Any, *, t_end: float) -> bool:
+        """Compare the requested grid coordinate without relabelling the native clock."""
+        temporal = getattr(self.engine, "_temporal_restart_state", None)
+        if type(self.strategy) is ExternalTimeGrid and self.strategy.frontier == "computed":
+            receipt = None if temporal is None else temporal.controller_state.get("external_frontier")
+            if receipt is not None and receipt["reached"] == float(native.time()).hex():
+                return float.fromhex(receipt["requested"]) < t_end
+        if type(self.strategy) is ComputedDt:
+            receipt = None if temporal is None else temporal.controller_state.get("program_frontier")
+            if receipt is not None and receipt["reached"] == float(native.time()).hex() \
+                    and receipt["limit"] == float(t_end).hex():
+                lower = float(t_end)
+                for _ in range(self.strategy.endpoint_ulps):
+                    lower = math.nextafter(lower, -math.inf)
+                return float(native.time()) < lower
+        return native.time() < t_end
 
     def begin(self, temporal: Any, *, time: Any, macro_step: Any) -> None:
         """Validate and bind restart state before any accepted mutation can occur."""

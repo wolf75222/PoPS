@@ -160,6 +160,10 @@ def _emit_resolved_cpp_program(
     )
 
 
+from .cpp_symbols import printer_scope
+from .cpp_strings import cpp_string_literal
+
+@printer_scope
 def _emit_cpp_program_impl(
     program: Any,
     model: Any = None,
@@ -290,7 +294,11 @@ def _emit_cpp_program_impl(
             if key in provider_halos and provider_halos[key] != width:
                 raise ValueError("Program provider has conflicting exact native halo shapes")
             provider_halos[key] = width
-    provider_plans = ProgramProviderPlans(target=target, provider_halos=provider_halos)
+    from .provider_instances import graph_instance_contracts
+    provider_plans = ProgramProviderPlans(target=target, provider_halos=provider_halos,
+                                         instance_contracts=graph_instance_contracts(authority))
+    from pops.codegen.program_value_authority import prepare_program_value_authority
+    value_authority = prepare_program_value_authority(program, authority, field_plans or {})
     prelude, body, post_synchronization, operator_authorities = _emit_body(
         program,
         authority,
@@ -299,6 +307,7 @@ def _emit_cpp_program_impl(
         balance_due_contract=balance_due_contract,
         has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
         provider_plans=provider_plans,
+        value_authority=value_authority,
     )
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
     # (true iff a bound was set) and one target-qualified entry accepting the authenticated runtime
@@ -317,7 +326,7 @@ def _emit_cpp_program_impl(
             provider_plans=provider_plans)
         if target == "amr_system" else None)
     return _PROGRAM_CPP_TEMPLATE.format(
-        name=json.dumps(program.name),
+        name=cpp_string_literal(program.name),
         hash=program._ir_hash(),
         prelude=prelude,
         body=body,
@@ -330,11 +339,12 @@ def _emit_cpp_program_impl(
         field_boundaries=field_boundaries,
         model_helpers=(_emit_program_model_helpers(program, authority)
                        + provider_plans.source_kernel_helpers.cpp()),
-        block_names=_emit_block_names(program),
+        block_names=(_emit_block_names(program, value_authority.block_names)
+                     + (_emit_uniform_clock_manifest(program) if target == "system" else "")),
         route_manifest=_emit_route_manifest("pops_program_route_manifest"),
         system_install=_emit_system_install(
             target, prelude, body, provider_plans.cpp_install(target)),
-        prepared_native_component_includes=_prepared_native_component_includes(program),
+        prepared_native_component_includes=_prepared_native_component_includes(program, target=target),
         block_inverse_include=_block_inverse_include(program),
         amr_install=_emit_amr_install(
             program,
@@ -346,6 +356,27 @@ def _emit_cpp_program_impl(
             post_synchronization,
         ),
     )
+
+
+def _emit_uniform_clock_manifest(program: Any) -> str:
+    """Export frozen clock ownership data; no clock identity selects an arithmetic recipe."""
+    temporal = program.temporal_manifest()
+    clocks = tuple(str(row["id"]) for row in temporal["clocks"])
+    primary = str(temporal["primary_clock"])
+    if not clocks or len(clocks) > 2**31 - 1 or len(set(clocks)) != len(clocks):
+        raise ValueError("Uniform Program clock ownership table is invalid")
+    if any(not clock for clock in clocks) or primary not in clocks:
+        raise ValueError("Uniform Program primary clock is outside its ownership table")
+    cases = "".join("    case %d: return %s;\n" % (index, cpp_string_literal(clock))
+                    for index, clock in enumerate(clocks))
+    return (
+        'extern "C" const char* pops_program_checkpoint_clock_manifest_contract() {\n'
+        '  return "pops.program.owned-clock-manifest@1";\n}\n'
+        'extern "C" int pops_program_checkpoint_logical_clock_count() { return %d; }\n'
+        'extern "C" const char* pops_program_checkpoint_logical_clock_identity(int i) {\n'
+        '  switch (i) {\n%s    default: return "";\n  }\n}\n'
+        'extern "C" const char* pops_program_checkpoint_primary_clock_identity() { return %s; }\n'
+    ) % (len(clocks), cases, cpp_string_literal(primary))
 
 
 def _emit_history_replay_authorities(program: Any) -> str:
@@ -362,7 +393,7 @@ def _emit_history_replay_authorities(program: Any) -> str:
         if not policy.degenerate_to_dense(depth):
             authorities.append((str(name), int(depth)))
     name_cases = "".join(
-        "    case %d: return %s;\n" % (index, json.dumps(name))
+        "    case %d: return %s;\n" % (index, cpp_string_literal(name))
         for index, (name, _depth) in enumerate(authorities)
     )
     depth_cases = "".join(
@@ -406,7 +437,9 @@ def _emit_program_model_helpers(program: Any, authority: Any) -> str:
         expressions.extend(declaration["expressions"])
         expressions.append(declaration["valid_if"])
     lines = _eig_witness_helpers(_collect_eig_witnesses(expressions), indent="")
-    return ("\n".join(lines) + "\n") if lines else ""
+    from .program_emit_principal import emit_principal_models
+    from .program_emit_moving import emit_moving_helpers
+    return (("\n".join(lines) + "\n") if lines else "") + emit_principal_models(program, authority) + emit_moving_helpers(program, authority)
 
 
 def _emit_system_install(target: str, prelude: str, body: str, provider_plan_install: str) -> str:
@@ -435,7 +468,7 @@ def _emit_system_install(target: str, prelude: str, body: str, provider_plan_ins
 
 
 def _emit_dt_bound_entry(target: str, body: str, value_name: str | None = None) -> str:
-    """Emit one allocation-free facade-typed dt-bound ABI."""
+    """Emit one facade-typed dt-bound ABI with collectively prepared resources."""
     if target == "amr_system":
         symbol = "pops_program_dt_bound_amr"
         facade = "pops::AmrSystem<pops::kNativeDimension>"
@@ -490,7 +523,7 @@ def _emit_operator_authorities(authorities: tuple[tuple[int, ...], ...]) -> str:
     )
 
 
-def _emit_block_names(program: Any) -> str:
+def _emit_block_names(program: Any, installed_names: tuple[str, ...] | None = None) -> str:
     """C++ source of the NAME-based block-binding ABI the .so exports (Spec 3 criterion 23, ADC-457):
     ``pops_program_block_count()`` and ``pops_program_block_name(int)`` -- the Program's block names in
     ``_block_indices`` order (T.state declaration order, the order the step body's ``ctx.state(idx)``
@@ -500,10 +533,13 @@ def _emit_block_names(program: Any) -> str:
     whose name has no System block fails loud. The block names are also part of the IR identity (the
     block_order field of _serialize feeds the IR hash), so reordering T.state changes the hash."""
     order = program._block_indices()  # name -> index, declaration order
-    names = sorted(order, key=order.get)
+    declared = tuple(block_name(block) for block in sorted(order, key=order.get))
+    names = declared if installed_names is None else installed_names
+    if names[:len(declared)] != declared or len(set(names)) != len(names):
+        raise ValueError("installed Program owner table changes the declared native block indices")
     cases = "".join(
-        "    case %d: return %s;\n" % (order[block], json.dumps(block_name(block)))
-        for block in names
+        "    case %d: return %s;\n" % (index, cpp_string_literal(name))
+        for index, name in enumerate(names)
     )
     return (
         "// NAME-based block binding (Spec 3 criterion 23, ADC-457): the Program's block names in\n"
@@ -520,15 +556,19 @@ def _emit_dt_bound(program: Any, model: Any = None) -> tuple:
     """Lower the optional dt bound (spec s18 / ADC-417) to ``(has, body, value)``.
 
     ``has`` is the bool literal ``pops_program_has_dt_bound`` returns. ``body`` is the
-    allocation-free scalar evaluation. ``value`` names the computed bound, or ``None``
+    prepared scalar/spatial evaluation. ``value`` names the computed bound, or ``None``
     when the function only returns the +inf sentinel. On ``amr_system`` the entry
     evaluates that scalar on every live level and keeps the minimum. ADC-426: a
     multi-block dt bound may read several blocks' states, so each op resolves its
     own block index. No commit lives in a dt bound (empty committed_ids).
     """
-    if program._dt_bound is None:
+    from .program_emit_principal import principal_dt_bounds
+    principal = principal_dt_bounds(program, model)
+    if program._dt_bound is None and not principal:
         return "false", "    return std::numeric_limits<pops::Real>::infinity();", None
-    sub, result = program._dt_bound
+    from pops.time._program.dt_bound import readonly_dt_bound_nodes
+    sub = readonly_dt_bound_nodes(program)
+    result = None if program._dt_bound is None else program._dt_bound[1]
     block_idx = program._block_indices()
     bases = {}
     for v in sub:
@@ -539,7 +579,9 @@ def _emit_dt_bound(program: Any, model: Any = None) -> tuple:
     for v in sub:
         _emit_op(program, v, bases.get(v.block), frozenset(), var, model, lines, None, block_idx)
     value_name = "pops_program_dt_bound_value"
-    lines.append("const pops::Real %s = %s;" % (value_name, var[result.id]))
+    lines.append("pops::Real %s = %s;" % (value_name,
+                 "std::numeric_limits<pops::Real>::infinity()" if result is None else var[result.id]))
+    lines.extend(principal)
     body = "\n".join("    " + ln for ln in lines)
     return "true", body, value_name
 
@@ -561,6 +603,8 @@ def _check_lowerable(
     (e.g. a passive field whose charge couples the others); a commit of a block that was never
     declared by ``T.state`` is rejected (an unknown-block commit cannot route to an index)."""
     _check_model_owner_dispatch(program, model)
+    from .program_emit_moving import check_moving_program
+    check_moving_program(program, model, target)
     blocks = program._block_indices()
     for state_ref in list(program._commits) + list(getattr(program, "_post_sync_commits", {})):
         block = state_ref.block_ref
@@ -601,6 +645,10 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
         else model
     )
     _validate_matrix_free_contract(v, node_model)
+    if v.op == "spatial_interaction":
+        from pops.time._program.spatial_interaction import interaction_contract
+        interaction_contract(v)
+        return
     if v.op in _MODEL_OPS:
         if model is None:
             raise NotImplementedError(
@@ -619,11 +667,20 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
             % (v.op, v.name, sorted(_ALLOWED_OPS), sorted(_MODEL_OPS))
         )
     if v.op in ("coupled_rate", "solve_coupled_implicit"):
+        if v.attrs.get("problem_kind") == "local_residual_product":
+            from .program_emit_local_product import product_components
+            product_components(v)
+            arguments = set(v.attrs.get("product_argument_positions", ()))
+            for index, node in enumerate(v.attrs.get("residual_block", ())):
+                if index not in arguments:
+                    _check_op_lowerable(program, node, model, field_plans)
+            return
         # A coupled_rate (collisions / ionization, Spec 3 criterion 27) lowers to ONE multi-state
         # for_each_cell kernel (see _emit_coupled_rate_kernel). The lowering reaches the operator
         # body (its per-block component formulas) through the BOUND registry, and binds each input
         # state's cons names from that input's StateSpace -- so the operator must be bound and the
-        # formulas must be cons-only (the MVP). Validate both here so a non-lowerable coupled_rate
+        # explicit formulas may read declared pointwise providers from the exact operator owner.
+        # Implicit auxiliary and primitive recipes remain deferred. Validate here so a non-lowerable coupled_rate
         # fails loud naming ADC-457, never emits an undefined reference.
         _coupled_rate_components(program, v, model)
         return

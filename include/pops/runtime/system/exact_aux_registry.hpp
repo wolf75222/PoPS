@@ -398,6 +398,17 @@ class ExactAuxiliaryRegistry final {
         result.push_back(providers_[provider].identity());
     return result;
   }
+  /// Publication invalidates only an existing accepted image. A never-published dependent is
+  /// already due on its first exact consumer read, and has no stale image to persist. Keep the
+  /// complete dependency query above separate: selection still traverses dormant providers.
+  [[nodiscard]] std::vector<std::string> accepted_dependent_provider_identities(
+      const std::vector<std::string>& provider_ids) const {
+    auto result = dependent_provider_identities(provider_ids);
+    std::erase_if(result, [&](const std::string& identity) {
+      return !last_accepted_point(identity).has_value();
+    });
+    return result;
+  }
   [[nodiscard]] AuxiliaryStorageAddress<Dim> address_of(const AuxiliaryComponentKey& key) const {
     require_sealed_();
     const std::string encoded = key.exact_key();
@@ -595,6 +606,43 @@ class ExactAuxiliaryRegistry final {
             break;
           }
 
+    PublicationTransaction transaction(*this, std::move(point), accepted_generation_ + 1,
+                                       std::move(due));
+    candidate_open_ = true;
+    return transaction;
+  }
+
+  static constexpr std::uint32_t invalidation_drain_contract_version = 1;
+
+  /// Invalidation-drain selection@1: evaluate the explicitly invalidated roots and
+  /// reuse their clean accepted prerequisites. A cleanup event is not a consuming
+  /// physical evaluation and cannot make an unrelated accepted provider due through
+  /// freshness policy alone. Normal consumer publication retains its policy rules.
+  [[nodiscard]] PublicationTransaction begin_invalidated_publication(
+      AuxiliaryEvaluationPoint point, const std::vector<std::string>& provider_ids) {
+    require_sealed_();
+    point.validate();
+    if (candidate_open_)
+      throw std::logic_error("auxiliary registry already has an unconsumed candidate generation");
+    if (provider_ids.empty())
+      throw std::invalid_argument("auxiliary invalidation drain requires an invalidated root");
+    std::vector<bool> required(providers_.size(), false);
+    std::vector<bool> due(providers_.size(), false);
+    for (const auto& identity : provider_ids) {
+      const auto index = provider_index_(identity);
+      required[index] = due[index] = true;
+    }
+    for (std::size_t reverse = topological_order_.size(); reverse-- > 0;)
+      if (required[topological_order_[reverse]])
+        for (const auto producer : dependency_providers_[topological_order_[reverse]])
+          required[producer] = true;
+    for (const auto consumer : topological_order_) {
+      if (!required[consumer]) continue;
+      for (const auto producer : dependency_providers_[consumer])
+        if (due[producer]) due[consumer] = true;
+      if (!due[consumer] && !accepted_points_[consumer])
+        throw std::logic_error("auxiliary invalidation drain has an unpublished prerequisite");
+    }
     PublicationTransaction transaction(*this, std::move(point), accepted_generation_ + 1,
                                        std::move(due));
     candidate_open_ = true;

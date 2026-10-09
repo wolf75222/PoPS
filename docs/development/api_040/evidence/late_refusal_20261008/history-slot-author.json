@@ -1,0 +1,31 @@
+{
+  "Main_changed": false,
+  "baseline_head": "29e9143c2d7234811030da3c10b897649978ec34",
+  "correction": "Previous Source preparation interpreted max readable lag as physical capacity; that claim is incorrect and preserved in earlier receipts. Revised expectation is predeclared before adaptive first run.",
+  "file": {
+    "baseline_sha256": "4c56564ec0d3ddcd7a3ce475c4bd9d509dacfe8b950e75752d5234f3ffd5d0fa",
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v4-physical-history-slots-20261008/tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py",
+    "sha256": "8fea64a1bbd3465bc1137fced5be2b89becb2815e307d377d30da9a2126a4478"
+  },
+  "invariants": [
+    "Public history depth1 unchanged",
+    "Euler/RK2/adaptive physical equations and method composition unchanged",
+    "Independent oracle, norm0.1 and dt bounds unchanged",
+    "Source core, Native, guard, timing catalog and public APIs unchanged"
+  ],
+  "limits": [
+    "No actual adaptive Native run or after-run claim",
+    "Fill-count read remains instrumented Native journal; capacity read uses public runtime.history_depth"
+  ],
+  "patch": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v4-physical-history-slots-20261008/physical-history-slots-v3-to-v4.patch",
+    "sha256": "ea3cf136db1cbf81ee95eef2f07b31cabd8c227e2300fd7084ae86677e7e127b"
+  },
+  "scope": "Only adaptive fixture declared metadata and assertion; all other function ASTs unchanged",
+  "source_probe": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v4-physical-history-slots-20261008/history-contract-source-probe.json",
+    "result": "actual public store_history(depth=1) records max_lag1 and physical_slots2; unchanged Native registration lag+1 and accepted rotation min(size,fill+1) imply2 after2 accepts",
+    "sha256": "6e17dbe9494a7580e162011d83844317584ac43ae6a26f1d5b0f6e83269a90aa"
+  },
+  "status": "SOURCE_EXPECTATION_FIX_PREPARED"
+}

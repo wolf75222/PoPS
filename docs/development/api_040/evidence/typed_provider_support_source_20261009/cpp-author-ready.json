@@ -1,0 +1,46 @@
+{
+  "scope": "External three-file generic support candidate. Wider-halo counterexample distinct from actual baseline missing halo0 transport bug. No Main/installedNative changes.",
+  "Source_base": "67623c9508e8f560fc8af18b34040fb6fb151d01",
+  "base_file_hashes": {
+    "include/pops/numerics/diffusion/prepared_diffusion.hpp": "8da244569280a4d41295f21082941fc5a03df8a5ea3395d2ef4f0bd8ef54de6f",
+    "tests/cpp/unit/runtime/test_prepared_diffusion.cpp": "fd8cc389dd3d4d13f89397b981fab530e6b3370cb3df422d14079c70436fa908",
+    "docs/development/api_040/nonnegative_diagonal_diffusion.md": "94bb586448fa4c762b0a9d453e8367e2afca5ed6822aaa4b49ec15af4238b114"
+  },
+  "candidate_file_hashes": {
+    "include/pops/numerics/diffusion/prepared_diffusion.hpp": "5f0adf266d50f6b38397179d78a88a1b56f177324ed1031d58b4b9cbfb9a1c39",
+    "tests/cpp/unit/runtime/test_prepared_diffusion.cpp": "308626cb81f56b09e657557345f74f30e816e6ec2b0904c69e26a322ee5ec99f",
+    "docs/development/api_040/nonnegative_diagonal_diffusion.md": "18f3c5063e91b02420d9317348aba975866d4f6d13e4f21e8ce54d3970e1af7a"
+  },
+  "patch": "/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/bounded-constitutive-support.patch",
+  "patch_sha256": "41c9be2eb758dc395f2cb25206d572494835efb30079aff3e36e413a5503761c",
+  "readonly_Main_applycheck": 0,
+  "header_signature": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+  "installed_header_count": 384,
+  "counterexample": "/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/wide-support-baseline.json",
+  "host_suite": "/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/wide-support-candidate.json",
+  "actual_501_cell_capture": "/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/actual-first501-cell-capture.json",
+  "Python_shape_candidate_review": {
+    "patch": "/Users/romaindespoulain/dev/tmp/PoPS-diffusion-field-source-review-20261008/typed-read-support.patch",
+    "sha256": "beaefd3092ccc4219e5bf3c7c752d4f40976dd2f8578bf2ab37007890776abf8",
+    "actual_independent_probe_exit": 0,
+    "log": "/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/independent-typed-shape-source.log",
+    "log_sha256": "50edc2e2a94262afb58c4bc3b0ba3caea06a1d8362f9194ff8e6262811b285f3",
+    "findings": "Uses selected stencil radius and exact qualified ResolvedAccess; backing lowering receives authenticated plan; owns component-selective and dependency closure. No physical names or recipe changes."
+  },
+  "provider_view_bounds_finding": "Raw ProviderStorageView hot POD has no bounds check. Resolved shape admission and explicit read-support proof must precede traversal. This patch bounds math support; it does not waive required-cell validity or add guessed provider shape.",
+  "final_receipts": {
+    "wide-support-baseline.json": "20cb9300b15fef292cfff8597bdc6e4de3c05f7d3c23c05c8da65c51a957a23f",
+    "wide-support-candidate.json": "35eb0bb347565f17c8acebac9be02515f52202ee4324e3f0a5decdb46fa3f596",
+    "actual-first501-cell-capture.json": "5cc38e4ead377e655cf7fa09319dafa91efdc87322509132b7b3407c1c2a3849"
+  },
+  "final_Host_tests": {
+    "tests": "21",
+    "failures": "0",
+    "disabled": "0",
+    "errors": "0",
+    "time": "0.454",
+    "timestamp": "2026-10-08T23:49:51.526",
+    "name": "AllTests"
+  },
+  "guard_scope": "Minimal diagonal1/tensor2 boxes are mathematically identical to historical minimal grown boxes; only surplus State allocation layers excluded. Physical clipping and inner tensor gradient box expressions unchanged. Actual malformed required ghost data still rejected by the existing suite."
+}

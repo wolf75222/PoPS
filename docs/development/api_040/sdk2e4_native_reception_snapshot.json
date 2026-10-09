@@ -1,0 +1,2822 @@
+{
+  "backend": {
+    "compiler": "Apple LLVM 21.0.0",
+    "host": "Apple arm64 CPU",
+    "kokkos": "5.2.0 CPU OpenMP",
+    "mpi": "MPICH 4.1.2",
+    "precision": "binary64",
+    "threads": 1
+  },
+  "builds": [
+    {
+      "data": {
+        "actual_build_returncode": 0,
+        "build_log_sha256": "d0c7ae7a683dfaf241f89af2f72027b40a41061dbaae3ce5fb7f873d5395a5db",
+        "closed_at": "2026-10-01T09:52:08.527490+00:00",
+        "compile_commands_sha256": "46e279c7866efe5b54c6ca245845d230bc1ab741e23a2e47aadf403e1bde0878",
+        "dimension": 1,
+        "initial_argument_rejection_returncode": 2,
+        "installed_identity": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-core-dim1-0298/installed-identity/identity.json",
+          "sha256": "da098b0d642ae870b5887a584771689c7eb95924b63e11c1b4c0b671e529c315"
+        },
+        "native_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim1/_pops.cpython-312-darwin.so",
+        "native_scientific_test_execution": false,
+        "native_sha256": "8aa0568564fe82c334e86f8c365d71375a11b2723ff72f215e4f166ad1f858b7",
+        "ninja_commands_sha256": "111d55895e9e1c5ddd2b24ae4535626cdd3067c75a0e3b7968d3ca4abb3cbc0e",
+        "packaging_transform": "CMake install_name_tool -delete_rpath; optional strip -x; exact installed wheel member is the binary authority",
+        "retained_wheel_build_returncode": 0,
+        "retained_wheel_log_sha256": "a1fa0ec8ebf122ece60d39507344ba554c570694bbda0748679e0adf4122b67c",
+        "schema": "root.api040.native-core-build@1",
+        "source_bytes_unchanged_during_build": true,
+        "source_commit": "0298d696ab5400c36d8f937f4ae3be87c2554e2d",
+        "source_files_count": 1175,
+        "uninstalled_build_native_sha256": "fc9e56392b8b0b9896d8edc02d6215412f99951f8a55e5f160762af1d0111a7e",
+        "verified_installed_source_files": 1120,
+        "wheel": {
+          "native_member": "pops/_native/dim1/_pops.cpython-312-darwin.so",
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-core-dim1-0298/retained-wheel/pops-1.1.0-cp312-cp312-macosx_26_0_arm64.whl",
+          "sha256": "5c72d837385cf8c71b311315a712a32dc81265f884cf9d3aa20f45aa1d7d7d93"
+        },
+        "wheel_and_installed_native_bytes_equal": true
+      },
+      "reference": {
+        "bytes": 1980,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-core-dim1-0298/build-reception.json",
+        "sha256": "2911406945840d565c57c65b444a25fe8922fefcc23d4fcb7f32b0572659e631"
+      }
+    },
+    {
+      "data": {
+        "actual_build_returncode": 0,
+        "build_log_sha256": "1c50112a749616ef338d6643913908eb8909340f8c28e1296ec941da5960454f",
+        "closed_at": "2026-10-01T10:10:12.794181+00:00",
+        "compile_commands_sha256": "5f8407714e5ec86e1197eadd53e70e72ba5f3ea4fc3b1cd2f50bea7f30375765",
+        "dimension": 2,
+        "installed_identity": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-core-dim2-e01c/installed-identity/identity.json",
+          "sha256": "59cbe73668fa021f46479cfd8dcf1a379ac453b9c0827413b374b524782cd81d"
+        },
+        "native_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+        "native_scientific_test_execution": false,
+        "native_sha256": "b8a5166c3ebe0a64e370be233bb2e987cbd7324f2b64dfac782718ead03f234b",
+        "ninja_commands_sha256": "f7308b4f558efbc0a6933eff006bb6f0d8c1e12c31d58e7b76aa95e5f4e036bc",
+        "packaging_transform": "CMake install_name_tool -delete_rpath; optional strip -x; exact installed wheel member is binary authority",
+        "schema": "root.api040.native-core-build@1",
+        "source_bytes_unchanged_during_build": true,
+        "source_commit": "e01c12a7988b1fb0f5e55658d76ce9e0d2cb8c6a",
+        "source_files_count": 1175,
+        "uninstalled_build_native_sha256": "0c077785d3ce58a66fea427d3c39251538133f83f284bcb290b67913e7a4697d",
+        "verified_installed_source_files": 1120,
+        "wheel": {
+          "native_member": "pops/_native/dim2/_pops.cpython-312-darwin.so",
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-core-dim2-e01c/retained-wheel/pops-1.1.0-cp312-cp312-macosx_26_0_arm64.whl",
+          "sha256": "82567c85852de1aa027df3f373d4fe0634e11727b2f33d9d0c2a651804ac062e"
+        },
+        "wheel_and_installed_native_bytes_equal": true
+      },
+      "reference": {
+        "bytes": 1791,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-core-dim2-e01c/build-reception.json",
+        "sha256": "18014fb674124f25ed73527581edd623068dee74618e16b0de758d54056755f8"
+      }
+    },
+    {
+      "data": {
+        "actual_build_returncode": 0,
+        "build_log_sha256": "31e54a3318d804cd369e30d8c387a531320e2a229459e69c1c1975d358cbf720",
+        "closed_at": "2026-10-01T10:19:32.942002+00:00",
+        "compile_commands_sha256": "d38f4df2c24f6e66f671e2afb084312625c0afdec0fa920fa65cb2772284cb73",
+        "dimension": 3,
+        "installed_identity": {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-core-dim3-e01c/installed-identity/identity.json",
+          "sha256": "da9d5f791c03aca620a60be6ca6666d6928865a966f8c0d743902fae2d3c9df0"
+        },
+        "native_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim3/_pops.cpython-312-darwin.so",
+        "native_scientific_test_execution": false,
+        "native_sha256": "69aadf18ebafd6a1632e7760ba3a90cd7a6129815a1357bc730d9718f6b159aa",
+        "ninja_commands_sha256": "3eff1c12c7fdac7b227240e55a923c6304f84bebe17b530b262d3d20c388c7f7",
+        "packaging_transform": "CMake install_name_tool -delete_rpath; optional strip -x; installed wheel member is binary authority",
+        "schema": "root.api040.native-core-build@1",
+        "source_bytes_unchanged_during_build": true,
+        "source_commit": "e01c12a7988b1fb0f5e55658d76ce9e0d2cb8c6a",
+        "source_files_count": 1175,
+        "uninstalled_build_native_sha256": "609d5bf18ec292c9dd550a6457700eaf0f7d5f89083465f8e57ce154b6a3516a",
+        "verified_installed_source_files": 1120,
+        "wheel": {
+          "native_member": "pops/_native/dim3/_pops.cpython-312-darwin.so",
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-core-dim3-e01c/retained-wheel/pops-1.1.0-cp312-cp312-macosx_26_0_arm64.whl",
+          "sha256": "4c15a52c402470757f1b9783dcf97df6e181f5c86bd137c8b5e837bdffe7a72a"
+        },
+        "wheel_and_installed_native_bytes_equal": true
+      },
+      "reference": {
+        "bytes": 1785,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-core-dim3-e01c/build-reception.json",
+        "sha256": "3a1c03349a5f4bc31c989f0b5f2ac3b3e3c594f59a9113c97aa79859a4cfe674"
+      }
+    }
+  ],
+  "closed_campaigns": [
+    {
+      "cases": [
+        {
+          "classname": "tests.review.test_sol61_evolved_original_field_stage",
+          "name": "test_original_stage_resolves_and_emits_actual_duration_and_same_Q[1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_original_field_stage",
+          "name": "test_original_stage_resolves_and_emits_actual_duration_and_same_Q[factor1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_original_field_stage",
+          "name": "test_multicomponent_permutations_keep_physical_unknowns_and_Q_order[False-2-order0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_original_field_stage",
+          "name": "test_multicomponent_permutations_keep_physical_unknowns_and_Q_order[False-3-order1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_original_field_stage",
+          "name": "test_multicomponent_permutations_keep_physical_unknowns_and_Q_order[True-2-order0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_original_field_stage",
+          "name": "test_multicomponent_permutations_keep_physical_unknowns_and_Q_order[True-3-order1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_original_field_stage",
+          "name": "test_tau_cannot_be_borrowed_by_homonymous_program_or_relabelled_point",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_original_field_stage",
+          "name": "test_projection_drift_is_rejected_without_commit_or_history_mutation",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_original_field_stage",
+          "name": "test_wrong_endpoint_fails_atomically",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_original_field_stage",
+          "name": "test_original_residual_is_Q_minus_tau_R_not_a_linearized_heat_capacity",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_original_field_stage",
+          "name": "test_composite_amr_source_route_uses_same_original_stage[False]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_original_field_stage",
+          "name": "test_composite_amr_source_route_uses_same_original_stage[True]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_original_field_stage",
+          "name": "test_missing_auxiliary_equation_and_nonlocal_Q_are_refused",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_original_field_stage",
+          "name": "test_auxiliary_original_equation_is_solved_but_not_committed_as_Q",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_original_field_stage",
+          "name": "test_descriptor_cannot_publish_a_Q_different_from_original_equations",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_original_field_stage",
+          "name": "test_stage_descriptors_and_tau_are_immutable",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_independent",
+          "name": "test_original_Q_auxiliary_and_signed_cross_diffusion_exact[order0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_independent",
+          "name": "test_original_Q_auxiliary_and_signed_cross_diffusion_exact[order1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_independent",
+          "name": "test_original_Q_auxiliary_and_signed_cross_diffusion_exact[order2]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_independent",
+          "name": "test_projection_countermodels_fail_without_graph_publication[expressions]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_independent",
+          "name": "test_projection_countermodels_fail_without_graph_publication[previous_slot]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_independent",
+          "name": "test_projection_countermodels_fail_without_graph_publication[ncomp]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_independent",
+          "name": "test_projection_countermodels_fail_without_graph_publication[target_point]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_independent",
+          "name": "test_projection_countermodels_fail_without_graph_publication[target_state]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_independent",
+          "name": "test_projection_countermodels_fail_without_graph_publication[captures_order]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_independent",
+          "name": "test_resolved_public_consumer_uses_issued_frame_authority_and_same_Q",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_independent",
+          "name": "test_encoded_tau_reseal_does_not_change_registered_original_equations",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_independent",
+          "name": "test_real_public_bind_refuses_foreign_tau_and_relabelled_previous[foreign_tau-another or relabelled Program]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_independent",
+          "name": "test_real_public_bind_refuses_foreign_tau_and_relabelled_previous[previous_point-accepted previous frame endpoint]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_independent",
+          "name": "test_resealed_Q_AST_is_refused_by_public_resolve_against_registered_source",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_independent",
+          "name": "test_real_detachment_preserves_native_projection_bytes_and_IR",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_independent",
+          "name": "test_real_public_compile_reaches_first_compiler_without_executing_it",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_independent",
+          "name": "test_piecewise_constant_conserved_restriction_is_not_H_of_mean_T",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_independent",
+          "name": "test_actual_AMR_finish_restricts_Q_before_publishing_and_history_swap",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_real_source_routes_full_residual_lu_and_authenticates_budget[False-False-1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_real_source_routes_full_residual_lu_and_authenticates_budget[False-False-3]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_real_source_routes_full_residual_lu_and_authenticates_budget[False-True-3]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_real_source_routes_full_residual_lu_and_authenticates_budget[True-False-3]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_uniform_refuses_only_this_unported_realization",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_resource_budget_requires_exact_positive_uint64[None]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_resource_budget_requires_exact_positive_uint64[0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_resource_budget_requires_exact_positive_uint64[-1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_resource_budget_requires_exact_positive_uint64[True]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_resource_budget_requires_exact_positive_uint64[1.0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_resource_budget_requires_exact_positive_uint64[1000]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_resource_budget_requires_exact_positive_uint64[18446744073709551616]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_dense_budget_cannot_silently_change_legacy_realization[None]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_dense_budget_cannot_silently_change_legacy_realization[SpatialBasisJacobi@1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_prepared_mutation_and_resource_scope_refused",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_resource_choice_preserves_numerical_controls_and_deep_copy",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_unsigned_budget_encoding_is_canonical_and_positive[0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_unsigned_budget_encoding_is_canonical_and_positive[0000000000000000]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_unsigned_budget_encoding_is_canonical_and_positive[FFFFFFFFFFFFFFFF]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_unsigned_budget_encoding_is_canonical_and_positive[000000000000000g]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_unsigned_budget_encoding_is_canonical_and_positive[True]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_equal_string_subclass_is_not_a_typed_realization",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_resealed_budget_drift_cannot_reuse_solver_authority",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_source_uses_complete_jvp_rebuild_and_real_active_owned_quotient",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_residual_basis_lu",
+          "name": "test_actual_host_lu_pivots_signed_matrix_and_refuses_singular_or_overflow",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_lu_independent",
+          "name": "test_resource_contract_rejects_nonexact_uint64[None]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_lu_independent",
+          "name": "test_resource_contract_rejects_nonexact_uint64[True]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_lu_independent",
+          "name": "test_resource_contract_rejects_nonexact_uint64[False]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_lu_independent",
+          "name": "test_resource_contract_rejects_nonexact_uint64[0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_lu_independent",
+          "name": "test_resource_contract_rejects_nonexact_uint64[-1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_lu_independent",
+          "name": "test_resource_contract_rejects_nonexact_uint64[1.0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_lu_independent",
+          "name": "test_resource_contract_rejects_nonexact_uint64[1024]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_lu_independent",
+          "name": "test_resource_contract_rejects_nonexact_uint64[18446744073709551616]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_lu_independent",
+          "name": "test_resources_are_part_of_realization_identity_and_seven_controls_are_unchanged",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_lu_independent",
+          "name": "test_public_source_admission_preserves_original_equation_and_emits_uint64[2-order0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_lu_independent",
+          "name": "test_public_source_admission_preserves_original_equation_and_emits_uint64[3-order1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_lu_independent",
+          "name": "test_uniform_selected_provider_refuses_explicitly_before_emission",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_lu_independent",
+          "name": "test_actual_dense_header_permutations_overflow_and_nonfinite[False]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_lu_independent",
+          "name": "test_actual_dense_header_permutations_overflow_and_nonfinite[True]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_lu_independent",
+          "name": "test_active_quotient_and_budget_precede_new_allocations",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_lu_independent",
+          "name": "test_full_original_JVP_and_terminal_residual_are_preserved",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_lu_independent",
+          "name": "test_legacy_jacobi_preparation_body_is_exactly_the_parent",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_full_lu_independent",
+          "name": "test_actual_active_scan_with_two_host_rank_adapters",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_root_candidate_diffusion_mms",
+          "name": "test_candidate_mms_preserves_full_unknown_dependent_law[1-order0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_root_candidate_diffusion_mms",
+          "name": "test_candidate_mms_preserves_full_unknown_dependent_law[3-order1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_mms",
+          "name": "test_independent_discrete_load_closes_same_accumulation[0.01-1-False-8]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_mms",
+          "name": "test_independent_discrete_load_closes_same_accumulation[0.01-1-False-16]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_mms",
+          "name": "test_independent_discrete_load_closes_same_accumulation[0.01-2-True-8]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_mms",
+          "name": "test_independent_discrete_load_closes_same_accumulation[0.01-2-True-16]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_mms",
+          "name": "test_independent_discrete_load_closes_same_accumulation[0.02-1-False-8]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_mms",
+          "name": "test_independent_discrete_load_closes_same_accumulation[0.02-1-False-16]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_mms",
+          "name": "test_independent_discrete_load_closes_same_accumulation[0.02-2-True-8]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_mms",
+          "name": "test_independent_discrete_load_closes_same_accumulation[0.02-2-True-16]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_mms",
+          "name": "test_fraction_periodic_face_balance_and_signed_cross_flux",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_mms",
+          "name": "test_captured_load_is_not_a_reaction_times_temperature",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_mms",
+          "name": "test_scalar_additive_original_case_uses_actual_RHS_and_duration",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_mms",
+          "name": "test_additive_source_refuses_unknown_dependency_before_solver",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_mms",
+          "name": "test_two_separate_Q_carriers_three_unknowns_resolve_emit_same_original_stage[False]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_mms",
+          "name": "test_two_separate_Q_carriers_three_unknowns_resolve_emit_same_original_stage[True]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_mms",
+          "name": "test_partition_requires_both_actual_commits_and_unmodified_component_selection",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_mms",
+          "name": "test_pure_additive_rhs_and_reversed_carrier_order_are_source_admissible",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_mms",
+          "name": "test_additive_capture_is_required_and_mutated_unknown_source_is_refused",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_evolved_stage_mms",
+          "name": "test_current_source_read_cannot_impersonate_future_but_real_candidate_is_allowed",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_original_Q_auxiliary_and_signed_cross_diffusion_exact[order0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_original_Q_auxiliary_and_signed_cross_diffusion_exact[order1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_original_Q_auxiliary_and_signed_cross_diffusion_exact[order2]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_projection_countermodels_fail_without_graph_publication[expressions]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_projection_countermodels_fail_without_graph_publication[previous_slot]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_projection_countermodels_fail_without_graph_publication[ncomp]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_projection_countermodels_fail_without_graph_publication[target_point]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_projection_countermodels_fail_without_graph_publication[target_state]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_projection_countermodels_fail_without_graph_publication[captures_order]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_resolved_public_consumer_uses_issued_frame_authority_and_same_Q",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_encoded_tau_reseal_does_not_change_registered_original_equations",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_real_public_bind_refuses_foreign_tau_and_relabelled_previous[foreign_tau-another or relabelled Program]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_real_public_bind_refuses_foreign_tau_and_relabelled_previous[previous_point-additive source State read changed its accepted endpoint]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_resealed_Q_AST_is_refused_by_public_resolve_against_registered_source",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_real_detachment_preserves_native_projection_bytes_and_IR",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_real_public_compile_reaches_first_compiler_without_executing_it",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_piecewise_constant_conserved_restriction_is_not_H_of_mean_T",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_actual_AMR_finish_restricts_Q_before_publishing_and_history_swap",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_autonomous_rate_zero_candidate_no_division_fiction[False-None]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_autonomous_rate_zero_candidate_no_division_fiction[False-zero]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_autonomous_rate_zero_candidate_no_division_fiction[True-None]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_autonomous_rate_zero_candidate_no_division_fiction[True-zero]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_unknown_dependent_additive_source_explicitly_refused[None]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_unknown_dependent_additive_source_explicitly_refused[0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_public_bind_authenticates_additive_source_capture[foreign_source]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_public_bind_authenticates_additive_source_capture[source_point]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_public_bind_authenticates_additive_source_capture[wrapped_source_point]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_resealed_additive_body_does_not_authenticate_itself[body]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_resealed_additive_body_does_not_authenticate_itself[descriptor]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_two_actual_State_carriers_select_exact_Q_components",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_partition_mutations_cannot_publish_partial_or_relabelled_Q[omit]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_partition_mutations_cannot_publish_partial_or_relabelled_Q[duplicate]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_partition_mutations_cannot_publish_partial_or_relabelled_Q[indices]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_partition_mutations_cannot_publish_partial_or_relabelled_Q[bool]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_partition_mutations_cannot_publish_partial_or_relabelled_Q[expression]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_additive_capture_point_reseal_after_binding_is_refused",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_genuine_future_computed_source_keeps_accepted_input_read",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_independent",
+          "name": "test_mutated_rate_unknown_body_is_refused_on_identity_emission",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_mms_math",
+          "name": "test_independent_forcing_closes_exact_additive_original_stage[1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_mms_math",
+          "name": "test_independent_forcing_closes_exact_additive_original_stage[3]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_mms_math",
+          "name": "test_autonomous_source_is_finite_at_zero_target_and_previous[1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_mms_math",
+          "name": "test_autonomous_source_is_finite_at_zero_target_and_previous[3]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_mms_math",
+          "name": "test_permutation_is_simultaneous_rows_columns_and_Q_components",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_mms_math",
+          "name": "test_frozen_native_fixture_forcing_against_independent_face_budgets[1-False-0.01-8]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_mms_math",
+          "name": "test_frozen_native_fixture_forcing_against_independent_face_budgets[1-False-0.01-16]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_mms_math",
+          "name": "test_frozen_native_fixture_forcing_against_independent_face_budgets[1-False-0.02-8]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_mms_math",
+          "name": "test_frozen_native_fixture_forcing_against_independent_face_budgets[1-False-0.02-16]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_mms_math",
+          "name": "test_frozen_native_fixture_forcing_against_independent_face_budgets[2-True-0.01-8]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_mms_math",
+          "name": "test_frozen_native_fixture_forcing_against_independent_face_budgets[2-True-0.01-16]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_mms_math",
+          "name": "test_frozen_native_fixture_forcing_against_independent_face_budgets[2-True-0.02-8]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_stage_additive_mms_math",
+          "name": "test_frozen_native_fixture_forcing_against_independent_face_budgets[2-True-0.02-16]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_literal_inventory_authenticates_real_component_evidence",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_actual_original_field_lowering_inventory_covers_five_records",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_capacity_and_retained_source_drift_refuse_before_capture",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_explicit_configuration_enables_absent_source_capacity",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_absent_or_dynamic_source_requires_explicit_capacity[None]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_absent_or_dynamic_source_requires_explicit_capacity[ctx.record_scalar(dynamic_name, 1);]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_public_configuration_votes_invalid_before_native_access[True]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_public_configuration_votes_invalid_before_native_access[False]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_public_configuration_votes_invalid_before_native_access[0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_public_configuration_votes_invalid_before_native_access[-1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_public_configuration_votes_invalid_before_native_access[1.0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_public_configuration_votes_invalid_before_native_access[512]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_public_configuration_votes_invalid_before_native_access[9223372036854775808]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_public_configuration_overflow_remote_mismatch_attempt_and_replace",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_multilayout_configuration_is_one_joined_authority[uniform]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_multilayout_configuration_is_one_joined_authority[amr]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_capture_and_preflight_rank_local_bits_legacy_and_perrank_bounds",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_capture_capacity_votes_before_transport[oversized]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_capture_capacity_votes_before_transport[unconfigured]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_capture_capacity_votes_before_transport[peer]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_array_preflight_copies_only_headers_then_admitted_owner_body",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_arrays_refuse_before_native_or_publication[partial]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_arrays_refuse_before_native_or_publication[dtype]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_arrays_refuse_before_native_or_publication[offset]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_arrays_refuse_before_native_or_publication[empty]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_arrays_refuse_before_native_or_publication[rankdup]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_arrays_refuse_before_native_or_publication[rankcount]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_program_diagnostic_checkpoint",
+          "name": "test_restore_order_and_archive_extension_do_not_replace_amr_flux_contract",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_invalid_rank_votes_before_any_capacity_publication[True]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_invalid_rank_votes_before_any_capacity_publication[0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_invalid_rank_votes_before_any_capacity_publication[-1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_invalid_rank_votes_before_any_capacity_publication[9223372036854775808]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_invalid_rank_votes_before_any_capacity_publication[18446744073709551615]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_collective_preparation_refuses_atomically[proposal]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_collective_preparation_refuses_atomically[pending]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_collective_preparation_refuses_atomically[consumer]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_collective_preparation_refuses_atomically[authority]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_actual_consensus_positive_and_exact_capacity_arithmetic",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_multilayout_uses_real_joined_budget_and_atomic_child_preparation[False]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_multilayout_uses_real_joined_budget_and_atomic_child_preparation[True]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_archive_offsets_and_rank_capacity_refuse_before_native_validate[rank]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_archive_offsets_and_rank_capacity_refuse_before_native_validate[cardinality]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_archive_offsets_and_rank_capacity_refuse_before_native_validate[offset]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_archive_offsets_and_rank_capacity_refuse_before_native_validate[partial]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_archive_offsets_and_rank_capacity_refuse_before_native_validate[capacity]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_rank_local_bits_selected_and_legacy_absence_clear",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_e86_historical_oversize_is_refused_only_after_byte_transport",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_e86_historical_preflight_copies_full_rank_slices_before_capacity_guard",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_521_current_oversize_votes_before_byte_transport[oversized_ranks0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_521_current_oversize_votes_before_byte_transport[oversized_ranks1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_521_current_positive_capture_preserves_exact_rank_images",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_521_current_capacity_refuses_before_header_or_body_copy[perrank]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_521_current_capacity_refuses_before_header_or_body_copy[aggregate]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_521_current_only_fixed_headers_copied_before_bounded_selection",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_521_helper_exact_authored_blob",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_real_codec_and_frozen_restore_bodies_host[False-double]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_real_codec_and_frozen_restore_bodies_host[False-float]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_real_codec_and_frozen_restore_bodies_host[True-double]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_real_codec_and_frozen_restore_bodies_host[True-float]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_retained_source_authority_is_local_and_verified_outside_bind",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.review.test_sol61_diagnostics_independent",
+          "name": "test_source_restart_order_keeps_one_diagnostic_publication_and_snapshot_join",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.codegen.test_compiled_artifact_protocol",
+          "name": "test_exact_artifact_names_the_complete_inspection_surface",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.codegen.test_compiled_artifact_protocol",
+          "name": "test_compiled_phase_has_one_exact_result_type",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.codegen.test_compiled_artifact_protocol",
+          "name": "test_compiled_artifact_stays_at_its_codegen_owner",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.codegen.test_compiled_artifact_protocol",
+          "name": "test_amr_compiled_record_rejects_missing_real_authorities",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_default_phi_requires_exact_native_ranked_storage[logical_shape0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_default_phi_requires_exact_native_ranked_storage[logical_shape1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_default_phi_requires_exact_native_ranked_storage[logical_shape2]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_field_free_legacy_logical_storage_stays_exact[slots0-logical_shape0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_field_free_legacy_logical_storage_stays_exact[slots0-logical_shape1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_field_free_legacy_logical_storage_stays_exact[slots0-logical_shape2]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_field_free_legacy_logical_storage_stays_exact[slots1-logical_shape0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_field_free_legacy_logical_storage_stays_exact[slots1-logical_shape1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_field_free_legacy_logical_storage_stays_exact[slots1-logical_shape2]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_rectangular_default_retains_dtype_contiguity_and_bitwise_guards[logical_shape-phi]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_rectangular_default_retains_dtype_contiguity_and_bitwise_guards[logical_shape-field_potential_0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_rectangular_default_retains_dtype_contiguity_and_bitwise_guards[binary32-phi]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_rectangular_default_retains_dtype_contiguity_and_bitwise_guards[binary32-field_potential_0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_rectangular_default_retains_dtype_contiguity_and_bitwise_guards[fortran-phi]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_rectangular_default_retains_dtype_contiguity_and_bitwise_guards[fortran-field_potential_0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_rectangular_default_retains_dtype_contiguity_and_bitwise_guards[signed_zero_mismatch-phi]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_rectangular_default_retains_dtype_contiguity_and_bitwise_guards[signed_zero_mismatch-field_potential_0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_rectangular_field_free_retains_exact_zero_representation[binary32]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_rectangular_field_free_retains_exact_zero_representation[fortran]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_rectangular_field_free_retains_exact_zero_representation[negative_zero]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_rectangular_field_free_retains_exact_zero_representation[nonzero]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_rectangular_field_free_retains_exact_zero_representation[nan]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_uniform_checkpoint_layout",
+          "name": "test_rectangular_default_alias_cannot_borrow_named_field_bytes",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_restart_field_recompute_dt_accepts_only_honest_initial_zero",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_contract_names_guarantee_relations_qualified_histories_and_transfer_plans",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_preflight_returns_exact_native_payload_and_counters",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_checkpoint_temporal_partition_kind_is_strict_and_data_only",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_preflight_refuses_any_static_provenance_mismatch[ratio]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_preflight_refuses_any_static_provenance_mismatch[route]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_preflight_refuses_any_static_provenance_mismatch[guarantee]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_dynamic_contract_is_checked_after_the_opaque_state_is_restored[history_qualifications]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_dynamic_contract_is_checked_after_the_opaque_state_is_restored[clocks]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_dynamic_contract_is_checked_after_the_opaque_state_is_restored[ledger]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_dynamic_contract_is_checked_after_the_opaque_state_is_restored[interface_ledger]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_dynamic_contract_is_checked_after_the_opaque_state_is_restored[temporal_partition]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_dynamic_contract_is_checked_after_the_opaque_state_is_restored[synchronization]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_legacy_wire_compares_original_rows_without_discarding_new_wire_provenance",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_restored_interface_audit_must_match_the_live_hierarchy[8-3-2]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_restored_interface_audit_must_match_the_live_hierarchy[7-1-2]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_restored_interface_audit_must_match_the_live_hierarchy[7-3-1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_regridded_contract_authenticates_transformed_topology_and_level_axes",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_native_route_requires_no_program_blob_and_compiled_route_requires_one",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_checkpoint_level_envelope_accepts_derefined_active_depth",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_amr_archive_authority_requires_a_canonical_signed_int64_scalar[n_ranks]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_amr_archive_authority_requires_a_canonical_signed_int64_scalar[n_levels]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_amr_archive_authority_requires_a_canonical_signed_int64_scalar[configured_n_levels]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_checkpoint_level_envelope_refuses_a_different_configured_depth",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_incomplete_v5_level_envelope_is_an_offline_migration_input",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_uniform_and_amr_payload_versions_are_exact_current_integer_scalars[Uniform-pops_checkpoint_version-8]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_uniform_and_amr_payload_versions_are_exact_current_integer_scalars[AMR-pops_amr_checkpoint_version-11]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_historical_version_refusal_happens_before_restart_transaction[Uniform-pops_checkpoint_version-8]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_historical_version_refusal_happens_before_restart_transaction[AMR-pops_amr_checkpoint_version-11]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_field_provider_depth_must_equal_the_complete_active_hierarchy[checkpoint capture]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_field_provider_depth_must_equal_the_complete_active_hierarchy[restart]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_topology_owner_alignment_is_level_local_and_strict",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_ranked_patch_boxes_round_trip_dim2_without_coordinate_flattening",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_ranked_patch_box_decoder_preserves_inclusive_singletons_and_adjacency",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_ranked_patch_box_encoder_refuses_unordered_carriers[rows0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_ranked_patch_box_encoder_refuses_unordered_carriers[rows1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_ranked_patch_box_contract_refuses_subclassed_live_values",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_ranked_patch_box_archive_requires_exact_dtype_and_refuses_overlap",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_ranked_patch_box_round_trip_retains_dim1_and_dim3_shape[1-rows0-shapes0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_ranked_patch_box_round_trip_retains_dim1_and_dim3_shape[3-rows1-shapes1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_ranked_patch_box_decoder_accepts_the_typed_empty_matrix",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_ranked_patch_box_encoder_refuses_malformed_rank_level_and_order[rows0-rank 2]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_ranked_patch_box_encoder_refuses_malformed_rank_level_and_order[rows1-outside]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_ranked_patch_box_encoder_refuses_malformed_rank_level_and_order[rows2-order drifted]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_ranked_patch_box_decoder_refuses_malformed_archive[archived0-spatial axis]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_ranked_patch_box_decoder_refuses_malformed_archive[archived1-outside]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_ranked_patch_box_decoder_refuses_malformed_archive[archived2-invalid]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_ranked_patch_box_decoder_refuses_malformed_archive[archived3-duplicate]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_ranked_patch_box_decoder_refuses_malformed_archive[archived4-order drifted]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_recorded_rank_topology_keeps_one_canonical_program_image_and_owner_map",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_recorded_rank_topology_refuses_missing_canonical_owner_map",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_recorded_rank_topology_refuses_out_of_range_recorded_ownership",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_recorded_rank_topology_refuses_non_uint8_program_image",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_recorded_rank_topology_authenticates_replicated_empty_maps_and_sentinel_rebuild_rows",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_restart_base_distribution_keeps_exact_partition_map_at_unchanged_rank_count",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_restart_base_distribution_allows_only_complete_rank_changed_target_partition",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_restart_base_distribution_preserves_replicated_empty_map_across_rank_change",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_recorded_rank_topology_refuses_mode_map_schema_ambiguity[distribution_mode_1-value0-unknown]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_recorded_rank_topology_refuses_mode_map_schema_ambiguity[dmap_1-value1-partitioned.*owner map]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_recorded_rank_topology_refuses_mode_map_schema_ambiguity[dmap_1-value2-int64]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_recorded_rank_topology_refuses_mode_map_schema_ambiguity[dmap_2-value3-surplus]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_amr_checkpoint_contract",
+          "name": "test_rank_change_restart_rolls_back_after_hierarchy_rebuild_failure",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_checkpoint_history_flux_snapshots",
+          "name": "test_ranked_history_flux_snapshot_archive_roundtrips_and_preserves_empty_image",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_checkpoint_history_flux_snapshots",
+          "name": "test_history_flux_snapshot_capture_fences_presence_and_local_capacity_before_gather",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_checkpoint_history_flux_snapshots",
+          "name": "test_history_flux_snapshot_capture_fences_canonicalization_and_agrees_digest",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_checkpoint_history_flux_snapshots",
+          "name": "test_history_flux_snapshot_preflight_refuses_malformed_rank_archive[state0-offsets0-64-uint8]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_checkpoint_history_flux_snapshots",
+          "name": "test_history_flux_snapshot_preflight_refuses_malformed_rank_archive[state1-offsets1-64-int64]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_checkpoint_history_flux_snapshots",
+          "name": "test_history_flux_snapshot_preflight_refuses_malformed_rank_archive[state2-offsets2-64-canonical]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_checkpoint_history_flux_snapshots",
+          "name": "test_history_flux_snapshot_preflight_refuses_malformed_rank_archive[state3-offsets3-64-canonical]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_checkpoint_history_flux_snapshots",
+          "name": "test_history_flux_snapshot_preflight_refuses_malformed_rank_archive[state4-offsets4-1-capacity]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_checkpoint_history_flux_snapshots",
+          "name": "test_history_flux_snapshot_preflight_preserves_legacy_absence_but_refuses_partial_pair",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_checkpoint_history_flux_snapshots",
+          "name": "test_history_flux_snapshot_capture_converges_final_serialization_failure[state]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_checkpoint_history_flux_snapshots",
+          "name": "test_history_flux_snapshot_capture_converges_final_serialization_failure[offsets]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_checkpoint_history_flux_snapshots",
+          "name": "test_history_flux_snapshot_capture_converges_final_serialization_failure[assignment]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_checkpoint_history_flux_snapshots",
+          "name": "test_legacy_archive_absence_clears_live_sources_before_program_import",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_initial_wire_authenticates_bound_origin_and_restart_then_real_run[uniform]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_initial_wire_authenticates_bound_origin_and_restart_then_real_run[amr]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_legacy_run_envelope_and_identity_remain_exactly_unchanged",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_public_initial_reseal_reads_executor_authority_without_starting_run",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_public_initial_reseal_refuses_missing_or_noninitial_executor_authority[absent_authority]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_public_initial_reseal_refuses_missing_or_noninitial_executor_authority[attempted_transaction]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_public_initial_reseal_refuses_missing_or_noninitial_executor_authority[orphan_run]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_missing_run_alone_never_authenticates_initial_origin[native_clock]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_missing_run_alone_never_authenticates_initial_origin[negative_zero]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_missing_run_alone_never_authenticates_initial_origin[native_step]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_missing_run_alone_never_authenticates_initial_origin[temporal_clock]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_missing_run_alone_never_authenticates_initial_origin[transactions]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_rehashed_forged_initial_origin_is_refused_by_both_validators[boolean_origin_version]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_rehashed_forged_initial_origin_is_refused_by_both_validators[run_on_initial]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_rehashed_forged_initial_origin_is_refused_by_both_validators[noninitial_clock]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_rehashed_forged_initial_origin_is_refused_by_both_validators[negative_zero]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_composite_initial_origin_authenticates_every_child_and_clears_lineage",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_supported_metadata_does_not_change_legacy_emission_version",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_bound_initial_composite_refuses_admitted_run_origin_child",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_initial_seal_refuses_forged_temporal_image_before_payload_publication",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.runtime.test_bound_initial_checkpoint_envelope",
+          "name": "test_initial_seal_requires_authenticated_bind_and_declared_controller",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_public_field_solve_builds_exact_native_equation_and_independent_storage[False]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_public_field_solve_builds_exact_native_equation_and_independent_storage[True]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_public_field_binding_refuses_same_shaped_foreign_state_input",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_observation_rejects_unconsumed_and_foreign_unknowns",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_equal_timestamp_fresh_stage_has_distinct_equation_context",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_public_case_resolves_and_emits_the_actual_field_native_path[False]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_public_case_resolves_and_emits_the_actual_field_native_path[True]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_arbitrary_field_count_and_cross_diffusion_bind_exact_relations[False-3]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_arbitrary_field_count_and_cross_diffusion_bind_exact_relations[False-4]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_arbitrary_field_count_and_cross_diffusion_bind_exact_relations[False-7]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_arbitrary_field_count_and_cross_diffusion_bind_exact_relations[True-3]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_arbitrary_field_count_and_cross_diffusion_bind_exact_relations[True-4]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_arbitrary_field_count_and_cross_diffusion_bind_exact_relations[True-7]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_arbitrary_nonshared_and_independent_kernel_modes_are_proved_exactly",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_nonorthogonal_mode_mean_constraints_lower_to_gram_coordinates",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_three_field_cross_matrix_and_nonshared_modes_emit_actual_native_storage",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_general_reaction_is_physical_and_krylov_provider_checks_compatibility[reaction0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_general_reaction_is_physical_and_krylov_provider_checks_compatibility[reaction1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_three_field_amr_uses_field_owned_composite_provider_and_synchronized_phases[True]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_three_field_amr_uses_field_owned_composite_provider_and_synchronized_phases[False]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.fields.test_program_field_problem",
+          "name": "test_field_solver_override_changes_numerical_scope_without_redeclaring_equations",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_solvers_is_top_level_and_exposed",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_native_ids_and_schemes",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_max_iter_is_mandatory_and_carried",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_missing_max_iter_is_refused[CG]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_missing_max_iter_is_refused[BiCGStab]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_missing_max_iter_is_refused[GMRES]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_missing_max_iter_is_refused[Richardson]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[0-CG]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[0-BiCGStab]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[0-GMRES]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[0-Richardson]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[-1-CG]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[-1-BiCGStab]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[-1-GMRES]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[-1-Richardson]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[-100-CG]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[-100-BiCGStab]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[-100-GMRES]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[-100-Richardson]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[True-CG]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[True-BiCGStab]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[True-GMRES]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[True-Richardson]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[2.0-CG]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[2.0-BiCGStab]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[2.0-GMRES]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[2.0-Richardson]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[200-CG]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[200-BiCGStab]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[200-GMRES]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_nonpositive_or_nonint_max_iter_is_refused[200-Richardson]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_integer_controls_match_the_native_signed_int_capacity",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_descriptors_compute_nothing",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_lower_carries_native_id_and_scheme",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_absolute_tolerance_is_exact_and_nonnegative[CG]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_absolute_tolerance_is_exact_and_nonnegative[BiCGStab]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_absolute_tolerance_is_exact_and_nonnegative[GMRES]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_absolute_tolerance_is_exact_and_nonnegative[Richardson]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_declare_amr_route_capabilities",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_nonlinear_surface_contains_only_executable_descriptors",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_local_newton_prepared_controls_fail_during_authoring[kwargs0-max_evaluations]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_local_newton_prepared_controls_fail_during_authoring[kwargs1-max_iterations]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_local_newton_prepared_controls_fail_during_authoring[kwargs2-max_evaluations]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_local_newton_prepared_controls_fail_during_authoring[kwargs3-max_backtracks]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_local_newton_prepared_controls_fail_during_authoring[kwargs4-safeguard]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_local_newton_prepared_controls_fail_during_authoring[kwargs5-damping]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_local_newton_prepared_controls_fail_during_authoring[kwargs6-damping]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_local_newton_prepared_controls_fail_during_authoring[kwargs7-safeguard='exact']",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_local_newton_prepared_controls_fail_during_authoring[kwargs8-minimum_step]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_local_newton_prepared_controls_fail_during_authoring[kwargs9-armijo]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_local_newton_allows_one_exact_fixed_step",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_local_newton_damping_requires_an_explicit_damped_safeguard",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_geometric_mg_defaults",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_geometric_mg_rich_surface",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_geometric_mg_capabilities",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_geometric_mg_inspect_and_lower",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_geometric_mg_rejects_string_for_typed_subdescriptor",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_fft_is_a_real_solver_with_route_constraints",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_fft_rejects_amr_layout_with_precise_message",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_fft_accepts_every_native_cartesian_rank[1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_fft_accepts_every_native_cartesian_rank[2]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_fft_accepts_every_native_cartesian_rank[3]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_fft_available_never_raises_on_odd_context",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_geometric_mg_accepts_amr_layout",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_preconditioners_catalog",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_prepared_preconditioner_descriptor_requires_authenticated_provider",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_capability_vocabulary_rejects_unknown_tag",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_lib_solvers_shim_is_removed",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_install_path_has_no_bind_time_solver_token_adapter",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_preconditioner_provider_consumes_option_protocol_without_core_type_dispatch",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_direct_small_grid_default_is_disabled",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_direct_small_grid_explicit_threshold_reaches_mg_options",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_direct_small_grid_refuses_non_positive[0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_direct_small_grid_refuses_non_positive[-3]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_composite_fac_defaults_and_domain",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_composite_fac_integer_knobs_match_native_int_capacity[max_iters]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_composite_fac_integer_knobs_match_native_int_capacity[fine_sweeps]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_composite_fac_integer_knobs_match_native_int_capacity[coarse_cycles]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_solver_tolerances_retain_exact_domains_until_native_lowering",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_solver_tolerances_reject_bool_nonpositive_and_nonfinite[True-Relative]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_solver_tolerances_reject_bool_nonpositive_and_nonfinite[True-Absolute]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_solver_tolerances_reject_bool_nonpositive_and_nonfinite[True-AbsoluteFloor]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_solver_tolerances_reject_bool_nonpositive_and_nonfinite[0-Relative]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_solver_tolerances_reject_bool_nonpositive_and_nonfinite[0-Absolute]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_solver_tolerances_reject_bool_nonpositive_and_nonfinite[0-AbsoluteFloor]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_solver_tolerances_reject_bool_nonpositive_and_nonfinite[-1-Relative]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_solver_tolerances_reject_bool_nonpositive_and_nonfinite[-1-Absolute]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_solver_tolerances_reject_bool_nonpositive_and_nonfinite[-1-AbsoluteFloor]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_solver_tolerances_reject_bool_nonpositive_and_nonfinite[nan-Relative]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_solver_tolerances_reject_bool_nonpositive_and_nonfinite[nan-Absolute]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_solver_tolerances_reject_bool_nonpositive_and_nonfinite[nan-AbsoluteFloor]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_solver_tolerances_reject_bool_nonpositive_and_nonfinite[inf-Relative]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_solver_tolerances_reject_bool_nonpositive_and_nonfinite[inf-Absolute]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_solver_tolerances_reject_bool_nonpositive_and_nonfinite[inf-AbsoluteFloor]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_geometric_mg_fac_slot",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_richardson_omega_and_krylov_rel_tol",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_krylov_descriptor_controls_preserve_exact_number_domains",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.unit.descriptors.test_solvers_descriptors",
+          "name": "test_weno5_epsilon_descriptor",
+          "status": "passed"
+        }
+      ],
+      "files": [
+        {
+          "bytes": 2862,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-e01c-api-contract-and-unit-dim2/identity.json",
+          "sha256": "1d6f7b42e4e3506ed575dd2f0c5a78cd7c42b1b7b2b2fc3b7bde33148079613d"
+        },
+        {
+          "bytes": 130883,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-e01c-api-contract-and-unit-dim2/source-files.json",
+          "sha256": "e46fb6c671707a3cfa1f18ee66ecf8b8a7eab1d4fe01259e5e615fe67dede2f8"
+        },
+        {
+          "bytes": 75413,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-e01c-api-contract-and-unit-dim2/pytest.xml",
+          "sha256": "05ce8ecd03b38d96ffc84497145bd6f92dbf4337d1caf51a52414fca0865f7a8"
+        },
+        {
+          "bytes": 64041,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-e01c-api-contract-and-unit-dim2/pytest.log",
+          "sha256": "1db3c9ada90199959c5589e35b9eb31377bd958104f89833103357b285653253"
+        }
+      ],
+      "name": "installed-e01c-api-contract-and-unit-dim2",
+      "result": {
+        "data": {
+          "command": [
+            "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+            "-c",
+            "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='b8a5166c3ebe0a64e370be233bb2e987cbd7324f2b64dfac782718ead03f234b'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+            "-v",
+            "--tb=short",
+            "-o",
+            "pythonpath=",
+            "--junitxml=/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-e01c-api-contract-and-unit-dim2/pytest.xml",
+            "--basetemp=/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-e01c-api-contract-and-unit-dim2/pytest-tmp",
+            "tests/review/test_sol61_evolved_original_field_stage.py",
+            "tests/review/test_sol61_evolved_stage_independent.py",
+            "tests/review/test_sol61_full_residual_basis_lu.py",
+            "tests/review/test_sol61_full_lu_independent.py",
+            "tests/review/test_root_candidate_diffusion_mms.py",
+            "tests/review/test_sol61_evolved_stage_mms.py",
+            "tests/review/test_sol61_stage_additive_independent.py",
+            "tests/review/test_sol61_stage_additive_mms_math.py",
+            "tests/review/test_sol61_program_diagnostic_checkpoint.py",
+            "tests/review/test_sol61_diagnostics_independent.py",
+            "tests/python/unit/codegen/test_compiled_artifact_protocol.py",
+            "tests/python/unit/runtime/test_uniform_checkpoint_layout.py",
+            "tests/python/unit/runtime/test_amr_checkpoint_contract.py",
+            "tests/python/unit/runtime/test_checkpoint_history_flux_snapshots.py",
+            "tests/python/unit/runtime/test_bound_initial_checkpoint_envelope.py",
+            "tests/python/unit/fields/test_program_field_problem.py",
+            "tests/python/unit/descriptors/test_solvers_descriptors.py"
+          ],
+          "counts": {
+            "errors": 0,
+            "failures": 0,
+            "skipped": 0,
+            "tests": 451
+          },
+          "duration_seconds": 269.9579506670125,
+          "identity_sha256": "1d6f7b42e4e3506ed575dd2f0c5a78cd7c42b1b7b2b2fc3b7bde33148079613d",
+          "log_sha256": "1db3c9ada90199959c5589e35b9eb31377bd958104f89833103357b285653253",
+          "pytest_base_temp": "pytest-tmp",
+          "returncode": 0,
+          "schema_version": 1,
+          "status": "passed"
+        },
+        "reference": {
+          "bytes": 2603,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-e01c-api-contract-and-unit-dim2/result.json",
+          "sha256": "2f8a5d03aa3e67708e9b39db5bacc01af98ed57b1cd2a06cf70eff26cd5bd064"
+        }
+      },
+      "scope": "Installed-package API, source/math, extracted-host and affected unit checks; not 451 scientific native witnesses."
+    },
+    {
+      "cases": [
+        {
+          "classname": "tests.python.integration.runtime.test_public_evolved_original_stage",
+          "name": "test_public_evolved_original_stage_saved_and_exact_replay[1-False-0.01-8]",
+          "status": "failed"
+        },
+        {
+          "classname": "tests.python.integration.runtime.test_public_evolved_original_stage",
+          "name": "test_public_evolved_original_stage_saved_and_exact_replay[1-False-0.01-16]",
+          "status": "failed"
+        },
+        {
+          "classname": "tests.python.integration.runtime.test_public_evolved_original_stage",
+          "name": "test_public_evolved_original_stage_saved_and_exact_replay[1-False-0.02-8]",
+          "status": "failed"
+        },
+        {
+          "classname": "tests.python.integration.runtime.test_public_evolved_original_stage",
+          "name": "test_public_evolved_original_stage_saved_and_exact_replay[1-False-0.02-16]",
+          "status": "failed"
+        },
+        {
+          "classname": "tests.python.integration.runtime.test_public_evolved_original_stage",
+          "name": "test_public_evolved_original_stage_saved_and_exact_replay[2-True-0.01-8]",
+          "status": "failed"
+        },
+        {
+          "classname": "tests.python.integration.runtime.test_public_evolved_original_stage",
+          "name": "test_public_evolved_original_stage_saved_and_exact_replay[2-True-0.01-16]",
+          "status": "failed"
+        },
+        {
+          "classname": "tests.python.integration.runtime.test_public_evolved_original_stage",
+          "name": "test_public_evolved_original_stage_saved_and_exact_replay[2-True-0.02-8]",
+          "status": "failed"
+        },
+        {
+          "classname": "tests.python.integration.runtime.test_public_evolved_original_stage",
+          "name": "test_public_evolved_original_stage_saved_and_exact_replay[2-True-0.02-16]",
+          "status": "failed"
+        }
+      ],
+      "files": [
+        {
+          "bytes": 2862,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-serial-dim2/identity.json",
+          "sha256": "1d6f7b42e4e3506ed575dd2f0c5a78cd7c42b1b7b2b2fc3b7bde33148079613d"
+        },
+        {
+          "bytes": 130883,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-serial-dim2/source-files.json",
+          "sha256": "e46fb6c671707a3cfa1f18ee66ecf8b8a7eab1d4fe01259e5e615fe67dede2f8"
+        },
+        {
+          "bytes": 85485,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-serial-dim2/pytest.xml",
+          "sha256": "f821c8e109631f2507c6243df0ce4b5c246456cd825e92433a81e4ad260fbe54"
+        },
+        {
+          "bytes": 49516,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-serial-dim2/pytest.log",
+          "sha256": "b0434e4b62f14944e9ad52f5b1067efcf7cd3b5844f3d8e951dfe62ef3af69d7"
+        }
+      ],
+      "name": "installed-sdk2e4-evolved-stage-serial-dim2",
+      "result": {
+        "data": {
+          "command": [
+            "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+            "-c",
+            "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='b8a5166c3ebe0a64e370be233bb2e987cbd7324f2b64dfac782718ead03f234b'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+            "-v",
+            "--tb=short",
+            "-o",
+            "pythonpath=",
+            "--junitxml=/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-serial-dim2/pytest.xml",
+            "--basetemp=/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-serial-dim2/pytest-tmp",
+            "tests/python/integration/runtime/test_public_evolved_original_stage.py::test_public_evolved_original_stage_saved_and_exact_replay"
+          ],
+          "counts": {
+            "errors": 0,
+            "failures": 8,
+            "skipped": 0,
+            "tests": 8
+          },
+          "duration_seconds": 264.65927924984135,
+          "identity_sha256": "1d6f7b42e4e3506ed575dd2f0c5a78cd7c42b1b7b2b2fc3b7bde33148079613d",
+          "log_sha256": "b0434e4b62f14944e9ad52f5b1067efcf7cd3b5844f3d8e951dfe62ef3af69d7",
+          "pytest_base_temp": "pytest-tmp",
+          "returncode": 1,
+          "schema_version": 1,
+          "status": "failed"
+        },
+        "reference": {
+          "bytes": 1680,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-evolved-stage-serial-dim2/result.json",
+          "sha256": "6b0115edcc25b6ea3c95c32b705b17a8f3e1edbd3869b2b317238c1088ccbb6b"
+        }
+      },
+      "scope": "Eight actual native Stage compilation attempts; all refused at generated C++ compile, before scientific runtime acceptance."
+    },
+    {
+      "cases": [
+        {
+          "classname": "tests.python.integration.runtime.test_public_captured_diffusion",
+          "name": "test_public_captured_diffusion_nonconstant_saved_and_exact_replay[1-order0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.integration.runtime.test_public_captured_diffusion",
+          "name": "test_public_captured_diffusion_nonconstant_saved_and_exact_replay[3-order1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.integration.runtime.test_public_captured_diffusion",
+          "name": "test_public_candidate_diffusion_nonconstant_saved_and_exact_replay[1-order0]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.integration.runtime.test_public_captured_diffusion",
+          "name": "test_public_candidate_diffusion_nonconstant_saved_and_exact_replay[3-order1]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.integration.runtime.test_program_diagnostic_checkpoint_runtime",
+          "name": "test_native_diagnostic_bits_checkpoint_restart_replay[False]",
+          "status": "failed"
+        },
+        {
+          "classname": "tests.python.integration.runtime.test_program_diagnostic_checkpoint_runtime",
+          "name": "test_native_diagnostic_bits_checkpoint_restart_replay[True]",
+          "status": "passed"
+        },
+        {
+          "classname": "tests.python.integration.runtime.test_program_diagnostic_checkpoint_runtime",
+          "name": "test_native_diagnostic_capacity_faults_and_joined_restore[False]",
+          "status": "failed"
+        },
+        {
+          "classname": "tests.python.integration.runtime.test_program_diagnostic_checkpoint_runtime",
+          "name": "test_native_diagnostic_capacity_faults_and_joined_restore[True]",
+          "status": "passed"
+        }
+      ],
+      "files": [
+        {
+          "bytes": 2862,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-diffusion-and-diagnostics-serial-dim2-corrected-selection/identity.json",
+          "sha256": "1d6f7b42e4e3506ed575dd2f0c5a78cd7c42b1b7b2b2fc3b7bde33148079613d"
+        },
+        {
+          "bytes": 130883,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-diffusion-and-diagnostics-serial-dim2-corrected-selection/source-files.json",
+          "sha256": "e46fb6c671707a3cfa1f18ee66ecf8b8a7eab1d4fe01259e5e615fe67dede2f8"
+        },
+        {
+          "bytes": 8409,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-diffusion-and-diagnostics-serial-dim2-corrected-selection/pytest.xml",
+          "sha256": "647d69e918d2d3b1cbeebb88c9361420a4abf804d6216da4df938293d2efdb76"
+        },
+        {
+          "bytes": 7298,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-diffusion-and-diagnostics-serial-dim2-corrected-selection/pytest.log",
+          "sha256": "c9ac4f7e15fdd484463a0b22e5b886b589550a109ca792281d3199f84fd86f4f"
+        }
+      ],
+      "name": "installed-sdk2e4-diffusion-and-diagnostics-serial-dim2-corrected-selection",
+      "result": {
+        "data": {
+          "command": [
+            "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+            "-c",
+            "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='b8a5166c3ebe0a64e370be233bb2e987cbd7324f2b64dfac782718ead03f234b'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+            "-v",
+            "--tb=short",
+            "-o",
+            "pythonpath=",
+            "--junitxml=/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-diffusion-and-diagnostics-serial-dim2-corrected-selection/pytest.xml",
+            "--basetemp=/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-diffusion-and-diagnostics-serial-dim2-corrected-selection/pytest-tmp",
+            "tests/python/integration/runtime/test_public_captured_diffusion.py::test_public_captured_diffusion_nonconstant_saved_and_exact_replay",
+            "tests/python/integration/runtime/test_public_captured_diffusion.py::test_public_candidate_diffusion_nonconstant_saved_and_exact_replay",
+            "tests/python/integration/runtime/test_program_diagnostic_checkpoint_runtime.py::test_native_diagnostic_bits_checkpoint_restart_replay",
+            "tests/python/integration/runtime/test_program_diagnostic_checkpoint_runtime.py::test_native_diagnostic_capacity_faults_and_joined_restore"
+          ],
+          "counts": {
+            "errors": 0,
+            "failures": 2,
+            "skipped": 0,
+            "tests": 8
+          },
+          "duration_seconds": 457.2465162500739,
+          "identity_sha256": "1d6f7b42e4e3506ed575dd2f0c5a78cd7c42b1b7b2b2fc3b7bde33148079613d",
+          "log_sha256": "c9ac4f7e15fdd484463a0b22e5b886b589550a109ca792281d3199f84fd86f4f",
+          "pytest_base_temp": "pytest-tmp",
+          "returncode": 1,
+          "schema_version": 1,
+          "status": "failed"
+        },
+        "reference": {
+          "bytes": 2175,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk2e4-diffusion-and-diagnostics-serial-dim2-corrected-selection/result.json",
+          "sha256": "e6138ae02838f84938fd43ab89c8d9a436aeafd6b4a4871e5edc921f920274c3"
+        }
+      },
+      "retained_archive_limits": [
+        "Observation NPZ writes overwrite three native checkpoint paths after actual in-process restart/replay; no offline checkpoint-codec/history proof follows from these retained files.",
+        "Compiler-owned CPP is retained, but the compiled component carried IR is not dumped."
+      ],
+      "scope": "Four actual native Uniform captured/candidate diffusion cases and two native AMR diagnostics cases pass. Two Uniform diagnostics cases fail in the test helper before checkpoint reception."
+    }
+  ],
+  "cpp_reception": {
+    "data": {
+      "elapsed_seconds": 128.3602836248465,
+      "failures": [],
+      "identity_sha256": "0ebdad890e117eab4b208d4be901384b8da45f1b95f827008a38cd6a2d3eba25",
+      "junit_sha256": "c60344766e7e0c4a08f08d48a847cf31c814202276cd3dcb045136afc1f7fb4f",
+      "log_sha256": "55db588d3fae814a83c09437a53c837a973f6452a609b9414e8c87fdb8b46839",
+      "native_unchanged": true,
+      "returncode": 0,
+      "schema_version": 1,
+      "skipped": [
+        {
+          "classname": "ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching",
+          "name": "ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching",
+          "status": "notrun",
+          "time": "0.459151"
+        },
+        {
+          "classname": "ProgramRuntime.ExplicitVectorPairingRefusesDistributedGlobalOverflow",
+          "name": "ProgramRuntime.ExplicitVectorPairingRefusesDistributedGlobalOverflow",
+          "status": "notrun",
+          "time": "0.460859"
+        },
+        {
+          "classname": "ProgramContextContract.AuxiliaryPublicationRefusesRankDivergentTransactionBeforeNoWorkBranch",
+          "name": "ProgramContextContract.AuxiliaryPublicationRefusesRankDivergentTransactionBeforeNoWorkBranch",
+          "status": "notrun",
+          "time": "0.0548673"
+        },
+        {
+          "classname": "ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection",
+          "name": "ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection",
+          "status": "notrun",
+          "time": "0.0537278"
+        },
+        {
+          "classname": "ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation",
+          "name": "ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation",
+          "status": "notrun",
+          "time": "0.0544762"
+        }
+      ],
+      "source_commit_after": "e01c12a7988b1fb0f5e55658d76ce9e0d2cb8c6a",
+      "source_unchanged": true,
+      "testcase_count": 240
+    },
+    "full_lu_native_properties": [
+      {
+        "file": {
+          "bytes": 1579,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/cpp-dim1-full-original-20261001/reception/raw-gtest/test_composite_general_field/CompositeGeneralField.OriginalAmrNonlinearResidualTwoResolutionsAndPermutation.xml",
+          "sha256": "8bf6b9d35425ec5e370977e38975b5ebe5a2b7ca4fd4994c61a97fde44e8bfcd"
+        },
+        "properties": [
+          {
+            "name": "full_lu_N16_p012",
+            "value": "active_dofs=72:dense_matrix_bytes_per_rank=41472:columns=288:factorizations=4:actual_original_F_evaluations=598"
+          },
+          {
+            "name": "full_lu_N16_p201",
+            "value": "active_dofs=72:dense_matrix_bytes_per_rank=41472:columns=288:factorizations=4:actual_original_F_evaluations=598"
+          },
+          {
+            "name": "full_lu_N32_p012",
+            "value": "active_dofs=144:dense_matrix_bytes_per_rank=165888:columns=576:factorizations=4:actual_original_F_evaluations=1174"
+          },
+          {
+            "name": "full_lu_N32_p201",
+            "value": "active_dofs=144:dense_matrix_bytes_per_rank=165888:columns=576:factorizations=4:actual_original_F_evaluations=1174"
+          }
+        ],
+        "test": "OriginalAmrNonlinearResidualTwoResolutionsAndPermutation"
+      },
+      {
+        "file": {
+          "bytes": 9870,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/cpp-dim1-full-original-20261001/reception/raw-gtest/test_composite_general_field_np2.rank0.xml",
+          "sha256": "ff3c503a1c21d9876ba6902d0733371613c657dee54875911c0459cd12a79a3b"
+        },
+        "properties": [
+          {
+            "name": "full_lu_N16_p012",
+            "value": "active_dofs=72:dense_matrix_bytes_per_rank=41472:columns=288:factorizations=4:actual_original_F_evaluations=598"
+          },
+          {
+            "name": "full_lu_N16_p201",
+            "value": "active_dofs=72:dense_matrix_bytes_per_rank=41472:columns=288:factorizations=4:actual_original_F_evaluations=598"
+          },
+          {
+            "name": "full_lu_N32_p012",
+            "value": "active_dofs=144:dense_matrix_bytes_per_rank=165888:columns=576:factorizations=4:actual_original_F_evaluations=1174"
+          },
+          {
+            "name": "full_lu_N32_p201",
+            "value": "active_dofs=144:dense_matrix_bytes_per_rank=165888:columns=576:factorizations=4:actual_original_F_evaluations=1174"
+          }
+        ],
+        "test": "OriginalAmrNonlinearResidualTwoResolutionsAndPermutation"
+      },
+      {
+        "file": {
+          "bytes": 9870,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/cpp-dim1-full-original-20261001/reception/raw-gtest/test_composite_general_field_np2.rank1.xml",
+          "sha256": "7b4dabfdcd5f3ba0a7357ed864cf5f9bb3e4b2886f910d2380117d1f3fba4c36"
+        },
+        "properties": [
+          {
+            "name": "full_lu_N16_p012",
+            "value": "active_dofs=72:dense_matrix_bytes_per_rank=41472:columns=288:factorizations=4:actual_original_F_evaluations=598"
+          },
+          {
+            "name": "full_lu_N16_p201",
+            "value": "active_dofs=72:dense_matrix_bytes_per_rank=41472:columns=288:factorizations=4:actual_original_F_evaluations=598"
+          },
+          {
+            "name": "full_lu_N32_p012",
+            "value": "active_dofs=144:dense_matrix_bytes_per_rank=165888:columns=576:factorizations=4:actual_original_F_evaluations=1174"
+          },
+          {
+            "name": "full_lu_N32_p201",
+            "value": "active_dofs=144:dense_matrix_bytes_per_rank=165888:columns=576:factorizations=4:actual_original_F_evaluations=1174"
+          }
+        ],
+        "test": "OriginalAmrNonlinearResidualTwoResolutionsAndPermutation"
+      }
+    ],
+    "reference": {
+      "bytes": 1899,
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/cpp-dim1-full-original-20261001/reception/receipt.json",
+      "sha256": "4fc0264f4a70287eb9db4971ef1d499afb6c6b7f6691b0bae81936a4e8591b50"
+    },
+    "scope": "240 selected C++ cases: 235 pass, zero fail, five MPI-only cases skip in their Serial variant. MPI aggregate variants are separate selected cases, not rank-count multiplication.",
+    "scope_limits": [
+      "N16/N32 positive case explicitly selects FullResidualBasisLU@1; the original Identity/Jacobi red runs remain archived.",
+      "No Uniform FullResidualBasisLU port is claimed. Dense LU workspace accounting is not allocator/RSS accounting."
+    ]
+  },
+  "date": "2026-10-01",
+  "dim1_python_source_note": "Dim1 was built at 0298d696. Its C++/headers have the same SDK as e01c12a7; later changes before e01c12a7 are Python only. The installed common Python is e01c12a7, authenticated by the later Dim2/Dim3 builds. Do not relabel the Dim1 original Python receipt.",
+  "main_source_before_this_metadata": "a1eb496f",
+  "migration_complete": false,
+  "native_fixture_source": "a5b05ff37c601c34f2c84fa6a34655a50c8311ca",
+  "not_qualified": [
+    "Stage scientific conservation/restart/replay (compile failed).",
+    "Uniform diagnostic capacity/bits/restart reception (fixture failed).",
+    "MPI2 Python diffusion and diagnostics closure pending this snapshot.",
+    "GPU, ROMEO, official OpenMPI/Kokkos4.4, exact-head GitHub CI, complete original M01-M27/W01-W13 corpus."
+  ],
+  "open_native_defects": [
+    "Stage emitter calls nonexistent ctx.step_dt() instead of issued evaluation-point dt.",
+    "Partitioned Stage emits duplicate capture declarations and a profile variable outside its scope.",
+    "Uniform diagnostics fixture calls AMR-only patch_boxes(); actual System geometry must be used."
+  ],
+  "production_source": "e01c12a7988b1fb0f5e55658d76ce9e0d2cb8c6a",
+  "schema": "root.api040.sdk2e4-reception-snapshot@1",
+  "sdk_signature": "2e4d69fd3574933f4b83cf014ad2d0159902fea6197d74623bee4b4ee6cf1675"
+}

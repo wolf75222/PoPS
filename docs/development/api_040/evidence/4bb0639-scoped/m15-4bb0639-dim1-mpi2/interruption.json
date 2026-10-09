@@ -1,0 +1,13 @@
+{
+  "status": "interrupted_after_diagnosed_collective_mismatch",
+  "launcher_pid": 38158,
+  "native_rank_pids": [
+    38160,
+    38161
+  ],
+  "reason": "Rank 0 waits in WorldCommunicator.allgather_bytes while rank 1 waits in native System.step collective_step_rejection; both samples captured after more than eight minutes.",
+  "samples": {
+    "rank1.sample.txt": "359b00f430db1d5dc4040677ff377ee747ac72a8e061d317130bfbf77539e63a",
+    "rank0.sample.txt": "c9339e33dad06389e587a60d0257ca984792f7a9b7c05da25db8285466017dd0"
+  }
+}

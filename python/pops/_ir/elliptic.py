@@ -87,6 +87,32 @@ class Reaction(_EllipticTerm):
         return "Reaction(%s%r*%r)" % (lead, self.coeff, self.field)
 
 
+class SpatialInteraction(_EllipticTerm):
+    """Physical integral W(x,y) times one declared unknown over the source domain.
+
+    Measure, quadrature and algorithm belong to the field discretization.
+    This inert term never reads a previously accepted or materialized field.
+    """
+
+    def __init__(self, field: Any, kernel: Any, scale: Any = 1) -> None:
+        from pops._frozen_data import freeze_containers
+
+        data = kernel.to_data() if callable(getattr(kernel, "to_data", None)) else kernel
+        if not isinstance(data, dict) or data.get("contract") != "pops.spatial-interaction-kernel@1":
+            raise TypeError("SpatialInteraction requires an inspectable physical kernel")
+        self.field = field
+        self.kernel = freeze_containers(data)
+        self.scale = exact_numeric_scalar(scale, where="SpatialInteraction scale")
+
+    def _kind(self) -> Any:
+        return "spatial_interaction"
+
+    def __neg__(self) -> Any:
+        from collections.abc import Mapping
+
+        return SpatialInteraction(self.field, dict(self.kernel) if isinstance(self.kernel, Mapping) else self.kernel, -self.scale)
+
+
 class CoeffGradient(_BoardNode):
     """``coeff * grad(phi)`` -- consumed by ``div(...)`` to build a :class:`DivCoeffGrad`."""
 

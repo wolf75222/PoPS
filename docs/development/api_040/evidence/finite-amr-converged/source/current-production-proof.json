@@ -1,0 +1,64 @@
+{
+  "compared_source_files": 1089,
+  "head": "4b5ad60d9dc9dd0728d0f54b21ec8f2aec29528c",
+  "mismatches": [
+    {
+      "actual": "712a36865bb8b6bab3660ba482a53c9e35a618fe405d03d57d6ba9066cede385",
+      "expected": "d858a9a576629a052f0ad37d073fe6aa1c097b43e170bfacdeec99e32ee568c8",
+      "path": "include/pops/numerics/diffusion/prepared_diffusion.hpp"
+    },
+    {
+      "actual": "996794a194b5f4241d7706fb59e6fd61a39a80ece2d6f2ce2827af8634f9d6b2",
+      "expected": "fc117f504e6f495d1526828931b7e8bf6740d962db10b7e6d276114bd9bc0544",
+      "path": "python/pops/_ir/balance.py"
+    },
+    {
+      "actual": "b598862f974bcc9d560ef51730bfb4f8d67525bd0078a8e8c29c7f46f7389d63",
+      "expected": "d18ffa6fb6736129d8da6551ec7c41a6b148dea093ff59d8bf1bf61e8e5e5f64",
+      "path": "python/pops/_ir/expr.py"
+    },
+    {
+      "actual": "4c69f470f59e6fa4a6dd36ed762afdce0c1823e9bfe18420614f0c6fccd88da7",
+      "expected": "5ec1915834570fd5bafacdb4768acea686d472dc95d850b714137cb2f0b4815b",
+      "path": "python/pops/codegen/_resolved_operation_inputs.py"
+    },
+    {
+      "actual": "3c2627b5e75010ee1e10e70c396984d11908e3a91bc8d6acb57336c5e9efd983",
+      "expected": "46ccf1621756262d8c1b206c5e9e3373a46c21ed8e383b9de09cbdea2981bb39",
+      "path": "python/pops/codegen/program_emit_diffusion.py"
+    },
+    {
+      "actual": "2266bf58d67114f28db1494f158f4fe57b2bd0ad2834124e502dc53e0ff772b8",
+      "expected": "081755ae5979cdc85757dd5ea511e0a6e3c84823538bdc3db71ff1f3e3c604c7",
+      "path": "python/pops/model/balance_analysis.py"
+    },
+    {
+      "actual": "4dc130150ed4df52d73cba6bbaf7e19324f7ab312b3ac275da4cd836413af9ef",
+      "expected": "c91db9f69137942d5813ffbf3d33b29648937d14532c7111c03a2dbec4bfc5f4",
+      "path": "python/pops/numerics/__init__.py"
+    },
+    {
+      "actual": "0ec69f948e6fe34a811d4cf23f36001ed4e7eb1520d65150b27dc593bb02c30e",
+      "expected": "ade2785ff3c57b9d65df2b63faca9eafbd7d39eb8d05740f659f9d578641bb61",
+      "path": "python/pops/numerics/diffusion.py"
+    },
+    {
+      "actual": "d934bf5424c1153621ade92475528c6f6038cdf4a127f56be306db4841f28019",
+      "expected": "a0abdb71c48fb8d51fc3375a181de36fd0755abf3abb0e580885f480bfdeaca5",
+      "path": "python/pops/physics/_board_rate.py"
+    },
+    {
+      "actual": "bc4867ede31f6fbc0b2c21595d912b6f66db71eaad04f04cc3f6fb0c486edcd4",
+      "expected": "c3b69e26040cc4dc4fa58c06d802b4e6d5efa8aee9d2968e0bd391c1d9ace69a",
+      "path": "python/pops/physics/diffusion.py"
+    },
+    {
+      "actual": "dcc6614638fc2095402f772ff5d8e5505e78d40915ccae3aaedc7f77a7ce01e6",
+      "expected": "2515ee221818a1ad15a41ade8de2aa6d50532861645c092492b06bd635334545",
+      "path": "python/pops/time/_program/diffusion.py"
+    }
+  ],
+  "reference_manifest": "raw/installed-finite-amr-repaired-unit/source-files.json",
+  "scope": "Read-only comparison at bundle capture against the 1089-member installed-run source manifest; test-only later commits preserved separately.",
+  "working_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

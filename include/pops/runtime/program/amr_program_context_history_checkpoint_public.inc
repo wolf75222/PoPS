@@ -158,6 +158,79 @@ void store_history(const std::string& name, const field_type& value) const {
   store_history_(name, value);
 }
 
+// Opt-in storage scope for a physically global solved observation. The source
+// remains independent of the selected block; only valid cells enter the ring.
+void store_global_field_history(
+    const std::string& name, const field_type& value, int program_owner,
+    const std::string& descriptor, const std::string& storage_state_identity,
+    const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+  const auto guard = prepare_history_mutation_collectively_(
+      [&]() {
+        require_history_owner_(program_owner);
+        require_current_boundary_point_exact_(point, "global solved-field history storage");
+        // The literal witness comes from the authenticated emitted TimeState, independently
+        // of the mutable history tables. Never remint authority from a resealed ring owner.
+        if (storage_state_identity.empty() ||
+            facade_->prepared_amr_block_state_identity_(static_cast<std::size_t>(sys_block(program_owner))) !=
+                storage_state_identity)
+          throw std::invalid_argument("global solved-field history has foreign prepared State authority");
+        const auto key = history_key_(name, active_level_);
+        const auto& manager = runtime_state().hist_;
+        const auto found = manager.histories.find(key);
+        if (descriptor.empty() || found == manager.histories.end() || found->second.empty() ||
+            manager.owner.at(key) != sys_block(program_owner) ||
+            manager.state_identity.at(key) != descriptor ||
+            (manager.space_identity.at(key) != "scalar-output-field-v1" &&
+             manager.space_identity.at(key) != kOutputHistoryProjectionSpace &&
+             manager.space_identity.at(key) != "scalar-field") ||
+            manager.clock_identity.at(key) != point.clock || manager.depth.at(key) < 1 ||
+            static_cast<int>(found->second.size()) != manager.depth.at(key))
+          throw std::invalid_argument("global solved-field history has foreign storage authority");
+        if (manager.space_identity.at(key) == kOutputHistoryProjectionSpace)
+          runtime_state().require_frozen_output_history_projection(
+              name, sys_block(program_owner), manager.state_identity.at(key),
+              manager.space_identity.at(key), manager.clock_identity.at(key),
+              manager.interpolation_identity.at(key), manager.depth.at(key),
+              found->second.front().ncomp(), program_owner);
+        const auto& prototype = facade_->prepared_amr_block_state(sys_block(program_owner), active_level_);
+        require_same_layout_(prototype, value, "global solved-field history storage");
+        require_same_field_contract_(found->second.front(), value, "global solved-field history storage");
+        if (value.ncomp() != 1 || found->second.front().ghosts() != prototype.ghosts())
+          throw std::invalid_argument("global solved-field history has foreign representation");
+        // A launch/allocation failure is locally fenced and reported by the prepared
+        // history lane before any rank enters the exact-contract consensus.
+        try {
+          for (std::size_t local = 0; local < value.local_size(); ++local) {
+            const auto view = std::as_const(value.fab(local)).view();
+            const Real invalid = for_each_cell_reduce_max(
+                value.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+                  return Kokkos::isfinite(view(cell, 0)) ? Real(0) : Real(1);
+                });
+            if (invalid != Real(0))
+              throw std::invalid_argument("global solved-field history has non-finite valid cells");
+          }
+          device_fence();
+        } catch (...) {
+          const auto error = std::current_exception();
+          try { device_fence(); } catch (...) {}
+          std::rethrow_exception(error);
+        }
+        ExactContractBuilder contract;
+        contract.bytes(key).bytes(descriptor).bytes(storage_state_identity);
+        contract.scalar(program_owner).scalar(manager.depth.at(key));
+        contract.bytes(point.clock).scalar(point.tick).scalar(point.level);
+        contract.scalar(point.substep).scalar(point.stage);
+        contract.scalar(point.stage_fraction.numerator).scalar(point.stage_fraction.denominator);
+        contract.scalar(std::bit_cast<std::uint64_t>(point.dt));
+        contract.scalar(std::bit_cast<std::uint64_t>(point.physical_time));
+        for (int axis = 0; axis < Dim; ++axis) contract.scalar(value.ghosts()[axis]);
+        return std::move(contract).release();
+      }, [](const std::string& contract) -> const std::string& { return contract; },
+      "global solved-field history storage");
+  (void)guard;
+  store_history_(name, value);
+}
+
 void rotate_histories() const {
   rotate_histories_(std::nullopt);
 }
@@ -297,6 +370,23 @@ const field_type* pointwise_active_mask(int program_block, const field_type& fie
   if (active != nullptr)
     require_same_layout_(*active, accepted, "AMR Program pointwise active mask");
   return active;
+}
+
+/// Finest-owner coverage is independent of the embedded-boundary activity mask.
+/// A covered coarse cell must not contribute another accepted exterior face
+/// when its fine descendants already stage the same physical trace.
+/// The caller has already refreshed the hierarchy through pointwise_active_mask.
+/// Keep this second lookup local: a rank-local mask validation may have failed on
+/// another rank, so another collective refresh here would diverge from its vote.
+const field_type* pointwise_exchange_coverage_mask(int program_block,
+                                                    const field_type& field) const {
+  const int runtime_block = sys_block(program_block);
+  const field_type& accepted = facade_->prepared_amr_block_state(runtime_block, active_level_);
+  require_same_layout_(field, accepted, "AMR Program accepted exchange coverage");
+  const field_type& coverage =
+      facade_->prepared_amr_block_level_coverage_mask(runtime_block, active_level_);
+  require_same_layout_(coverage, accepted, "AMR Program accepted exchange coverage mask");
+  return &coverage;
 }
 
 /// Reduce generated per-cell status over every live owner level.  Inactive values, including

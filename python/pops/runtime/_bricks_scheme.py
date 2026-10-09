@@ -129,14 +129,20 @@ def _lower_selector(
 
 
 def _lower_reconstruction_selector(value: Any) -> Any:
-    """Lower only a catalogue-authenticated native reconstruction descriptor."""
+    """Lower a catalogue route or a source-bound generated reconstruction."""
     from pops.descriptors import reject_string_selector
     from pops.numerics.reconstruction import authenticated_reconstruction_route
+    from pops.numerics.reconstruction.user import authenticated_user_reconstruction
 
     if value is None:
         return None
     if isinstance(value, str):
         reject_string_selector(value, "limiter", _LIMITER_SUGGEST)  # always raises
+    if getattr(value, "scheme", None) == "source_stencil":
+        authored = authenticated_user_reconstruction(value)
+        # This is a package-source identity, not a catalogued algorithm token. The
+        # generated C++ package must carry the same expression and verify the digest.
+        return "source_stencil:" + authored.options["source_identity"]
     try:
         return authenticated_reconstruction_route(value)
     except TypeError as error:
@@ -319,13 +325,30 @@ class Spatial:
                 )
             limiter = enabled_limiter_shortcuts[0][1]()
         lim_tok = _lower_reconstruction_selector(limiter)
-        flux_tok = _lower_selector(
-            flux,
-            param="flux",
-            schemes=_FLUX_SCHEMES,
-            suggestion=_FLUX_SUGGEST,
-            categories=("riemann",),
-        )
+        self.source_reconstruction = (
+            limiter if getattr(limiter, "scheme", None) == "source_stencil" else None)
+        self.source_riemann = None
+        if getattr(flux, "scheme", None) == "source_face":
+            from pops.numerics.riemann.user import authenticated_user_face
+
+            self.source_riemann = authenticated_user_face(flux)
+            flux_tok = "source_face:" + self.source_riemann.options["source_identity"]
+        elif getattr(flux, "scheme", None) == "coordinated_face":
+            options = flux.options
+            if (flux.native_id != "pops::CoordinatedFaceFlux"
+                    or options.get("interface_contract") != 1
+                    or not isinstance(options.get("operator_identity"), str)
+                    or not options["operator_identity"]):
+                raise ValueError("coordinated face requires its complete resolved operator identity")
+            flux_tok = "coordinated_face:v1:" + options["operator_identity"]
+        else:
+            flux_tok = _lower_selector(
+                flux,
+                param="flux",
+                schemes=_FLUX_SCHEMES,
+                suggestion=_FLUX_SUGGEST,
+                categories=("riemann",),
+            )
         recon_tok = _lower_selector(
             recon,
             param="recon",
@@ -480,6 +503,17 @@ class Spatial:
         def _manifest(slot_route: Any) -> Any:
             if hasattr(slot_route, "manifest"):
                 return slot_route.manifest()
+            if isinstance(slot_route, str) and slot_route.startswith("source_stencil:"):
+                return {"family": "reconstruction", "id": slot_route,
+                        "source_compiled": True}
+            if isinstance(slot_route, str) and slot_route.startswith("source_face:"):
+                return {"family": "riemann", "id": slot_route,
+                        "source_compiled": True,
+                        "requirements": list(self.riemann_capability_contract.required_capabilities)}
+            if isinstance(slot_route, str) and slot_route.startswith("coordinated_face:v1:"):
+                return {"family": "coordinated_face", "id": slot_route,
+                        "interface_contract": 1, "source_compiled": True,
+                        "publication": "atomic_shared_flux_two_sides_speed"}
             return {
                 "family": "riemann",
                 "id": "riemann.user",
@@ -523,7 +557,8 @@ class Spatial:
         from pops.numerics.reconstruction import validate_ghost_depth
 
         available = None if ghost_depth is None else int(ghost_depth)
-        return validate_ghost_depth(self.limiter, available=available, block=block)
+        return validate_ghost_depth(
+            self.source_reconstruction or self.limiter, available=available, block=block)
 
 
 class Explicit:

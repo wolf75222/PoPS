@@ -1,0 +1,147 @@
+{
+  "schema": "sol61.ale-canonical.historical-offline-reception@1",
+  "review_base": "004a6757b76dceba0e60ff8bf4bf2ff9eb84798c",
+  "qualification": "externally owner-pinned historical saved states, no native execution here",
+  "campaigns": [
+    {
+      "campaign": "serial",
+      "pins_sha256": "9cf00652fe3de74c437ba19f91fb9687adacde99d4c57cdb0e1d9939a37e8b4b",
+      "status": "PASS",
+      "ranks": 1,
+      "cases": 14,
+      "source_commit": "0a8148f823fb78b378e43f8b16a6c61810d67d03",
+      "maxima": {
+        "field_max_abs": 8.881784197001252e-16,
+        "gcl_max_abs": 0.0,
+        "reynolds_max_abs": 6.504366001965772e-17,
+        "face_max_abs": 8.673617379884035e-19,
+        "source_max_abs": 3.3881317890172014e-21,
+        "law_max_abs": 0.0,
+        "inventory_max_abs": 8.881784197001252e-16
+      }
+    },
+    {
+      "campaign": "mpi2",
+      "pins_sha256": "8afc2f2333922b846b4ed4df6c435bc504c651172ace4759e61f12f9c7686ee9",
+      "status": "PASS",
+      "ranks": 2,
+      "cases": 14,
+      "source_commit": "a7834520dfabc4931b497d62662f687775cdff68",
+      "maxima": {
+        "field_max_abs": 8.881784197001252e-16,
+        "gcl_max_abs": 0.0,
+        "reynolds_max_abs": 6.504366001965772e-17,
+        "face_max_abs": 8.673617379884035e-19,
+        "source_max_abs": 3.3881317890172014e-21,
+        "law_max_abs": 0.0,
+        "inventory_max_abs": 8.881784197001252e-16
+      }
+    }
+  ],
+  "countermodels": [
+    {
+      "countermodel": "fma_one_bit_balanced_face",
+      "refusal": "accepted exchange support/amount/duration authority differs",
+      "all_285_file_pins_verified": true,
+      "NOT_OWNER_AUTHORITY": true,
+      "harness_manifest_sha256": "e643ff0de68331f69a965aa3dfd50f60368fc98f87811554f08b2e8e31c90c11",
+      "face": 10,
+      "paired_incidences": 2,
+      "old": -0.0007303308973683938,
+      "new": -0.0007303308973683937,
+      "native_bits": "abebe3a875ee47bf",
+      "negative_bits": "aaebe3a875ee47bf",
+      "global_signed_face_delta": 0.0
+    },
+    {
+      "countermodel": "nonfused_relative_amount",
+      "refusal": "accepted exchange support/amount/duration authority differs",
+      "all_285_file_pins_verified": true,
+      "NOT_OWNER_AUTHORITY": true,
+      "harness_manifest_sha256": "4314cdd7606fd5a1befb0d625f7055130e1217e44f6f004475c50b19386ec4f1",
+      "face": 10,
+      "paired_incidences": 2,
+      "old": -0.0007303308973683938,
+      "new": -0.0007303308973683937,
+      "native_bits": "abebe3a875ee47bf",
+      "negative_bits": "aaebe3a875ee47bf",
+      "global_signed_face_delta": 0.0
+    },
+    {
+      "countermodel": "wrong_original_velocity_balanced",
+      "refusal": "physical Rusanov face amount differs",
+      "all_285_file_pins_verified": true,
+      "NOT_OWNER_AUTHORITY": true,
+      "harness_manifest_sha256": "cf9ded9be329c5a82942f6abc5ff7b63e531e71146989dbe1fafecb49165a422",
+      "self_reynolds_linf": 2.9132851187864406e-17,
+      "self_gcl_linf": 0.0
+    },
+    {
+      "countermodel": "wrong_original_source_balanced",
+      "refusal": "original Reynolds/Rusanov/source equation mismatch",
+      "all_285_file_pins_verified": true,
+      "NOT_OWNER_AUTHORITY": true,
+      "harness_manifest_sha256": "f155583a3a4886dba30c01e496d0ccd1c630c5f88119b84e20c131a8ea62cf0b",
+      "self_reynolds_linf": 2.500102447115793e-17,
+      "self_gcl_linf": 0.0
+    },
+    {
+      "countermodel": "wrong_coordinate_law_balanced",
+      "refusal": "authored coordinate law differs from saved nodes",
+      "all_285_file_pins_verified": true,
+      "NOT_OWNER_AUTHORITY": true,
+      "harness_manifest_sha256": "ee527be1d166de5bab44747114c03530f113bd3dd49ab49136ea08b867f52c5a",
+      "self_reynolds_linf": 2.9132851187864406e-17,
+      "self_gcl_linf": 0.0
+    },
+    {
+      "countermodel": "legacy_false_temporal_key",
+      "refusal": "wrong exact temporal schema2 manifest",
+      "all_285_file_pins_verified": true,
+      "NOT_OWNER_AUTHORITY": true,
+      "harness_manifest_sha256": "dee0b5cdff64edbe9237e145f05920efe50137259737c752e14f194a61e27c6d"
+    },
+    {
+      "countermodel": "foreign_synchronization_cursor",
+      "refusal": "temporal cursor is not at the declared accepted boundary",
+      "all_285_file_pins_verified": true,
+      "NOT_OWNER_AUTHORITY": true,
+      "harness_manifest_sha256": "71bf3f37c53ce0c8e9fe053ecd5fad31f29b8f51aa9c520ffa65270374240663"
+    },
+    {
+      "countermodel": "restored_controller_changed",
+      "refusal": "restart restore complete accepted temporal envelope changed",
+      "all_285_file_pins_verified": true,
+      "NOT_OWNER_AUTHORITY": true,
+      "harness_manifest_sha256": "ad7d76d0c9ca47623187983b0dc63a17323e25741e67b6b5aec6b7023eb311b8"
+    },
+    {
+      "countermodel": "restored_native_history_changed",
+      "refusal": "restart restore exact native payload history_names",
+      "all_285_file_pins_verified": true,
+      "NOT_OWNER_AUTHORITY": true,
+      "harness_manifest_sha256": "a96b35e143fa990e15d0b299bf5ebd03a196ab1f49dc9e22248d5bff56dd5799"
+    }
+  ],
+  "original_285_files_reverified_unchanged": true,
+  "negative_authority": "explicit harness reseals, NOT root owner pins",
+  "native_execution_here": false,
+  "actual_mpi_topology": {
+    "replicated": false,
+    "global_box_owner": 0,
+    "rank0_local_boxes": [
+      0
+    ],
+    "rank1_local_boxes": [],
+    "nonempty_distributed_partition_qualified": false
+  },
+  "io_evidence": {
+    "readall_pid": 97820,
+    "observed_elapsed_at_least_seconds": 392,
+    "observed_cpu_seconds": 0.21,
+    "sample_kernel_stack": "_io_FileIO_readall_impl -> _Py_read -> read",
+    "pread_exact_extent_bytes": 2188,
+    "pread_seconds": 0.0001341670285910368,
+    "pread_sha256": "c686a5d741e0f7020f94c88bd5f936b3b46a966f5a4d769ab34e623e5f36d540"
+  }
+}

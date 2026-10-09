@@ -1,0 +1,71 @@
+{
+  "Native": "22da10777dbd3e17698ba80193f3de4b95d1953d1009d0a952d0bdc92aa18f52",
+  "SDK": "e0b1d301cdad59a5e8874b0fc3a56e1b272810037555291fe13399631c5b717f",
+  "Source": "67623c9508e8f560fc8af18b34040fb6fb151d01",
+  "core": "3576bd9bef51c608146692bbc7f7ba9f4167edcd93c38a7928fa2b8af0f91e38",
+  "core_files": 1213,
+  "core_scope_schema": 2,
+  "files": {
+    "actual-first501-cell-capture.json": {
+      "bytes": 3712,
+      "sha256": "5cc38e4ead377e655cf7fa09319dafa91efdc87322509132b7b3407c1c2a3849",
+      "source": "/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/actual-first501-cell-capture.json"
+    },
+    "build-admission.json": {
+      "bytes": 18705,
+      "sha256": "89af4b7b7b23cef255c27a3c097000dc038185e82d622fa2ff2fc08a55824a88",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/native-build-admission.json"
+    },
+    "build-physical-reception.json": {
+      "bytes": 5587,
+      "sha256": "5c113312dd11a933c09f6bd73b869dd25c35b9c908ecb48697029f3488fbb8d3",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-guarded-reception-prep-20261008/native-build-physical-reception.json"
+    },
+    "build-result.json": {
+      "bytes": 780,
+      "sha256": "246621928c597c417229baca330684de69e52af3feab925f85e8b1eeaa41a558",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/build-result.json"
+    },
+    "cold-uniform-independent-reception.json": {
+      "bytes": 84198,
+      "sha256": "99a598061ccf0a01eab6e489cb28a6e1fe1374a6a7df7a9bac16c51a9a9b89bb",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-guarded-reception-prep-20261008/cold-uniform-independent-reception.json"
+    },
+    "cold-uniform-invocation.json": {
+      "bytes": 3181,
+      "sha256": "f77e3c4355fb52653ccf2427267b8cdf20085d7c80def4d1621f50e6638802a8",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/cold-uniform/invocation.json"
+    },
+    "cold-uniform-result.json": {
+      "bytes": 1067,
+      "sha256": "e31b85b8247f4f23c3f775260695b46b34dfd8d9b49255ac88ccd0c82320f318",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/cold-uniform/result.json"
+    },
+    "diagnostic2-compile-receipts.json": {
+      "bytes": 7174,
+      "sha256": "ba18d67892e9b8138ca10d00e00f1d53e01822e7b6e09465cc50320ac47040b0",
+      "source": "/Users/romaindespoulain/dev/tmp/sol61-diffusion-provider-support-67623c95-20261008/diagnostic2-actual-compile-receipts.json"
+    },
+    "guarded-baseline-invocation.json": {
+      "bytes": 3165,
+      "sha256": "e619ee7742856c0330c4bc6fcd4c8b09594af712b0f50e20fb74900c571d7447",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline/invocation.json"
+    },
+    "guarded-baseline-result.json": {
+      "bytes": 1062,
+      "sha256": "90bb24d1efde787d4430853f11ff4e1e1f7cbeb2d1f43180a26d55aea91360a1",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline/result.json"
+    },
+    "guarded-baseline.log": {
+      "bytes": 3508,
+      "sha256": "cdb66ce7e4a49a429730b0441d71a82bacdeb2fbcdbcc3f2c78f9c4b75aaf15d",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/guarded-baseline.log"
+    },
+    "identity.json": {
+      "bytes": 2840,
+      "sha256": "37644203de2e3a764504114c46fb8d5e562ca852838ef5816c34ef86a7ebb4ac",
+      "source": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-native-build-20261008/identity/identity.json"
+    }
+  },
+  "scope": "Preceding native cohort only. Guarded diffusion failed501; cold Uniform capacity passed. No reception carried over to subsequent Source repairs."
+}

@@ -759,6 +759,10 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("tolerance"), py::arg("max_iterations"), py::arg("linear_tolerance"),
            py::arg("linear_max_iterations"), py::arg("restart"), py::arg("armijo"),
            py::arg("minimum_step"))
+      .def("set_field_newton_convergence_plan", &AmrSystem::set_field_newton_convergence_plan, py::arg("provider_slot"),
+           py::arg("tolerance"), py::arg("max_iterations"), py::arg("linear_tolerance"),
+           py::arg("linear_max_iterations"), py::arg("restart"), py::arg("armijo"),
+           py::arg("minimum_step"), py::arg("convergence_kind"), py::arg("relative"), py::arg("absolute"))
       // Runtime-private lowering seam for the normalized analytic LevelSet.  The exact-ranked AMR
       // hierarchy owns compilation, collective validation, and per-level rematerialization; no
       // Python callback reaches a cell kernel.
@@ -845,6 +849,8 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
            "Collective-free exact rank-local carrier and auxiliary-registry rollback witness.")
       .def("dirty_auxiliary_provider_identities", &AmrSystem::dirty_auxiliary_provider_identities,
            "Exact pending auxiliary-provider identities retained by rollback.")
+      .def("_checkpoint_state_carriers_byte_capacity", &AmrSystem::checkpoint_state_carriers_byte_capacity,
+           "Configured full-grown POPSCAR1 byte capacity@1, exact sealed storage authority.")
       .def("_checkpoint_auxiliary_level_capacity", &AmrSystem::checkpoint_auxiliary_level_capacity,
            "Return the sealed AMR per-level auxiliary metadata/scalar checkpoint capacity.")
       .def(
@@ -1010,11 +1016,11 @@ void bind_amr_stepping(py::class_<AmrSystem>& cls) {
              return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
            })
       .def("_validate_checkpoint_program_exchanges",
-           [](const AmrSystem&, py::bytes payload) {
+           [](const AmrSystem& system, py::bytes payload) {
              const std::string_view bytes(
                  PyBytes_AS_STRING(payload.ptr()),
                  static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
-             (void)pops::runtime::program::AcceptedExchangeLedger::from_checkpoint(
+             system.validate_checkpoint_program_exchanges(
                  std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(bytes.data()),
                                                bytes.size()));
            })
@@ -1224,7 +1230,88 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       // one, program_diagnostics() the whole map; record_program_diagnostic is the sink the diagnostics
       // driver records a measured scalar into each cadence tick.
       .def("program_diagnostic", &AmrSystem::program_diagnostic, py::arg("name"))
+      .def("_program_integral", &AmrSystem::program_integral, py::arg("identity"))
       .def("program_diagnostics", &AmrSystem::program_diagnostics)
+      .def("checkpoint_state_carriers", [](const AmrSystem& s) {
+        const auto bytes = s.checkpoint_state_carriers();
+        return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+      })
+      .def("_prepare_checkpoint_capture", &AmrSystem::prepare_checkpoint_capture)
+      .def("_validate_prepared_checkpoint_capture", &AmrSystem::validate_prepared_checkpoint_capture)
+      .def("_validate_committed_checkpoint_capture", &AmrSystem::validate_committed_checkpoint_capture)
+      .def("_prepared_checkpoint_state_carriers",
+           [](const AmrSystem& s, const AmrSystem::PreparedCheckpointCapture& capture) {
+             const auto bytes = s.prepared_checkpoint_state_carriers(capture);
+             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+           })
+      .def("_prepared_checkpoint_program_diagnostics",
+           [](const AmrSystem& s, const AmrSystem::PreparedCheckpointCapture& capture) {
+             const auto bytes = s.prepared_checkpoint_program_diagnostics(capture);
+             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+           })
+      .def("validate_checkpoint_state_carriers", [](const AmrSystem& s, py::object payload) {
+        s.validate_checkpoint_state_carriers(
+            +[](const void* context) -> std::span<const std::uint8_t> {
+              const auto& value = *static_cast<const py::object*>(context);
+              if (!PyBytes_CheckExact(value.ptr()))
+                throw py::type_error("state carrier checkpoint payload must be exact bytes");
+              char* data = nullptr; Py_ssize_t size = 0;
+              if (PyBytes_AsStringAndSize(value.ptr(), &data, &size) != 0)
+                throw py::error_already_set();
+              return {reinterpret_cast<const std::uint8_t*>(data), static_cast<std::size_t>(size)};
+            }, &payload);
+      }, py::arg("payload"))
+      .def("restore_checkpoint_state_carriers", [](AmrSystem& s, py::object payload) {
+        s.restore_checkpoint_state_carriers(
+            +[](const void* context) -> std::span<const std::uint8_t> {
+              const auto& value = *static_cast<const py::object*>(context);
+              if (!PyBytes_CheckExact(value.ptr()))
+                throw py::type_error("state carrier checkpoint payload must be exact bytes");
+              char* data = nullptr; Py_ssize_t size = 0;
+              if (PyBytes_AsStringAndSize(value.ptr(), &data, &size) != 0)
+                throw py::error_already_set();
+              return {reinterpret_cast<const std::uint8_t*>(data), static_cast<std::size_t>(size)};
+            }, &payload);
+      }, py::arg("payload"))
+      .def("_checkpoint_program_diagnostics",
+           [](const AmrSystem& s) {
+             const auto bytes = s.checkpoint_program_diagnostics();
+             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+           })
+      .def(
+          "_validate_checkpoint_program_diagnostics",
+          [](const AmrSystem& s, py::object payload) {
+            if (!PyBytes_CheckExact(payload.ptr()))
+              throw py::type_error("Program diagnostic checkpoint payload must be exact bytes");
+            char* data = nullptr;
+            Py_ssize_t size = 0;
+            if (PyBytes_AsStringAndSize(payload.ptr(), &data, &size) != 0)
+              throw py::error_already_set();
+            s.validate_checkpoint_program_diagnostics(
+                {reinterpret_cast<const std::uint8_t*>(data), static_cast<std::size_t>(size)});
+          },
+          py::arg("payload"))
+      .def(
+          "_restore_checkpoint_program_diagnostics",
+          [](AmrSystem& s, py::object payload) {
+            // Type/byte extraction executes inside native preparation before its failure vote.
+            s.restore_checkpoint_program_diagnostics(
+                +[](const void* context) -> std::span<const std::uint8_t> {
+                  const auto& payload = *static_cast<const py::object*>(context);
+                  if (!PyBytes_CheckExact(payload.ptr()))
+                    throw py::type_error(
+                        "Program diagnostic checkpoint payload must be exact bytes");
+                  char* data = nullptr;
+                  Py_ssize_t size = 0;
+                  if (PyBytes_AsStringAndSize(payload.ptr(), &data, &size) != 0)
+                    throw py::error_already_set();
+                  return {reinterpret_cast<const std::uint8_t*>(data),
+                          static_cast<std::size_t>(size)};
+                },
+                &payload);
+          },
+          py::arg("payload"))
+
       .def("_accepted_balance_terms", &AmrSystem::accepted_balance_terms, py::arg("route"))
       .def("_selected_accepted_balance_terms", &AmrSystem::selected_accepted_balance_terms,
            py::arg("route"), py::arg("block"), py::arg("component"), py::arg("levels"),
@@ -1278,6 +1365,9 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       // coarse transport); replicated / single-box -> local == total. Query between steps, no hot cost.
       .def("coarse_local_boxes", &AmrSystem::coarse_local_boxes)
       .def("coarse_total_boxes", &AmrSystem::coarse_total_boxes)
+      .def("coarse_local_box_bounds", [](AmrSystem& s) {
+        return ranked_boxes_to_python(s.coarse_local_box_bounds());
+      })
       // mass / density: overload by BLOCK NAME (multi-block; empty name -> 1st block, mono-block
       // compat or cosmetic name). The name INDEXES the block in multi-block (each block has its mass /
       // density, conserved PER BLOCK at reflux). Without argument -> 1st block (mono-block back-compat).
@@ -1542,6 +1632,55 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def("checkpoint_topology_epoch", &AmrSystem::checkpoint_topology_epoch)
       .def("restore_checkpoint_counters", &AmrSystem::restore_checkpoint_counters,
            py::arg("regrid_count"), py::arg("topology_epoch"))
+      .def("checkpoint_accepted_halo_contract", &AmrSystem::checkpoint_accepted_halo_contract)
+      .def("_arm_accepted_halo_test_failure", &AmrSystem::arm_accepted_halo_test_failure,
+           py::arg("request"))
+      .def("_accepted_halo_test_failure_receipt", &AmrSystem::accepted_halo_test_failure_receipt)
+      .def("_enable_field_candidate_observation", [](AmrSystem& s, py::handle version) {
+        // Malformed local values enter the same Native preflight vote as valid peers;
+        // never throw on one Python rank while another enters the activation collective.
+        std::uint32_t parsed = 0;
+        if (PyLong_CheckExact(version.ptr()) && !PyBool_Check(version.ptr())) {
+          const auto value = PyLong_AsUnsignedLongLong(version.ptr());
+          if (PyErr_Occurred()) PyErr_Clear();
+          else if (value <= UINT32_MAX) parsed = static_cast<std::uint32_t>(value);
+        }
+        s.enable_field_candidate_observation(parsed);
+      }, py::arg("version"))
+      .def("_field_candidate_observations", [](const AmrSystem& s) {
+        py::list result;
+        for (const auto& witness : s.field_candidate_observations()) {
+          py::dict row, point;
+          row["schema"] = "pops.amr.field-candidate-observation@1";
+          row["status"] = "producer-completed-consumer-preparation-completed";
+          row["accepted_publication"] = false;
+          row["provider_slot"] = witness.provider_slot;
+          row["consumer_block"] = witness.consumer_block;
+          row["consumer_level"] = witness.consumer_level;
+          row["owner_macro_step"] = witness.owner_macro_step; row["owner_time"] = witness.owner_time;
+          row["configuration_identity"] = witness.configuration_identity;
+          row["provider_identity"] = witness.provider_identity; row["plan_identity"] = witness.plan_identity;
+          row["output_owner_identity"] = witness.output_owner_identity;
+          row["output_block"] = witness.output_block; row["output_key"] = witness.output_key;
+          row["topology_epoch"] = witness.topology_epoch;
+          row["materialization_generation"] = witness.materialization_generation;
+          point["clock"] = witness.point.clock; point["tick"] = witness.point.tick;
+          point["level"] = witness.point.level; point["substep"] = witness.point.substep;
+          point["stage"] = witness.point.stage;
+          point["fraction_numerator"] = witness.point.stage_fraction.numerator;
+          point["fraction_denominator"] = witness.point.stage_fraction.denominator;
+          point["dt"] = witness.point.dt; point["physical_time"] = witness.point.physical_time;
+          point["graph_identity"] = witness.point.graph_identity;
+          point["rate_identity"] = witness.point.rate_identity;
+          point["application_identity"] = witness.point.application_identity;
+          row["point"] = std::move(point);
+          row["carrier_bytes"] = py::bytes(reinterpret_cast<const char*>(witness.carrier_bytes.data()),
+                                           witness.carrier_bytes.size());
+          result.append(std::move(row));
+        }
+        return result;
+      })
+      .def("checkpoint_tag_selection_contract", &AmrSystem::checkpoint_tag_selection_contract)
       .def("checkpoint_temporal_relations", &AmrSystem::checkpoint_temporal_relations)
       .def("set_temporal_relations", &AmrSystem::set_temporal_relations, py::arg("numerators"),
            py::arg("denominators"), py::arg("remainder_policies"))
@@ -1623,6 +1762,36 @@ void init_amr(py::module_& m) {
   // headers of PoPS; it is no longer exposed by the _pops module.
   using NativeAmrSystem = pops::AmrSystem<pops::kNativeDimension>;
   using NativeAmrSystemConfig = pops::AmrSystemConfig<pops::kNativeDimension>;
+  py::enum_<pops::AcceptedHaloTestFailurePhase>(m, "_AcceptedHaloTestFailurePhase")
+      .value("after_block_level_preparation", pops::AcceptedHaloTestFailurePhase::after_block_level_preparation);
+  py::class_<pops::AcceptedHaloTestFailureRequest>(m, "_AcceptedHaloTestFailureRequest", py::is_final())
+      .def(py::init([](const py::handle& version, pops::AcceptedHaloTestFailurePhase phase,
+                       const py::handle& block, const py::handle& level, const py::handle& rank) {
+        for (const auto value : {version, block, level, rank})
+          if (!PyLong_CheckExact(value.ptr()))
+            throw py::type_error("accepted halo test request integers must be exact Python int values");
+        return pops::AcceptedHaloTestFailureRequest{py::cast<std::uint32_t>(version), phase,
+            py::cast<int>(block), py::cast<int>(level), py::cast<int>(rank)};
+      }), py::kw_only(), py::arg("version") = 1,
+          py::arg("phase") = pops::AcceptedHaloTestFailurePhase::after_block_level_preparation,
+          py::arg("block"), py::arg("level"), py::arg("rank"))
+      .def_readonly("version", &pops::AcceptedHaloTestFailureRequest::version)
+      .def_readonly("phase", &pops::AcceptedHaloTestFailureRequest::phase)
+      .def_readonly("block", &pops::AcceptedHaloTestFailureRequest::block)
+      .def_readonly("level", &pops::AcceptedHaloTestFailureRequest::level)
+      .def_readonly("rank", &pops::AcceptedHaloTestFailureRequest::rank);
+  py::class_<pops::AcceptedHaloTestFailureReceipt>(m, "_AcceptedHaloTestFailureReceipt", py::is_final())
+      .def_readonly("request", &pops::AcceptedHaloTestFailureReceipt::request)
+      .def_readonly("requested", &pops::AcceptedHaloTestFailureReceipt::requested)
+      .def_readonly("reached", &pops::AcceptedHaloTestFailureReceipt::reached)
+      .def_readonly("consumed", &pops::AcceptedHaloTestFailureReceipt::consumed)
+      .def_readonly("before_publication", &pops::AcceptedHaloTestFailureReceipt::before_publication)
+      .def_readonly("local_error", &pops::AcceptedHaloTestFailureReceipt::local_error)
+      .def_readonly("tick", &pops::AcceptedHaloTestFailureReceipt::tick)
+      .def_readonly("armed_tick", &pops::AcceptedHaloTestFailureReceipt::armed_tick)
+      .def_readonly("topology_epoch", &pops::AcceptedHaloTestFailureReceipt::topology_epoch)
+      .def_readonly("physical_time", &pops::AcceptedHaloTestFailureReceipt::physical_time)
+      .def_readonly("dt", &pops::AcceptedHaloTestFailureReceipt::dt);
   py::class_<NativeAmrSystemConfig>(m, "AmrSystemConfig")
       .def(py::init<>())
       .def_property(
@@ -1697,6 +1866,24 @@ void init_amr(py::module_& m) {
             config.transition_lookaheads = ranked_extents_from_python<kNativeDimension>(
                 value, "AmrSystemConfig.transition_lookaheads", 0);
           })
+      .def_readwrite("accepted_halo_contract_version", &NativeAmrSystemConfig::accepted_halo_contract_version)
+      .def_property("accepted_halo_extent",
+          [](const NativeAmrSystemConfig& config) {
+            return ranked_extent_to_python(config.accepted_halo_extent);
+          },
+          [](NativeAmrSystemConfig& config, const py::handle& value) {
+            config.accepted_halo_extent = ranked_extent_from_python<kNativeDimension>(
+                value, "AmrSystemConfig.accepted_halo_extent");
+          })
+      .def_readwrite("tag_selection_contract_version", &NativeAmrSystemConfig::tag_selection_contract_version)
+      .def_property("tag_selection_buffer",
+          [](const NativeAmrSystemConfig& config) {
+            return ranked_extent_to_python(config.tag_selection_buffer);
+          },
+          [](NativeAmrSystemConfig& config, const py::handle& value) {
+            config.tag_selection_buffer = ranked_extent_from_python<kNativeDimension>(
+                value, "AmrSystemConfig.tag_selection_buffer", true);
+          })
       .def_readwrite("explicit_bootstrap", &NativeAmrSystemConfig::explicit_bootstrap)
       .def_property(
           "periodicity",
@@ -1738,6 +1925,10 @@ void init_amr(py::module_& m) {
           py::arg("options"));
 
   // AmrSystem: generic single-species composition on AMR.
+  py::class_<NativeAmrSystem::PreparedCheckpointCapture>(m, "_PreparedAMRCheckpointCapture")
+      .def_property_readonly("contract", [](const NativeAmrSystem::PreparedCheckpointCapture&) {
+        return "pops.amr.prepared-checkpoint-capture@1";
+      });
   py::class_<NativeAmrSystem> cls(m, "AmrSystem");
   bind_amr_assembly(cls);
   bind_amr_physics(cls);

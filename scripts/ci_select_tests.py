@@ -374,6 +374,42 @@ def cpp_targets_with_label(manifest: dict, label: str) -> list[str]:
     return targets
 
 
+def cpp_mpi_build_groups(manifest: dict) -> list[dict]:
+    """Split the complete MPI build into two bounded sequential phases.
+
+    ``test_program_runtime`` needs an isolated compiler because its observed host
+    memory headroom falls below 0.5 GiB. The loader target now also builds six
+    authenticated DSO fixtures. Move two previously unbuilt I/O targets beside
+    these outliers to reserve space in the remaining phase. This is a scheduling
+    partition, not a cold-build duration guarantee; see change_aware_ci.md.
+    """
+    targets = cpp_targets_with_label(manifest, "mpi")
+    isolated = {
+        "test_program_runtime",
+        "test_amr_synthetic_program_loader_transaction",
+        "test_mpi_system_gather_scatter",
+        "test_mpi_system_io_gather",
+    }
+    missing = sorted(isolated - set(targets))
+    if missing:
+        raise SystemExit(f"MPI build phase anchors missing from manifest: {missing}")
+    groups = [
+        {"name": "isolated", "targets": tuple(sorted(isolated))},
+        {
+            "name": "remaining",
+            "targets": tuple(target for target in targets if target not in isolated),
+        },
+    ]
+    flattened = [target for group in groups for target in group["targets"]]
+    if (
+        any(not group["targets"] for group in groups)
+        or sorted(flattened) != targets
+        or len(flattened) != len(set(flattened))
+    ):
+        raise SystemExit("MPI build phases are not an exact nonempty disjoint target cover")
+    return groups
+
+
 def cpp_mpi_ctest_plan(manifest: dict) -> dict[str, int]:
     """Return every manifest-owned MPI CTest name and its exact processor reservation.
 
@@ -901,13 +937,16 @@ def _refine_cpp_target_shards(
     Cold template builds are indivisible and can dominate a shard containing only
     three targets. Moving one such target rarely helps, but exchanging it for one
     or two targets elsewhere can fit the same measured work more evenly. Accept
-    only strictly lower maximum loads, retaining LPT's original upper bound. The
+    lexicographically lower descending load vectors, retaining LPT's original
+    maximum-load bound. This can improve one of several tied critical shards
+    before the final tied shard moves. The
     number of exchanges is capped by the number of selected targets.
     """
     for _ in range(sum(map(len, shards))):
         loads = [math.fsum(weights[target] for target in shard) for shard in shards]
         source = max(range(len(shards)), key=lambda index: (loads[index], -index))
         maximum = loads[source]
+        load_order = tuple(sorted(loads, reverse=True))
         best = None
         for destination, shard in enumerate(shards):
             if destination == source:
@@ -929,11 +968,17 @@ def _refine_cpp_target_shards(
                     candidate_maximum = max(candidate_loads)
                     # Avoid exchanges caused solely by floating-point summation
                     # noise; this tolerance never changes a modeled target cost.
-                    if candidate_maximum >= maximum - 1.0e-9:
+                    candidate_order = tuple(sorted(candidate_loads, reverse=True))
+                    if candidate_maximum > maximum + 1.0e-9:
+                        continue
+                    first_change = next((after - before for before, after in
+                                         zip(load_order, candidate_order)
+                                         if abs(after - before) > 1.0e-9), 0.0)
+                    if first_change >= 0.0:
                         continue
                     candidate = (
                         candidate_maximum,
-                        tuple(sorted(candidate_loads, reverse=True)),
+                        candidate_order,
                         destination, target, bundle,
                     )
                     if best is None or candidate < best:
@@ -1551,6 +1596,8 @@ def plan_cpp_label(args: argparse.Namespace) -> int:
     targets = cpp_targets_with_label(manifest, args.label)
     mpi_ctest_plan = cpp_mpi_ctest_plan(manifest) if args.label == "mpi" else {}
     mpi_ctest_count = len(mpi_ctest_plan)
+    build_groups = cpp_mpi_build_groups(manifest) if args.label == "mpi" else []
+    build_targets = {group["name"]: group["targets"] for group in build_groups}
     summary = f"label {args.label}: {len(targets)} C++ targets"
     if args.label == "mpi":
         summary += f", {mpi_ctest_count} CTest launches"
@@ -1579,6 +1626,9 @@ def plan_cpp_label(args: argparse.Namespace) -> int:
             "cpp_label_count": str(len(targets)),
             "cpp_label_ctest_count": str(mpi_ctest_count),
             "cpp_label_ctest_group_count": str(len(groups)),
+            "cpp_label_build_phase_count": str(len(build_groups)),
+            "cpp_label_build_isolated_targets": " ".join(build_targets.get("isolated", ())),
+            "cpp_label_build_remaining_targets": " ".join(build_targets.get("remaining", ())),
             "cpp_label_summary": summary,
         },
     )
@@ -1591,6 +1641,7 @@ def plan_cpp_label(args: argparse.Namespace) -> int:
             "ctest_count": mpi_ctest_count,
             "ctest_names": list(mpi_ctest_plan),
             "ctest_groups": groups,
+            "build_groups": build_groups,
             "selected": targets,
         },
     )

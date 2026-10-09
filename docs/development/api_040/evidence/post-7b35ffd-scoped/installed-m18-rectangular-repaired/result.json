@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='00b38fe09ba42678a5a2beda64a3767be9aa130455ecdfcf864a7182fc519cc9'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m18-rectangular-repaired/pytest.xml",
+    "tests/python/unit/moments/test_m18_discrete_entropy.py",
+    "tests/python/integration/runtime/test_m18_discrete_entropy_runtime.py"
+  ],
+  "returncode": 0,
+  "duration_seconds": 17.984003625111654,
+  "counts": {
+    "tests": 6,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "passed",
+  "identity_sha256": "733f235244c4bda68eb679487ba693bbb104d1eddb1d04e1245b3334be719139",
+  "log_sha256": "46b323dc21c391dd3172bef5d92f8f06f1148ef524fdba34b024303ca2d6ee3a"
+}

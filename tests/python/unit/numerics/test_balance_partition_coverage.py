@@ -75,3 +75,11 @@ def test_unknown_signed_numerical_realization_is_diagnosed_at_resolution():
     assert caught.value.code == "unsupported_balance_realization"
     assert caught.value.phase == "resolve"
     assert caught.value.context["rate"] == rate.local_id
+    assert caught.value.blockage.to_data() == {
+        "schema_version": 1,
+        "classification": "IMPL",
+        "phase": "resolve",
+        "source": rate.qualified_id,
+        "cause": "numerical_realization_unavailable",
+        "capability": "selected_rate_realization",
+    }

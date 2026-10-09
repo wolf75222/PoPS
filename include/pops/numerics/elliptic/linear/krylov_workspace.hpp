@@ -64,6 +64,29 @@ struct KrylovFailureActions {
   }
 };
 
+/// Optional caller-owned GMRES diagnostics. Recording only copies already-computed scalars:
+/// no callbacks, allocation, operator applications, reductions or convergence authority.
+/// The caller must keep this buffer alive and exclusively borrowed through one invocation.
+struct GmresDiagnosticTrace {
+  static constexpr std::size_t capacity = 512;
+  struct Cycle {
+    int begin_iteration = 0, end_iteration = 0, dimension = 0, second_passes = 0;
+    Real initial_residual = 0, final_residual = 0, beta = 0;
+    Real equation_scale = 0, preconditioner_scale = 0;
+    detail::ScaledScalar estimate = detail::ScaledScalar::zero();
+    detail::ScaledScalar estimate_threshold = detail::ScaledScalar::zero();
+    unsigned end_flags = 0;  // 1: estimate, 2: lucky breakdown, 4: cap, 8: full restart.
+  };
+  std::array<Cycle, capacity> cycles{};
+  std::size_t size = 0;
+  bool overflow = false;
+  void reset() noexcept { size = 0; overflow = false; }
+  void append(const Cycle& cycle) noexcept {
+    if (size == capacity) { overflow = true; return; }
+    cycles[size++] = cycle;
+  }
+};
+
 template <int Dim>
 struct KrylovControls {
   PreparedKrylovMethod<Dim> method{};
@@ -71,11 +94,16 @@ struct KrylovControls {
   Real abs_tol = Real(0);
   int max_iterations = 1;
   KrylovFailureActions failure_actions{};
+  KrylovPhysicalNorm physical_norm = KrylovPhysicalNorm::metric_l2;
+  GmresDiagnosticTrace* diagnostic_trace = nullptr;
 };
 
 template <int Dim>
 class KrylovWorkspace {
  public:
+  [[nodiscard]] std::weak_ptr<void> solve_outcome_lifetime() const noexcept {
+    return solve_outcome_lifetime_;
+  }
   static int max_batched_basis_extent() {
     return max_krylov_batched_basis_extent(detail::PreparedFieldAlgebra::kRobustDotPayloadWidth);
   }
@@ -162,6 +190,15 @@ class KrylovWorkspace {
         vector_distribution_(std::move(vector_distribution)),
         metric_(std::move(metric)),
         lane_(ExecutionLane::duplicate_collectively(execution_communicator, lane_identity)) {
+    long lifetime_failure_local = 0;
+    try {
+      solve_outcome_lifetime_ = std::make_shared<int>(0);
+    } catch (...) {
+      lifetime_failure_local = 1;
+    }
+    if (all_reduce_max(lifetime_failure_local, lane_) != 0)
+      throw std::runtime_error(
+          "prepared Krylov workspace solve-result lifetime allocation failed collectively");
     long materialization_token_failure_local = 0;
     try {
       if (owner_supplied_materialization_token && materialization_token.empty())
@@ -661,6 +698,7 @@ class KrylovWorkspace {
     payload.append(std::bit_cast<std::uint64_t>(controls.rel_tol));
     payload.append(std::bit_cast<std::uint64_t>(controls.abs_tol));
     payload.append(controls.max_iterations);
+    payload.append(static_cast<std::uint8_t>(controls.physical_norm));
   }
 
   void append_collective_state_(detail::KrylovCollectivePayload& payload) const noexcept {
@@ -939,6 +977,7 @@ class KrylovWorkspace {
   bool publication_active_ = false;
   ExactSolveReportConsensusScratch provider_report_consensus_{};
   std::atomic<ReservationState> reservation_state_{ReservationState::Idle};
+  std::shared_ptr<void> solve_outcome_lifetime_;
 };
 
 }  // namespace pops

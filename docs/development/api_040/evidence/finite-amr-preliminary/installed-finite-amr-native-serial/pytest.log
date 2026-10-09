@@ -1,0 +1,329 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 9 items
+
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[False-False] FAILED [ 11%]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[False-True] FAILED [ 22%]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[True-False] FAILED [ 33%]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[True-True] FAILED [ 44%]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_singular_elimination_pivot_is_not_a_monolithic_singularity[False] FAILED [ 55%]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_singular_elimination_pivot_is_not_a_monolithic_singularity[True] FAILED [ 66%]
+tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py::test_public_affine_body_and_local_solve_match_particles_on_amr[1] PASSED [ 77%]
+tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py::test_public_affine_body_and_local_solve_match_particles_on_amr[2] FAILED [ 88%]
+tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py::test_impossible_local_residual_rejects_without_amr_publication PASSED [100%]
+
+=================================== FAILURES ===================================
+______ test_finite_w06_original_equations_and_reconstruction[False-False] ______
+tests/python/integration/runtime/test_finite_m09_runtime.py:30: in test_finite_w06_original_equations_and_reconstruction
+    artifact,world=_compile(case,layout,"finite-w06-%d-%d"%(condensed,permuted))
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).
+E   Command: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG="396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI="f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpfehwrre7/problem.d -MT /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat0/pops-native-cache/.2378fefc747b28c4c6296d1370c81f92a1a2f2a3211827fe80b9c7ea6a17912a.pops-stage-m_jwfqx7.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpfehwrre7/problem.cpp -o /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat0/pops-native-cache/.2378fefc747b28c4c6296d1370c81f92a1a2f2a3211827fe80b9c7ea6a17912a.pops-stage-m_jwfqx7.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so
+E   Compiler output:
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpfehwrre7/problem.cpp:487:59: error: use of undeclared identifier 'expression_active_12'; did you mean 'expression_status_12'?
+E     487 |     if (ctx.pointwise_status_max(0, expression_status_12, expression_active_12, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E         |                                                           expression_status_12
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpfehwrre7/problem.cpp:391:45: note: 'expression_status_12' declared here
+E     391 |     pops::MultiFab<pops::kNativeDimension>& expression_status_12 = ctx.scalar_scratch(12, 1, ci8_velocity, 1, 0);
+E         |                                             ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpfehwrre7/problem.cpp:487:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')
+E     487 |     if (ctx.pointwise_status_max(0, expression_status_12, expression_active_12, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here
+E     902 |                             const field_type* active_cells, const ExecutionLane& lane) const {
+E         |                                               ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpfehwrre7/problem.cpp:566:59: error: use of undeclared identifier 'expression_active_13'; did you mean 'expression_status_13'?
+E     566 |     if (ctx.pointwise_status_max(1, expression_status_13, expression_active_13, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E         |                                                           expression_status_13
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpfehwrre7/problem.cpp:493:45: note: 'expression_status_13' declared here
+E     493 |     pops::MultiFab<pops::kNativeDimension>& expression_status_13 = ctx.scalar_scratch(13, 1, ci8_velocity, 1, 0);
+E         |                                             ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpfehwrre7/problem.cpp:566:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')
+E     566 |     if (ctx.pointwise_status_max(1, expression_status_13, expression_active_13, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here
+E     902 |                             const field_type* active_cells, const ExecutionLane& lane) const {
+E         |                                               ^
+E   4 errors generated.
+E   Hints: `python -c "import pops; pops.doctor()"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.
+E   This is GENERATED code emitted by pops.time.Program 'finite_monolithic'; the failing source was written to /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat0/pops-native-cache/2378fefc747b28c4c6296d1370c81f92a1a2f2a3211827fe80b9c7ea6a17912a.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).
+----------------------------- Captured stdout call -----------------------------
+[rank 0] finite-w06-0-0: compile and publish start
+______ test_finite_w06_original_equations_and_reconstruction[False-True] _______
+tests/python/integration/runtime/test_finite_m09_runtime.py:30: in test_finite_w06_original_equations_and_reconstruction
+    artifact,world=_compile(case,layout,"finite-w06-%d-%d"%(condensed,permuted))
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).
+E   Command: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG="396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI="f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.d -MT /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat1/pops-native-cache/.6ec7af7ad82577cb64955bcbeeaee59a69262ed70dc09966158210e5ce5193d8.pops-stage-vfsqkldi.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp -o /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat1/pops-native-cache/.6ec7af7ad82577cb64955bcbeeaee59a69262ed70dc09966158210e5ce5193d8.pops-stage-vfsqkldi.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so
+E   Compiler output:
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp:416:59: error: use of undeclared identifier 'expression_active_10'; did you mean 'expression_status_10'?
+E     416 |     if (ctx.pointwise_status_max(0, expression_status_10, expression_active_10, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E         |                                                           expression_status_10
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp:338:45: note: 'expression_status_10' declared here
+E     338 |     pops::MultiFab<pops::kNativeDimension>& expression_status_10 = ctx.scalar_scratch(10, 1, u0, 1, 0);
+E         |                                             ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp:416:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')
+E     416 |     if (ctx.pointwise_status_max(0, expression_status_10, expression_active_10, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here
+E     902 |                             const field_type* active_cells, const ExecutionLane& lane) const {
+E         |                                               ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp:518:59: error: use of undeclared identifier 'expression_active_11'; did you mean 'expression_status_11'?
+E     518 |     if (ctx.pointwise_status_max(0, expression_status_11, expression_active_11, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E         |                                                           expression_status_11
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp:422:45: note: 'expression_status_11' declared here
+E     422 |     pops::MultiFab<pops::kNativeDimension>& expression_status_11 = ctx.scalar_scratch(11, 1, u10, 1, 0);
+E         |                                             ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp:518:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')
+E     518 |     if (ctx.pointwise_status_max(0, expression_status_11, expression_active_11, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here
+E     902 |                             const field_type* active_cells, const ExecutionLane& lane) const {
+E         |                                               ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp:597:59: error: use of undeclared identifier 'expression_active_12'; did you mean 'expression_status_12'?
+E     597 |     if (ctx.pointwise_status_max(1, expression_status_12, expression_active_12, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E         |                                                           expression_status_12
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp:524:45: note: 'expression_status_12' declared here
+E     524 |     pops::MultiFab<pops::kNativeDimension>& expression_status_12 = ctx.scalar_scratch(12, 1, u10, 1, 0);
+E         |                                             ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpf2j5amlz/problem.cpp:
+E   Hints: `python -c "import pops; pops.doctor()"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.
+E   This is GENERATED code emitted by pops.time.Program 'finite_condensed'; the failing source was written to /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat1/pops-native-cache/6ec7af7ad82577cb64955bcbeeaee59a69262ed70dc09966158210e5ce5193d8.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).
+----------------------------- Captured stdout call -----------------------------
+[rank 0] finite-w06-1-0: compile and publish start
+______ test_finite_w06_original_equations_and_reconstruction[True-False] _______
+tests/python/integration/runtime/test_finite_m09_runtime.py:30: in test_finite_w06_original_equations_and_reconstruction
+    artifact,world=_compile(case,layout,"finite-w06-%d-%d"%(condensed,permuted))
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).
+E   Command: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG="396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI="f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp39mp9dbf/problem.d -MT /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat2/pops-native-cache/.d59e1712c8c94f0357cdb0d69274660b344b5f154455e03ecbd4dd27d8df3227.pops-stage-swqpqrqd.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp39mp9dbf/problem.cpp -o /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat2/pops-native-cache/.d59e1712c8c94f0357cdb0d69274660b344b5f154455e03ecbd4dd27d8df3227.pops-stage-swqpqrqd.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so
+E   Compiler output:
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp39mp9dbf/problem.cpp:487:59: error: use of undeclared identifier 'expression_active_12'; did you mean 'expression_status_12'?
+E     487 |     if (ctx.pointwise_status_max(0, expression_status_12, expression_active_12, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E         |                                                           expression_status_12
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp39mp9dbf/problem.cpp:391:45: note: 'expression_status_12' declared here
+E     391 |     pops::MultiFab<pops::kNativeDimension>& expression_status_12 = ctx.scalar_scratch(12, 1, ci8_velocity, 1, 0);
+E         |                                             ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp39mp9dbf/problem.cpp:487:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')
+E     487 |     if (ctx.pointwise_status_max(0, expression_status_12, expression_active_12, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here
+E     902 |                             const field_type* active_cells, const ExecutionLane& lane) const {
+E         |                                               ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp39mp9dbf/problem.cpp:566:59: error: use of undeclared identifier 'expression_active_13'; did you mean 'expression_status_13'?
+E     566 |     if (ctx.pointwise_status_max(1, expression_status_13, expression_active_13, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E         |                                                           expression_status_13
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp39mp9dbf/problem.cpp:493:45: note: 'expression_status_13' declared here
+E     493 |     pops::MultiFab<pops::kNativeDimension>& expression_status_13 = ctx.scalar_scratch(13, 1, ci8_velocity, 1, 0);
+E         |                                             ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp39mp9dbf/problem.cpp:566:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')
+E     566 |     if (ctx.pointwise_status_max(1, expression_status_13, expression_active_13, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here
+E     902 |                             const field_type* active_cells, const ExecutionLane& lane) const {
+E         |                                               ^
+E   4 errors generated.
+E   Hints: `python -c "import pops; pops.doctor()"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.
+E   This is GENERATED code emitted by pops.time.Program 'finite_monolithic'; the failing source was written to /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat2/pops-native-cache/d59e1712c8c94f0357cdb0d69274660b344b5f154455e03ecbd4dd27d8df3227.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).
+----------------------------- Captured stdout call -----------------------------
+[rank 0] finite-w06-0-1: compile and publish start
+_______ test_finite_w06_original_equations_and_reconstruction[True-True] _______
+tests/python/integration/runtime/test_finite_m09_runtime.py:30: in test_finite_w06_original_equations_and_reconstruction
+    artifact,world=_compile(case,layout,"finite-w06-%d-%d"%(condensed,permuted))
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).
+E   Command: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG="396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI="f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.d -MT /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat3/pops-native-cache/.907aae1583dc0d03bddde02646db56ef987d1987c8c73ad6ce7a67ca52bb9d40.pops-stage-ostmjzmv.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp -o /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat3/pops-native-cache/.907aae1583dc0d03bddde02646db56ef987d1987c8c73ad6ce7a67ca52bb9d40.pops-stage-ostmjzmv.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so
+E   Compiler output:
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp:416:59: error: use of undeclared identifier 'expression_active_10'; did you mean 'expression_status_10'?
+E     416 |     if (ctx.pointwise_status_max(0, expression_status_10, expression_active_10, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E         |                                                           expression_status_10
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp:338:45: note: 'expression_status_10' declared here
+E     338 |     pops::MultiFab<pops::kNativeDimension>& expression_status_10 = ctx.scalar_scratch(10, 1, u0, 1, 0);
+E         |                                             ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp:416:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')
+E     416 |     if (ctx.pointwise_status_max(0, expression_status_10, expression_active_10, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here
+E     902 |                             const field_type* active_cells, const ExecutionLane& lane) const {
+E         |                                               ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp:518:59: error: use of undeclared identifier 'expression_active_11'; did you mean 'expression_status_11'?
+E     518 |     if (ctx.pointwise_status_max(0, expression_status_11, expression_active_11, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E         |                                                           expression_status_11
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp:422:45: note: 'expression_status_11' declared here
+E     422 |     pops::MultiFab<pops::kNativeDimension>& expression_status_11 = ctx.scalar_scratch(11, 1, u10, 1, 0);
+E         |                                             ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp:518:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')
+E     518 |     if (ctx.pointwise_status_max(0, expression_status_11, expression_active_11, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here
+E     902 |                             const field_type* active_cells, const ExecutionLane& lane) const {
+E         |                                               ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp:597:59: error: use of undeclared identifier 'expression_active_12'; did you mean 'expression_status_12'?
+E     597 |     if (ctx.pointwise_status_max(1, expression_status_12, expression_active_12, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E         |                                                           expression_status_12
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp:524:45: note: 'expression_status_12' declared here
+E     524 |     pops::MultiFab<pops::kNativeDimension>& expression_status_12 = ctx.scalar_scratch(12, 1, u10, 1, 0);
+E         |                                             ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp_ka1s1td/problem.cpp:
+E   Hints: `python -c "import pops; pops.doctor()"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.
+E   This is GENERATED code emitted by pops.time.Program 'finite_condensed'; the failing source was written to /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_finite_w06_original_equat3/pops-native-cache/907aae1583dc0d03bddde02646db56ef987d1987c8c73ad6ce7a67ca52bb9d40.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).
+----------------------------- Captured stdout call -----------------------------
+[rank 0] finite-w06-1-1: compile and publish start
+____ test_singular_elimination_pivot_is_not_a_monolithic_singularity[False] ____
+tests/python/integration/runtime/test_finite_m09_runtime.py:73: in test_singular_elimination_pivot_is_not_a_monolithic_singularity
+    artifact,world=_compile(case,layout,"finite-singular-pivot-%d"%condensed)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).
+E   Command: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG="396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI="f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp21z7syuc/problem.d -MT /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_singular_elimination_pivo0/pops-native-cache/.ca653bcc70ca0abfb6f913ddf9bb5e946da05bc08fb8a275dd57bf2dacc5bc1f.pops-stage-x30cveci.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp21z7syuc/problem.cpp -o /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_singular_elimination_pivo0/pops-native-cache/.ca653bcc70ca0abfb6f913ddf9bb5e946da05bc08fb8a275dd57bf2dacc5bc1f.pops-stage-x30cveci.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so
+E   Compiler output:
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp21z7syuc/problem.cpp:487:59: error: use of undeclared identifier 'expression_active_12'; did you mean 'expression_status_12'?
+E     487 |     if (ctx.pointwise_status_max(0, expression_status_12, expression_active_12, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E         |                                                           expression_status_12
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp21z7syuc/problem.cpp:391:45: note: 'expression_status_12' declared here
+E     391 |     pops::MultiFab<pops::kNativeDimension>& expression_status_12 = ctx.scalar_scratch(12, 1, ci8_velocity, 1, 0);
+E         |                                             ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp21z7syuc/problem.cpp:487:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')
+E     487 |     if (ctx.pointwise_status_max(0, expression_status_12, expression_active_12, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here
+E     902 |                             const field_type* active_cells, const ExecutionLane& lane) const {
+E         |                                               ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp21z7syuc/problem.cpp:566:59: error: use of undeclared identifier 'expression_active_13'; did you mean 'expression_status_13'?
+E     566 |     if (ctx.pointwise_status_max(1, expression_status_13, expression_active_13, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E         |                                                           expression_status_13
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp21z7syuc/problem.cpp:493:45: note: 'expression_status_13' declared here
+E     493 |     pops::MultiFab<pops::kNativeDimension>& expression_status_13 = ctx.scalar_scratch(13, 1, ci8_velocity, 1, 0);
+E         |                                             ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmp21z7syuc/problem.cpp:566:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')
+E     566 |     if (ctx.pointwise_status_max(1, expression_status_13, expression_active_13, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here
+E     902 |                             const field_type* active_cells, const ExecutionLane& lane) const {
+E         |                                               ^
+E   4 errors generated.
+E   Hints: `python -c "import pops; pops.doctor()"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.
+E   This is GENERATED code emitted by pops.time.Program 'finite_monolithic'; the failing source was written to /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_singular_elimination_pivo0/pops-native-cache/ca653bcc70ca0abfb6f913ddf9bb5e946da05bc08fb8a275dd57bf2dacc5bc1f.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).
+----------------------------- Captured stdout call -----------------------------
+[rank 0] finite-singular-pivot-0: compile and publish start
+____ test_singular_elimination_pivot_is_not_a_monolithic_singularity[True] _____
+tests/python/integration/runtime/test_finite_m09_runtime.py:73: in test_singular_elimination_pivot_is_not_a_monolithic_singularity
+    artifact,world=_compile(case,layout,"finite-singular-pivot-%d"%condensed)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: RuntimeError: pops.dsl: compiling the .so (compile_problem (backend production)) failed (exit 1).
+E   Command: /usr/bin/clang++ -shared -fPIC -std=c++20 -O3 -DNDEBUG -fno-fast-math -ffp-contract=off -DPOPS_HEADER_SIG="396719235acdb96435dba0dd27c5e5579aefbda4936f657262b9b2553d13bb4c" -DPOPS_NATIVE_DIM=2 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I /opt/homebrew/opt/libomp/include -DPOPS_HAS_MPI -DPOPS_MPI_ABI="f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5" -I /Users/romaindespoulain/miniforge3/envs/pops-api040/include -undefined dynamic_lookup -MMD -MF /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.d -MT /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_singular_elimination_pivo1/pops-native-cache/.f21fd3ce9b11d408a2d0dda073ea554d3db0c1708181d138ab16a2a1ef776a2a.pops-stage-i8zh_b7w.so -I /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp -o /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_singular_elimination_pivo1/pops-native-cache/.f21fd3ce9b11d408a2d0dda073ea554d3db0c1708181d138ab16a2a1ef776a2a.pops-stage-i8zh_b7w.so -ldl -pthread -Wl,-rpath,/Users/romaindespoulain/miniforge3/envs/pops-api040/lib -Wl,-commons,use_dylibs /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpicxx.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libmpi.dylib /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/libpmpi.dylib -Wl,-install_name,@rpath/pops_program.so
+E   Compiler output:
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp:416:59: error: use of undeclared identifier 'expression_active_10'; did you mean 'expression_status_10'?
+E     416 |     if (ctx.pointwise_status_max(0, expression_status_10, expression_active_10, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E         |                                                           expression_status_10
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp:338:45: note: 'expression_status_10' declared here
+E     338 |     pops::MultiFab<pops::kNativeDimension>& expression_status_10 = ctx.scalar_scratch(10, 1, u0, 1, 0);
+E         |                                             ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp:416:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')
+E     416 |     if (ctx.pointwise_status_max(0, expression_status_10, expression_active_10, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here
+E     902 |                             const field_type* active_cells, const ExecutionLane& lane) const {
+E         |                                               ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp:518:59: error: use of undeclared identifier 'expression_active_11'; did you mean 'expression_status_11'?
+E     518 |     if (ctx.pointwise_status_max(0, expression_status_11, expression_active_11, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E         |                                                           expression_status_11
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp:422:45: note: 'expression_status_11' declared here
+E     422 |     pops::MultiFab<pops::kNativeDimension>& expression_status_11 = ctx.scalar_scratch(11, 1, u10, 1, 0);
+E         |                                             ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp:518:59: error: no viable conversion from 'pops::MultiFab<pops::kNativeDimension>' to 'const field_type *' (aka 'const MultiFab<2> *')
+E     518 |     if (ctx.pointwise_status_max(0, expression_status_11, expression_active_11, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E   /Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/include/pops/runtime/program/program_context.hpp:902:47: note: passing argument to parameter 'active_cells' here
+E     902 |                             const field_type* active_cells, const ExecutionLane& lane) const {
+E         |                                               ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp:597:59: error: use of undeclared identifier 'expression_active_12'; did you mean 'expression_status_12'?
+E     597 |     if (ctx.pointwise_status_max(1, expression_status_12, expression_active_12, ctx.prepared_execution_lane()) != pops::Real(0)) {
+E         |                                                           ^~~~~~~~~~~~~~~~~~~~
+E         |                                                           expression_status_12
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp:524:45: note: 'expression_status_12' declared here
+E     524 |     pops::MultiFab<pops::kNativeDimension>& expression_status_12 = ctx.scalar_scratch(12, 1, u10, 1, 0);
+E         |                                             ^
+E   /var/folders/5b/7bq9pdq9063c_s1tb05f8sph0000gn/T/tmpzzg7d098/problem.cpp:
+E   Hints: `python -c "import pops; pops.doctor()"` diagnoses the environment (compiler/standard/headers); POPS_CXX forces a specific compiler.
+E   This is GENERATED code emitted by pops.time.Program 'finite_condensed'; the failing source was written to /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest-tmp/test_singular_elimination_pivo1/pops-native-cache/f21fd3ce9b11d408a2d0dda073ea554d3db0c1708181d138ab16a2a1ef776a2a.failed.cpp. Re-run pops.compile(..., debug=True) to keep the .cpp with a full provenance banner (IR + hashes + flags + command).
+----------------------------- Captured stdout call -----------------------------
+[rank 0] finite-singular-pivot-1: compile and publish start
+______ test_public_affine_body_and_local_solve_match_particles_on_amr[2] _______
+tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py:54: in test_public_affine_body_and_local_solve_match_particles_on_amr
+    _root_check(world, check_initial)
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:47: in _root_check
+    assert not failure, failure
+E   AssertionError: AssertionError: a real coarse/fine interface is required
+E     assert np.int64(256) < 256
+E      +  where np.int64(256) = <built-in method sum of numpy.ndarray object at 0x1227855f0>()
+E      +    where <built-in method sum of numpy.ndarray object at 0x1227855f0> = array([[ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True]]).sum
+E      +  and   256 = array([[ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True],\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\n         True,  True,  True,  True,  True,  True,  True]]).size
+E   assert not 'AssertionError: a real coarse/fine interface is required\nassert np.int64(256) < 256\n +  where np.int64(256) = <built-in method sum of numpy.ndarray object at 0x1227855f0>()\n +    where <built-in method sum of numpy.ndarray object at 0x1227855f0> = array([[ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True, ...     [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True],\\n       [ True,  True,  True,  True,  True,  True,  True,  True,  True,\\n         True,  True,  True,  True,  True,  True,  True]]).size'
+----------------------------- Captured stdout call -----------------------------
+[rank 0] affine-local-amr2: compile and publish start
+[rank 0] affine-local-amr2: compile and publish done
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[False-False]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[False-True]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[True-False]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[True-True]
+  tests/python/integration/runtime/test_finite_m09_runtime.py:23: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.parametrize("condensed",(False,True))
+
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_singular_elimination_pivot_is_not_a_monolithic_singularity[False]
+tests/python/integration/runtime/test_finite_m09_runtime.py::test_singular_elimination_pivot_is_not_a_monolithic_singularity[True]
+  tests/python/integration/runtime/test_finite_m09_runtime.py:63: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.parametrize("condensed",(False,True))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-native-serial/pytest.xml -
+=========================== short test summary info ============================
+FAILED tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[False-False]
+FAILED tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[False-True]
+FAILED tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[True-False]
+FAILED tests/python/integration/runtime/test_finite_m09_runtime.py::test_finite_w06_original_equations_and_reconstruction[True-True]
+FAILED tests/python/integration/runtime/test_finite_m09_runtime.py::test_singular_elimination_pivot_is_not_a_monolithic_singularity[False]
+FAILED tests/python/integration/runtime/test_finite_m09_runtime.py::test_singular_elimination_pivot_is_not_a_monolithic_singularity[True]
+FAILED tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py::test_public_affine_body_and_local_solve_match_particles_on_amr[2]
+============= 7 failed, 2 passed, 6 warnings in 173.39s (0:02:53) ==============

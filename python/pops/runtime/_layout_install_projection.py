@@ -133,6 +133,12 @@ class LayoutInstallProjection:
         return self.local.authorities.hierarchy
 
     @property
+    def resolved_tagging(self):
+        if self.parent.layout_amr_authorities.get(self.selected.layout_id) is not self.local:
+            raise ValueError("child install lost its parent AMR tagging authority")
+        return self.parent._resolved_tagging_for_layout(self.selected.layout_id)
+
+    @property
     def amr_transfer(self):
         return self.local.authorities.transfer
 

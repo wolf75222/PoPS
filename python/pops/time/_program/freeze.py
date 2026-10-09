@@ -11,6 +11,8 @@ def freeze_program_tables(program: Any) -> None:
     """Replace every Program-owned container with a detached immutable equivalent."""
     if program._recording:
         raise RuntimeError("Program.freeze() cannot run while an authoring sub-block is active")
+    from .global_history_storage import validate_issuances
+    validate_issuances(program)
     replacements = {
         name: freeze_containers(value)
         for name, value in vars(program).items()

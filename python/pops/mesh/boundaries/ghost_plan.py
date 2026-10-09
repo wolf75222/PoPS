@@ -502,6 +502,18 @@ class GhostProducerPlan:
         data = self.execution_authority.compile_boundary_data()
         if type(data) is not dict:
             raise TypeError("boundary compile authority must return a dict")
+        # Delegate inferred expressions to their exact component, not BindSchema
+        # expression evaluation. The full AST remains in its manifest identity.
+        inferred=getattr(self.execution_authority,"inferred_component_bindings",None)
+        for expected,component in inferred() if callable(inferred) else ():
+            bound=self._binding_map().get(expected.target)
+            if bound is None or bound.canonical_identity()!=expected.canonical_identity():
+                raise ValueError("inferred boundary value delegation lacks its exact component binding")
+            bound.require_component(component)
+            faces=[face for face in data["faces"] if face.get("producer")==expected.target.qualified_id]
+            if len(faces)!=1 or faces[0].get("type")!="external" or faces[0].get("value_protocol")!="native-boundary-component-values@1":
+                raise ValueError("inferred boundary value delegation lacks its exact external face")
+            faces[0]["value_delegate"]=bound.canonical_identity()
         periodic_identifications = []
         for identification in self.topology.periodic:
             orientation = identification.orientation
@@ -763,6 +775,11 @@ class GhostProducerPlan:
 
     def _binding_map(self) -> dict[Handle, BoundaryComponentBinding]:
         return {row.target: row for row in self.component_bindings}
+
+    @property
+    def inferred_component_inputs(self) -> tuple[Any, ...]:
+        factory=getattr(self.execution_authority,"inferred_component_bindings",None)
+        return tuple(component for _,component in factory()) if callable(factory) else ()
 
     def require_component_inputs(self, components: tuple[Any, ...]) -> None:
         """Authenticate every bound component against the explicit resolve input tuple."""

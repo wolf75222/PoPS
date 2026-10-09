@@ -1,6 +1,8 @@
 """GeneratedModule metadata emission for compiled Program artifacts."""
 from __future__ import annotations
 
+from .cpp_strings import cpp_string_literal
+
 import json
 from collections.abc import Iterable
 from typing import Any, cast
@@ -75,7 +77,7 @@ def emit_module_metadata(program: Any, model: Any = None) -> str:
                 field_owners.append(owner_name)
 
     def table(accessor: Any, values: Any) -> str:
-        cases = "".join('    case %d: return %s;\n' % (i, json.dumps(value))
+        cases = "".join('    case %d: return %s;\n' % (i, cpp_string_literal(value))
                         for i, value in enumerate(values))
         return ('extern "C" const char* pops_module_%s(int i) {\n'
                 '  switch (i) {\n%s    default: return "";\n  }\n}\n' % (accessor, cases))

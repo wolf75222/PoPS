@@ -1,0 +1,1101 @@
+{
+  "schema": "sol61.t5-portable-archive.countermodel-reception@1",
+  "status": "received",
+  "authentic_archive": {
+    "status": "received",
+    "archive_sha256": "854974b3447561d22f8c767821cf8ce85eb1c1a8232e2ec3f8f0e56141579a4b",
+    "pinned_files": 48,
+    "actual_files": 49,
+    "total_bytes": 1084339,
+    "symlinks": 0,
+    "relocated_files": 40,
+    "native_execution": false,
+    "scientific_reception": {
+      "schema": "sol61.integral-feedback.offline-reception@1",
+      "scientific_status": "PASS",
+      "source_contract": "8eabb8e2875158e3f4f8a0ed0255b0a63db4b6c4",
+      "source_commit": "634cba3511fef957e65a21fcae3ab257f164b360",
+      "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=7b503163f41cc33040c296679e3b3530a9716c91ecfe4fdce6f69dca6f07dad0;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+      "native_sha256": "8a217a0fff5a131729a842dd222e2e08346034eb53b4f461fc17fc8cc291b563",
+      "dimension": 2,
+      "ranks": 1,
+      "pins_sha256": "e2a8c4e255a0cc2bd6df924682a52ca7e1d4c063e075c6c62a99e25560114b6f",
+      "constants": {
+        "dt": 0.01,
+        "gamma": 0.3,
+        "q0": 0.7,
+        "tolerance": 3e-13
+      },
+      "cases": [
+        {
+          "kind": "restart",
+          "cells": 8,
+          "steps": [
+            {
+              "field_linf_error": 2.220446049250313e-16,
+              "inventory_residual": 8.304988641238964e-17,
+              "native_ledger_residual": 1.951563910473908e-18,
+              "native_incidence_count": 32,
+              "q_before": 0.7,
+              "q_after": 0.7118500624999999,
+              "right_delivery": 0.011850062500000001,
+              "source_inventory": -0.00231,
+              "boundary_inventory": -0.0017463249999999997,
+              "record": {
+                "operation": "pops.transport-operation.v1:sha256:ab5bfe8afb63258ffc298de1fc01f1212bd8020e7b25c1a38c75b0aeeabfa893",
+                "occurrence": "pops.transport-operation.v1:sha256:ab5bfe8afb63258ffc298de1fc01f1212bd8020e7b25c1a38c75b0aeeabfa893/occurrence:pops.handle.v1::model_definition:feedback_physics@pops.module%3Asha256%3A5b77d05ab8883d1772a42299fb3964527b6e7951dcd0be7f84a69e61c8fc5b82::local_rate::balance::target::balance/occurrence:0",
+                "context": "pops.exchange.frame.v1/86:pops.clock.v1::sha256:7cbd789d7cd749a7f395301309b51ef33e22b0f2e94aba4301bed0f034723eea/0/0/0/0/0/1/4576918229304087675/0/267:stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='feedback_lie'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:5",
+                "quadrature": "cell:7:0/axis:0/side:1",
+                "orientation": -1,
+                "measure": 1.0,
+                "flux": 1.18500625,
+                "weight": 0.01,
+                "multiplicity": 1,
+                "axis": 0,
+                "side": 1,
+                "component": 0,
+                "exterior": true,
+                "evaluation": "stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='feedback_lie'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:5"
+              },
+              "clock": "pops.clock.v1::sha256:7cbd789d7cd749a7f395301309b51ef33e22b0f2e94aba4301bed0f034723eea"
+            },
+            {
+              "field_linf_error": 2.220446049250313e-16,
+              "inventory_residual": 4.0115480381963664e-17,
+              "native_ledger_residual": 6.505213034913027e-19,
+              "native_incidence_count": 32,
+              "q_before": 0.7118500624999999,
+              "q_after": 0.7236549032181168,
+              "right_delivery": 0.01180484071811688,
+              "source_inventory": -0.002340442720635689,
+              "boundary_inventory": -0.0017226802566294587,
+              "record": {
+                "operation": "pops.transport-operation.v1:sha256:ab5bfe8afb63258ffc298de1fc01f1212bd8020e7b25c1a38c75b0aeeabfa893",
+                "occurrence": "pops.transport-operation.v1:sha256:ab5bfe8afb63258ffc298de1fc01f1212bd8020e7b25c1a38c75b0aeeabfa893/occurrence:pops.handle.v1::model_definition:feedback_physics@pops.module%3Asha256%3A5b77d05ab8883d1772a42299fb3964527b6e7951dcd0be7f84a69e61c8fc5b82::local_rate::balance::target::balance/occurrence:0",
+                "context": "pops.exchange.frame.v1/86:pops.clock.v1::sha256:7cbd789d7cd749a7f395301309b51ef33e22b0f2e94aba4301bed0f034723eea/1/0/0/0/0/1/4576918229304087675/4576918229304087675/267:stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='feedback_lie'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:5",
+                "quadrature": "cell:7:0/axis:0/side:1",
+                "orientation": -1,
+                "measure": 1.0,
+                "flux": 1.180484071811688,
+                "weight": 0.01,
+                "multiplicity": 1,
+                "axis": 0,
+                "side": 1,
+                "component": 0,
+                "exterior": true,
+                "evaluation": "stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='feedback_lie'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:5"
+              },
+              "clock": "pops.clock.v1::sha256:7cbd789d7cd749a7f395301309b51ef33e22b0f2e94aba4301bed0f034723eea"
+            },
+            {
+              "field_linf_error": 2.220446049250313e-16,
+              "inventory_residual": 4.0115480381963664e-17,
+              "native_ledger_residual": 6.505213034913027e-19,
+              "native_incidence_count": 32,
+              "q_before": 0.7118500624999999,
+              "q_after": 0.7236549032181168,
+              "right_delivery": 0.01180484071811688,
+              "source_inventory": -0.002340442720635689,
+              "boundary_inventory": -0.0017226802566294587,
+              "record": {
+                "operation": "pops.transport-operation.v1:sha256:ab5bfe8afb63258ffc298de1fc01f1212bd8020e7b25c1a38c75b0aeeabfa893",
+                "occurrence": "pops.transport-operation.v1:sha256:ab5bfe8afb63258ffc298de1fc01f1212bd8020e7b25c1a38c75b0aeeabfa893/occurrence:pops.handle.v1::model_definition:feedback_physics@pops.module%3Asha256%3A5b77d05ab8883d1772a42299fb3964527b6e7951dcd0be7f84a69e61c8fc5b82::local_rate::balance::target::balance/occurrence:0",
+                "context": "pops.exchange.frame.v1/86:pops.clock.v1::sha256:7cbd789d7cd749a7f395301309b51ef33e22b0f2e94aba4301bed0f034723eea/1/0/0/0/0/1/4576918229304087675/4576918229304087675/267:stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='feedback_lie'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:5",
+                "quadrature": "cell:7:0/axis:0/side:1",
+                "orientation": -1,
+                "measure": 1.0,
+                "flux": 1.180484071811688,
+                "weight": 0.01,
+                "multiplicity": 1,
+                "axis": 0,
+                "side": 1,
+                "component": 0,
+                "exterior": true,
+                "evaluation": "stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='feedback_lie'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:5"
+              },
+              "clock": "pops.clock.v1::sha256:7cbd789d7cd749a7f395301309b51ef33e22b0f2e94aba4301bed0f034723eea"
+            }
+          ],
+          "file_sha256": {
+            "initial": {
+              "checkpoint": "a6c4d11c0fcc26e75d3a40c1f24cb6c466c03fbfe8d77b1ed2afc1355f6f6fd1",
+              "receipt": "255625bf51741016edd73f63c3d0e76ce7f653c7e643f4ca1a96fd63b64e2907",
+              "state": "10a05a812328fb3df18e6a509d16e379a2c85b88632a044a0a03832f0038bfde"
+            },
+            "accepted": {
+              "checkpoint": "ed56f88276147c8a5450ab0f6e62d56835f4a97012028bf60a4e3a2459525c7a",
+              "receipt": "c5300ce61a54746a1b4b9626ebbadd9d5b412b2eb864d4044d07baf3530ffbe8",
+              "state": "1fb01d96eb9839984bba589d3d2781e862626309ed5b31100580190d2b0d2143"
+            },
+            "continuous": {
+              "checkpoint": "d3d874ce16a442edeab18c42d541966f1eed9bfa87cb957f78e6699c9fcbb587",
+              "receipt": "c680ed50e145626442ca71076eed9f073091d48f43ab17084ebed715ee236cc2",
+              "state": "3f96af591b4602f63bac79eb0ec2b4eb94b122167b52bfaa89def5eac5c15a1c"
+            },
+            "restored": {
+              "checkpoint": "ed56f88276147c8a5450ab0f6e62d56835f4a97012028bf60a4e3a2459525c7a",
+              "receipt": "a2ebfc5fe726912f6ed73f757d744c119362561533a084348bdf9aa165ff3be6",
+              "state": "1fb01d96eb9839984bba589d3d2781e862626309ed5b31100580190d2b0d2143"
+            },
+            "replayed": {
+              "checkpoint": "18f8dadce687fce93112fd583c278cfb3a3413eaadba4a9bb2c7b0a60d847e21",
+              "receipt": "d39047c91e55a9ebb93b89610a0a6ce714f50945998015f613c0882f571845e1",
+              "state": "3f96af591b4602f63bac79eb0ec2b4eb94b122167b52bfaa89def5eac5c15a1c"
+            }
+          }
+        },
+        {
+          "kind": "restart",
+          "cells": 16,
+          "steps": [
+            {
+              "field_linf_error": 2.220446049250313e-16,
+              "inventory_residual": 5.421010862427522e-17,
+              "native_ledger_residual": 8.673617379884035e-19,
+              "native_incidence_count": 64,
+              "q_before": 0.7,
+              "q_after": 0.7119124312499999,
+              "right_delivery": 0.011912431250000003,
+              "source_inventory": -0.00231,
+              "boundary_inventory": -0.0018710625000000003,
+              "record": {
+                "operation": "pops.transport-operation.v1:sha256:ab5bfe8afb63258ffc298de1fc01f1212bd8020e7b25c1a38c75b0aeeabfa893",
+                "occurrence": "pops.transport-operation.v1:sha256:ab5bfe8afb63258ffc298de1fc01f1212bd8020e7b25c1a38c75b0aeeabfa893/occurrence:pops.handle.v1::model_definition:feedback_physics@pops.module%3Asha256%3A5b77d05ab8883d1772a42299fb3964527b6e7951dcd0be7f84a69e61c8fc5b82::local_rate::balance::target::balance/occurrence:0",
+                "context": "pops.exchange.frame.v1/86:pops.clock.v1::sha256:7cbd789d7cd749a7f395301309b51ef33e22b0f2e94aba4301bed0f034723eea/0/0/0/0/0/1/4576918229304087675/0/267:stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='feedback_lie'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:5",
+                "quadrature": "cell:15:0/axis:0/side:1",
+                "orientation": -1,
+                "measure": 1.0,
+                "flux": 1.1912431250000002,
+                "weight": 0.01,
+                "multiplicity": 1,
+                "axis": 0,
+                "side": 1,
+                "component": 0,
+                "exterior": true,
+                "evaluation": "stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='feedback_lie'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:5"
+              },
+              "clock": "pops.clock.v1::sha256:7cbd789d7cd749a7f395301309b51ef33e22b0f2e94aba4301bed0f034723eea"
+            },
+            {
+              "field_linf_error": 2.220446049250313e-16,
+              "inventory_residual": 3.2526065174565133e-18,
+              "native_ledger_residual": 2.168404344971009e-19,
+              "native_incidence_count": 64,
+              "q_before": 0.7119124312499999,
+              "q_after": 0.7237795053013649,
+              "right_delivery": 0.011867074051365053,
+              "source_inventory": -0.00234038137201625,
+              "boundary_inventory": -0.0018471510270847214,
+              "record": {
+                "operation": "pops.transport-operation.v1:sha256:ab5bfe8afb63258ffc298de1fc01f1212bd8020e7b25c1a38c75b0aeeabfa893",
+                "occurrence": "pops.transport-operation.v1:sha256:ab5bfe8afb63258ffc298de1fc01f1212bd8020e7b25c1a38c75b0aeeabfa893/occurrence:pops.handle.v1::model_definition:feedback_physics@pops.module%3Asha256%3A5b77d05ab8883d1772a42299fb3964527b6e7951dcd0be7f84a69e61c8fc5b82::local_rate::balance::target::balance/occurrence:0",
+                "context": "pops.exchange.frame.v1/86:pops.clock.v1::sha256:7cbd789d7cd749a7f395301309b51ef33e22b0f2e94aba4301bed0f034723eea/1/0/0/0/0/1/4576918229304087675/4576918229304087675/267:stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='feedback_lie'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:5",
+                "quadrature": "cell:15:0/axis:0/side:1",
+                "orientation": -1,
+                "measure": 1.0,
+                "flux": 1.1867074051365052,
+                "weight": 0.01,
+                "multiplicity": 1,
+                "axis": 0,
+                "side": 1,
+                "component": 0,
+                "exterior": true,
+                "evaluation": "stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='feedback_lie'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:5"
+              },
+              "clock": "pops.clock.v1::sha256:7cbd789d7cd749a7f395301309b51ef33e22b0f2e94aba4301bed0f034723eea"
+            },
+            {
+              "field_linf_error": 2.220446049250313e-16,
+              "inventory_residual": 3.2526065174565133e-18,
+              "native_ledger_residual": 2.168404344971009e-19,
+              "native_incidence_count": 64,
+              "q_before": 0.7119124312499999,
+              "q_after": 0.7237795053013649,
+              "right_delivery": 0.011867074051365053,
+              "source_inventory": -0.00234038137201625,
+              "boundary_inventory": -0.0018471510270847214,
+              "record": {
+                "operation": "pops.transport-operation.v1:sha256:ab5bfe8afb63258ffc298de1fc01f1212bd8020e7b25c1a38c75b0aeeabfa893",
+                "occurrence": "pops.transport-operation.v1:sha256:ab5bfe8afb63258ffc298de1fc01f1212bd8020e7b25c1a38c75b0aeeabfa893/occurrence:pops.handle.v1::model_definition:feedback_physics@pops.module%3Asha256%3A5b77d05ab8883d1772a42299fb3964527b6e7951dcd0be7f84a69e61c8fc5b82::local_rate::balance::target::balance/occurrence:0",
+                "context": "pops.exchange.frame.v1/86:pops.clock.v1::sha256:7cbd789d7cd749a7f395301309b51ef33e22b0f2e94aba4301bed0f034723eea/1/0/0/0/0/1/4576918229304087675/4576918229304087675/267:stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='feedback_lie'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:5",
+                "quadrature": "cell:15:0/axis:0/side:1",
+                "orientation": -1,
+                "measure": 1.0,
+                "flux": 1.1867074051365052,
+                "weight": 0.01,
+                "multiplicity": 1,
+                "axis": 0,
+                "side": 1,
+                "component": 0,
+                "exterior": true,
+                "evaluation": "stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='feedback_lie'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:5"
+              },
+              "clock": "pops.clock.v1::sha256:7cbd789d7cd749a7f395301309b51ef33e22b0f2e94aba4301bed0f034723eea"
+            }
+          ],
+          "file_sha256": {
+            "initial": {
+              "checkpoint": "7ec2392b4ae289d2fd15e3a0afd699b21c8c3e92af22ad09856794e031bfdfd5",
+              "receipt": "e41b08859e613cf426e457e137216555dfc7e5211bfe11c9686d1332210c0edb",
+              "state": "ff66e119b96e39ed43344a2530734f2f2d2c6f4d6a133c08cd762ae5146949c7"
+            },
+            "accepted": {
+              "checkpoint": "3a2ce069e51c608c24102ba670869ad9580afdc0557739b3bfff0243aa40b33f",
+              "receipt": "7457202c0363efdc06a85ebf78f741f69649ba343cc1c6807b9dbe1e8dbf6a4e",
+              "state": "0facd95aae903e0769475879ff6ab3a8a924d915330ea6f49a20ca392a86db99"
+            },
+            "continuous": {
+              "checkpoint": "ec23911de42d20fd764cecc419476efa3a2a993441c62e3c6a6a50e78b1eec0f",
+              "receipt": "26e740e55aa91a00aa4845f25ac7d7601cc71e616d5dc784f5c40dc9b0892d6d",
+              "state": "b8e7d920f2f34566bf792389037b12ca84b97c7badd9ffc84d80a68f5faad899"
+            },
+            "restored": {
+              "checkpoint": "3a2ce069e51c608c24102ba670869ad9580afdc0557739b3bfff0243aa40b33f",
+              "receipt": "1efa31c4672a2a7bbc383f5075d94ff1733b670de2811db0d650360d2bdb9bce",
+              "state": "0facd95aae903e0769475879ff6ab3a8a924d915330ea6f49a20ca392a86db99"
+            },
+            "replayed": {
+              "checkpoint": "72e5dfcc58f89b1bbe280fed281f1c182566c74419c1a0682b85890be4fa8ed5",
+              "receipt": "74ae62add97f8b302b070041d40f435b5721260387a023fab5b8957f269e0c87",
+              "state": "b8e7d920f2f34566bf792389037b12ca84b97c7badd9ffc84d80a68f5faad899"
+            }
+          }
+        },
+        {
+          "kind": "retry",
+          "cells": 8,
+          "steps": [
+            {
+              "field_linf_error": 2.220446049250313e-16,
+              "inventory_residual": 8.304988641238964e-17,
+              "native_ledger_residual": 1.951563910473908e-18,
+              "native_incidence_count": 32,
+              "q_before": 0.7,
+              "q_after": 0.7118500624999999,
+              "right_delivery": 0.011850062500000001,
+              "source_inventory": -0.00231,
+              "boundary_inventory": -0.0017463249999999997,
+              "record": {
+                "operation": "pops.transport-operation.v1:sha256:ab5bfe8afb63258ffc298de1fc01f1212bd8020e7b25c1a38c75b0aeeabfa893",
+                "occurrence": "pops.transport-operation.v1:sha256:ab5bfe8afb63258ffc298de1fc01f1212bd8020e7b25c1a38c75b0aeeabfa893/occurrence:pops.handle.v1::model_definition:feedback_physics@pops.module%3Asha256%3A5b77d05ab8883d1772a42299fb3964527b6e7951dcd0be7f84a69e61c8fc5b82::local_rate::balance::target::balance/occurrence:0",
+                "context": "pops.exchange.frame.v1/86:pops.clock.v1::sha256:7cbd789d7cd749a7f395301309b51ef33e22b0f2e94aba4301bed0f034723eea/0/0/0/0/0/1/4576918229304087675/0/267:stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='feedback_lie'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:5",
+                "quadrature": "cell:7:0/axis:0/side:1",
+                "orientation": -1,
+                "measure": 1.0,
+                "flux": 1.18500625,
+                "weight": 0.01,
+                "multiplicity": 1,
+                "axis": 0,
+                "side": 1,
+                "component": 0,
+                "exterior": true,
+                "evaluation": "stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='feedback_lie'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:5"
+              },
+              "clock": "pops.clock.v1::sha256:7cbd789d7cd749a7f395301309b51ef33e22b0f2e94aba4301bed0f034723eea"
+            }
+          ],
+          "file_sha256": {
+            "before": {
+              "checkpoint": "56fe681eef439beed957b61cf90d0d8312fc573d89a4273ffb3fac464e4274fb",
+              "receipt": "146be8ce58944c6c7c5888e9aca5d299ee6135f367ca29298ead8802671da1a2",
+              "state": "10a05a812328fb3df18e6a509d16e379a2c85b88632a044a0a03832f0038bfde"
+            },
+            "rejected": {
+              "checkpoint": "330278b14ad518d67336daa9fb99eb77ad7ca06fe6f0574d5285175b6a4b9723",
+              "receipt": "073a85f4627059e93672f6ef1eae8c8124eb6e617aa9125de7009316539d739e",
+              "state": "10a05a812328fb3df18e6a509d16e379a2c85b88632a044a0a03832f0038bfde"
+            },
+            "retried": {
+              "checkpoint": "ce5677fee120bd3e78dfa57ef8c22dd7987f26529c46a17fb6147c45c212cf1c",
+              "receipt": "a9e0a1cb15f8ce3e37458891886e55fbce487e0fde9dedc5f33fc6e2e1431294",
+              "state": "1fb01d96eb9839984bba589d3d2781e862626309ed5b31100580190d2b0d2143"
+            }
+          }
+        }
+      ],
+      "limitation": "Offline saved-state/ledger reception; no new PoPS/native/MPI execution."
+    }
+  },
+  "protocol_countermodels": [
+    {
+      "countermodel": "internal_symlink_same_hash",
+      "original_checker_status": "received",
+      "strict_refusal": "archive symlink entry: t5-sdk7b/positive/restart-n8/accepted-state.npz",
+      "external_root_manifest_unchanged": true,
+      "harness_manifest_sha256": "854974b3447561d22f8c767821cf8ce85eb1c1a8232e2ec3f8f0e56141579a4b",
+      "NOT_ROOT_OWNER_AUTHORITY": true
+    },
+    {
+      "countermodel": "extra_empty_directory",
+      "original_checker_status": "received",
+      "strict_refusal": "archive directory inventory differs",
+      "external_root_manifest_unchanged": true,
+      "harness_manifest_sha256": "854974b3447561d22f8c767821cf8ce85eb1c1a8232e2ec3f8f0e56141579a4b",
+      "NOT_ROOT_OWNER_AUTHORITY": true
+    },
+    {
+      "countermodel": "duplicate_mapping_row",
+      "original_checker_status": "received",
+      "strict_refusal": "wrong archive mapping count",
+      "external_root_manifest_unchanged": false,
+      "harness_manifest_sha256": "12bd9cdb2912a2196604512a289b499b6db2a57421ec090de461d72ae8330e43",
+      "NOT_ROOT_OWNER_AUTHORITY": true
+    },
+    {
+      "countermodel": "dangling_mapping_row",
+      "original_checker_status": "received",
+      "strict_refusal": "wrong archive mapping count",
+      "external_root_manifest_unchanged": false,
+      "harness_manifest_sha256": "19347ad9f67820ad3521e9ceacdf322da9349ceff963f87a249107e7dddc77ed",
+      "NOT_ROOT_OWNER_AUTHORITY": true
+    },
+    {
+      "countermodel": "absolute_portable_mapping",
+      "original_checker_status": "received",
+      "strict_refusal": "nonportable archive path",
+      "external_root_manifest_unchanged": false,
+      "harness_manifest_sha256": "1929af4230fa9dd2e224c302cb891d5cb322a457bca5a4590b68cf56badc4d5a",
+      "NOT_ROOT_OWNER_AUTHORITY": true
+    },
+    {
+      "countermodel": "duplicate_inventory_row",
+      "original_checker_status": "received",
+      "strict_refusal": "wrong archive file count",
+      "external_root_manifest_unchanged": false,
+      "harness_manifest_sha256": "d162bae67ec02c03576aea375786aa331781fdd46258295f0b950970f8568238",
+      "NOT_ROOT_OWNER_AUTHORITY": true
+    },
+    {
+      "countermodel": "duplicate_json_key",
+      "original_checker_status": "received",
+      "strict_refusal": "duplicate JSON key",
+      "external_root_manifest_unchanged": false,
+      "harness_manifest_sha256": "e295e17f18c0f82742e72897d18694f3b9960705eb6334ee89af63e972a6e67a",
+      "NOT_ROOT_OWNER_AUTHORITY": true
+    },
+    {
+      "countermodel": "changed_historical_source_snapshot",
+      "original_checker_status": "received",
+      "strict_refusal": "frozen historical source/oracle differs: source/test_public_integral_feedback.py",
+      "external_root_manifest_unchanged": false,
+      "harness_manifest_sha256": "245755c9732e9909ab0213b80de3412997eb24e4b8b9db5e0768f6370cf7eb41",
+      "NOT_ROOT_OWNER_AUTHORITY": true
+    }
+  ],
+  "scientific_countermodels": [
+    {
+      "countermodel": "wrong_q_in_original_reaction",
+      "phase": "accepted",
+      "expected_refusal": "reaction/candidate q capture or FV field update mismatch",
+      "all_40_external_file_pins_verified": true,
+      "mutation_delta": {
+        "state_shape_before": [
+          1,
+          1,
+          8
+        ],
+        "state_shape_after": [
+          1,
+          1,
+          8
+        ],
+        "state_linf_delta": 4.214474728136963e-05,
+        "q_delta": 0.0,
+        "changed_native_record_fields": []
+      },
+      "resealed_phase_sha256": {
+        "checkpoint": "540176eff7c96a66c49bb814c1157cb013cf31d1e091acb0a29bd497b5001840",
+        "receipt": "e6719f5bf119d4aba5ed2b062392ab5ebb670ae9b02289274e27216f32abd497",
+        "state": "22096da5b4a43b60035572ebd958a220fce3d63733c8a26c7c58a7f2d3866c10"
+      },
+      "resealed_pins_sha256": "52f85249a28c242b07dd0eaa2cb1135f140e86f9251e6d8cbbf0f32689ec068c",
+      "provenance": "adversarial harness copies; NOT root-owner pins/native positive receipts"
+    },
+    {
+      "countermodel": "right_face_flux",
+      "phase": "accepted",
+      "expected_refusal": "ledger physical flux/measure/duration/orientation mismatch",
+      "all_40_external_file_pins_verified": true,
+      "mutation_delta": {
+        "state_shape_before": [
+          1,
+          1,
+          8
+        ],
+        "state_shape_after": [
+          1,
+          1,
+          8
+        ],
+        "state_linf_delta": 0.0,
+        "q_delta": 0.0,
+        "changed_native_record_fields": [
+          {
+            "rank": 0,
+            "record": 29,
+            "fields": [
+              "flux"
+            ]
+          }
+        ]
+      },
+      "resealed_phase_sha256": {
+        "checkpoint": "371487a8f60044ca5e1ca249823835dd5441734e5104e2378c79f14017543e8f",
+        "receipt": "eb070ebdef7612337da74e5ff059107bc94b4ef1b8249877ed973f25055eea6e",
+        "state": "1fb01d96eb9839984bba589d3d2781e862626309ed5b31100580190d2b0d2143"
+      },
+      "resealed_pins_sha256": "92caf4479e7eb92f345be9f1cd6b6f6c91a50b23106887f3db8f4f959a81e188",
+      "provenance": "adversarial harness copies; NOT root-owner pins/native positive receipts"
+    },
+    {
+      "countermodel": "omitted_negative_trace_scale",
+      "phase": "accepted",
+      "expected_refusal": "reaction/candidate q capture or FV field update mismatch",
+      "all_40_external_file_pins_verified": true,
+      "mutation_delta": {
+        "state_shape_before": [
+          1,
+          1,
+          8
+        ],
+        "state_shape_after": [
+          1,
+          1,
+          8
+        ],
+        "state_linf_delta": 0.0,
+        "q_delta": -0.02370012499999996,
+        "changed_native_record_fields": []
+      },
+      "resealed_phase_sha256": {
+        "checkpoint": "3c46bfcfc3ab999210c0bd732361fe811afb817a4b3c559aaae9b962d6bf148a",
+        "receipt": "f46c705d812c2271a048631c83b7afdfc43b60c93c06b97e2d3342dd4acfe363",
+        "state": "9653171ffb59721d4e5d078ee709b03980194dbad0358dff8b7fb64fb3e50b87"
+      },
+      "resealed_pins_sha256": "dbbde721402c9a6fefa6e942407540afb814d1873dd2e97d95c1b0600570e6ed",
+      "provenance": "adversarial harness copies; NOT root-owner pins/native positive receipts"
+    },
+    {
+      "countermodel": "transpose_physical_axes",
+      "phase": "accepted",
+      "expected_refusal": "T5 state shape/type/finitude mismatch",
+      "all_40_external_file_pins_verified": true,
+      "mutation_delta": {
+        "state_shape_before": [
+          1,
+          1,
+          8
+        ],
+        "state_shape_after": [
+          1,
+          8,
+          1
+        ],
+        "state_linf_delta": 0.0,
+        "q_delta": 0.0,
+        "changed_native_record_fields": []
+      },
+      "resealed_phase_sha256": {
+        "checkpoint": "0cadf4e5fd251913565ed7f28b945e478e7da15f23cf93bc3c61d8d0409a9e7b",
+        "receipt": "82fb799894161a4a98eb18b7c3213c08d7b2118c538c64f29e7751eb152ea899",
+        "state": "9da241b94a68a910b2d622b13bbdf2f3f198ebf6ed30ee3058c424f74218f00e"
+      },
+      "resealed_pins_sha256": "27e5d3e9557126c8bc41f54992c49a516529da6c6b7071b04a87ccc00ed13031",
+      "provenance": "adversarial harness copies; NOT root-owner pins/native positive receipts"
+    },
+    {
+      "countermodel": "interior_trace_with_right_amount",
+      "phase": "accepted",
+      "expected_refusal": "wrong physical right endpoint cell",
+      "all_40_external_file_pins_verified": true,
+      "mutation_delta": {
+        "state_shape_before": [
+          1,
+          1,
+          8
+        ],
+        "state_shape_after": [
+          1,
+          1,
+          8
+        ],
+        "state_linf_delta": 0.0,
+        "q_delta": 0.0,
+        "changed_native_record_fields": [
+          {
+            "rank": 0,
+            "record": 25,
+            "fields": [
+              "flux",
+              "exterior"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 29,
+            "fields": [
+              "exterior"
+            ]
+          }
+        ]
+      },
+      "resealed_phase_sha256": {
+        "checkpoint": "40a4cb13a367be8e4bd54cc2d230540a6c69ea5cb1a2d81e6fc49018ac80eb87",
+        "receipt": "93efba5f30a0387023c493b047db04f175ac41172678b2a9c5649c717c258600",
+        "state": "1fb01d96eb9839984bba589d3d2781e862626309ed5b31100580190d2b0d2143"
+      },
+      "resealed_pins_sha256": "c1fe72321bc9699c2135d9eadcbfb7a2c1986ed2ec4afafb3faa31bbe3d1252d",
+      "provenance": "adversarial harness copies; NOT root-owner pins/native positive receipts"
+    },
+    {
+      "countermodel": "duration_one_ulp",
+      "phase": "accepted",
+      "expected_refusal": "wrong runtime interval/duration authority",
+      "all_40_external_file_pins_verified": true,
+      "mutation_delta": {
+        "state_shape_before": [
+          1,
+          1,
+          8
+        ],
+        "state_shape_after": [
+          1,
+          1,
+          8
+        ],
+        "state_linf_delta": 0.0,
+        "q_delta": 0.0,
+        "changed_native_record_fields": [
+          {
+            "rank": 0,
+            "record": 29,
+            "fields": [
+              "context"
+            ]
+          }
+        ]
+      },
+      "resealed_phase_sha256": {
+        "checkpoint": "b268ee7930f545b2e65fc80839b65b79fb6fb0eaa92826624ed7b9440fc7a7ed",
+        "receipt": "3d1f9f2c6bd7982d92cf513a67e6905df365393f6544f32d12edc52361255cf0",
+        "state": "1fb01d96eb9839984bba589d3d2781e862626309ed5b31100580190d2b0d2143"
+      },
+      "resealed_pins_sha256": "2ae7651e66a6e8da00571f2cc016bac831be8fd8e8d8917feb972d273333d88a",
+      "provenance": "adversarial harness copies; NOT root-owner pins/native positive receipts"
+    },
+    {
+      "countermodel": "foreign_declared_clock",
+      "phase": "accepted",
+      "expected_refusal": "trace uses a foreign declared clock",
+      "all_40_external_file_pins_verified": true,
+      "mutation_delta": {
+        "state_shape_before": [
+          1,
+          1,
+          8
+        ],
+        "state_shape_after": [
+          1,
+          1,
+          8
+        ],
+        "state_linf_delta": 0.0,
+        "q_delta": 0.0,
+        "changed_native_record_fields": [
+          {
+            "rank": 0,
+            "record": 29,
+            "fields": [
+              "context"
+            ]
+          }
+        ]
+      },
+      "resealed_phase_sha256": {
+        "checkpoint": "8f04ec0fb8fe391bf7a5247c4778d60c90a9cf3a30b39ba31fc75f9b81963558",
+        "receipt": "2f467dc34c4108bb0f99a7ec5f72f4ddc478dff7b2cbc309a9cfc9752d2a6220",
+        "state": "1fb01d96eb9839984bba589d3d2781e862626309ed5b31100580190d2b0d2143"
+      },
+      "resealed_pins_sha256": "87d091d46b65bd36021d6bf309e0e3df95e93f2ee0ac30f1c32441d816bea26b",
+      "provenance": "adversarial harness copies; NOT root-owner pins/native positive receipts"
+    },
+    {
+      "countermodel": "restore_physical_state",
+      "phase": "restored",
+      "expected_refusal": "restart restore did not preserve exact state/q/clock/rank-ledger bytes",
+      "all_40_external_file_pins_verified": true,
+      "mutation_delta": {
+        "state_shape_before": [
+          1,
+          1,
+          8
+        ],
+        "state_shape_after": [
+          1,
+          1,
+          8
+        ],
+        "state_linf_delta": 0.0009999999999998899,
+        "q_delta": 0.0,
+        "changed_native_record_fields": []
+      },
+      "resealed_phase_sha256": {
+        "checkpoint": "5496947415759600752fc3943ff6145e5479405669ec9f6128db6539cd3c253d",
+        "receipt": "6115d47ca8cbf3922e47b866474557bf05f370734da96b58c96788827bfcefc1",
+        "state": "4b08c994291b1b125d6f89a58755cb61cc807ae4ee739467b742ab2368f70283"
+      },
+      "resealed_pins_sha256": "b025704b1bf54e5fd9078dfa92b693dfe28886554d6ed575f108b57d0d605dca",
+      "provenance": "adversarial harness copies; NOT root-owner pins/native positive receipts"
+    },
+    {
+      "countermodel": "rejected_attempt_state",
+      "phase": "rejected",
+      "expected_refusal": "rejected attempt did not preserve exact state/q/clock/rank-ledger bytes",
+      "all_40_external_file_pins_verified": true,
+      "mutation_delta": {
+        "state_shape_before": [
+          1,
+          1,
+          8
+        ],
+        "state_shape_after": [
+          1,
+          1,
+          8
+        ],
+        "state_linf_delta": 0.0009999999999998899,
+        "q_delta": 0.0,
+        "changed_native_record_fields": []
+      },
+      "resealed_phase_sha256": {
+        "checkpoint": "29101bbe6947a7d10d8e6899484ca698d98e103f842ff199267362f698e95513",
+        "receipt": "445269de11c1c2184947cdcd8f6abc0933e11682bc28ddc51285ec9a5fcdd089",
+        "state": "de2a9f9802760ce5c609e054845244a019c0098b1a45e6bfbd24d275bcdfc367"
+      },
+      "resealed_pins_sha256": "95df1e499a13e4c3e6efdda7a59e381a6ccfad2f97c0cd366e69ac84b0a78e2f",
+      "provenance": "adversarial harness copies; NOT root-owner pins/native positive receipts"
+    },
+    {
+      "countermodel": "source_reads_post_transport_snapshot",
+      "refusal": "reaction/candidate q capture or FV field update mismatch",
+      "all_40_file_pins_verified": true,
+      "authenticated_snapshot_before_scientific_refusal": true,
+      "mutation_delta": {
+        "state_shape_before": [
+          1,
+          1,
+          8
+        ],
+        "state_shape_after": [
+          1,
+          1,
+          8
+        ],
+        "state_linf_delta": 9.419234999974435e-06,
+        "q_delta": 9.42805500336874e-08,
+        "changed_native_record_fields": [
+          {
+            "rank": 0,
+            "record": 0,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 1,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 4,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 5,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 8,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 9,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 12,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 13,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 16,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 17,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 20,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 21,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 24,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 25,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 28,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 29,
+            "fields": [
+              "flux"
+            ]
+          }
+        ]
+      },
+      "counterfactual_inventory_residual": 1.1557595158695477e-16,
+      "counterfactual_source_inventory": -0.0023014817174999425,
+      "original_source_inventory": -0.00231,
+      "harness_pins_sha256": "8c1b07ce752a0f33b0444770f205f54a12b4aedff44cc39a8eed2bed99172dd5",
+      "NOT_ROOT_OWNER_AUTHORITY": true
+    },
+    {
+      "countermodel": "capture_reads_endpoint_quantity",
+      "refusal": "reaction/candidate q capture or FV field update mismatch",
+      "all_40_file_pins_verified": true,
+      "authenticated_snapshot_before_scientific_refusal": true,
+      "mutation_delta": {
+        "state_shape_before": [
+          1,
+          1,
+          8
+        ],
+        "state_shape_after": [
+          1,
+          1,
+          8
+        ],
+        "state_linf_delta": 4.214474728136963e-05,
+        "q_delta": -4.2215847650961535e-07,
+        "changed_native_record_fields": [
+          {
+            "rank": 0,
+            "record": 0,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 1,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 4,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 5,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 8,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 9,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 12,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 13,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 16,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 17,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 20,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 21,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 24,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 25,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 28,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 29,
+            "fields": [
+              "flux"
+            ]
+          }
+        ]
+      },
+      "counterfactual_inventory_residual": 1.8756697583999227e-16,
+      "counterfactual_source_inventory": -0.0023491052062500073,
+      "original_source_inventory": -0.00231,
+      "harness_pins_sha256": "8760ab3b2c4af94b5d8eced04cb7274c6b816b5428e6ae333a4bcc1b5b893baf",
+      "NOT_ROOT_OWNER_AUTHORITY": true
+    },
+    {
+      "countermodel": "physical_source_evaluated_twice",
+      "refusal": "reaction/candidate q capture or FV field update mismatch",
+      "all_40_file_pins_verified": true,
+      "authenticated_snapshot_before_scientific_refusal": true,
+      "mutation_delta": {
+        "state_shape_before": [
+          1,
+          1,
+          8
+        ],
+        "state_shape_after": [
+          1,
+          1,
+          8
+        ],
+        "state_linf_delta": 0.0024895499999999515,
+        "q_delta": -2.493749999998851e-05,
+        "changed_native_record_fields": [
+          {
+            "rank": 0,
+            "record": 0,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 1,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 4,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 5,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 8,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 9,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 12,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 13,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 16,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 17,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 20,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 21,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 24,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 25,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 28,
+            "fields": [
+              "flux"
+            ]
+          },
+          {
+            "rank": 0,
+            "record": 29,
+            "fields": [
+              "flux"
+            ]
+          }
+        ]
+      },
+      "counterfactual_inventory_residual": 1.8323016715005025e-16,
+      "counterfactual_source_inventory": -0.004619999999999985,
+      "original_source_inventory": -0.00231,
+      "harness_pins_sha256": "eaaeea0cbe3f6283bff34b7f96e87b5b9d5b8e52432c0ef2f45756fe6a67eed8",
+      "NOT_ROOT_OWNER_AUTHORITY": true
+    }
+  ],
+  "root_archive_reverified_unchanged": true,
+  "countermodel_workspace": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-sol61-t5-archive-reception/outputs/sol61-t5-portable-negative-countermodels-v3",
+  "cold_relocation_received_with_original_files_denied": 89,
+  "cold_pops_import_forbidden": true,
+  "countermodel_authority": "explicit negative harness reseals, NOT root owner seals or native positive receipts"
+}

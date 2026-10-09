@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="1.186" timestamp="2026-10-08T23:55:50.234881+02:00" hostname="macbookpro.home"><testcase classname="PoPS-diffusion-field-source-review-20261008.test_diffusion_frozen_input_quadrature_v2" name="test_weno_state_reconstruction_keeps_pointwise_provider_face_support" time="0.690"><failure message="assert {3} == {1}&#10;  &#10;  Extra items in the left set:&#10;  3&#10;  Extra items in the right set:&#10;  1&#10;  Use -v to get more diff">def test_weno_state_reconstruction_keeps_pointwise_provider_face_support():
+        import pops
+        from pops import math
+        from pops.domain import Rectangle
+        from pops.frames import Cartesian2D
+        from pops.numerics import FiniteVolume, DiscretizationPlan, variables, riemann, reconstruction
+        from pops.time import Program, FixedDt
+        from pops.layouts import Uniform
+        from pops.mesh import CartesianGrid, PeriodicAxes
+        from pops.codegen.module_lowering import lower_and_validate
+        from pops.codegen._native_auxiliary_shapes import native_auxiliary_halos
+        from pops.codegen._compile_emit import _emit_auxiliary_route_registration
+        from pops.codegen.program_codegen import emit_cpp_program
+    
+        frame = Rectangle("fv-support-domain", (0, 0), (1, 1)).frame(Cartesian2D())
+        model = pops.Model("variable-velocity-material", frame=frame)
+        state = model.state("inventory", components=("inventory",))
+        speed = model.aux("imposed_speed")
+        flux = model.flux("physical-transport", frame=frame, state=state,
+            components={frame.x: (speed * state[0],), frame.y: (0 * state[0],)},
+            waves={frame.x: (speed,), frame.y: (0,)})
+        rate = model.rate("conservation", equation=math.ddt(state) == -math.div(flux))
+        case = pops.Case("provider-face-support")
+        block = case.block("material", model)
+        methods = DiscretizationPlan()
+        methods.rates.add(rate, FiniteVolume(flux=flux, variables=variables.Conservative(state),
+            reconstruction=reconstruction.WENO5(), riemann=riemann.Rusanov()))
+        case.numerics(methods, block=block)
+        program = Program("advance-material")
+        q = program.state(block[state])
+        fields = program.input_fields(q.n, for_rate=rate)
+        rhs = rate(q.n, fields)
+        endpoint = program.value("actual-endpoint", q.n + program.dt * rhs, at=q.next.point)
+        program.commit(q.next, endpoint)
+        program.step_strategy(FixedDt(1e-5))
+        case.program(program)
+        resolved = pops.resolve(pops.validate(case), layout=Uniform(CartesianGrid(
+            frame=frame, cells=(16, 16), periodic=PeriodicAxes(frame.axes))))
+        selected = resolved.blocks[0]
+        emitter, _ = lower_and_validate(selected.model,
+            resolved_operations=selected.resolved_operations, numerics=selected.numerics)
+        reads = [(operation.stencil_radius, read.sampling)
+                 for operation in selected.resolved_operations.operations
+                 for read in operation.inputs if read.kind == "field"]
+        assert reads and all(radius == 3 and sampling == "face_trace"
+                             for radius, sampling in reads)
+&gt;       assert set(native_auxiliary_halos(emitter._m).values()) == {1}
+E       assert {3} == {1}
+E         
+E         Extra items in the left set:
+E         3
+E         Extra items in the right set:
+E         1
+E         Use -v to get more diff
+
+../PoPS-diffusion-field-source-review-20261008/test_diffusion_frozen_input_quadrature_v2.py:799: AssertionError</failure></testcase></testsuite></testsuites>

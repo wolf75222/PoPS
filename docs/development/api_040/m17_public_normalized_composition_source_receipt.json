@@ -1,0 +1,34 @@
+{
+  "cohort": {
+    "passed": 39,
+    "seconds": 355.84,
+    "sha256": "6974f62223e6672eaa1704ee405e506e965d2c79eeabd6489ae9fdcdc52ad6eb",
+    "xml": "/tmp/sol61-m17-final-source.xml"
+  },
+  "files": {
+    "include/pops/numerics/moments/density_path_arithmetic.hpp": "a67aba0d46665ed6d38e11caab78f59a625a92a1a4950ef76280c0937e9d315b",
+    "include/pops/numerics/moments/normalized_moment_path.hpp": "2fa32bc33a5e36c61d6b03f4f310fefefb6fbc9a961ef0e9bf5e83cdec57f31e",
+    "python/pops/codegen/moment_path_kernel.py": "c98a3c8b16c9c3371a869daf01e68541fd4a0923f695a98c1abb01fb4310a084",
+    "python/pops/moments/fan_li.py": "e9cc6f29b2c9ed7ab8d923005feb3d4e6842f70aa2568785be0a2693d1eb0cff",
+    "python/pops/moments/fan_li_path.py": "2c9e7536dfe584f9c161ddd73b74c247ece74e87252640a697fbd976cfd690b6",
+    "python/pops/moments/polynomial_path.py": "7fd843579f3e97292e2132cd0727d91d96d5073c7563e387fece888cb121d5d1",
+    "python/pops/numerics/normalized_polynomial_path.py": "8eeffa5832bea3f122f60ed5d88df369b1d00b8c78c60f4ce1cb20b995c49f2f",
+    "tests/cpp/support/generated_fan_li15.hpp": "cada3915440c266b7c155060a9dda4eb081f3df17b319617babb3eec3c0038ab"
+  },
+  "independent_delta": {
+    "passed": 10,
+    "pins_sha256": "8832efba522c3da3e987efc03d022e4c3a4cbafa79cd965fd0ddce62d0c59161",
+    "seconds": 1.55
+  },
+  "loaded_native_extensions": 0,
+  "python_source": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-m17-composition/python",
+  "scope": "SOURCE_ONLY_HOST_ARITHMETIC_NOT_NATIVE_RECEPTION",
+  "source": "45e746abff861781cd78e881d3572d8952afe742",
+  "unreceived": [
+    "Native",
+    "MPI",
+    "GPU",
+    "scientific_saved_state",
+    "performance"
+  ]
+}

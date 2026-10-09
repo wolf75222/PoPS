@@ -12,7 +12,10 @@ from typing import Any
 
 from pops.identity.scalar import scalar_cpp
 from pops.model.state_symbols import state_component_symbol
-from pops.codegen.cpp_writer import _cse_emit
+from pops.codegen.cpp_writer import _cpp_identifier, _cse_emit
+from pops._ir.primitive_expansion import expand_evaluation_boundaries, expand_primitive_recipes
+from pops._ir.visitors import _dependencies
+from pops.codegen.module_emit_helpers import _checked_inline_expr
 
 from pops.codegen.program_emit_kernels import (
     _cell_locals,
@@ -50,7 +53,7 @@ def _emit_local_transform_kernel(
         raise ValueError(
             "local transform '%s' has %d outputs for %d conservative components"
             % (name, len(exprs), len(impl.cons_names)))
-    roots = exprs + [valid_if]
+    roots = list(expand_evaluation_boundaries(exprs + [valid_if], impl.prim_defs))
     provider_binding = _provider_binding(impl, roots, provider_plans, consumer_qid)
     impl.assign_runtime_indices()
     params_block = block_idx if _has_runtime_param(roots) else None
@@ -114,7 +117,8 @@ def _emit_local_transform_kernel(
 
 
 def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, block_idx: Any = 0,
-                        *, provider_plans: Any, consumer_qid: str, plan_exprs: Any = None) -> list:
+                        *, provider_plans: Any, consumer_qid: str, plan_exprs: Any = None,
+                        evaluation=None, variables=None) -> list:
     """Lower ``source`` (a named ``m.source_term``): outA(i,j,c) = S_c(U, prims, aux, params) per cell.
 
     @p block_idx (ADC-510): the PROGRAM block index whose RuntimeParams the kernel reads when a source
@@ -127,12 +131,22 @@ def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, blo
         raise NotImplementedError(
             "emit_cpp_program: source '%s' is not declared on the model (m.source_term); declared: %s"
             % (name, sorted(impl._source_terms)))
-    exprs = impl._source_terms[name]
+    if (evaluation is not None and evaluation.attrs.get("physical_global_inputs_v1")
+            and getattr(evaluation.prog, "_compiled_detached", False)):
+        from .program_source_authority import require_lowered_source_authority
+        require_lowered_source_authority(model, impl, name, evaluation)
+    exprs = list(expand_evaluation_boundaries(impl._source_terms[name], impl.prim_defs))
+    from pops.model.global_quantity import global_references
+    if global_references(tuple(impl.prim_defs.values())):
+        exprs = list(expand_primitive_recipes(exprs, impl.prim_defs))
     provider_binding = _provider_binding(
         impl, exprs if plan_exprs is None else plan_exprs, provider_plans, consumer_qid)
+    from .program_global_sources import bind_source_globals
+    exprs, global_prelude = bind_source_globals(
+        exprs, evaluation, variables, source_module=getattr(model, "module", None))
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
     helpers = getattr(provider_plans, "source_kernel_helpers", None)
-    if helpers is not None:
+    if helpers is not None and not global_prelude:
         shared_call = helpers.call(
             impl, exprs, binding=provider_binding, state_var=state_var,
             out_var=out_var, block_index=block_idx)
@@ -143,9 +157,9 @@ def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, blo
                         program_block=block_idx)
     body += ["    " + ln for ln in _cell_locals(impl, exprs, state_var, with_cons=True,
                                                  with_prim=True, provider_binding=provider_binding)]
-    body += ["    outA(index, %d) = %s;" % (c, e.to_cpp()) for c, e in enumerate(exprs)]
+    body += ["    outA(index, %d) = %s;" % (c, _checked_inline_expr(e)) for c, e in enumerate(exprs)]
     body += _kernel_close()
-    return body
+    return global_prelude + body
 
 
 def _component_sources(
@@ -192,11 +206,12 @@ def _component_sources(
 
 def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch: Any, *,
                               status: str | None = None, active_mask: str | None = None,
-                              reason: str | None = None) -> list:
+                              reason: str | None = None, provider_impl: Any = None,
+                              provider_binding: Any = None, program_block: Any = None) -> list:
     """Lower a ``coupled_rate`` (Spec 3 criterion 27, ADC-457) to ONE multi-state for_each_cell kernel
     filling every participating block's rate scratch at once.
 
-    @p components: ``{block: [Expr, ...]}`` -- the per-block component formulas (cons-only MVP).
+    @p components: ``{block: [Expr, ...]}`` -- exact state and declared provider formulas.
     @p by_block:   ``{block: state Value}`` -- each block's input state (its StateSpace gives the cons
                    names + their component indices; its C++ token gives the ranked read FieldView).
     @p var:        the id -> C++ token map (the input states are already bound to ``ctx.state(idx)``).
@@ -216,13 +231,23 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
     for comps in components.values():
         for e in comps:
             referenced |= e.deps()
+    roots = [e for blk in blocks for e in components[blk]]
+    if provider_binding is not None:
+        referenced -= set(provider_binding["slots"])
     cons_source = _component_sources(
         referenced, by_block, lambda state, index: (var[state.id], index))
 
     def state_handle(token: Any) -> str:
         return "%sA" % token                     # read handle for an input state token (u0A / u1A)
 
-    lines = ["for (int li = 0; li < %s.local_size(); ++li) {" % driver]
+    from .program_emit_kernels import _prepare_provider_values
+    provider_state = var[next(iter(by_block.values())).id]
+    lines = _prepare_provider_values(provider_binding, program_block, provider_state)
+    lines.append("for (int li = 0; li < %s.local_size(); ++li) {" % driver)
+    if provider_binding is not None:
+        import json
+        lines.append("  const auto providers = ctx.template provider_values_view<%d>(%s, %d, li);"
+                     % (provider_binding["count"], json.dumps(provider_binding["qid"]), program_block))
     # Bind a write handle per OUTPUT block scratch, then a read handle per DISTINCT input state that a
     # formula actually reads (incl. a read-only catalyst input that is not an output block), all inside
     # the per-fab loop and BEFORE for_each_cell so the device lambda captures them by value.
@@ -258,11 +283,15 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
         if reason is not None:
             lines.append("    native_reason_view(index, 0) = pops::Real(0);")
         lines.append("    if (native_has_active_mask && native_active_view(index, 0) == pops::Real(0)) return;")
+    from .cpp_symbols import variable_identifier
     for c in sorted(cons_source):                # bind only the referenced cons (no unused locals)
         tok, idx = cons_source[c]
-        lines.append("    const pops::Real %s = %s(index, %d);" % (c, state_handle(tok), idx))
+        lines.append("    const pops::Real %s = %s(index, %d);" % (variable_identifier(c,"cons"), state_handle(tok), idx))
+    if provider_binding is not None:
+        lines += ["    " + line for line in _cell_locals(
+            provider_impl, roots, provider_state, with_cons=False, with_prim=False,
+            provider_binding=provider_binding)]
     from .cpp_writer import _cse_emit
-    roots = [e for blk in blocks for e in components[blk]]
     declarations, rendered, native_results = _cse_emit(
         roots, "pops::Real", "    ", return_native_statuses=True)
     if native_results and status is None:
@@ -330,7 +359,8 @@ def _prepared_local_control_lines(attrs: Any, *, indent: str = "    ") -> list[s
 
 def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any,
                                         scratch: Any, status: str, *, controls: Any,
-                                        coefficient: Any) -> list:
+                                        coefficient: Any, original_residual=None,
+                                        all_inputs=None, fab_setup=()) -> list:
     """Emit one fail-closed prepared nonlinear solve over a coupled ``RateBundle``.
 
     Every output block is an unknown; additional signed inputs are frozen catalysts.  Results land
@@ -344,7 +374,8 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
     for block in blocks:
         offsets[block] = total
         total += len(components[block])
-    referenced = {name for rows in components.values() for expr in rows for name in expr.deps()}
+    referenced = (set() if original_residual is not None else
+                  {name for rows in components.values() for expr in rows for name in expr.deps()})
     sources = _component_sources(
         referenced,
         by_block,
@@ -354,7 +385,20 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
     )
     driver = scratch[blocks[0]]
     coefficient_cpp = scalar_cpp(coefficient)
-    lines = ["for (int li = 0; li < %s.local_size(); ++li) {" % driver]
+    all_inputs = tuple(by_block.values()) if all_inputs is None else tuple(all_inputs)
+    lines = ["{"]
+    lines.append("long product_layout_error_ = 0;")
+    for state in all_inputs:
+        token = var[state.id]
+        lines.append(
+            "product_layout_error_ |= (%s.layout() != %s.layout() || "
+            "%s.distribution() != %s.distribution() || "
+            "%s.local_rank() != %s.local_rank());"
+            % (token, driver, token, driver, token, driver))
+    lines += [
+        "if (pops::all_reduce_max(product_layout_error_, ctx.prepared_execution_lane()))",
+        '  throw std::runtime_error("local product requires co-located layouts, distributions and ranks");',
+        "for (int li = 0; li < %s.local_size(); ++li) {" % driver]
     for block in blocks:
         lines.append(
             "  const pops::FieldView<pops::Real, pops::kNativeDimension> %sA = "
@@ -365,7 +409,7 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
         "%s.fab(li).view();" % (status, status)
     )
     seen = set()
-    for state in by_block.values():
+    for state in all_inputs:
         token = var[state.id]
         if token not in seen:
             seen.add(token)
@@ -373,6 +417,7 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
                 "  const pops::FieldView<const pops::Real, pops::kNativeDimension> %sA = "
                 "std::as_const(%s).fab(li).view();" % (token, token)
             )
+    lines.extend(fab_setup)
     lines.append(
         "  pops::for_each_cell(%s.box(li), [=] POPS_HD("
         "const pops::CellIndex<pops::kNativeDimension>& index) {" % driver
@@ -396,15 +441,18 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
                                  % (component, source[1], source[2]))
     lines += binding_lines
     from ._native_solve_cpp import evaluate_residual_expressions, coupled_jacobian_expressions
-    expressions = [expr for rows in components.values() for expr in rows]
-    residual_lines, residual_values = evaluate_residual_expressions(expressions)
-    lines += residual_lines
-    for slot, value in enumerate(residual_values):
-        lines.append(
-            "      rout[%d] = Ueval[%d] - G_[%d] - "
-            "static_cast<pops::Real>(%s) * dt * (%s);"
-            % (slot, slot, slot, coefficient_cpp, value))
-    lines.append("      return pops::LocalNonlinearEvaluationResult::ok();")
+    if original_residual is not None:
+        lines += original_residual
+    else:
+        expressions = [expr for rows in components.values() for expr in rows]
+        residual_lines, residual_values = evaluate_residual_expressions(expressions)
+        lines += residual_lines
+        for slot, value in enumerate(residual_values):
+            lines.append(
+                "      rout[%d] = Ueval[%d] - G_[%d] - "
+                "static_cast<pops::Real>(%s) * dt * (%s);"
+                % (slot, slot, slot, coefficient_cpp, value))
+        lines.append("      return pops::LocalNonlinearEvaluationResult::ok();")
     lines.append("    };")
     lines += _prepared_local_control_lines(controls)
     route = controls.get("derivative_contract", {}).get("route", "finite_difference")
@@ -455,7 +503,7 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
         "      %sA(index, 9) = pops::Real(0);" % status,
         "    }",
     ]
-    lines += ["  });", "}"]
+    lines += ["  });", "}", "}"]
     return lines
 
 
@@ -501,7 +549,9 @@ def _emit_flux_kernel(
                 for component in range(n)
             ]
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
-    roots = [expression for axis in axes for expression in expressions[axis]]
+    roots = list(expand_evaluation_boundaries(
+        [expression for axis in axes for expression in expressions[axis]], impl.prim_defs))
+    expressions = {axis: roots[i * n:(i + 1) * n] for i, axis in enumerate(axes)}
     provider_binding = _provider_binding(
         impl, roots if plan_exprs is None else plan_exprs, provider_plans, consumer_qid)
     params_block = block_idx if _has_runtime_param(roots) else None
@@ -530,7 +580,7 @@ def _emit_flux_kernel(
     ]
     for axis in axes:
         body += [
-            "    %s(index, %d) = %s;" % (handles[axis], component, expression.to_cpp())
+            "    %s(index, %d) = %s;" % (handles[axis], component, _checked_inline_expr(expression))
             for component, expression in enumerate(expressions[axis])
         ]
     body += _kernel_close()
@@ -556,7 +606,7 @@ def _emit_apply_kernel(model: Any, name: Any, state_var: Any, out_var: Any, bloc
                                                  with_prim=False, provider_binding=provider_binding)]
     for r in range(n):
         terms = [
-            "(%s) * %sA(index, %d)" % (rows[r][c].to_cpp(), state_var, c)
+            "(%s) * %sA(index, %d)" % (_checked_inline_expr(rows[r][c]), state_var, c)
             for c in range(n)
         ]
         body.append("    outA(index, %d) = %s;" % (r, " + ".join(terms)))
@@ -579,8 +629,12 @@ def _emit_solve_local_linear_kernel(model: Any, name: Any, a_coeff: Any, rhs_var
     a_cpp = _coeff_cpp(a_coeff)
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
     params_block = block_idx if _has_runtime_param(flat) else None
+    # Uniform prerequisites are prepared by the solve-outcome router, preserving its
+    # authored numerical failure action. AMR owns its collective publication seam;
+    # publish there before a local Fab view can observe a previous stage's values.
     body = _kernel_open(out_var, rhs_var, params_block, provider_binding=provider_binding,
-                        program_block=block_idx, prepare_providers=False)
+                        program_block=block_idx,
+                        prepare_providers=provider_binding["target"] == "amr_system")
     lambda_index = next(
         index for index, line in enumerate(body) if "pops::for_each_cell" in line)
     body[lambda_index:lambda_index] = [
@@ -595,7 +649,7 @@ def _emit_solve_local_linear_kernel(model: Any, name: Any, a_coeff: Any, rhs_var
     for r in range(n):
         for c in range(n):
             ident = "pops::Real(1)" if r == c else "pops::Real(0)"
-            body.append("    M_[%d][%d] = %s - a_ * (%s);" % (r, c, ident, rows[r][c].to_cpp()))
+            body.append("    M_[%d][%d] = %s - a_ * (%s);" % (r, c, ident, _checked_inline_expr(rows[r][c])))
             body.append(
                 "    if (!std::isfinite(M_[%d][%d])) solve_failure_ = 3;" % (r, c))
     for c in range(n):
@@ -641,13 +695,14 @@ def _residual_term_exprs(impl: Any, w: Any) -> list:
             raise NotImplementedError(
                 "emit_cpp_program: residual source '%s' is not declared on the model (m.source_term); "
                 "declared: %s" % (name, sorted(impl._source_terms)))
-        return list(impl._source_terms[name])
+        return list(expand_primitive_recipes(impl._source_terms[name], impl.prim_defs))
     if w.op == "apply":
         rows = _linear_source_rows(impl, w.attrs["linear_source"])
         n = len(rows)
         # (L U)_r = sum_c L[r][c] * cons_c -- a per-component Expr in the cons names + aux.
-        return [sum((rows[r][c] * Var(impl.cons_names[c], "cons") for c in range(n)),
-                    Const(0.0)) for r in range(n)]
+        expressions = [sum((rows[r][c] * Var(impl.cons_names[c], "cons") for c in range(n)),
+                           Const(0.0)) for r in range(n)]
+        return list(expand_primitive_recipes(expressions, impl.prim_defs))
     raise NotImplementedError(
         "emit_cpp_program: residual op '%s' is not a per-cell Expr term (source / apply only)" % w.op)
 
@@ -669,13 +724,80 @@ def _emit_residual_eval(impl: Any, v: Any, n: Any) -> list:
     # stack Ueval; the guess is the frozen Gval; source / apply lower to Exprs over the cons names.
     comps = {iterate_id: ["Ueval[%d]" % c for c in range(n)],
              guess_id: ["Gval[%d]" % c for c in range(n)]}
+    for w in block:
+        if w.op == "state" and "capture_index" in w.attrs:
+            slot = w.attrs["capture_index"]
+            if type(slot) is not int or not 0 <= slot < len(v.inputs) - 1:
+                raise ValueError("local residual capture index is not authenticated")
+            comps[w.id] = ["Cval%d[%d]" % (slot, c) for c in range(n)]
+    lines, comps = _emit_local_residual_nodes(block, comps, n, lambda w: (impl, []))
+    result = comps[v.attrs["residual"].id]
+    lines.extend("rout[%d] = %s;" % (c, result[c]) for c in range(n))
+    return lines
+
+
+def _emit_local_residual_nodes(block, initial_components, residual_width, physical_environment):
+    """Shared scalar/product walk: exact arguments, checked local physics, no field solve."""
+    from pops.time.expressions import component_names
+    comps = dict(initial_components)
     lines = []
     for w in block:
-        if w.op == "state":
-            continue  # the iterate / guess placeholders: bound in `comps` above, nothing to emit
+        if w.id in comps:
+            continue
+        if w.op == "linear_source":
+            continue  # immutable operator descriptor, consumed by typed apply
+        if w.op in ("state", "input_fields"):
+            raise ValueError("local residual contains an unbound argument")
+        n = len(component_names(w))
         if w.op in ("source", "apply"):
+            impl, setup = physical_environment(w)
             exprs = _residual_term_exprs(impl, w)
-            comps[w.id] = ["(%s)" % e.to_cpp() for e in exprs]
+            if len(exprs) != n:
+                raise ValueError("local residual operator output Space changed")
+            # Bind the actual argument of every call, including frozen captures and
+            # earlier derived values. Using Ueval unconditionally changes the equation.
+            source = comps[w.inputs[0].id]
+            target = "residual_value_%d" % w.id
+            lines.append("pops::Real %s[%d];" % (target, n))
+            lines.append("{")
+            lines.extend(setup)
+            # Use the same checked evaluation policy as Program expressions. A
+            # final finite residual alone cannot detect sqrt(-u) hidden by fmin.
+            # Bind leaves, too: otherwise a non-finite captured argument could
+            # disappear behind a finite min/max. The common emitter keeps where
+            # branches lazy and rounded barriers intact.
+            from .cpp_symbols import variable_bindings
+            bindings = variable_bindings(exprs)
+            bindings.update({('cons',name):value for name,value in zip(impl.cons_names, source, strict=True)})
+            temporaries, rendered, observed = _cse_emit(
+                exprs, "pops::Real", "  ", materialize_all=True, return_names=True,
+                scalar_bindings=bindings)
+            lines.extend(temporaries)
+            invalid = " || ".join("!Kokkos::isfinite(%s)" % name
+                                   for name in dict.fromkeys([*observed, *rendered])) or "false"
+            lines.append("  if (%s) {" % invalid)
+            for c in range(residual_width):
+                lines.append("    rout[%d] = std::numeric_limits<pops::Real>::quiet_NaN();" % c)
+            lines.extend(["    return;", "  }"])
+            for c, expression in enumerate(rendered):
+                lines.append("  %s[%d] = %s;" % (target, c, expression))
+            lines.append("}")
+            comps[w.id] = ["%s[%d]" % (target, c) for c in range(n)]
+        elif w.op == "pointwise_expression":
+            from pops.codegen.program_emit_expressions import checked_pointwise_rows
+            temporaries, rendered, invalid = checked_pointwise_rows(
+                w, [comps[item.id] for item in w.inputs])
+            target = "residual_expression_%d" % w.id
+            lines.extend(["pops::Real %s[%d];" % (target, n), "{"])
+            lines.extend("  " + line for line in temporaries)
+            lines.append("  if (%s) {" % invalid)
+            for c in range(residual_width):
+                lines.append("    rout[%d] = std::numeric_limits<pops::Real>::quiet_NaN();" % c)
+            lines.extend(["    return;", "  }"])
+            lines.extend("  %s[%d] = %s;" % (target, c, expression)
+                         for c, expression in enumerate(rendered))
+            lines.append("}")
+            comps[w.id] = ["%s[%d]" % (target, c) for c in range(n)]
         elif w.op == "linear_combine":
             # An affine sum over earlier terms: comps[w] = sum_k coeff_k(dt) * comps[input_k].
             coeffs = w.attrs["coeffs"]  # aligned with w.inputs; each a dt-polynomial power->float dict
@@ -695,10 +817,7 @@ def _emit_residual_eval(impl: Any, v: Any, n: Any) -> list:
         else:  # builder guards _RESIDUAL_LOCAL_OPS; this is belt-and-suspenders
             raise NotImplementedError(
                 "emit_cpp_program: residual op '%s' is not lowerable in a local Newton kernel" % w.op)
-    result = comps[v.attrs["residual"].id]
-    for c in range(n):
-        lines.append("rout[%d] = %s;" % (c, result[c]))
-    return lines
+    return lines, comps
 
 
 def _emit_solve_local_nonlinear_kernel(
@@ -709,7 +828,7 @@ def _emit_solve_local_nonlinear_kernel(
     status_var: Any,
     active_mask_var: Any,
     block_idx: Any = 0,
-    *, provider_plans: Any, consumer_qid: str,
+    *, provider_plans: Any, consumer_qid: str, capture_vars: tuple = (),
 ) -> list:
     """Lower ``solve_local_nonlinear`` to the unique prepared local nonlinear provider.
 
@@ -729,7 +848,13 @@ def _emit_solve_local_nonlinear_kernel(
     params_block = block_idx if _has_runtime_param(term_exprs) else None
     body = _kernel_open(out_var, guess_var, params_block, provider_binding=provider_binding,
                         program_block=block_idx, prepare_providers=False)
+    if len(capture_vars) != len(v.inputs) - 1:
+        raise ValueError("local residual capture input arity changed")
     lambda_index = next(index for index, line in enumerate(body) if "pops::for_each_cell" in line)
+    body[lambda_index:lambda_index] = [
+        "  const auto capture%dA = std::as_const(%s).fab(li).view();" % (i, name)
+        for i, name in enumerate(capture_vars)]
+    lambda_index += len(capture_vars)
     body[lambda_index:lambda_index] = [
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> solve_statusA = "
         "%s.fab(li).view();" % status_var,
@@ -765,16 +890,15 @@ def _emit_solve_local_nonlinear_kernel(
     body.append("    pops::Real Gval[%d];" % n)
     for component in range(n):
         body.append("    Gval[%d] = %sA(index, %d);" % (component, guess_var, component))
+    for slot, _ in enumerate(capture_vars):
+        body.append("    pops::Real Cval%d[%d];" % (slot, n))
+        for component in range(n):
+            body.append("    Cval%d[%d] = capture%dA(index, %d);"
+                        % (slot, component, slot, component))
     body.append(
         "    auto residual_eval = "
         "[&](const pops::Real (&Ueval)[%d], pops::Real (&rout)[%d]) {" % (n, n)
     )
-    for component, name in enumerate(impl.cons_names):
-        body.append("      const pops::Real %s = Ueval[%d];" % (name, component))
-    live = impl._live_prims(term_exprs) if term_exprs else set()
-    for name, expr in impl.prim_defs.items():
-        if name in live:
-            body.append("      const pops::Real %s = %s;" % (name, expr.to_cpp()))
     body += ["      " + line for line in _emit_residual_eval(impl, v, n)]
     body.append("    };")
     attrs = dict(v.attrs)

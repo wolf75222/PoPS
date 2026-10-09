@@ -2,12 +2,27 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from collections.abc import Mapping
 from typing import Any
 
 from pops.identity import Identity, canonical_bytes
 from pops.model import Handle
 from pops.model.provider_pack import ComponentKey, ProviderEntry, ProviderPack
 from pops.time._program.serialization import _json_ready
+
+
+def publication_target_space(model: Any, destination: Handle) -> Any:
+    """Authenticate one compiled publication destination against its source owner."""
+    from .program_models import ProgramModelGraph
+    if type(model) is not ProgramModelGraph:
+        raise ValueError("compiled field publication requires an exact Program model graph")
+    model.model_for_block(destination.block_ref)
+    owner = model.owner_for_block(destination.block_ref)
+    if owner != destination.declaration_ref.owner_path.canonical():
+        raise ValueError("compiled field publication declaration belongs to a different block model")
+    module = model.source_module_for_owner(owner)
+    module.declaration_index().authenticate(destination.declaration_ref)
+    return module.field_spaces()[destination.declaration_ref.local_id]
 
 
 def _key(module: Any, target: Handle, component: str) -> ComponentKey:
@@ -19,6 +34,31 @@ def _key(module: Any, target: Handle, component: str) -> ComponentKey:
     if space is None or component not in space.components:
         raise ValueError("Program field output selects an undeclared destination component")
     return ComponentKey(str(module.owner_path.canonical()), "field", space.name, component)
+
+
+def _merge_publication_claim(prior: Any, claim: Any) -> dict[str, Any]:
+    """One physical authority, with separately authenticated ordered occurrences."""
+    # ResolvedOperationPlan freezes nested mappings; canonicalize its public JSON projection.
+    prior = None if prior is None else _json_ready(prior)
+    claim = _json_ready(claim)
+    if prior is None or canonical_bytes(prior) == canonical_bytes(claim):
+        return claim if prior is None else prior
+    left = {k: v for k, v in prior.items() if k not in ("mapped_output", "mapped_occurrences", "occurrence_contract")}
+    right = {k: v for k, v in claim.items() if k != "mapped_output"}
+    if canonical_bytes(left) != canonical_bytes(right) or "mapped_output" not in claim:
+        raise ValueError("Program field output has competing physical publication authorities")
+    occurrences = list(prior.get("mapped_occurrences", (prior.get("mapped_output"),)))
+    new = claim["mapped_output"]
+    for old in occurrences:
+        if old is None or any(canonical_bytes(old[name]) != canonical_bytes(new[name])
+                              for name in ("physical_map", "source_port", "target_port")):
+            raise ValueError("Program field output has competing physical publication authorities")
+        if canonical_bytes(old) == canonical_bytes(new):
+            return prior
+        if canonical_bytes(old["target_point"]) == canonical_bytes(new["target_point"]):
+            raise ValueError("Program field output has competing occurrences at the same point")
+    return {**left, "occurrence_contract": "mapped-publication-occurrences@1",
+            "mapped_occurrences": [*occurrences, new]}
 
 
 def publication_claims(block: Any, program: Any) -> tuple[dict[str, Any], ...]:
@@ -37,15 +77,17 @@ def publication_claims(block: Any, program: Any) -> tuple[dict[str, Any], ...]:
             if str(target.owner_path.canonical()) != block.instance_owner_qid:
                 continue
             key = _key(module, target, row["component"])
-            observed = source if source.op == "field_component" else source.inputs[0]
+            from pops.fields._program_publication import publication_observation
+            observed = publication_observation(source)
             claim = {"key": key.to_data(), "target": target._resolved().canonical_identity(),
                      "producer": value.attrs["field_problem_identity"],
                      "unknown": _json_ready(observed.attrs["field_unknown"]),
                      "observation": source.op, "source_component": row["source_component"]}
+            if source.attrs.get("contract") == "mapped-consumed-output@1":
+                claim["mapped_output"] = _json_ready({name: source.attrs[name] for name in
+                    ("invocation", "physical_map", "source_port", "target_port", "source_point", "target_point")})
             prior = claims.get(key)
-            if prior is not None and canonical_bytes(prior) != canonical_bytes(claim):
-                raise ValueError("Program field output has competing physical publication authorities")
-            claims[key] = claim
+            claims[key] = _merge_publication_claim(prior, claim)
     return tuple(claims[key] for key in sorted(claims))
 
 
@@ -57,6 +99,20 @@ def reproject_publication_packs(module: Any, packs: Any, claims: Any) -> Any:
 
     selected = {}
     for claim in claims:
+        if "mapped_occurrences" in claim or "occurrence_contract" in claim:
+            if claim.get("occurrence_contract") != "mapped-publication-occurrences@1" or "mapped_output" in claim:
+                raise ValueError("invalid mapped publication occurrence contract")
+            occurrences = claim.get("mapped_occurrences")
+            if type(occurrences) not in (tuple, list) or len(occurrences) < 2:
+                raise ValueError("mapped publication occurrences require distinct ordered points")
+            physical = {k: v for k, v in claim.items() if k not in ("mapped_occurrences", "occurrence_contract")}
+            rebuilt = None
+            for occurrence in occurrences:
+                if not isinstance(occurrence, Mapping) or set(occurrence) != {"invocation", "physical_map", "source_port", "target_port", "source_point", "target_point"}:
+                    raise ValueError("invalid mapped publication occurrence")
+                rebuilt = _merge_publication_claim(rebuilt, {**physical, "mapped_output": occurrence})
+            if canonical_bytes(rebuilt) != canonical_bytes(_json_ready(claim)):
+                raise ValueError("mapped publication occurrences are repeated or noncanonical")
         key = ComponentKey(**claim["key"])
         target = Handle.from_canonical_identity(_json_ready(claim["target"]))
         if _key(module, target, key.component) != key:

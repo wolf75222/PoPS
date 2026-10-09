@@ -1,0 +1,94 @@
+{
+  "kind": "root independent NumPy DFT and original two residuals from saved native states; no pops or example oracle import",
+  "status": "passed",
+  "rows": [
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_16_canonical.npz",
+      "initial_error": 0.0,
+      "c_error": 3.880229471064922e-14,
+      "mu_error": 1.3994361225400098e-13,
+      "mass_residual": 7.700264037513449e-13,
+      "chemical_residual": 4.831345826877831e-14,
+      "mass_drift": 1.1102230246251565e-16,
+      "energy_increase": 0.0,
+      "time_error": 0.0
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_32_canonical.npz",
+      "initial_error": 0.0,
+      "c_error": 3.9745984281580604e-14,
+      "mu_error": 1.2456702336294256e-13,
+      "mass_residual": 6.723710130329685e-13,
+      "chemical_residual": 6.399394902878441e-14,
+      "mass_drift": 6.661338147750939e-16,
+      "energy_increase": 0.0,
+      "time_error": 0.0
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_64_canonical.npz",
+      "initial_error": 0.0,
+      "c_error": 3.824718319833664e-14,
+      "mu_error": 1.2256862191861728e-13,
+      "mass_residual": 6.66311407090947e-13,
+      "chemical_residual": 7.309300056488818e-14,
+      "mass_drift": 3.885780586188048e-16,
+      "energy_increase": 0.0,
+      "time_error": 0.0
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m27-native-dim1-restart128-fc0-20260930/pytest-tmp/test_mixed_linear_three_grids_0/state_16_permuted.npz",
+      "initial_error": 0.0,
+      "c_error": 5.1458837191376006e-14,
+      "mu_error": 1.6503465261052952e-13,
+      "mass_residual": 5.932875718483999e-13,
+      "chemical_residual": 7.249626246541574e-14,
+      "mass_drift": 1.1102230246251565e-16,
+      "energy_increase": 0.0,
+      "time_error": 0.0
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_mixed_linear_three_grids_0/state_16_canonical.npz",
+      "initial_error": 0.0,
+      "c_error": 3.880229471064922e-14,
+      "mu_error": 1.3994361225400098e-13,
+      "mass_residual": 7.700264037513449e-13,
+      "chemical_residual": 4.831345826877831e-14,
+      "mass_drift": 1.1102230246251565e-16,
+      "energy_increase": 0.0,
+      "time_error": 0.0
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_mixed_linear_three_grids_0/state_32_canonical.npz",
+      "initial_error": 0.0,
+      "c_error": 3.9745984281580604e-14,
+      "mu_error": 1.2456702336294256e-13,
+      "mass_residual": 6.723710130329685e-13,
+      "chemical_residual": 6.399394902878441e-14,
+      "mass_drift": 6.661338147750939e-16,
+      "energy_increase": 0.0,
+      "time_error": 0.0
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_mixed_linear_three_grids_0/state_64_canonical.npz",
+      "initial_error": 0.0,
+      "c_error": 3.824718319833664e-14,
+      "mu_error": 1.2256862191861728e-13,
+      "mass_residual": 6.66311407090947e-13,
+      "chemical_residual": 7.309300056488818e-14,
+      "mass_drift": 3.885780586188048e-16,
+      "energy_increase": 0.0,
+      "time_error": 0.0
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m26-m27-mpi2-fc0-20260930/rank0-tmp/test_mixed_linear_three_grids_0/state_16_permuted.npz",
+      "initial_error": 0.0,
+      "c_error": 5.1458837191376006e-14,
+      "mu_error": 1.6503465261052952e-13,
+      "mass_residual": 5.932875718483999e-13,
+      "chemical_residual": 7.249626246541574e-14,
+      "mass_drift": 1.1102230246251565e-16,
+      "energy_increase": 0.0,
+      "time_error": 0.0
+    }
+  ]
+}

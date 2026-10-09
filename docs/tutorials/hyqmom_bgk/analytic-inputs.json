@@ -1,0 +1,118 @@
+{
+  "schema": "hoffart.separate-knudsen-bgk.analytical-inputs.v1",
+  "scope": "Exact proposed initial/equilibrium moments and algebraic checks; no measured state or simulation",
+  "actual_simulation": false,
+  "ordering": [
+    "M00",
+    "M10",
+    "M20",
+    "M30",
+    "M40",
+    "M01",
+    "M11",
+    "M21",
+    "M31",
+    "M02",
+    "M12",
+    "M22",
+    "M03",
+    "M13",
+    "M04"
+  ],
+  "rho": "3/2",
+  "mean": [
+    "1/4",
+    "-1/8"
+  ],
+  "mixture_weights": [
+    "1/4",
+    "3/4"
+  ],
+  "component_means": [
+    [
+      "7/4",
+      "11/8"
+    ],
+    [
+      "-1/4",
+      "-5/8"
+    ]
+  ],
+  "component_covariance_diagonal": [
+    "17/4",
+    "9/4"
+  ],
+  "covariance": [
+    [
+      "5",
+      "3/4"
+    ],
+    [
+      "3/4",
+      "3"
+    ]
+  ],
+  "theta": "4",
+  "collision_frequency": "6/Kn",
+  "collision_time": "Kn/6",
+  "exact_initial_rational": [
+    "3/2",
+    "3/8",
+    "243/32",
+    "867/128",
+    "59331/512",
+    "-3/16",
+    "69/64",
+    "189/256",
+    "16917/1024",
+    "579/128",
+    "1011/512",
+    "49491/2048",
+    "-579/1024",
+    "37077/4096",
+    "326019/8192"
+  ],
+  "exact_equilibrium_rational": [
+    "3/2",
+    "3/8",
+    "195/32",
+    "579/128",
+    "38019/512",
+    "-3/16",
+    "-3/64",
+    "-195/256",
+    "-579/1024",
+    "771/128",
+    "771/512",
+    "50115/2048",
+    "-2307/1024",
+    "-2307/4096",
+    "594435/8192"
+  ],
+  "raw_invariants": {
+    "M00": "3/2",
+    "M10": "3/8",
+    "M01": "-3/16",
+    "M20_plus_M02": "1551/128"
+  },
+  "nonconserved_rows_with_nonzero_defect": [
+    2,
+    3,
+    4,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14
+  ],
+  "analytic_law": "M(t)=M_eq+exp(-6*t/Kn)*(M_initial-M_eq)",
+  "proposed_knudsen": [
+    "0.01",
+    "0.1",
+    "1"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "schema": "pops.fixed-core-scope-interpretation@1",
+  "original_manifest_sha256": "ace8d56aa0d9b4aae91c9d559e8b60aca6365e50756f003bb71b8d0c9edaf701",
+  "original_core_fingerprint": "fd27f604adde381bad38e6f04986805ed05f33b549a8dc8c36b622770a9b6aa5",
+  "actual_scope": "All1197tracked files in python/pops,include,src, including bundled libraries and internal documentation in those prefixes; top-leveldocs/tests/examples excluded. This is a conservative superset.",
+  "internal_documentation_files": [
+    "include/pops/coupling/README.md"
+  ],
+  "original_manifest_unchanged": true,
+  "not_universal_genericity_reception": true
+}

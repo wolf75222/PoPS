@@ -1,0 +1,243 @@
+{
+  "GPU_inter_node_Dim1_Dim3_qualified": false,
+  "actual_all_Model_TU_DSO_companions_authenticated": true,
+  "adverses": {
+    "passed": 7,
+    "root_xml": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-v-mpi2-adversaries.xml",
+    "root_xml_sha256": "a16191fe209e25da8eb5f5261e0732ea7df67f9fc4793a1e3adee0523ca354f7",
+    "test": "/Users/romaindespoulain/dev/tmp/sol61-sdk21-v-mpi2-independent-reception/test_adversaries.py",
+    "test_sha256": "45bda5c7e6b07887b444ab957bdbeb4f853226b0d74396d61e149f821dc87e47"
+  },
+  "backend_scope": "Dim2 CPU Kokkos OpenMP, MPICH MPI2 on one node",
+  "body": {
+    "OriginalF_rel_residual": {
+      "accepted": 1.6115956861858127e-13,
+      "continuous": 3.521218301156558e-13,
+      "reloaded": 1.6115956861858127e-13,
+      "replay": 3.521218301156558e-13
+    },
+    "abi_key": "compiler=15.3.0;std=202002L;headers=2d3aa1140e6b24d30cdb501d70012b700b1ce70ce36871756f2e7cffda7d828d;kokkos=1;stdlib=libstdc++_20260612;mpi=1;mpi_abi=f0d5c4a08c55d4d84a14c6cfd4d12d992c3afa7c5f9c2ca3ee140e5d87a0fa9e;dim=2",
+    "accepted_contract": 8,
+    "case": [
+      8,
+      1
+    ],
+    "checkpoint_payload": 12,
+    "coarse_active": 48,
+    "complete_durable_replay_exact": true,
+    "fine_active": 64,
+    "fine_total": 256,
+    "gaps": [
+      "Actual Model TU and C25 compile companions are exported and joined offline to each DSO/sidecar. Separate model manifest/IR is not exported; no transitive semantic-graph proof. Compiler digest is recorded, not independently rehashed live.",
+      "Single MPI2 N8/width1, CPU OpenMP MPICH; no four-case/GPU/inter-node qualification.",
+      "Initial full carrier blob absent: initial registry and valid states captured only."
+    ],
+    "historical_profiles_unchanged": true,
+    "installed_files": 1156,
+    "ir_version": 16,
+    "job": 732149,
+    "junit": [
+      {
+        "artifact": "pops.artifact.v1:sha256:3bc14f85962e001618235317dbe42ed4deccb23e27648a4400e32856706a3bf5",
+        "rank": 0,
+        "seconds": 140.79,
+        "tests": 1
+      },
+      {
+        "artifact": "pops.artifact.v1:sha256:3bc14f85962e001618235317dbe42ed4deccb23e27648a4400e32856706a3bf5",
+        "rank": 1,
+        "seconds": 140.79,
+        "tests": 1
+      }
+    ],
+    "live_metadata_scope": "rank0 only; durable checkpoint history/diagnostics/carriers cover both ranks",
+    "models": [
+      {
+        "actual_model_cpp_exported": true,
+        "binary_sha256": "2a193a4b51d3648cb5f20ff7999bd25efa9e12e804184ba879f50dc6111835d6",
+        "compiler_live_rehashed": false,
+        "compiler_sha256_recorded": "e802ef021bccd09d2ae1dae3f9400e53ab2c2c7bc2b4e47dc29a81c7ec3bcd31",
+        "compiler_to_binary_graph_proof": false,
+        "component": "block-Q0",
+        "header_signature": "2d3aa1140e6b24d30cdb501d70012b700b1ce70ce36871756f2e7cffda7d828d",
+        "provenance_sha256": "64b62290b65444028787873ae0b599237a62f58cea2cdb78efa336334336522f",
+        "source_sha256": "77d138f56ede1bf606dfff0ba9923b81167e09429193925e497729cf79d56009"
+      },
+      {
+        "actual_model_cpp_exported": true,
+        "binary_sha256": "5252f3acb98f6587dd9c1fb85112e0e227b3053eedb0843f0c0963c7afd27c5c",
+        "compiler_live_rehashed": false,
+        "compiler_sha256_recorded": "e802ef021bccd09d2ae1dae3f9400e53ab2c2c7bc2b4e47dc29a81c7ec3bcd31",
+        "compiler_to_binary_graph_proof": false,
+        "component": "block-forcing",
+        "header_signature": "2d3aa1140e6b24d30cdb501d70012b700b1ce70ce36871756f2e7cffda7d828d",
+        "provenance_sha256": "1703aaffefe8f134582dee42df9976300f8e659249e217b897cd7d07e033442e",
+        "source_sha256": "98a18e3f9bfc9510013119850806d67ff6624ade19125f76440d88368a94912b"
+      }
+    ],
+    "native": "4efc61b3a4a01ed82e41ef1eac4baaa450914afa516e806b88e282a0ac8fc0b7",
+    "pins": {
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/after/identity.json": "90fa7f4b2e2395541957a65e09fdfcc7508d0d691a1f5cde5f4ee64a19990bed",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/after/source-files.json": "3a555a75268830b2b7073a33040562ab181af1600b67a28d73d4d28f93043cfa",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/before/identity.json": "90fa7f4b2e2395541957a65e09fdfcc7508d0d691a1f5cde5f4ee64a19990bed",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/before/source-files.json": "3a555a75268830b2b7073a33040562ab181af1600b67a28d73d4d28f93043cfa",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/cache/codegen/9070f30a55e6c11d7bdceb12b7cdb9c34007a551536d303c7742cb3d579bf155.so": "a3da2b13ad95db148d93290cb2886be217e356bf39d524204fb3db4b395defc8",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/cache/codegen/9070f30a55e6c11d7bdceb12b7cdb9c34007a551536d303c7742cb3d579bf155.so.pops-artifact.json": "3a0a520fa3f62cb16d3bd275b0a092e167d9dc1b65e7317b5087730f94bdc303",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/cache/codegen/9070f30a55e6c11d7bdceb12b7cdb9c34007a551536d303c7742cb3d579bf155.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/compute-output-path.txt": "ee44991394b0a5005c25babb4f63e175b44af2902047e4eff094dc35ba9f985a",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/installed-after.json": "bc9980c209ee044399f3b19db292a278ac10527ff96feaf558e37d9c9e907da9",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/installed-before.json": "bc9980c209ee044399f3b19db292a278ac10527ff96feaf558e37d9c9e907da9",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/after.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/after/identity.json": "90fa7f4b2e2395541957a65e09fdfcc7508d0d691a1f5cde5f4ee64a19990bed",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/after/source-files.json": "3a555a75268830b2b7073a33040562ab181af1600b67a28d73d4d28f93043cfa",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/before.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/before/identity.json": "90fa7f4b2e2395541957a65e09fdfcc7508d0d691a1f5cde5f4ee64a19990bed",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/before/source-files.json": "3a555a75268830b2b7073a33040562ab181af1600b67a28d73d4d28f93043cfa",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/launcher.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/accepted-checkpoint.npz": "99a448bde00823ab0f2493031fc3f41d8fb472adc703232bfb84603d108d77b5",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/accepted-level0.npz": "15f37995b9efb9406dc155fb978ec2ed5924aaf0e8ef3ad7669c648f7ef2084b",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/accepted-level1.npz": "79bebb8eee1388fd2d4a17d9575dfba62659594340f1c156a929c8831bbd99c8",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/carrier-registry.json": "70245b06b69b428525abf9f332b16421a1189161288302a9f19db8da28ae9fb5",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/continuous-checkpoint.npz": "6adc516ddf16e178b4b392d5eda209356ec8f70be9bb057502375c15125cbba0",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/continuous-level0.npz": "87a361d93d2a8fc531a79865a9f349115b9ca1eb83cc305401f8d5530cbe6cab",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/continuous-level1.npz": "892177ce0b7f6272e0f0bf978f5c93ef4d71470f5c7af302bc88de1355ef7d13",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/initial-level0.npz": "9bc8c65ba206ad970e84fc6736ebd21eea8585400af62fcaafbc34d437953dab",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/initial-level1.npz": "938cbc922ca16b1be2ebc94243b276e62c4310ed6374ffbfe715de911ca8c7b4",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/program-2.cpp": "b5a159f45d6b6428442e5faad3fc5b0f99e3e13e428c7f43b63bd05ef7a0f064",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/program-2.ir.json": "49ee965a61f37251737e7dbfa6c532aa962aa412b3ac47b9a4f7e0afc0d7da00",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/receipt.json": "62544efef3ffd1ff86cfdd98503d795498ffcc5a901f07516296a7528010651a",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/reloaded-level0.npz": "15f37995b9efb9406dc155fb978ec2ed5924aaf0e8ef3ad7669c648f7ef2084b",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/reloaded-level1.npz": "79bebb8eee1388fd2d4a17d9575dfba62659594340f1c156a929c8831bbd99c8",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/replay-checkpoint.npz": "fe1c8cbc124a47b7820f4f660f989a19ff14597e306325528fd280f181402e49",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/replay-level0.npz": "87a361d93d2a8fc531a79865a9f349115b9ca1eb83cc305401f8d5530cbe6cab",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/replay-level1.npz": "892177ce0b7f6272e0f0bf978f5c93ef4d71470f5c7af302bc88de1355ef7d13",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/pops-native-cache/.5247f494a3f9f75e528e89ec51ed1b1e5296cf9d570a76a0007c50d826c02928.pops-stage-yzh3kyoi.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/pops-native-cache/.7c5b4937397e90d0cff2c9f0b42789b5cb10878662ec761ba2aaf4c3e5b031ac.pops-stage-lhjxavnz.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/pops-native-cache/5247f494a3f9f75e528e89ec51ed1b1e5296cf9d570a76a0007c50d826c02928.so": "2a193a4b51d3648cb5f20ff7999bd25efa9e12e804184ba879f50dc6111835d6",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/pops-native-cache/5247f494a3f9f75e528e89ec51ed1b1e5296cf9d570a76a0007c50d826c02928.so.pops-artifact.json": "b38413687369bcd87c86154b7e5dc5234b0f0fb43e4a836757e052b27b31d314",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/pops-native-cache/5247f494a3f9f75e528e89ec51ed1b1e5296cf9d570a76a0007c50d826c02928.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/pops-native-cache/5247f494a3f9f75e528e89ec51ed1b1e5296cf9d570a76a0007c50d826c02928.so.pops-model-compile.json": "64b62290b65444028787873ae0b599237a62f58cea2cdb78efa336334336522f",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/pops-native-cache/5247f494a3f9f75e528e89ec51ed1b1e5296cf9d570a76a0007c50d826c02928.so.pops-model.cpp": "77d138f56ede1bf606dfff0ba9923b81167e09429193925e497729cf79d56009",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/pops-native-cache/7c5b4937397e90d0cff2c9f0b42789b5cb10878662ec761ba2aaf4c3e5b031ac.so": "5252f3acb98f6587dd9c1fb85112e0e227b3053eedb0843f0c0963c7afd27c5c",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/pops-native-cache/7c5b4937397e90d0cff2c9f0b42789b5cb10878662ec761ba2aaf4c3e5b031ac.so.pops-artifact.json": "c2a81918011d95c2483a4825659c708b061c54603ca7bbf34b95f2decbd5bc58",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/pops-native-cache/7c5b4937397e90d0cff2c9f0b42789b5cb10878662ec761ba2aaf4c3e5b031ac.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/pops-native-cache/7c5b4937397e90d0cff2c9f0b42789b5cb10878662ec761ba2aaf4c3e5b031ac.so.pops-model-compile.json": "1703aaffefe8f134582dee42df9976300f8e659249e217b897cd7d07e033442e",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0-tmp/test_public_evolved_stage_amr_0/pops-native-cache/7c5b4937397e90d0cff2c9f0b42789b5cb10878662ec761ba2aaf4c3e5b031ac.so.pops-model.cpp": "98a18e3f9bfc9510013119850806d67ff6624ade19125f76440d88368a94912b",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0.identity-check.json": "105703eab01661e629d54288ee66830b3c119206382fc5d977db16aa9874f40a",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0.identity.json": "ec4a1fdf3a9f418d4c94a8841adedf2d0c19e9c7bc8ad17c83e9d9cbe129baaa",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0.log": "9b85bd97c285163c21997568192feb16d6779befcce0af5cb0b78aabc9f1f791",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank0.xml": "be8ff1ffd699678752d4035de1edf6a0cf7f68bdc3b9a5701ea972c832bf7964",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank1.identity-check.json": "105703eab01661e629d54288ee66830b3c119206382fc5d977db16aa9874f40a",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank1.identity.json": "630bc2fcf8bd5843fb76df5f10745119496d94c64d28f149b8d9b328dd51c477",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank1.log": "c10eaada8a6cc64810b2ae023204ca817f7b652c23988c42406968083539cb62",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/rank1.xml": "9b6d858d824117bef2754471d9db7aafbe461b97ad2d4c562870b3d7f11093ea",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/result.json": "3def777c05c4b591b8eb06f6d414ddd5d593cb51c2e7e0ad31976e0111733316",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/output/test-sources.json": "60f59a184e91eb14f4b18fd621ee0f025ff10c300fe8657a7e3adb0cf77f55a3",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/preserved-after.json": "ac88be16e6521f1d800f9c5ddf94fc950be7c874560c6073f03eabf31f7cd262",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/preserved-before.json": "ac88be16e6521f1d800f9c5ddf94fc950be7c874560c6073f03eabf31f7cd262",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/result.json": "fa8f4878479e4b8b564857e5fa1d0975e80e4a8801d08e8edc34f997a4e915d3",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/run.log": "3ac713693b984c194f8a5146e300a4326201ea4a2b3fc0b7ff2798f4112c36d8",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/source-after.json": "239fcc7f4b32470b1e23f0a32b8de7ddd3c512bfa16dff0045f9df47fd7ea6a6",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/source-before.json": "239fcc7f4b32470b1e23f0a32b8de7ddd3c512bfa16dff0045f9df47fd7ea6a6",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/test-exit.json": "300ffe4f1ef21e149d0eb56cd4e35a73727ac1f1b1b01e00c1d71071a54b7087",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149/test-wrapper.log": "aa2701867ade586d20f60f5010a29e409e8ec0af4c653c8d964ca8c842975438",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-complete-received-732149/root-transfer-reception.json": "e0fd215e204e42a1b1daa2046f462d97d1f7094df6cf14191d957c9d552ce6bd",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/native-sdk21-amr-v12-partial-refinement-mpi2-job-732149.transfer.json": "9cb56d9b0d2881d6cabf1fbd77394457f0a1b29fdcb7d1b1f255329b1424879d",
+      "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk21-build-reception-732100.json": "b4361a6ec3e94a3e0f5905c5b6c40550a6a37d82dec155a9d3096b34678e884b",
+      "/Users/romaindespoulain/dev/tmp/sol61-sdk21-v-mpi2-independent-reception/audit.py": "48eee1f4777aeca55a5c1f2e63c441600da87d321f3c5f9fca8dca3cd079945b"
+    },
+    "program_sources_authenticated": true,
+    "reader_sources": {
+      "/Users/romaindespoulain/dev/tmp/pops-api040-initial-ghost-native-20261002/tests/review/sol61_amr_full_carrier_offline.py": "c5148a74fb067087f4c157c38d5a763e85169089c988b8a302c1d93720ad5e9d",
+      "/Users/romaindespoulain/dev/tmp/pops-api040-initial-ghost-native-20261002/tests/review/sol61_evolved_stage_amr_saved_reception.py": "737c612cc3ba45f8490e22b40bcf2fedc7dd36fcda111e8929658b58c2ccfe6f",
+      "/Users/romaindespoulain/dev/tmp/pops-api040-initial-ghost-native-20261002/tests/review/sol61_evolved_stage_amr_saved_reception_v2.py": "daca8f4d42d720040cd5363ac39e882e492129bccad44fbefb2ec72added6468",
+      "/Users/romaindespoulain/dev/tmp/pops-api040-initial-ghost-native-20261002/tests/review/sol61_evolved_stage_amr_saved_reception_v3.py": "7c68df827727b4a53aad2934bde362505a8fb812a9fb7f64b795f699fb32ffea",
+      "/Users/romaindespoulain/dev/tmp/pops-api040-initial-ghost-native-20261002/tests/review/sol61_integral_feedback_offline_oracle.py": "21041d64af5378a35b5a8717cc0300b6a399d95cc2c9209e66d66e5e2ed54f89"
+    },
+    "registry_restart_exact": true,
+    "regular_files": 64,
+    "root_seal": false,
+    "runtime": "CPU OpenMP, MPICH, same node",
+    "schema": "sol61.sdk21-v-mpi2-independent-report@1",
+    "science": {
+      "accepted": {
+        "Q_projection_linf": 0.0,
+        "amounts": [
+          0.18560000000002994
+        ],
+        "balance": [
+          2.99482660892636e-14
+        ],
+        "original_Q_linf": 2.99482660892636e-14,
+        "z_constraint_linf": 0.0
+      },
+      "continuous": {
+        "Q_projection_linf": 0.0,
+        "amounts": [
+          0.1987000000000999
+        ],
+        "balance": [
+          9.992007221626409e-14
+        ],
+        "original_Q_linf": 7.002731727823175e-14,
+        "z_constraint_linf": 0.0
+      },
+      "reloaded": {
+        "Q_projection_linf": 0.0,
+        "amounts": [
+          0.18560000000002994
+        ],
+        "balance": [
+          2.99482660892636e-14
+        ],
+        "original_Q_linf": 2.99482660892636e-14,
+        "z_constraint_linf": 0.0
+      },
+      "replay": {
+        "Q_projection_linf": 0.0,
+        "amounts": [
+          0.1987000000000999
+        ],
+        "balance": [
+          9.992007221626409e-14
+        ],
+        "original_Q_linf": 7.002731727823175e-14,
+        "z_constraint_linf": 0.0
+      }
+    },
+    "source": "3302c4a19d94a0b08dbba9c05c4de3ae2debb232",
+    "source_blobs_rehashed": 1191,
+    "symlinks": 2,
+    "world": 2
+  },
+  "full_AMR_method_qualified": false,
+  "github_ci_qualified": false,
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk21-v-mpi2-independent-reception/report.json",
+    "sha256": "2a4156250a427487e7ea8fbdf0b49899f475e33484d947ce29010862a90d7601"
+  },
+  "initial_full_storage_qualified": false,
+  "job": 732149,
+  "performance_qualified": false,
+  "pins": {
+    "Source_reader_helpers": 5,
+    "build_authority": 1,
+    "independent_reader": 1,
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk21-v-mpi2-independent-reception/pins.json",
+    "raw_regular_files": 64,
+    "sha256": "246e681bebb8cb7062e8b1cac37cf6f32325801e8376b437729d9fb02daf0d71",
+    "total_rehashed": 73,
+    "transfer_authorities": 2
+  },
+  "reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk21-v-mpi2-independent-reception/audit.py",
+    "sha256": "48eee1f4777aeca55a5c1f2e63c441600da87d321f3c5f9fca8dca3cd079945b"
+  },
+  "root_recompute_exact_bytes": true,
+  "schema": "root.sdk21-amr-v12-partial-refinement-mpi2-scoped-reception@1",
+  "scoped_native_scientific_and_restart_reception": true,
+  "separate_all_Model_manifests_qualified": false,
+  "source_freeze": "3302c4a19d94a0b08dbba9c05c4de3ae2debb232",
+  "transitive_compiler_graph_qualified": false,
+  "whole_mission_complete": false
+}

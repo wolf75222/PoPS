@@ -1,0 +1,90 @@
+{
+  "dim13_native_source": "717936347672aeb4bc9146e2b3065bfd42cf1ef5",
+  "entries": [
+    {
+      "copy": "sdk26_m18_w09_dimensional_receipts_20261003/receipts/root-sdk26-m18-dim2-build-reception-732416.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/root-sdk26-m18-dim2-build-reception-732416.json",
+      "role": "sdk26_build",
+      "schema": "root.sdk26-m18-dim2-build-reception@1",
+      "sha256": "a95c9ee91c19f6aee92960403dc90eb1c274b7872fedd7c2085786419d0d8c1b"
+    },
+    {
+      "copy": "sdk26_m18_w09_dimensional_receipts_20261003/receipts/root-sdk26-m18-w09-native-reception-732422-732423.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-native-preparation-20261003/root-sdk26-m18-w09-native-reception-732422-732423.json",
+      "role": "m18_w09",
+      "schema": "root.sdk26-m18-w09-native-reception@1",
+      "sha256": "7eee84fa218e75b9c467376ba79ca30e12adcd3f0c08c66dc10445bce795033b"
+    },
+    {
+      "copy": "sdk26_m18_w09_dimensional_receipts_20261003/receipts/root-sdk26-m18-five-node-nonreg-reception-732440-732442.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-native-preparation-20261003/root-sdk26-m18-five-node-nonreg-reception-732440-732442.json",
+      "role": "five_node_nonreg",
+      "schema": "root.sdk26-m18-five-node-nonreg-reception@1",
+      "sha256": "ac39ea99fff9167162c50e80b1fe6f7466716b3b370c8714491575569e4eec60"
+    },
+    {
+      "copy": "sdk26_m18_w09_dimensional_receipts_20261003/receipts/root-sdk25-dimensional-cp9-reception-732408-732409-732410-732411.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/root-sdk25-dimensional-cp9-reception-732408-732409-732410-732411.json",
+      "role": "dim13_cp9",
+      "schema": "root.sdk25-dimensional-cp9-reception@1",
+      "sha256": "bbf0b191032c5d3a20daccbc2c1ba3aee52efec41415f0ba0addcad3fa2b0fd5"
+    },
+    {
+      "copy": "sdk26_m18_w09_dimensional_receipts_20261003/receipts/root-sdk25-dimensional-build-reception-732365-732370.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/root-sdk25-dimensional-build-reception-732365-732370.json",
+      "role": "dim13_build",
+      "schema": "root.sdk25.dimensional-build-reception@1",
+      "sha256": "3dffc20911431a37a87fd82bce640683535bd25f2192bedb2bd86cc206c14dc3"
+    },
+    {
+      "copy": "sdk26_m18_w09_dimensional_receipts_20261003/receipts/root-dimensional-cp9-ci-source-reception.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-dimensional-cp9-catalog-preparation-20261003/root-dimensional-cp9-ci-source-reception.json",
+      "role": "catalogue_source",
+      "schema": "root.dimensional-cp9-ci-source-reception@1",
+      "sha256": "3899e73f67d373250e8a240cf7da80b669ad53b43390f78a37e00f327cdce2bd"
+    },
+    {
+      "copy": "sdk26_m18_w09_dimensional_receipts_20261003/receipts/root-dimensional-cp9-ci-source-integration.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-dimensional-cp9-catalog-preparation-20261003/root-dimensional-cp9-ci-source-integration.json",
+      "role": "catalogue_integration",
+      "schema": "root.dimensional-cp9-ci-source-integration@1",
+      "sha256": "7943b07739d01bb1fa7116f5c4f4c2aa0c37694fe9e8d55ff8c9ee63013a4663"
+    },
+    {
+      "copy": "sdk26_m18_w09_dimensional_receipts_20261003/support/build-dim2.sbatch",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-dim2-preparation-20261003/build-dim2.sbatch",
+      "role": "wrapper_support",
+      "sha256": "c4ba74465934aafc9dd85146bfaff766d0ba0304db7f84d96686ee51a9712945"
+    },
+    {
+      "copy": "sdk26_m18_w09_dimensional_receipts_20261003/support/native-dim2-v3.sbatch",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-native-preparation-20261003/native-dim2-v3.sbatch",
+      "role": "wrapper_support",
+      "sha256": "a7ed87a48787a86e06a3e3df3b4c5b92ce54bed86daea16c5feea78448e589f3"
+    },
+    {
+      "copy": "sdk26_m18_w09_dimensional_receipts_20261003/support/submit_m18_v3.py",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-native-preparation-20261003/submit_m18_v3.py",
+      "role": "wrapper_support",
+      "sha256": "c8b8dc9f109a5bf98d11a1c77f8508b970d78b3a7f95b19b1dd9e1b769c83452"
+    },
+    {
+      "copy": "sdk26_m18_w09_dimensional_receipts_20261003/support/native-dim2-nonreg-v2.sbatch",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-native-preparation-20261003/native-dim2-nonreg-v2.sbatch",
+      "role": "wrapper_support",
+      "sha256": "cdad5417b0e54a987a03446e4cd2d03b8cd4091649c79f1858c8e952e1691264"
+    },
+    {
+      "copy": "sdk26_m18_w09_dimensional_receipts_20261003/support/submit_m18_nonreg_v2.py",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-sdk26-m18-native-preparation-20261003/submit_m18_nonreg_v2.py",
+      "role": "wrapper_support",
+      "sha256": "45bc5445c46b4b50bb0818de2d619ac602591f81d836f88b8d1c1f7f2890adda"
+    }
+  ],
+  "github_ci_qualified": false,
+  "main_baseline": "d2129eb897b548b1a31974b45c7f2a86733f70bf",
+  "native_integration": "4778814b58a578f10357951b3b995f190af15fed",
+  "native_m18_source": "51b0eec9dcfd660098cc5531eed6c400185c8dad",
+  "schema": "pops.sdk26-m18-w09-dimensional-documentation-index@1",
+  "whole_mission_complete": false
+}

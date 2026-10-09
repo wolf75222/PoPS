@@ -77,7 +77,7 @@ def test_ssprk2_flux_families_are_operation_typed_and_installed_before_restore_h
     assert source.index(declaration) < source.index("ctx.install([=](double dt)")
     for family in by_provider["1"]:
         assert source.count('neg_div_flux_default_with_faces_into(0,u') == 2
-        assert source.count(f',"{family}");') >= 2
+        assert source.count(f',"{family}",nullptr,&diffusive_transport_frequency_') >= 2
     for family in by_provider["4"]:
         assert source.count("ctx.attach_diffusive_flux_basis(") == 2
         assert source.count(f',"{family}");') >= 2
@@ -146,8 +146,27 @@ def test_actual_subcycled_diffusion_rhs_keeps_spatial_sum_at_dt_power_zero(n):
     )
     additions = re.findall(r"ctx\.axpy\(diffusive_rhs_\d+,1,diffusive_transport_\d+([^;]*);", source)
     assert additions == [",dt,{{0, 1, 1}})"]
-    # The temporal update still owns exactly one dt power after spatial assembly.
-    assert re.search(r"ctx\.axpy\([^;]*diffusive_rhs_\d+, dt, \{\{1, 1, 1\}\}\);", source)
+    # The authored Euler step first freezes the assembled RHS with coefficient 1,
+    # then applies exactly one dt power to that same value in the State update.
+    rhs = [value for value in resolved.time._values if value.op == "diffusive_rhs"]
+    assert len(rhs) == 1
+    frozen_rhs = [value for value in resolved.time._values
+                  if value.op == "linear_combine" and len(value.inputs) == 1
+                  and value.inputs[0] is rhs[0]
+                  and tuple(dict(coeff) for coeff in value.attrs["coeffs"]) == ({0: 1},)]
+    assert len(frozen_rhs) == 1
+    endpoints = [value for value in resolved.time._values
+                 if value.op == "linear_combine" and len(value.inputs) == 2
+                 and value.inputs[0].op == "state" and value.inputs[1] is frozen_rhs[0]]
+    assert len(endpoints) == 1
+    assert tuple(dict(coeff) for coeff in endpoints[0].attrs["coeffs"]) == ({0: 1}, {1: 1})
+    copies = re.findall(
+        r"ctx\.axpy\((\w+), static_cast<pops::Real>\(pops::Real\(1\)\), "
+        r"diffusive_rhs_\d+, dt, \{\{0, 1, 1\}\}\);", source)
+    assert len(copies) == 1
+    assert re.search(
+        r"ctx\.axpy\([^;]*static_cast<pops::Real>\(dt\), " + re.escape(copies[0])
+        + r", dt, \{\{1, 1, 1\}\}\);", source)
     assert "ctx.advance_hierarchy(dt" in source
 
 

@@ -45,6 +45,7 @@ from pops.time._program.pass_api import (  # noqa: F401
     optimize,
 )
 from pops.time._program.api import Program
+from pops.time._program.geometry import MovingFieldProjection
 from pops.time._program.hold_catchup import (  # noqa: F401
     HoldCatchupBlock, adaptive_strides, hold_catchup_program, step_adaptive_program,
 )
@@ -53,7 +54,7 @@ from pops.time.solve_outcome import (  # noqa: F401
     SolveOutcome,
 )
 from pops.time._step.strategy import (  # noqa: F401
-    AdaptiveCFL, ErrorControlledDt, ExternalTimeGrid, FixedDt, StepStrategy,
+    AdaptiveCFL, ComputedDt, ErrorControlledDt, ExternalTimeGrid, FixedDt, StepStrategy,
 )
 from pops.time.solve_problem import (  # noqa: F401
     CoupledImplicitEuler, LocalLinear, LocalResidual,
@@ -61,6 +62,7 @@ from pops.time.solve_problem import (  # noqa: F401
 from pops.time.solve_request import (  # noqa: F401
     DerivativeStrategy, SolveRequest, SolveRequestError, SolveUnknown,
 )
+from pops.time.evolved_field_stage import EvolvedOriginalFieldStage, EvolvedOriginalFieldRate, TemporalTau  # noqa: F401
 from pops.time.implicit_stage import ImplicitStage  # noqa: F401
 from pops.time.implicit_diffusion import ImplicitDiffusionStage  # noqa: F401
 from pops.time._step.transaction import (  # noqa: F401
@@ -85,13 +87,13 @@ from pops.time.value_collections import StageStateSet  # noqa: F401
 from pops.time.values import ProgramValue  # noqa: F401
 from pops.time.stencil import StencilAccess  # noqa: F401
 
-__all__ = ["Program", "ProgramValue", "StageStateSet", "StencilAccess", "ResidualSolution",
+__all__ = ["Program", "ProgramValue", "MovingFieldProjection", "StageStateSet", "StencilAccess", "ResidualSolution",
            "CoupledImplicitEuler", "LocalLinear", "LocalResidual",
            "DerivativeStrategy", "SolveRequest", "SolveRequestError", "SolveUnknown",
-           "ImplicitStage", "ImplicitDiffusionStage",
+           "ImplicitStage", "ImplicitDiffusionStage", "EvolvedOriginalFieldStage", "EvolvedOriginalFieldRate", "TemporalTau",
            "SolveOutcome", "FieldSolveOutcome", "SolveAction", "FailRun", "RejectAttempt",
            "SOLVE_STATUSES", "Schedule",
-           "StepStrategy", "FixedDt", "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid",
+           "StepStrategy", "FixedDt", "ComputedDt", "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid",
            "ALL_PROVISIONAL_STORES", "AcceptanceGuard", "BlockProjection", "GuardRole",
            "ProjectAndRecheck", "ProvisionalStore", "StepTransactionPlan", "StepTransactionReport",
            "ProgramGraph", "GraphProgramValue", "StateRead", "Unknown", "OperatorCall",

@@ -142,7 +142,9 @@ void install(std::function<void(double)> step) const {
   require_facade_execution_();
   if (!step)
     throw std::invalid_argument("AMR Program install requires a non-empty step");
+  auto lifetime = program_resource_lifetime_();
   facade_->install_program_step(std::move(step));
+  runtime_state().install_resource_lifetime(std::move(lifetime));
 }
 
 void install(std::function<void(double)> step, std::shared_ptr<AmrProgramContext> keep_alive,
@@ -151,12 +153,14 @@ void install(std::function<void(double)> step, std::shared_ptr<AmrProgramContext
   require_facade_execution_();
   if (!step || !keep_alive || keep_alive.get() != this)
     throw std::invalid_argument("AMR Program install requires its exact owning context");
+  auto lifetime = program_resource_lifetime_();
   facade_->install_program_step([step = std::move(step), keep_alive](double dt) { step(dt); });
+  runtime_state().install_resource_lifetime(std::move(lifetime));
   if (resource_refresh)
     facade_->install_program_resource_refresh(std::move(resource_refresh));
   if (hierarchy_refresh)
     facade_->install_program_hierarchy_refresh(
-        [owner = keep_alive, refresh = std::move(hierarchy_refresh)]() mutable {
+        [owner = keep_alive, refresh = hierarchy_refresh]() mutable {
           refresh();
           owner->refresh_accepted_hierarchy_state_();
         });
@@ -164,8 +168,14 @@ void install(std::function<void(double)> step, std::shared_ptr<AmrProgramContext
     facade_->install_program_hierarchy_refresh(
         [owner = keep_alive]() { owner->refresh_accepted_hierarchy_state_(); });
   facade_->install_program_history_remap_accepted(
-      [owner = keep_alive](const AmrProgramHistoryRemapDescriptor& descriptor) {
+      [owner = keep_alive, refresh = std::move(hierarchy_refresh)](
+          const AmrProgramHistoryRemapDescriptor& descriptor) mutable {
         owner->refresh_accepted_hierarchy_state_after_remap_(descriptor);
+        // The accepted remap publishes histories on the new generation and discards old scratch
+        // storage. Rebuild the artifact's captured level resources before that regrid commits.
+        // A failed rebuild remains inside the facade's accepted-state rollback transaction.
+        if (refresh)
+          refresh();
       });
   facade_->install_program_restart_hooks(
       [owner = keep_alive]() { owner->preflight_restart_regrid_(); },
@@ -182,6 +192,10 @@ void begin_step(double dt) const {
   require_facade_execution_();
   if (!std::isfinite(dt) || !(dt > 0.0))
     throw std::invalid_argument("AMR Program step requires a finite positive dt");
+  program_values_.revoke_();
+  (void)prepared_resources_.begin_attempt(prepared_execution_lane());
+  drain_program_value_writes_();
+  rhs_input_traces_.clear();
   current_dt_ = dt;
   current_interval_start_time_ = facade_->time();
   current_interval_begin_phase_ = {0, 1};

@@ -1,0 +1,37 @@
+{
+  "all_production_git_equal_to_build": true,
+  "all_production_main_native_git_equal": true,
+  "ci_qualified": false,
+  "existing_capture_clock_nonauthor_review": {
+    "native_collect_only": 3,
+    "passed": 30,
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-cp9-clock-consumer-independent-20261003/receipt.json",
+    "sha256": "eac05fa2ff953dc95d7dce0964ed977c6185349d8261bd8c650c577ca0eadfc7"
+  },
+  "historical_native732229_remains_failed": true,
+  "historical_pure_reader_helpers_unchanged": true,
+  "main_head": "a6ae38f07f3582dea5808000cdffa12dbafe5c54",
+  "native_tests_not_yet_received_positive": true,
+  "new_test_doc_files_main_native_bytes_verified": {
+    "docs/review/sol61_cp9_actual_public_clock_fix.md": "c5e8f7588294c82f4812c74ee1eee2c4023068307961f6c53fb1e0ef8a46a685",
+    "docs/review/sol61_cp9_clock_consumer_nonauthor.md": "6be77bbe05d60764049c444771b34452c44ad31230004e5532a4b6daba57f539",
+    "docs/review/sol61_cp9_provisional_effect_preparation.md": "4fbfe9e234cbcd326f5d9c1abcff7c9023212a730f6a7ebdda228953e87682d5",
+    "docs/review/sol61_cp9_provisional_independent.md": "54614f35170064a50390f77bb026e327e3ff672ebd7b99e433971f6bedea715f",
+    "tests/python/integration/runtime/test_uniform_checkpoint_provisional_effect.py": "a4a4e85aac81a4d7df23e79f536b97d5c508a11a5a92960dd02e6812942334c2",
+    "tests/python/integration/runtime/test_uniform_state_carrier_checkpoint_runtime.py": "9184e2b5c1670b7b7e57dd5b6ea119030fd4b4ad0672acf97ba6f380f6ec144c",
+    "tests/review/test_sol61_cp9_capture_nonauthor.py": "33483d97dc12523469f5f6163f25e62b9a42cecc3df00238550bc17d05ec762c",
+    "tests/review/test_sol61_cp9_provisional_effect_preparation.py": "bbc54d60af0c95b5f8294cc8691438e48a43db10430970eefdde3504cb0de055",
+    "tests/review/test_sol61_cp9_provisional_independent.py": "4109cf3ae3097773c6ea512df6d4b5f289319bfe1d218cb966b4567a88eb6971",
+    "tests/review/test_sol61_cp9_public_clock_protocol.py": "a34400b7c82ecc63020a1c986f22198128d5b434e46bf77a0ec8b826d8bea7e0"
+  },
+  "production_build_freeze": "7bbeb375df24d22d08f91e9f009ffe05812ec9ef",
+  "provisional_durable_cursor_nonauthor_review": {
+    "passed": 5,
+    "sha256": "dacfd8574ceda50ba739446de5370f3d4d49a446d0a15fbab00e5b89dc65fccd",
+    "xml": "/tmp/sol61-cp9-provisional-cursors-independent.xml"
+  },
+  "schema": "root.sdk22-public-clock-and-provisional-test-source-integration@1",
+  "scope": "Test/docs additions plus correction of public clock calls; Native framework not changed or rebuilt",
+  "test_source_freeze": "78c75abb8b20318c9c0a8d5d93a85e4ac4bdb965",
+  "whole_mission_complete": false
+}

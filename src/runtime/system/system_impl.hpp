@@ -131,6 +131,11 @@ struct System<Dim>::Impl {
   Index<Dim>& local_rank = domain_.local_rank;
   std::array<bool, Dim>& periodicity = domain_.periodicity;
 
+  const runtime::multiblock::BoundaryEvaluationPoint* active_field_rhs_point_ = nullptr;
+  std::shared_ptr<void> field_rhs_session_ = std::make_shared<int>(0);
+  const runtime::system::FieldSolveRequest<Dim>* active_field_rhs_request_ = nullptr;
+  std::shared_ptr<runtime::system::FieldRhsExecutionRecovery> field_rhs_recovery_ =
+      std::make_shared<runtime::system::FieldRhsExecutionRecovery>();
   using auxiliary_registry_type = runtime::system::ExactAuxiliaryRegistry<Dim>;
   using auxiliary_publication_type = typename auxiliary_registry_type::PublicationTransaction;
   using auxiliary_key_type = runtime::system::AuxiliaryComponentKey;
@@ -170,8 +175,11 @@ struct System<Dim>::Impl {
   double t = 0.0;
   int macro_step_ = 0;
   std::string last_dt_reason_;
+  // Invocation-only Courant authority. Zero refuses a path RHS without step_cfl.
+  double active_program_step_courant_ = 0.0;
   NewtonReport last_newton_report_{};
   std::string poisson_solver_ = "cartesian_cg";
+  bool explicit_default_poisson_requested_ = false;
   std::string poisson_bc_ = "auto";
   double poisson_abs_tol_ = 0.0;
   double poisson_rel_tol_ = static_cast<double>(kCartesianCGDefaultRelTol);
@@ -557,6 +565,10 @@ struct System<Dim>::Impl {
           .scalar(plan.newton->restart)
           .scalar(plan.newton->armijo)
           .scalar(plan.newton->minimum_step);
+    if (plan.newton && plan.newton->convergence.kind != FieldNewtonConvergenceKind::kLegacy)
+      contract.text("pops.newton.original-residual-convergence@1")
+          .scalar(static_cast<int>(plan.newton->convergence.kind))
+          .scalar(plan.newton->convergence.relative).scalar(plan.newton->convergence.absolute);
     return std::move(contract).release();
   }
 
@@ -676,7 +688,8 @@ struct System<Dim>::Impl {
     int macro_step = 0;
 
     explicit AcceptedSnapshot(const Impl& owner)
-        : auxiliary_registry(owner.auxiliary_registry_),
+        : states((owner.program_.drain_resource_work(), std::vector<field_type>{})),
+          auxiliary_registry(owner.auxiliary_registry_),
           provider_carrier(owner.provider_carrier_
                                ? std::optional<runtime::system::AuxiliaryStorageGroups<Dim>>(
                                      *owner.provider_carrier_)
@@ -850,17 +863,37 @@ struct System<Dim>::Impl {
       block.state_identity = installed->state_identity;
   }
 
-  template <class Function>
-  decltype(auto) execute_step_transaction(Function&& function) {
-    AcceptedSnapshot snapshot(*this);
-    if (!external_step_transaction_) {
-      program_.accepted_exchanges_.clear();
-      program_.begin_step_projection_report();
-    }
+  template <class Function, class RejectSolveResults>
+  void execute_step_transaction(const CommunicatorView& communicator, Function&& function,
+                                RejectSolveResults&& reject_solve_results) {
+    std::unique_ptr<AcceptedSnapshot> snapshot;
+    runtime::program::collective_step_rejection_phase(
+        communicator, {"pops.system-step-snapshot.v1", "pops.system-step-snapshot", false, false},
+        "System step snapshot failed collectively",
+        [&] { snapshot = std::make_unique<AcceptedSnapshot>(*this); });
     try {
-      return std::forward<Function>(function)();
+      runtime::program::collective_step_rejection_phase(
+          communicator, {"pops.system-step-result.v1", "pops.system-step-result", false, false},
+          "System step failed collectively",
+          [&] {
+            if (!external_step_transaction_) {
+              program_.accepted_exchanges_.clear();
+              program_.begin_step_projection_report();
+            }
+            std::forward<Function>(function)();
+          },
+          [&] { program_.drain_resource_work(); });
     } catch (...) {
-      snapshot.restore(*this);
+      // Every rank takes this branch, including peers whose local work succeeded.
+      program_.reject_resource_work();
+      runtime::program::collective_step_rejection_phase(
+          communicator,
+          {"pops.system-step-solve-revoke.v1", "pops.system-step-solve-revoke", false, false},
+          "System solve-result revocation failed collectively",
+          [&] { std::forward<RejectSolveResults>(reject_solve_results)(); });
+      runtime::program::collective_step_rejection_phase(
+          communicator, {"pops.system-step-restore.v1", "pops.system-step-restore", false, false},
+          "System step rollback failed collectively", [&] { snapshot->restore(*this); });
       throw;
     }
   }

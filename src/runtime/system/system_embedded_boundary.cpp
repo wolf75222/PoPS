@@ -150,6 +150,17 @@ const MultiFab<Dim>* System<Dim>::prepared_program_block_active_mask_(
   return &embedded->active_mask();
 }
 
+template <int Dim>
+const MultiFab<Dim>* System<Dim>::prepared_program_block_volume_fraction_(
+    int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const {
+  if (!prepared_program_block_active_mask_(runtime_block, field, lane)) return nullptr;
+  return &p_->embedded_boundary_->volume_fraction();
+}
+
+template const MultiFab<kNativeDimension>*
+System<kNativeDimension>::prepared_program_block_volume_fraction_(
+    int, const MultiFab<kNativeDimension>&, const ExecutionLane&) const;
+
 template void System<kNativeDimension>::set_analytic_level_set(const std::vector<std::string>&,
                                                                const std::vector<double>&,
                                                                const std::string&, double, double,

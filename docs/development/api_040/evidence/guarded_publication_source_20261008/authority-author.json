@@ -1,0 +1,142 @@
+{
+  "contract": "accepted-update-ssp@1 successful frozen aliases plus compiled publication authority",
+  "source_base": {
+    "checkout": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+    "start_head": "53fd6ec25fd67351aefe0a5d2ac1101be7041a78",
+    "latest_observed_head": "29e9143c2d7234811030da3c10b897649978ec34",
+    "main_edits_by_worker": false,
+    "scope": "External small Source candidates only; actual Main dependencies plus exact four-module import finder."
+  },
+  "v1_preserved": {
+    "patch_sha256": "006b4c062480c17c02481ff8ee065fcac9e1f756d5c8eca651e0ef0469fb891b",
+    "receipt_sha256": "f1abba3576550b71b4ee999624bb1ae196763539fe365fee884fffb9a6724c80",
+    "source_pass": 21,
+    "independent_review": "/Users/romaindespoulain/dev/tmp/PoPS-independent-successful-guard-frozen-alias-review-20261008/review.json",
+    "review_sha256": "344f1f54e5aec2ab7b6841853d6c627b5006e84cfc72be83ae59b0a98d9967a6"
+  },
+  "patch": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-independent-audit-53fd-20261008/successful-guard-frozen-authority-v2.patch",
+    "sha256": "e25f52db5ef4547bf2bb163f539faf7fd0c5448e21417d95ddc48691b7958b13",
+    "files": [
+      "python/pops/codegen/program_accepted_ssp.py",
+      "python/pops/codegen/program_emit_field_publication.py",
+      "python/pops/codegen/program_emit_ops.py",
+      "python/pops/codegen/program_field_publication.py"
+    ],
+    "scope": "Includes immutable V1 four recursive successful alias lines; shared exact compiled publication owner resolver used by proof and emitter; canonical history storage witness.",
+    "external_git_apply_check": true,
+    "external_apply_exact": true
+  },
+  "authority_rule": [
+    "Exact ProgramModelGraph type required.",
+    "Destination block must resolve through its exact model route.",
+    "owner_for_block(destination.block_ref) equals canonical declaration owner, not merely membership of both owners.",
+    "source_module_for_owner(exact_owner) then declaration_index.authenticate(exact_declaration) then declared FieldSpace lookup.",
+    "Proof passes existing validate_field_publication target_space callback; no reconstruction of authoring registries, no fake/empty reads, no first owner/model recipe fallback.",
+    "Frontend validator remains compiler-independent; shared codegen helper imports no emitter."
+  ],
+  "new_counterexample_before": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-independent-audit-53fd-20261008/future-fixture-resolution.log",
+    "sha256": "dcd298153792830f8cc605e06cbb70449544d213af51321321a1c57a69de92c9",
+    "detached_reason": "field publication target requires its authoritative Case registry",
+    "actual_state": "Public two-owner FieldProblem with +3 reaction validated/resolved; detach graph preserved; real supplied ProgramModelGraph could not validate publication via authoring registry."
+  },
+  "history_storage": {
+    "public_owner_api": "Program.store_history(..., owner_block=receiver) preserves global field physical identity and gives explicit storage scope.",
+    "canonicalization": "canonical_handle(storage_authority[storage_state_witness]).qualified_id; generic identity projection, no raw string normalization.",
+    "historical_delta": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-independent-audit-53fd-20261008/future-step-delta.diff",
+      "sha256": "07381500c77d2099855d5b7a66648b23044fcb0a2f5097d69124a3d59f356055",
+      "actual_difference": "Only raw #authoring=2 suffix in separate storage state witness; descriptor JSON equal."
+    },
+    "fixed_evidence": "Full authored/detached C++ byte equality is asserted directly in both original and renamed tests; no exclusions or normalizations."
+  },
+  "portable_future_native_fixture": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-independent-audit-53fd-20261008/portable_future_native_fixture.py",
+    "sha256": "26ca8ff81084c44268785e33a90b36c43f6e64d429fbdc761fbe613065e16d37",
+    "math": "(-L_h+3I)phi=d, d=3/5 unchanged; dq/dt=div((2/7+phi^2)grad(q)); both public terminal guards; two independently owned models; explicit one-level AMR and hierarchy CompositeFieldGMRES.",
+    "solver_controls": "CompositeFieldGMRES(max_iter=200,rel_tol=1e-12,abs_tol=1e-14); explicit method choice, no math/guard tolerance relaxation.",
+    "independent_oracle": "Constant donor gives unique discrete phi=1/5; receiver starts as exact cosine cell averages, one Euler periodic finite-volume step computed with numpy.roll. Separate Fourier eigenvalue check validates oracle arithmetic. dt*FEfrequency=0.005211428571428572.",
+    "qualification_limits": "One-level Source scenario; neither AMR refinement/coarse-fine nor Native execution qualified.",
+    "solver_language_gap": "Same public FieldProblem with GeometricMG fails actual p.solve: solver must implement prepare_program_solve(); descriptor serves named AMR MG/FAC provider but not generic FieldProblem request. Reaction +3 retained; no algorithm substitution by model identity."
+  },
+  "validation": {
+    "passed": 28,
+    "failed": 0,
+    "warnings": 2,
+    "warnings_reason": "External runner lacks repository pytest marker configuration; two original helper marks compiler/native_loader not registered; no Native tests run.",
+    "duration_seconds": 36.032,
+    "command": "rtk proxy env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/romaindespoulain/miniforge3/envs/pops/bin/python -m pytest /Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-independent-audit-53fd-20261008/check_authority_v2.py -q -o cache_dir=/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-independent-audit-53fd-20261008/pytest-cache --basetemp=/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-independent-audit-53fd-20261008/pytest-temp-v2 --junitxml=/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-independent-audit-53fd-20261008/source-authority-v2.xml > /Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-independent-audit-53fd-20261008/source-authority-v2.log 2>&1",
+    "scope": "Previous21 checks + two full resolve/detach/proof/emit positives (original/renamed), three absent/foreign/source-module authority negatives, exact cross-member declaration-owner rejection, independent FV/spectral oracle.",
+    "nodeids": [
+      "test_successful_frozen_value_aliases_keep_the_actual_elliptic_diffusion_equation[False-False-]",
+      "test_successful_frozen_value_aliases_keep_the_actual_elliptic_diffusion_equation[True-False-]",
+      "test_successful_frozen_value_aliases_keep_the_actual_elliptic_diffusion_equation[False-True-]",
+      "test_successful_frozen_value_aliases_keep_the_actual_elliptic_diffusion_equation[True-True-]",
+      "test_successful_frozen_value_aliases_keep_the_actual_elliptic_diffusion_equation[False-False-_renamed]",
+      "test_successful_frozen_value_aliases_keep_the_actual_elliptic_diffusion_equation[True-False-_renamed]",
+      "test_successful_frozen_value_aliases_keep_the_actual_elliptic_diffusion_equation[False-True-_renamed]",
+      "test_alias_proof_does_not_drop_actual_conditions_effects_or_driver_evolution[unproved_action]",
+      "test_alias_proof_does_not_drop_actual_conditions_effects_or_driver_evolution[input_mutation]",
+      "test_alias_proof_does_not_drop_actual_conditions_effects_or_driver_evolution[changed_mathematical_driver]",
+      "test_exact_euler_face_quadrature_survives_an_independent_unchanged_driver",
+      "test_exact_convex_update_preserves_both_authored_compositions_and_exchange_weights[expanded]",
+      "test_exact_convex_update_preserves_both_authored_compositions_and_exchange_weights[retained]",
+      "test_frozen_mathematical_reads_do_not_authenticate_corrupt_reference_or_binder_objects[cycle]",
+      "test_frozen_mathematical_reads_do_not_authenticate_corrupt_reference_or_binder_objects[detached_observation]",
+      "test_frozen_mathematical_reads_do_not_authenticate_corrupt_reference_or_binder_objects[detached_binder]",
+      "test_terminal_guards_keep_actual_conditions_and_success_path_value_algebra[FailRun]",
+      "test_terminal_guards_keep_actual_conditions_and_success_path_value_algebra[RejectAttempt]",
+      "test_unused_input_mutation_does_not_disappear_from_the_acceptance_proof",
+      "test_boolean_scalar_metadata_cannot_supply_a_real_convex_coefficient",
+      "test_wrong_stage_coordinate_is_a_separate_acceptance_obligation",
+      "test_independent_portable_amr_math_resolves_detaches_and_emits_identical_actual_cpp[]",
+      "test_independent_portable_amr_math_resolves_detaches_and_emits_identical_actual_cpp[_renamed]",
+      "test_detached_publication_never_borrows_an_unknown_or_foreign_source_authority[no_source_authority]",
+      "test_detached_publication_never_borrows_an_unknown_or_foreign_source_authority[foreign_model_graph]",
+      "test_detached_publication_never_borrows_an_unknown_or_foreign_source_authority[foreign_source_module]",
+      "test_publication_declaration_cannot_borrow_a_different_known_block_owner",
+      "test_independent_fv_oracle_matches_separable_discrete_eigenvalues"
+    ],
+    "junit": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-independent-audit-53fd-20261008/source-authority-v2.xml",
+      "sha256": "14170fa7c6f4cb4e6f44704580f4d958dfcfa676a2077cb159a2d4a35783082a"
+    },
+    "log": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-independent-audit-53fd-20261008/source-authority-v2.log",
+      "sha256": "e5b3abdda9f2aff101eef9885c2c6038f886ad7bda4b67cf1fe3a1f876469a82"
+    },
+    "runner": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-independent-audit-53fd-20261008/check_authority_v2.py",
+      "sha256": "289406c29d140adb2c700acb77c827eb1843cf6e4e7f0d322fda3db57bc8d551"
+    }
+  },
+  "candidate_sources": [
+    {
+      "path": "python/pops/codegen/program_accepted_ssp.py",
+      "base_sha256": "4fc97755ecf482e9e683694e568987595420c2ba25a7bf0f04fe11eb816241ad",
+      "candidate_sha256": "bd799da58c0e547318b318ec0f4e2ec8a7c95cfc70235c68b9f6efe5f8585194"
+    },
+    {
+      "path": "python/pops/codegen/program_emit_field_publication.py",
+      "base_sha256": "aba4673ed5ac25a001c59f41267bb8bffdc979af1125a600da5e4d4ec689bad8",
+      "candidate_sha256": "69aaef32943ff91d912f7de2aa8c6094bba55a0470cc3037fa47da151e31bbff"
+    },
+    {
+      "path": "python/pops/codegen/program_emit_ops.py",
+      "base_sha256": "e5bbc07f080432b6da5106d9f2717956750b184cc17bf1c18911bfbcb21bd022",
+      "candidate_sha256": "091187d1844c52601423a88d7c414f663e113cda27b553ca9cecfee23e20676c"
+    },
+    {
+      "path": "python/pops/codegen/program_field_publication.py",
+      "base_sha256": "b9ad09fb51018b0c2470d92bfa97c223a3c27b9d353fb9f96575b97e5c79139b",
+      "candidate_sha256": "cd24092df4840ca171f7d497d894cd4eb2470e5056b650c49d0ecb0ab1f058bf"
+    }
+  ],
+  "evidence_limits": [
+    "No Main/env/build/install/Native/ROMEO/remote-job actions.",
+    "Full 94-obligation mission remains open; these cases do not establish universal translation.",
+    "Acceptance remains mathematically conditional on FE spatial guards, exact convex weights, dt powers and stage coordinates; the tiny fixes add no identity-selected numerical recipe.",
+    "Initial V2 negative accidentally replaced the unused donor module, leaving receiver module intact; corrected to replace actual receiver module and retained initial failure log."
+  ]
+}

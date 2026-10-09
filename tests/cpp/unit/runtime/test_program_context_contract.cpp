@@ -33,6 +33,7 @@
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/program/history_sample_identity_codec.hpp>
+#include <pops/runtime/accelerator/prepared_stream_executor.hpp>
 #include <pops/runtime/program/program_context.hpp>  // NativeProgramContext (the contract under test)
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
 #include <pops/runtime/system.hpp>
@@ -42,6 +43,8 @@
 #include <bit>
 #include <cmath>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -294,6 +297,68 @@ TEST(ProgramContextContract, SystemMoveTransfersPreparedExecutionLane) {
   assigned = std::move(moved);
   EXPECT_EQ(assigned.prepared_boundary_execution_lane().identity(), "pops.test.system-move");
   EXPECT_THROW(static_cast<void>(moved.prepared_boundary_execution_lane()), std::logic_error);
+}
+
+TEST(ProgramContextContract, PendingRealFieldSolveRefusesTransactionExitBeforeMutation) {
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.pending-field-transaction");
+  add_gas(sim);
+  sim.set_state("gas", ic(4));
+  const auto accepted = sim.get_state("gas");
+  sim.begin_step_transaction();
+  auto pending = sim.solve_fields();
+  ASSERT_TRUE(pending.report().solved_value_available()) << pending.report().reason;
+  const auto before_refusal = sim.get_state("gas");
+  EXPECT_THROW(sim.rollback_step_transaction(), std::runtime_error);
+  EXPECT_THROW(sim.commit_step_transaction(), std::runtime_error);
+  EXPECT_THROW(sim.begin_nested_step_transaction(), std::runtime_error);
+  EXPECT_EQ(sim.step_transaction_depth(), 1u);
+  EXPECT_EQ(sim.get_state("gas"), before_refusal);
+  EXPECT_NO_THROW((void)pending.consume(SolveConsumption::kAccept));
+  EXPECT_THROW((void)pending.consume(SolveConsumption::kAccept), std::logic_error);
+  EXPECT_NO_THROW(sim.rollback_step_transaction());
+  EXPECT_EQ(sim.get_state("gas"), accepted);
+  EXPECT_EQ(sim.step_transaction_depth(), 0u);
+}
+
+TEST(ProgramContextContract, RealFieldSolveOutcomeSurvivesMoveAndRevokesAfterOwnerDeath) {
+  ensure_kokkos();
+  comm_init();
+  NativeSystem source(native_config(4));
+  install_execution_lane(source, "pops.test.solve-outcome-move");
+  add_gas(source);
+  source.set_state("gas", ic(4));
+  auto moved_outcome = source.solve_fields();
+  ASSERT_TRUE(moved_outcome.report().solved_value_available()) << moved_outcome.report().reason;
+  NativeSystem destination(std::move(source));
+  EXPECT_NO_THROW((void)moved_outcome.consume(SolveConsumption::kAccept));
+  EXPECT_THROW((void)moved_outcome.consume(SolveConsumption::kAccept), std::logic_error);
+
+  std::optional<SolveOutcome> orphan;
+  {
+    auto owner = std::make_unique<NativeSystem>(native_config(4));
+    install_execution_lane(*owner, "pops.test.solve-outcome-owner-death");
+    add_gas(*owner);
+    owner->set_state("gas", ic(4));
+    orphan.emplace(owner->solve_fields());
+    ASSERT_TRUE(orphan->report().solved_value_available()) << orphan->report().reason;
+  }
+  EXPECT_THROW((void)orphan->consume(SolveConsumption::kAccept), std::logic_error);
+  EXPECT_THROW((void)orphan->consume(SolveConsumption::kAccept), std::logic_error);
+
+  NativeSystem replaced(native_config(4));
+  install_execution_lane(replaced, "pops.test.solve-outcome-replaced");
+  add_gas(replaced);
+  replaced.set_state("gas", ic(4));
+  auto stale = replaced.solve_fields();
+  ASSERT_TRUE(stale.report().solved_value_available()) << stale.report().reason;
+  NativeSystem replacement(native_config(4));
+  install_execution_lane(replacement, "pops.test.solve-outcome-replacement");
+  replaced = std::move(replacement);
+  EXPECT_THROW((void)stale.consume(SolveConsumption::kAccept), std::logic_error);
+  EXPECT_THROW((void)stale.consume(SolveConsumption::kAccept), std::logic_error);
 }
 
 TEST(ProgramContextContract, AnonymousRateIdentityIsRejectedBeforeTopologyLookup) {
@@ -698,11 +763,15 @@ TEST(ProgramContextContract, PreparedLinearSolveAcceptsDistinctCongruentWorkspac
                    problem, legacy_workspace, solution, rhs,
                    KrylovControls<kTestDimension>{method, Real(1e-12), Real(0), 4}),
                std::invalid_argument);
+  sim.begin_step_transaction();
   SolveOutcome outcome = context.solve_prepared_linear(
       problem, workspace, solution, rhs,
       KrylovControls<kTestDimension>{method, Real(1e-12), Real(0), 4});
   ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
+  EXPECT_THROW(sim.rollback_step_transaction(), std::runtime_error);
+  EXPECT_EQ(sim.step_transaction_depth(), 1u);
   (void)outcome.consume(SolveConsumption::kAccept);
+  EXPECT_NO_THROW(sim.rollback_step_transaction());
   for (int component = 0; component < solution.ncomp(); ++component)
     EXPECT_DOUBLE_EQ(context.sum_component(solution, component),
                      context.sum_component(rhs, component));
@@ -2033,6 +2102,197 @@ TEST(ProgramContextContract, AcceptedExchangeIdentityRetainsMathematicalMultipli
   EXPECT_EQ(snapshot.records().size(), 1u);
 }
 
+TEST(ProgramContextContract, ExtendedAcceptedMetadataWithoutIntegralHasExactRoundtrip) {
+  using Ledger=runtime::program::AcceptedExchangeLedger;
+  Ledger ledger;
+  const auto default_image=ledger.checkpoint();
+  const auto empty_extended=ledger.checkpoint(true);
+  ASSERT_EQ(default_image.size(),16u);
+  ASSERT_EQ(empty_extended.size(),32u);
+  EXPECT_EQ(default_image[7],'1');
+  EXPECT_EQ(empty_extended[7],'2');
+  auto restored=Ledger::from_checkpoint(empty_extended);
+  EXPECT_EQ(restored.checkpoint(),default_image);
+  EXPECT_EQ(restored.checkpoint(true),empty_extended);
+  runtime::program::ExchangeRecord record{"mesh","volume","geometry","endpoint",1,1.,.04,.2,1};
+  record.source_evaluation_identity="mesh-original-evaluation";
+  ledger.stage(record);
+  const auto qualified=ledger.checkpoint(true);
+  restored=Ledger::from_checkpoint(qualified);
+  ASSERT_EQ(restored.records().size(),1u);
+  EXPECT_EQ(restored.records()[0].source_evaluation_identity,record.source_evaluation_identity);
+  EXPECT_EQ(restored.checkpoint(true),qualified);
+  auto oversized=empty_extended;
+  for(unsigned byte=16;byte<24;++byte) oversized[byte]=255;
+  EXPECT_THROW(Ledger::from_checkpoint(oversized),std::invalid_argument);
+  auto truncated=empty_extended;
+  truncated.resize(24);
+  EXPECT_THROW(Ledger::from_checkpoint(truncated),std::invalid_argument);
+  auto invented_consumption=empty_extended;
+  invented_consumption.back()=1;
+  EXPECT_THROW(Ledger::from_checkpoint(invented_consumption),std::invalid_argument);
+  // Keep a valid pending exterior metadata positive before inventing its exact
+  // consumption key. Without an IntegralState no writer can consume this key.
+  Ledger pending;
+  record.trace_axis=0; record.trace_side=1; record.trace_component=0; record.exterior_trace=true;
+  pending.stage(record);
+  const auto pending_image=pending.checkpoint(true);
+  ASSERT_NO_THROW(restored=Ledger::from_checkpoint(pending_image));
+  ASSERT_EQ(restored.checkpoint(true),pending_image);
+  auto synthetic_consumption=pending_image;
+  synthetic_consumption[synthetic_consumption.size()-8]=1;
+  const auto append_text=[&](const std::string& value) {
+    for(unsigned byte=0;byte<8;++byte)
+      synthetic_consumption.push_back(static_cast<std::uint8_t>(value.size()>>(8*byte)));
+    synthetic_consumption.insert(synthetic_consumption.end(),value.begin(),value.end());
+  };
+  append_text(record.operation_identity); append_text(record.occurrence_identity);
+  append_text(record.evaluation_context); append_text(record.quadrature_identity);
+  try {
+    (void)Ledger::from_checkpoint(synthetic_consumption);
+    FAIL()<<"synthetic consumption without an integral was accepted";
+  } catch(const std::invalid_argument& error) {
+    EXPECT_STREQ(error.what(),"accepted exchange checkpoint consumes trace without an integral state");
+  }
+}
+
+TEST(ProgramContextContract, IntegralStateConsumesExactAcceptedTraceAndRollsBackParent) {
+  using Ledger = runtime::program::AcceptedExchangeLedger;
+  using Record = runtime::program::ExchangeRecord;
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(8));
+  install_execution_lane(sim, "pops.test.integral-accepted-trace");
+  add_gas_block(sim, "gas");
+  sim.set_state("gas", ic(8));
+  sim.declare_program_integral("program/integral/q", 0.7);
+  EXPECT_DOUBLE_EQ(sim.program_integral("program/integral/q"), 0.7);
+  const auto legacy_image = Ledger{}.checkpoint();
+  EXPECT_EQ(legacy_image[7], static_cast<std::uint8_t>('1'));
+  EXPECT_THROW(sim.validate_checkpoint_program_exchanges(legacy_image), std::invalid_argument);
+
+  const auto selector = [](const std::string& evaluation) {
+    return Ledger::TraceSelection{"flux", "balance/occurrence", 0, 1, 0, evaluation};
+  };
+  const auto stage = [&](NativeSystem& system) {
+    std::vector<Record> local;
+    if (my_rank() == 0) {
+      for (const auto& [evaluation, weight] :
+           std::vector<std::pair<std::string, double>>{{"stage/a", 0.1}, {"stage/b", 0.2}}) {
+        Record record{"flux", "balance/occurrence", evaluation, "face/x+", -1, 1.0,
+                      2.0, weight, 1};
+        record.trace_axis = 0;
+        record.trace_side = 1;
+        record.trace_component = 0;
+        record.exterior_trace = true;
+        record.source_evaluation_identity = evaluation;
+        local.push_back(std::move(record));
+      }
+    }
+    system.stage_program_exchanges(local);
+  };
+
+  sim.begin_step_transaction();
+  sim.begin_nested_step_transaction();
+  stage(sim);
+  EXPECT_DOUBLE_EQ(sim.consume_program_external_trace(
+      "program/integral/q", selector("stage/a"), -1.0), 0.9);
+  EXPECT_THROW(sim.consume_program_external_trace(
+      "program/integral/q", selector("stage/a"), -1.0), std::invalid_argument);
+  EXPECT_DOUBLE_EQ(sim.program_integral("program/integral/q"), 0.9);
+  EXPECT_DOUBLE_EQ(sim.consume_program_external_trace(
+      "program/integral/q", selector("stage/b"), -1.0), 1.3);
+  sim.commit_step_transaction();
+  sim.finalize_step_transaction();
+  EXPECT_DOUBLE_EQ(sim.program_integral("program/integral/q"), 1.3);
+  sim.rollback_step_transaction();
+  EXPECT_DOUBLE_EQ(sim.program_integral("program/integral/q"), 0.7);
+  EXPECT_TRUE(sim.program_exchange_records().empty());
+  EXPECT_EQ(sim.macro_step(), 0);
+  EXPECT_DOUBLE_EQ(sim.time(), 0.0);
+
+  sim.begin_step_transaction();
+  stage(sim);
+  EXPECT_DOUBLE_EQ(sim.consume_program_external_trace(
+      "program/integral/q", selector("stage/a"), -1.0), 0.9);
+  EXPECT_DOUBLE_EQ(sim.consume_program_external_trace(
+      "program/integral/q", selector("stage/b"), -1.0), 1.3);
+  sim.commit_step_transaction();
+  sim.finalize_step_transaction();
+  EXPECT_DOUBLE_EQ(sim.program_integral("program/integral/q"), 1.3);
+  const auto image = sim.checkpoint_program_exchanges();
+  ASSERT_GE(image.size(), 8u);
+  EXPECT_EQ(image[7], static_cast<std::uint8_t>('2'));
+  sim.begin_restart_transaction();
+  EXPECT_NO_THROW(sim.restore_checkpoint_program_exchanges(image));
+  sim.commit_restart_transaction();
+  sim.finalize_restart_transaction();
+  EXPECT_DOUBLE_EQ(sim.program_integral("program/integral/q"), 1.3);
+  EXPECT_THROW(sim.consume_program_external_trace(
+      "program/integral/q", selector("stage/a"), -1.0), std::invalid_argument);
+}
+
+TEST(ProgramContextContract, IntegralStateCollectiveRefusalsPreserveValueAndConsumption) {
+  using Ledger = runtime::program::AcceptedExchangeLedger;
+  using Record = runtime::program::ExchangeRecord;
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(8));
+  install_execution_lane(sim, "pops.test.integral-collective-refusals");
+  add_gas_block(sim, "gas");
+  sim.set_state("gas", ic(8));
+  sim.declare_program_integral("q", 0.7);
+  const auto declared = sim.checkpoint_program_exchanges();
+  if (n_ranks() > 1) {
+    EXPECT_THROW(sim.declare_program_integral("another", my_rank() == 0 ? 0.0 : -0.0),
+                 std::runtime_error);
+    EXPECT_EQ(sim.checkpoint_program_exchanges(), declared);
+  }
+
+  const auto face = [] {
+    Record record{"flux", "occurrence", "stage", "face/x+", -1, 1.0, 2.0, 1.0, 1};
+    record.trace_axis = 0;
+    record.trace_side = 1;
+    record.trace_component = 0;
+    record.exterior_trace = true;
+    record.source_evaluation_identity = "stage";
+    return record;
+  };
+  const Ledger::TraceSelection selector{"flux", "occurrence", 0, 1, 0, "stage"};
+  sim.begin_step_transaction();
+  std::vector<Record> records;
+  if (my_rank() == 0) records.push_back(face());
+  sim.stage_program_exchanges(records);
+  const auto staged = sim.checkpoint_program_exchanges();
+  if (n_ranks() > 1) {
+    auto divergent = selector;
+    if (my_rank() != 0) divergent.side = 0;
+    EXPECT_THROW(sim.consume_program_external_trace("q", divergent, -0.5), std::runtime_error);
+    EXPECT_EQ(sim.checkpoint_program_exchanges(), staged);
+  }
+  EXPECT_THROW(sim.consume_program_external_trace("q", selector, 1.e308), std::runtime_error);
+  EXPECT_EQ(sim.checkpoint_program_exchanges(), staged);
+  EXPECT_DOUBLE_EQ(sim.program_integral("q"), 0.7);
+  EXPECT_DOUBLE_EQ(sim.consume_program_external_trace("q", selector, -0.5), 1.7);
+  sim.rollback_step_transaction();
+  EXPECT_EQ(sim.checkpoint_program_exchanges(), declared);
+
+  if (n_ranks() > 1) {
+    // Both wire images are individually valid, but replicated q disagrees. The
+    // restore must vote before publishing either rank's candidate image.
+    Ledger candidate;
+    candidate.declare_integral("q", 0.7);
+    candidate.stage(face());
+    const auto trace = candidate.prepare_trace(selector);
+    candidate.apply_trace("q", trace, my_rank() == 0 ? -2.0 : -4.0, -0.5);
+    sim.begin_restart_transaction();
+    EXPECT_THROW(sim.restore_checkpoint_program_exchanges(candidate.checkpoint()),
+                 std::runtime_error);
+    EXPECT_EQ(sim.checkpoint_program_exchanges(), declared);
+    sim.rollback_restart_transaction();
+  }
+}
+
 TEST(ProgramContextContract, TransactionScopeDivergenceRefusesBeforeMutation) {
   ensure_kokkos();
   comm_init();
@@ -2383,3 +2643,133 @@ TEST(ProgramContextContract, AmrProgramSingleCarrierTopologyRejectsMultipleBlock
   for (int block = 0; block < 2; ++block)
     EXPECT_EQ(difference_sum_sq_all(context->state(block), before_values[block]), Real(0));
 }
+
+// This crosses the real System accepted transaction: rank zero fails after submitting
+// actual Kokkos work; other ranks return normally, then collective rollback revokes
+// every exact attempt before the accepted carriers are rewritten.
+namespace {
+void check_prepared_task_collective_rollback(bool cancel_task, bool typed_rejection) {
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.program-context.native-lifetime");
+  add_gas_block(sim, "gas");
+  sim.seal_auxiliary_providers();
+  sim.set_state("gas", ic(4));
+  const auto accepted = sim.get_state("gas");
+  NativeProgramContext context(&sim);
+  context.configure_primary_clock("clock.macro");
+  using Executor =
+      runtime::accelerator::PreparedAcceleratorStreamExecutor<double,
+                                                              Kokkos::DefaultHostExecutionSpace>;
+  using Task = runtime::program::PreparedResourceTask;
+  auto executor = context.prepared_resource_lease<Executor>(
+      701, 0, [](const Executor&) { return true; }, Executor::prepare_synchronous(8));
+  Task task;
+  runtime::program::PreparedResourceAttempt attempt;
+  bool fail = true;
+  int calls = 0;
+  context.install([&](double dt) {
+    ++calls;
+    context.begin_step(dt);
+    attempt = context.resource_attempt();
+    double* raw = executor->workspace_data(0);
+    task = context.submit_prepared_for(
+        executor, 0, "context-lifetime-write", 8, KOKKOS_LAMBDA(std::int64_t i) { raw[i] = 42; });
+    context.state(0).set_val(Real(7));
+    if (fail && context.prepared_execution_lane().rank() == 0) {
+      if (cancel_task)
+        task.request_cancel();
+      else if (typed_rejection)
+        throw runtime::program::StepAttemptRejected(SolveStatus::kInvalidEvaluation,
+                                                    "prepared_task",
+                                                    "injected retry after native submission");
+      else
+        throw std::runtime_error("injected rank-local rejection after native submission");
+    }
+  });
+  sim.set_program_block_map({0});
+  sim.set_program_cadence(2, 1);
+  if (typed_rejection)
+    EXPECT_THROW(sim.step(0.1), runtime::program::StepAttemptRejected);
+  else
+    EXPECT_THROW(sim.step(0.1), std::runtime_error);
+  EXPECT_EQ(calls, 1);  // No peer enters substep two after rank-zero failure.
+  EXPECT_EQ(sim.get_state("gas"), accepted);
+  EXPECT_DOUBLE_EQ(sim.time(), 0.0);
+  EXPECT_EQ(sim.macro_step(), 0);
+  EXPECT_FALSE(attempt.visible());
+  EXPECT_TRUE(task.physically_complete());
+  EXPECT_EQ(task.status(), Task::Status::cancelled);
+  EXPECT_THROW(task.require_consumable(attempt), std::logic_error);
+  const auto rejected_ordinal = attempt.ordinal();
+  fail = false;
+  EXPECT_NO_THROW(sim.step(0.1));
+  EXPECT_EQ(calls, 3);
+  EXPECT_GT(attempt.ordinal(), rejected_ordinal);
+  EXPECT_TRUE(attempt.visible());
+  EXPECT_TRUE(task.physically_complete());
+  EXPECT_NO_THROW(task.require_consumable(attempt));
+  EXPECT_DOUBLE_EQ(executor->workspace_data(0)[7], 42);
+  EXPECT_DOUBLE_EQ(sim.time(), 0.1);
+}
+
+}  // namespace
+
+TEST(ProgramContextContract, PreparedTaskRollbackRevokesEveryRankAndRetryUsesNewAttempt) {
+  check_prepared_task_collective_rollback(false, false);
+}
+
+TEST(ProgramContextContract, CancelledNativeTaskFailsCollectivelyBeforeNextSubstep) {
+  check_prepared_task_collective_rollback(true, false);
+}
+
+TEST(ProgramContextContract, PreparedTaskTypedRejectionRemainsCollectiveAndRetryable) {
+  check_prepared_task_collective_rollback(false, true);
+}
+
+TEST(ProgramContextContract,
+     ArtifactInstallRollbackRestoresWeakLifetimeHookWithoutRevivingAttempt) {
+  ensure_kokkos();
+  comm_init();
+  auto lane = ExecutionLane::world("pops.test.program-context.install-lifetime");
+  using namespace runtime::program;
+  using Executor =
+      runtime::accelerator::PreparedAcceleratorStreamExecutor<double,
+                                                              Kokkos::DefaultHostExecutionSpace>;
+  PreparedResourceCache accepted_cache, candidate_cache;
+  auto accepted_executor = accepted_cache.acquire_lease<Executor>(
+      1, 0, 0, lane, [](const Executor&) { return true; }, Executor::prepare_synchronous(8));
+  auto candidate_executor = candidate_cache.acquire_lease<Executor>(
+      1, 0, 0, lane, [](const Executor&) { return true; }, Executor::prepare_synchronous(8));
+  ProgramRuntimeState<kTestDimension> state;
+  state.install_unverified_step([](double) {});
+  state.install_resource_lifetime(accepted_cache.lifetime_callback());
+  const auto accepted_attempt = accepted_cache.begin_attempt(lane);
+  auto install_snapshot = state.capture_artifact_step_install();
+  state.install_unverified_step([](double) {});
+  EXPECT_FALSE(accepted_attempt.visible());
+  state.install_resource_lifetime(candidate_cache.lifetime_callback());
+  const auto candidate_attempt = candidate_cache.begin_attempt(lane);
+  auto candidate_task =
+      candidate_executor->submit_for(candidate_cache, candidate_attempt, candidate_executor, 0,
+                                     "candidate-install", 1, KOKKOS_LAMBDA(std::int64_t){});
+  state.rollback_artifact_step_install(std::move(install_snapshot));
+  EXPECT_FALSE(candidate_attempt.visible());
+  EXPECT_TRUE(candidate_task.physically_complete());
+  EXPECT_FALSE(accepted_attempt.visible());
+  const auto retry = accepted_cache.begin_attempt(lane);
+  EXPECT_GT(retry.ordinal(), accepted_attempt.ordinal());
+  auto task = accepted_executor->submit_for(accepted_cache, retry, accepted_executor, 0,
+                                            "restored-install", 1, KOKKOS_LAMBDA(std::int64_t){});
+  EXPECT_NO_THROW(state.finish_resource_work());
+  EXPECT_TRUE(task.physically_complete());
+  EXPECT_NO_THROW(task.require_consumable(retry));
+  state.invalidate_resources();
+  EXPECT_FALSE(retry.visible());
+  EXPECT_THROW(task.require_consumable(retry), std::logic_error);
+  // Quiescence before a retry snapshot remains legal after numerical rejection.
+  EXPECT_NO_THROW(state.drain_resource_work());
+}
+
+#include "solve_outcome_attempt_review.inc"

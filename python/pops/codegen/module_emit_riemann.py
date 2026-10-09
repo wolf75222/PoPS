@@ -20,6 +20,7 @@ from typing import Any
 
 from pops._dense_spectral import is_exact_block_triangular
 from pops.codegen.cpp_writer import _cpp_roe
+from .cpp_symbols import variable_identifier
 from pops.codegen.module_emit_helpers import (
     _codegen_exprs,
     _live_prims,
@@ -342,13 +343,13 @@ def _emit_roe_provided(model: Any, nc: Any) -> list:
     out.append(_axis_guard("provided Roe dissipation"))
     # locals of BOTH states: conservatives, primitives (def with prefix), then aux read.
     for side, U, av in (("L_", "UL", "aL"), ("R_", "UR", "aR")):
-        out += ["    const pops::Real %s%s = %s[%d];" % (side, c, U, i)
+        out += ["    const pops::Real %s%s = %s[%d];" % (side, variable_identifier(c,"cons"), U, i)
                 for i, c in enumerate(model.cons_names)]
-        out += ["    const pops::Real %s%s = %s;" % (side, p, _cpp_roe(e, side))
+        out += ["    const pops::Real %s%s = %s;" % (side, variable_identifier(p,"prim"), _cpp_roe(e, side))
                 for p, e in model.prim_defs.items()]
         if has_aux:
             out += ["    const pops::Real %s%s = pops::provider_value<%d>(%s);"
-                    % (side, n, model._physical_flux_consumer_slot(n), av)
+                    % (side, variable_identifier(n,"aux"), model._physical_flux_consumer_slot(n), av)
                     for n in provider_components]
     out.append("    State d{};")
     for ordinal, axis in enumerate(axes):
@@ -401,7 +402,7 @@ def _emit_roe_jacobian(model: Any, nc: Any, cse: Any) -> list:
                "const State& UR, const auto&) const {")
     out.append(_axis_guard("Jacobian Roe dissipation"))
     # conservatives at the ARITHMETIC-MEAN interface state Uavg = 1/2 (UL + UR)
-    out += ["    const pops::Real %s = pops::Real(0.5) * (UL[%d] + UR[%d]);" % (c, i, i)
+    out += ["    const pops::Real %s = pops::Real(0.5) * (UL[%d] + UR[%d]);" % (variable_identifier(c,"cons"), i, i)
             for i, c in enumerate(model.cons_names)]
     out += _prim_block(model, live)  # live primitives, evaluated at Uavg
     out.append("    pops::Real A[%d][%d];" % (nc, nc))
@@ -482,7 +483,7 @@ def _emit_roe_jacobian(model: Any, nc: Any, cse: Any) -> list:
     out.append("  static constexpr bool characteristic_no_inflow_conservative = true;")
     out.append("  POPS_HD bool characteristic_no_inflow(const State& interior, ")
     out.append("      const State& reference, int dir, int outward_sign, State& ghost) const {")
-    out += ["    const pops::Real %s = interior[%d];" % (c, i)
+    out += ["    const pops::Real %s = interior[%d];" % (variable_identifier(c,"cons"), i)
             for i, c in enumerate(model.cons_names)]
     out += _prim_block(model, live)
     out.append("    pops::Real A[%d][%d];" % (nc, nc))
@@ -522,7 +523,7 @@ def _emit_roe_jacobian(model: Any, nc: Any, cse: Any) -> list:
     out.append("  POPS_HD bool characteristic_no_inflow(const State& interior, ")
     out.append("      const State& reference, const pops::Real* normal, State& ghost) const {")
     out.append("    if (normal == nullptr) return false;")
-    out += ["    const pops::Real %s = interior[%d];" % (c, i)
+    out += ["    const pops::Real %s = interior[%d];" % (variable_identifier(c,"cons"), i)
             for i, c in enumerate(model.cons_names)]
     out += _prim_block(model, live)
     out.append("    pops::Real A[%d][%d];" % (nc, nc))

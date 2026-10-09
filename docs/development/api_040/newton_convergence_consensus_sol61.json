@@ -1,0 +1,30 @@
+{
+  "schema": "sol61.newton-convergence-consensus-source-host@1",
+  "parent_author": "81ac2d80941c85db498a01012fab66803133e2ae",
+  "source_tests": 26,
+  "source_seconds": 20.91,
+  "actual_host_gtests": 6,
+  "host_failures": 0,
+  "host_skips": 0,
+  "mpi_execution": false,
+  "mpi_source_syntax": "Serial configuration only, rc0",
+  "native_simulation": false,
+  "consensus": "fixed stack exact kind+pertinent IEEE bits MIN/MAX on ExecutionLane, followed by unconditional voted cutoff computation",
+  "legacy": "seven controls, emitted IR/C++ bytes and arithmetic unchanged; backend control communication intentionally added",
+  "pins": {
+    "include/pops/numerics/elliptic/interface/field_newton_convergence_consensus.hpp": "96a1d36534aacf16b319ccf50c1100f7e960907f0254badc61293383288d58c1",
+    "include/pops/numerics/elliptic/interface/field_newton_krylov.hpp": "44c96014f13fde0a9c3de15c6bb77d8b9bc4b2e807649a13fa0a9a559b868fbd",
+    "include/pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp": "7aa82c94ce70e79916b6285c763f92232ce1c81007ca2dd05b65875e8536f35b",
+    "include/pops/runtime/program/prepared_amr_field_residual.hpp": "6803226dd8652b3a0d1e02dd73bdc2d4700de2f2b5fd30611a68c4e876a10a94",
+    "python/pops/codegen/program_emit_nonlinear_field.py": "6392641c002d2cf4e87fcd750f386ceff5f84f28826c134576acbf1e05f0624f",
+    "tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp": "d6644a5805d2bb29aca820d5192848f149352774c2931e43b41e9cb2fabbbbf9",
+    "tests/cpp/unit/numerics/test_numerical_defaults.cpp": "e5ca72abad615bb14c333e5186a7ccd793f21568cc65ef47bc8fd0ae3303912a",
+    "build-newton-typed-host/consensus-evidence/mpi-consensus-syntax.log": "463752ce4cec3f123754b728b781cd8fff63a20acaa1fb6187be16f54525fa3c",
+    "build-newton-typed-host/consensus-evidence/link-consensus.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "build-newton-typed-host/consensus-evidence/compile-consensus.log": "243ab76b4af44aaea1e3782a00ebf70798d326b1d262271a4f396c91ecc37d51",
+    "build-newton-typed-host/consensus-evidence/test_numerical_defaults": "0143547a162f84bff7210c06d3357ae50c955b31241191ebd2663416201f5d90",
+    "build-newton-typed-host/consensus-evidence/consensus-run.log": "fe08530fe909d46097751b54e81bcc02fbfeec5253031db03d8e9b17819b4216",
+    "build-newton-typed-host/consensus-evidence/commands.txt": "4547e8739e89c8ac8eff42310a673a32ce3bac954d225e94fb18cf6e2a27aec5",
+    "build-newton-typed-host/consensus-evidence/consensus-results.xml": "955d0cf0178ab00bde52b3a9f4ae70280f8436e2783f6d4fafe541a157df9275"
+  }
+}

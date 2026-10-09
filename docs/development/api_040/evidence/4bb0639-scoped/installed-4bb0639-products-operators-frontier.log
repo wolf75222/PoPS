@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='7105935a756fc6f0411c831ea18500f549365a30bc35cdbe340ef4ef11d56011'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-4bb0639-products-operators-frontier/pytest.xml",
+    "tests/python/integration/runtime/test_local_residual_product_runtime.py",
+    "tests/python/integration/runtime/test_api040_m22_h05_runtime.py",
+    "tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py",
+    "tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py",
+    "tests/python/integration/runtime/test_api040_c17_stagnation_runtime.py",
+    "tests/python/integration/runtime/test_external_grid_frontier_runtime.py",
+    "tests/python/integration/runtime/test_local_product_operators_runtime.py"
+  ],
+  "returncode": 1,
+  "duration_seconds": 311.52114979200996,
+  "counts": {
+    "tests": 21,
+    "failures": 10,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "failed",
+  "identity_sha256": "a4a91529e06b103391c1891454488b57f1b04669ad5499ac9e4267911fdf98b7",
+  "log_sha256": "60302f4dc94c1f53483f23ff05d85bff29b39eb30dee42179dcb824d3407db5b"
+}

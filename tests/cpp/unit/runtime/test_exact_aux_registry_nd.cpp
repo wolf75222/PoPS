@@ -853,3 +853,565 @@ TEST(ExactAuxiliaryRegistryNd, EmptyAuxiliaryCheckpointAttestationIsExactAndFail
 }
 
 }  // namespace
+
+namespace {
+template <int Dim>
+void verifies_lazy_checkpoint_invalidations() {
+  using namespace pops::runtime::system;
+  auto calls = std::make_shared<std::vector<std::string>>();
+  auto registry = accepted_registry_for_checkpoint<Dim>(calls);
+  const auto initial_launches = calls->size();
+  const auto clean = capture_auxiliary_checkpoint_state(registry);
+  const auto clean_bytes = serialize_auxiliary_checkpoint_state(clean);
+  EXPECT_EQ(clean_bytes[7], '2');
+  EXPECT_EQ(serialize_auxiliary_checkpoint_state(deserialize_auxiliary_checkpoint_state<Dim>(clean_bytes)), clean_bytes);
+  const auto stale = capture_auxiliary_checkpoint_state(registry, {"checkpoint/derived"});
+  const auto stale_bytes = serialize_auxiliary_checkpoint_state(stale);
+  EXPECT_EQ(stale_bytes[7], '3');
+  const auto decoded = deserialize_auxiliary_checkpoint_state<Dim>(stale_bytes);
+  EXPECT_EQ(decoded, stale);
+  EXPECT_EQ(decoded.providers, clean.providers);
+  EXPECT_EQ(calls->size(), initial_launches); // capture/codec never evaluates a lazy provider
+  auto restored = registry;
+  restore_auxiliary_checkpoint_state(decoded, restored);
+  EXPECT_EQ(capture_auxiliary_checkpoint_state(restored, decoded.invalidated_providers), stale);
+  EXPECT_EQ(calls->size(), initial_launches);
+  {
+    auto rejected = restored.begin_publication(point("checkpoint-clock", 2, AuxiliaryEvaluationEvent::before_residual), decoded.invalidated_providers);
+    rejected.launch_ready_native();
+    rejected.reject();
+  }
+  EXPECT_EQ(capture_auxiliary_checkpoint_state(restored, decoded.invalidated_providers), stale);
+  {
+    auto retry = restored.begin_publication(point("checkpoint-clock", 2, AuxiliaryEvaluationEvent::before_residual), decoded.invalidated_providers);
+    retry.launch_ready_native(); retry.accept();
+  }
+  EXPECT_EQ(calls->size(), initial_launches + 2);
+  EXPECT_EQ(capture_auxiliary_checkpoint_state(restored).invalidated_providers.size(), 0U);
+  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(registry, {"checkpoint/input"}), std::invalid_argument);
+  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(registry, {"foreign"}), std::invalid_argument);
+  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(registry, {"checkpoint/derived", "checkpoint/derived"}), std::invalid_argument);
+  auto bad = stale;
+  for (auto& provider : bad.providers)
+    if (provider.identity == "checkpoint/derived") provider.accepted_point.reset();
+  EXPECT_THROW((void)serialize_auxiliary_checkpoint_state(bad), std::invalid_argument);
+  auto empty_extension = clean_bytes;
+  empty_extension[7] = '3'; empty_extension.insert(empty_extension.end(), 8, 0);
+  EXPECT_THROW((void)deserialize_auxiliary_checkpoint_state<Dim>(empty_extension), std::runtime_error);
+  auto unsupported = clean_bytes; unsupported[7] = '4';
+  EXPECT_THROW((void)deserialize_auxiliary_checkpoint_state<Dim>(unsupported), std::runtime_error);
+  ExactAuxiliaryRegistry<Dim> initial;
+  auto unaccepted_output = output<Dim>("initial/owner", "gain", "value", 0);
+  initial.add(derived<Dim>("initial/derived", unaccepted_output, {}, calls));
+  initial.seal();
+  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(initial, {"initial/derived"}), std::invalid_argument);
+  auto truncated = stale_bytes; truncated.pop_back();
+  EXPECT_THROW((void)deserialize_auxiliary_checkpoint_state<Dim>(truncated), std::runtime_error);
+  auto foreign = stale; foreign.registry_contract += "foreign";
+  const auto before = capture_auxiliary_checkpoint_state(restored);
+  EXPECT_THROW(restore_auxiliary_checkpoint_state(foreign, restored), std::invalid_argument);
+  EXPECT_EQ(capture_auxiliary_checkpoint_state(restored), before);
+}
+TEST(ExactAuxiliaryRegistryNd, LazyInvalidationsRoundTripWithoutPublishingAndRefreshOnlyOnConsumer) {
+  verifies_lazy_checkpoint_invalidations<1>();
+  verifies_lazy_checkpoint_invalidations<2>();
+  verifies_lazy_checkpoint_invalidations<3>();
+}
+
+template <int Dim>
+void verifies_unpublished_dependents_are_due_without_stale_publication() {
+  using namespace pops::runtime::system;
+  auto calls = std::make_shared<std::vector<std::string>>();
+  const auto source = output<Dim>("arbitrary/root-owner", "field", "load", 0);
+  const auto used = output<Dim>("arbitrary/used-owner", "derived", "used", 1);
+  const auto dormant = output<Dim>("arbitrary/dormant-owner", "derived", "dormant", 2);
+  ExactAuxiliaryRegistry<Dim> registry;
+  const AuxiliaryEvaluationPolicy once{AuxiliaryEvaluationEvent::before_residual,
+                                      AuxiliaryFreshness::once};
+  registry.add(PreparedAuxiliaryProvider<Dim>{"root", AuxiliaryProviderKind::field_output,
+                                            once, {source}, {}});
+  registry.add(derived<Dim>("used", used, {dependency(source)}, calls, once));
+  registry.add(derived<Dim>("dormant", dormant, {dependency(source)}, calls, once));
+  registry.add_consumer_plan({"read-used", {{dependency(used), 0}}});
+  registry.add_consumer_plan({"read-dormant", {{dependency(dormant), 0}}});
+  registry.seal();
+  const auto at = point("arbitrary-clock", 0, AuxiliaryEvaluationEvent::before_residual);
+  {
+    auto external = registry.begin_external_publication(at, {"root"});
+    external.stage_external("root");
+    external.accept();
+  }
+  EXPECT_EQ(registry.dependent_provider_identities({"root"}).size(), 2U);
+  EXPECT_TRUE(registry.accepted_dependent_provider_identities({"root"}).empty());
+  {
+    auto read = registry.begin_publication(at, {}, {"read-used"});
+    read.launch_ready_native();
+    read.accept();
+  }
+  EXPECT_EQ(calls->size(), 1U);
+  EXPECT_FALSE(registry.last_accepted_point("dormant"));
+  const auto invalidated = registry.accepted_dependent_provider_identities({"root"});
+  EXPECT_EQ(invalidated, (std::vector<std::string>{"used"}));
+  {
+    auto external = registry.begin_external_publication(at, {"root"});
+    external.stage_external("root");
+    external.accept();
+  }
+  const auto checkpoint = capture_auxiliary_checkpoint_state(registry, invalidated);
+  const auto bytes = serialize_auxiliary_checkpoint_state(checkpoint);
+  EXPECT_EQ(bytes[7], '3');
+  auto restored = registry;
+  restore_auxiliary_checkpoint_state(deserialize_auxiliary_checkpoint_state<Dim>(bytes), restored);
+  EXPECT_EQ(capture_auxiliary_checkpoint_state(restored, invalidated), checkpoint);
+  EXPECT_EQ(calls->size(), 1U) << "checkpoint must not evaluate a dormant provider";
+  {
+    auto read = restored.begin_publication(at, invalidated, {"read-dormant"});
+    EXPECT_TRUE(read.requires_staging("used")) << "accepted stale image remains forced";
+    EXPECT_TRUE(read.requires_staging("dormant")) << "first read needs no dirty marker";
+    read.launch_ready_native();
+    read.reject();
+  }
+  EXPECT_FALSE(restored.last_accepted_point("dormant"));
+  EXPECT_EQ(capture_auxiliary_checkpoint_state(restored, invalidated), checkpoint);
+  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(registry, {"dormant"}),
+               std::invalid_argument);
+}
+
+TEST(ExactAuxiliaryRegistryNd, UnpublishedDependentsRemainDueWithoutCheckpointInvalidations) {
+  verifies_unpublished_dependents_are_due_without_stale_publication<1>();
+  verifies_unpublished_dependents_are_due_without_stale_publication<2>();
+  verifies_unpublished_dependents_are_due_without_stale_publication<3>();
+}
+
+// Registry selection/provenance witnesses only. These do not substitute for AMR
+// accepted publication, per-level acknowledgement, carrier transport or rollback.
+template <int Dim>
+struct DrainPhysicalNativeLaunch {
+  std::shared_ptr<std::vector<AuxiliaryEvaluationPoint>> calls;
+  std::string expected_clock;
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.exact-aux.drain-physical-launch", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& exact) const {
+    exact.text(expected_clock);
+  }
+  void operator()(const pops::runtime::system::AuxiliaryKernelLaunchContext<Dim>& context) const {
+    calls->push_back(context.point);
+    (void)context.point.require_physical_time(expected_clock);
+  }
+};
+
+AuxiliaryEvaluationPoint drain_physical_point(int stage, pops::amr::Rational fraction,
+                                             double time) {
+  auto requested = point("counterexample.physical-clock", 0,
+                         AuxiliaryEvaluationEvent::before_field_solve, 0, 0, 0, stage);
+  pops::runtime::multiblock::BoundaryEvaluationPoint actual;
+  actual.clock = requested.clock; actual.tick = 0; actual.level = 0;
+  actual.substep = 0; actual.stage = stage;
+  actual.stage_fraction = fraction; actual.dt = 1.; actual.physical_time = time;
+  requested.qualify_physical_evaluation(actual);
+  return requested;
+}
+
+AuxiliaryEvaluationPoint drain_diagnostic_point() {
+  return point("counterexample.legacy-topology", 0,
+               AuxiliaryEvaluationEvent::after_regrid, 7);
+}
+
+template <int Dim>
+struct DrainRegistryFixture {
+  std::shared_ptr<std::vector<AuxiliaryEvaluationPoint>> physical_calls =
+      std::make_shared<std::vector<AuxiliaryEvaluationPoint>>();
+  std::shared_ptr<std::vector<std::string>> legacy_calls =
+      std::make_shared<std::vector<std::string>>();
+  ExactAuxiliaryRegistry<Dim> registry;
+
+  explicit DrainRegistryFixture(bool legacy_depends_on_physical) {
+    using Provider = PreparedAuxiliaryProvider<Dim>;
+    using Launcher = typename Provider::launcher_type;
+    const auto physical = output<Dim>("physical-owner", "aux", "physical", 0);
+    const auto legacy = output<Dim>("legacy-owner", "aux", "legacy", 1);
+    registry.add(Provider{"physical", AuxiliaryProviderKind::derived,
+      AuxiliaryEvaluationPolicy{std::vector<AuxiliaryEvaluationEvent>{
+        AuxiliaryEvaluationEvent::before_field_solve, AuxiliaryEvaluationEvent::after_regrid},
+        AuxiliaryFreshness::evaluation}, {physical}, {},
+      Launcher(DrainPhysicalNativeLaunch<Dim>{
+        physical_calls, "counterexample.physical-clock"})});
+    std::vector<AuxiliaryDependency<Dim>> dependencies;
+    if (legacy_depends_on_physical) dependencies.push_back(dependency(physical));
+    registry.add(derived<Dim>("legacy", legacy, std::move(dependencies), legacy_calls,
+      {AuxiliaryEvaluationEvent::before_field_solve, AuxiliaryFreshness::once}));
+    registry.add_consumer_plan({"read-physical", {{dependency(physical), 0}}});
+    registry.add_consumer_plan({"read-legacy", {{dependency(legacy), 0}}});
+    registry.seal();
+  }
+
+  void publish_initial() {
+    auto publication = registry.begin_publication(
+        drain_physical_point(1, {1, 4}, .25), {}, {"read-physical", "read-legacy"});
+    publication.launch_ready_native();
+    publication.accept();
+  }
+};
+
+template <int Dim>
+void verifies_drain_leaves_unrelated_clean_physical_provider_accepted() {
+  DrainRegistryFixture<Dim> fixture(false);
+  fixture.publish_initial();
+  const auto accepted = fixture.registry.last_accepted_point("physical");
+  ASSERT_EQ(fixture.physical_calls->size(), 1U);
+  const auto diagnostic = drain_diagnostic_point();
+  {
+    // Control: ordinary publication would select the clean physical provider by
+    // its authored after_regrid/evaluation policy, even with only legacy forced.
+    auto normal = fixture.registry.begin_publication(diagnostic, {"legacy"});
+    EXPECT_TRUE(normal.requires_staging("physical"));
+    normal.reject();
+  }
+  {
+    auto drain = fixture.registry.begin_invalidated_publication(diagnostic, {"legacy"});
+    EXPECT_FALSE(drain.requires_staging("physical"));
+    EXPECT_TRUE(drain.requires_staging("legacy"));
+    drain.launch_ready_native();
+    drain.accept();
+  }
+  EXPECT_EQ(fixture.physical_calls->size(), 1U);
+  EXPECT_EQ(fixture.legacy_calls->size(), 2U);
+  EXPECT_EQ(fixture.registry.last_accepted_point("physical"), accepted);
+  EXPECT_EQ(*fixture.registry.last_accepted_point("legacy"), diagnostic);
+}
+
+TEST(ExactAuxiliaryRegistryNd, InvalidationDrainDoesNotReevaluateUnrelatedCleanPhysicalProvider) {
+  verifies_drain_leaves_unrelated_clean_physical_provider_accepted<1>();
+  verifies_drain_leaves_unrelated_clean_physical_provider_accepted<2>();
+  verifies_drain_leaves_unrelated_clean_physical_provider_accepted<3>();
+}
+
+template <int Dim>
+void verifies_drain_uses_clean_accepted_physical_prerequisite() {
+  DrainRegistryFixture<Dim> fixture(true);
+  fixture.publish_initial();
+  const auto accepted = fixture.registry.last_accepted_point("physical");
+  ASSERT_TRUE(accepted.has_value());
+  const auto diagnostic = drain_diagnostic_point();
+  auto drain = fixture.registry.begin_invalidated_publication(diagnostic, {"legacy"});
+  EXPECT_FALSE(drain.requires_staging("physical"));
+  EXPECT_TRUE(drain.requires_staging("legacy"));
+  drain.launch_ready_native();
+  EXPECT_NO_THROW(drain.validate_complete());
+  drain.accept();
+  EXPECT_EQ(fixture.physical_calls->size(), 1U);
+  EXPECT_EQ(fixture.legacy_calls->size(), 2U);
+  EXPECT_EQ(fixture.registry.last_accepted_point("physical"), accepted);
+  EXPECT_EQ(*fixture.registry.last_accepted_point("legacy"), diagnostic);
+}
+
+TEST(ExactAuxiliaryRegistryNd, InvalidationDrainBorrowsCleanPhysicalPrerequisiteAtAcceptedProvenance) {
+  verifies_drain_uses_clean_accepted_physical_prerequisite<1>();
+  verifies_drain_uses_clean_accepted_physical_prerequisite<2>();
+  verifies_drain_uses_clean_accepted_physical_prerequisite<3>();
+}
+
+template <int Dim>
+void verifies_dirty_physical_provider_refuses_unqualified_drain() {
+  DrainRegistryFixture<Dim> fixture(true);
+  fixture.publish_initial();
+  const auto accepted = fixture.registry.accepted_points();
+  const auto generation = fixture.registry.accepted_generation();
+  auto same_clock_without_payload = drain_diagnostic_point();
+  same_clock_without_payload.clock = "counterexample.physical-clock";
+  for (const auto& requested : std::vector<AuxiliaryEvaluationPoint>{
+         drain_diagnostic_point(), same_clock_without_payload}) {
+    auto drain = fixture.registry.begin_invalidated_publication(requested, {"physical", "legacy"});
+    EXPECT_TRUE(drain.requires_staging("physical"));
+    EXPECT_THROW(drain.launch_ready_native(), std::invalid_argument);
+    EXPECT_THROW(drain.validate_complete(), std::logic_error);
+    drain.reject();
+    EXPECT_EQ(fixture.registry.accepted_points(), accepted);
+    EXPECT_EQ(fixture.registry.accepted_generation(), generation);
+  }
+  EXPECT_EQ(fixture.physical_calls->size(), 3U) << "both absent-payload paths must reach the guard";
+  EXPECT_EQ(fixture.legacy_calls->size(), 1U) << "a dependent cannot run after its prerequisite fails";
+  EXPECT_EQ(fixture.registry.accepted_points(), accepted);
+  EXPECT_EQ(fixture.registry.accepted_generation(), generation);
+}
+
+TEST(ExactAuxiliaryRegistryNd, DirtyPhysicalInvalidationDrainRetainsExactPhysicalClockGuard) {
+  verifies_dirty_physical_provider_refuses_unqualified_drain<1>();
+  verifies_dirty_physical_provider_refuses_unqualified_drain<2>();
+  verifies_dirty_physical_provider_refuses_unqualified_drain<3>();
+}
+
+template <int Dim>
+void verifies_normal_exact_consumer_rechecks_physical_freshness() {
+  DrainRegistryFixture<Dim> fixture(true);
+  fixture.publish_initial();
+  ASSERT_EQ(fixture.physical_calls->size(), 1U);
+  auto after_regrid = drain_physical_point(3, {7, 8}, .875);
+  after_regrid.event = AuxiliaryEvaluationEvent::after_regrid;
+  for (const auto& next : std::vector<AuxiliaryEvaluationPoint>{
+         drain_physical_point(2, {3, 4}, .75), after_regrid}) {
+    auto consumer = fixture.registry.begin_publication(next, {}, {"read-legacy"});
+    EXPECT_TRUE(consumer.requires_staging("physical"));
+    EXPECT_TRUE(consumer.requires_staging("legacy")) << "due dependency propagation remains active";
+    consumer.launch_ready_native();
+    consumer.accept();
+    EXPECT_EQ(fixture.physical_calls->back(), next);
+    EXPECT_EQ(*fixture.registry.last_accepted_point("physical"), next);
+    EXPECT_EQ(*fixture.registry.last_accepted_point("legacy"), next);
+  }
+  EXPECT_EQ(fixture.physical_calls->size(), 3U);
+  EXPECT_EQ(fixture.legacy_calls->size(), 3U);
+}
+
+TEST(ExactAuxiliaryRegistryNd, NormalExactConsumerStillReevaluatesCleanPhysicalProviderAtNewPoint) {
+  verifies_normal_exact_consumer_rechecks_physical_freshness<1>();
+  verifies_normal_exact_consumer_rechecks_physical_freshness<2>();
+  verifies_normal_exact_consumer_rechecks_physical_freshness<3>();
+}
+
+template <int Dim>
+void verifies_drain_cannot_invent_accepted_prerequisite() {
+  DrainRegistryFixture<Dim> fixture(true);
+  EXPECT_THROW((void)fixture.registry.begin_invalidated_publication(
+      drain_diagnostic_point(), {"legacy"}), std::logic_error);
+  EXPECT_TRUE(fixture.physical_calls->empty());
+  EXPECT_TRUE(fixture.legacy_calls->empty());
+  EXPECT_EQ(fixture.registry.accepted_generation(), 0U);
+  EXPECT_FALSE(fixture.registry.last_accepted_point("physical"));
+  EXPECT_FALSE(fixture.registry.last_accepted_point("legacy"));
+  // Refusal must leave the registry available for a real qualified publication.
+  EXPECT_NO_THROW(fixture.publish_initial());
+  EXPECT_EQ(fixture.registry.accepted_generation(), 1U);
+}
+
+TEST(ExactAuxiliaryRegistryNd, InvalidationDrainRefusesUnpublishedCleanPrerequisiteBeforeLaunch) {
+  verifies_drain_cannot_invent_accepted_prerequisite<1>();
+  verifies_drain_cannot_invent_accepted_prerequisite<2>();
+  verifies_drain_cannot_invent_accepted_prerequisite<3>();
+}
+
+template <int Dim>
+void verifies_rejected_drain_preserves_accepted_provenance_and_retry() {
+  DrainRegistryFixture<Dim> fixture(true);
+  fixture.publish_initial();
+  const auto accepted = fixture.registry.accepted_points();
+  const auto physical_accepted = fixture.registry.last_accepted_point("physical");
+  const auto generation = fixture.registry.accepted_generation();
+  const auto diagnostic = drain_diagnostic_point();
+  {
+    auto rejected = fixture.registry.begin_invalidated_publication(diagnostic, {"legacy"});
+    rejected.launch_ready_native();
+    EXPECT_NO_THROW(rejected.validate_complete());
+    rejected.reject();
+  }
+  EXPECT_EQ(fixture.registry.accepted_points(), accepted);
+  EXPECT_EQ(fixture.registry.accepted_generation(), generation);
+  {
+    auto retry = fixture.registry.begin_invalidated_publication(diagnostic, {"legacy"});
+    EXPECT_TRUE(retry.requires_staging("legacy"));
+    EXPECT_FALSE(retry.requires_staging("physical"));
+    retry.launch_ready_native();
+    retry.accept();
+  }
+  EXPECT_EQ(fixture.physical_calls->size(), 1U);
+  EXPECT_EQ(fixture.legacy_calls->size(), 3U);
+  EXPECT_EQ(fixture.registry.accepted_generation(), generation + 1);
+  EXPECT_EQ(*fixture.registry.last_accepted_point("legacy"), diagnostic);
+  EXPECT_EQ(fixture.registry.last_accepted_point("physical"), physical_accepted);
+}
+
+TEST(ExactAuxiliaryRegistryNd, RejectedInvalidationDrainDoesNotPublishOrConsumeRetryWork) {
+  verifies_rejected_drain_preserves_accepted_provenance_and_retry<1>();
+  verifies_rejected_drain_preserves_accepted_provenance_and_retry<2>();
+  verifies_rejected_drain_preserves_accepted_provenance_and_retry<3>();
+}
+} // namespace
+
+#include <pops/runtime/system/auxiliary_checkpoint_capacity.hpp>
+#include <pops/runtime/program/program_runtime_state.hpp>
+#include <bit>
+namespace {
+template <int Dim>
+ExactAuxiliaryRegistry<Dim> cold_capacity_registry() {
+  auto calls = std::make_shared<std::vector<std::string>>();
+  auto seed = output<Dim>("capacity/seed-owner", "input", "value", 0);
+  auto dormant = output<Dim>("capacity/dormant-owner", "derived", "value", 1);
+  ExactAuxiliaryRegistry<Dim> registry;
+  registry.add(input<Dim>("seed", seed));
+  registry.add(derived<Dim>("dormant", dormant, {dependency(seed)}, calls));
+  registry.add_consumer_plan({"read-dormant", {{dependency(dormant), 0}}});
+  registry.seal();
+  return registry;
+}
+template <int Dim>
+void capacity_counterexamples() {
+  using namespace pops::runtime::system;
+  auto registry = cold_capacity_registry<Dim>();
+  const auto clean = capture_auxiliary_checkpoint_state(registry);
+  EXPECT_THROW(require_no_pending_auxiliary_input_checkpoint(registry, {"seed"}), std::logic_error);
+  EXPECT_THROW(require_no_pending_auxiliary_input_checkpoint(registry, {"foreign"}),
+               std::invalid_argument);
+  EXPECT_NO_THROW(require_no_pending_auxiliary_input_checkpoint(registry, {}));
+  EXPECT_TRUE(current_accepted_auxiliary_checkpoint_observation(registry, {"seed", "dormant"})
+                  .invalidated_providers.empty());
+  EXPECT_THROW((void)current_accepted_auxiliary_checkpoint_observation(registry, {"foreign"}),
+               std::invalid_argument);
+  EXPECT_THROW((void)current_accepted_auxiliary_checkpoint_observation(registry, {"seed", "seed"}),
+               std::invalid_argument);
+  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(registry, {"seed"}), std::invalid_argument);
+  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(registry, {"dormant"}),
+               std::invalid_argument);
+  EXPECT_FALSE(registry.last_accepted_point("seed"));
+  EXPECT_FALSE(registry.last_accepted_point("dormant"));
+  auto restored = registry;
+  restore_auxiliary_checkpoint_state(clean, restored);
+  auto retry = restored.begin_publication(point("p", 0, AuxiliaryEvaluationEvent::before_residual),
+                                          {"seed"}, {"read-dormant"});
+  EXPECT_TRUE(retry.requires_staging("seed"));
+  EXPECT_TRUE(retry.requires_staging("dormant"));
+  retry.reject();
+  EXPECT_FALSE(restored.last_accepted_point("seed"));
+  EXPECT_FALSE(restored.last_accepted_point("dormant"));
+}
+TEST(ExactAuxiliaryCapacityNd, ColdPendingIdentitiesAreNotAcceptedInvalidations) {
+  capacity_counterexamples<1>();
+  capacity_counterexamples<2>();
+  capacity_counterexamples<3>();
+}
+template <int Dim>
+void future_owned_clock_bound() {
+  using namespace pops::runtime::system;
+  auto registry = cold_capacity_registry<Dim>();
+  const std::string long_clock(4096, 'q');
+  pops::runtime::program::ProgramOwnedClockManifest manifest{
+      "installed-owner", "p", {"p", long_clock}};
+  const auto initial_size =
+      serialize_auxiliary_checkpoint_state(capture_auxiliary_checkpoint_state(registry)).size();
+  const auto bound = program_auxiliary_metadata_capacity(registry, manifest);
+  EXPECT_GT(bound, initial_size);
+  auto initialization = registry.begin_external_publication(
+      point("p", 0, AuxiliaryEvaluationEvent::initialization), {"seed"});
+  initialization.stage_external("seed");
+  initialization.launch_ready_native();
+  initialization.accept();
+  EXPECT_FALSE(registry.last_accepted_point("dormant"));
+  const auto dormant_image = capture_auxiliary_checkpoint_state(registry);
+  auto restored = registry;
+  restore_auxiliary_checkpoint_state(dormant_image, restored);
+  auto publication = restored.begin_publication(
+      point(long_clock, 1, AuxiliaryEvaluationEvent::before_residual), {}, {"read-dormant"});
+  EXPECT_TRUE(publication.requires_staging("dormant"));
+  publication.launch_ready_native();
+  publication.accept();
+  ASSERT_TRUE(restored.last_accepted_point("dormant"));
+  EXPECT_EQ(restored.last_accepted_point("dormant")->clock, long_clock);
+  const auto image = capture_auxiliary_checkpoint_state(restored, {"dormant"});
+  EXPECT_EQ(current_accepted_auxiliary_checkpoint_observation(restored, {"seed", "dormant"}),
+            image);
+  EXPECT_LE(serialize_auxiliary_checkpoint_state(image).size(), bound);
+  EXPECT_EQ(program_auxiliary_metadata_capacity(restored, manifest), bound);
+  // Raw System/registry clocks remain unbounded. An unrelated longer raw clock is valid,
+  // but invalidates any claim that the original Program-owned capacity bound covers it.
+  const std::string raw_clock(bound + 1, 'r');
+  auto raw = restored.begin_publication(
+      point(raw_clock, 2, AuxiliaryEvaluationEvent::before_residual), {}, {"read-dormant"});
+  raw.launch_ready_native();
+  raw.accept();
+  const auto raw_image = capture_auxiliary_checkpoint_state(restored);
+  EXPECT_GT(serialize_auxiliary_checkpoint_state(raw_image).size(), bound);
+  EXPECT_GT(program_auxiliary_metadata_capacity(restored, manifest), bound);
+}
+TEST(ExactAuxiliaryCapacityNd, ActualLongClockPublicationAndInvalidationFitOwnedReserve) {
+  future_owned_clock_bound<1>();
+  future_owned_clock_bound<2>();
+  future_owned_clock_bound<3>();
+}
+TEST(ExactAuxiliaryCapacityNd, IncompleteManifestAndOverflowFailClosed) {
+  pops::runtime::program::ProgramOwnedClockManifest incomplete{"", "p", {"p"}};
+  EXPECT_THROW(incomplete.validate(), std::invalid_argument);
+  auto unsupported = incomplete;
+  unsupported.contract_version =
+      static_cast<pops::runtime::program::ProgramOwnedClockManifestVersion>(2);
+  EXPECT_THROW(unsupported.validate(), std::invalid_argument);
+  pops::runtime::program::ProgramOwnedClockManifest foreign{"owner", "p", {"q"}};
+  EXPECT_THROW(foreign.validate(), std::invalid_argument);
+  pops::runtime::program::ProgramOwnedClockManifest duplicate{"owner", "p", {"p", "p"}};
+  EXPECT_THROW(duplicate.validate(), std::invalid_argument);
+  EXPECT_THROW(pops::runtime::system::checked_auxiliary_capacity_add(
+                   std::numeric_limits<std::size_t>::max(), 1),
+               std::overflow_error);
+}
+}  // namespace
+
+namespace {
+template <int Dim>
+void accepted_input_cache_restore() {
+  using namespace pops::runtime::system;
+  auto registry = cold_capacity_registry<Dim>();
+  auto publication = registry.begin_external_publication(
+      point("p", 0, AuxiliaryEvaluationEvent::initialization), {"seed"});
+  publication.stage_external("seed");
+  publication.accept();
+  auto image = capture_auxiliary_checkpoint_state(registry);
+  for (auto& group : image.groups) {
+    group.payload.resize(group.component_count * 2);
+    for (std::size_t i = 0; i < group.payload.size(); ++i)
+      group.payload[i] = i % 2 ? -0.0 : 7.0;
+  }
+  auto cache = restored_accepted_auxiliary_inputs(image, 2);
+  ASSERT_EQ(cache.size(), 1U);
+  const auto input_component =
+      std::find_if(image.components.begin(), image.components.end(), [](const auto& component) {
+        return component.provider_kind == AuxiliaryProviderKind::input;
+      });
+  ASSERT_NE(input_component, image.components.end());
+  const auto expected = input_component->key.exact_key();
+  ASSERT_EQ(cache.at(expected).size(), 2U);
+  EXPECT_EQ(std::bit_cast<std::uint64_t>(cache.at(expected)[0]), std::bit_cast<std::uint64_t>(7.0));
+  EXPECT_EQ(std::bit_cast<std::uint64_t>(cache.at(expected)[1]),
+            std::bit_cast<std::uint64_t>(-0.0));
+  // Accepted-only restore replaces a newer staged cache rather than leaking it into the restart.
+  std::map<std::string, std::vector<double>> staged{{expected, {99.0, 98.0}}};
+  staged.swap(cache);
+  EXPECT_EQ(staged.at(expected)[0], 7.0);
+  EXPECT_EQ(cache.at(expected)[0], 99.0);  // retired owner remains intact until commit completes
+  auto cold = capture_auxiliary_checkpoint_state(cold_capacity_registry<Dim>());
+  for (auto& group : cold.groups)
+    group.payload.resize(group.component_count * 2, 0.0);
+  EXPECT_TRUE(restored_accepted_auxiliary_inputs(cold, 2).empty());
+  EXPECT_FALSE(cold.providers[0].accepted_point);
+  EXPECT_FALSE(cold.providers[1].accepted_point);
+  image.groups[0].payload.pop_back();
+  EXPECT_THROW((void)restored_accepted_auxiliary_inputs(image, 2), std::invalid_argument);
+}
+TEST(ExactAuxiliaryCapacityNd, AcceptedRestoreCacheOwnsBytesAndLeavesColdProvidersUninitialized) {
+  accepted_input_cache_restore<1>();
+  accepted_input_cache_restore<2>();
+  accepted_input_cache_restore<3>();
+}
+template <int Dim>
+void manifest_install_rollback() {
+  pops::runtime::program::ProgramRuntimeState<Dim> state;
+  const pops::runtime::program::ProgramOwnedClockManifest original{
+      "owned-install", "main", {"main", std::string(4096, 's')}, 7};
+  state.step_install_generation_ = 7;
+  state.checkpoint_metadata_.uniform_auxiliary_clocks = original;
+  auto snapshot = state.capture_artifact_step_install();
+  state.install_unverified_step([](double) {});
+  EXPECT_TRUE(state.checkpoint_metadata_.uniform_auxiliary_clocks.owner_identity.empty());
+  state.rollback_artifact_step_install(std::move(snapshot));
+  EXPECT_EQ(state.checkpoint_metadata_.uniform_auxiliary_clocks, original);
+  EXPECT_EQ(state.step_install_generation_, 7U);
+  EXPECT_NO_THROW(
+      state.checkpoint_metadata_.uniform_auxiliary_clocks.require_owned(std::string(4096, 's')));
+  EXPECT_THROW(state.checkpoint_metadata_.uniform_auxiliary_clocks.require_owned("foreign"),
+               std::invalid_argument);
+}
+TEST(ExactAuxiliaryCapacityNd, InstalledClockManifestSharesExistingFullInstallRollback) {
+  manifest_install_rollback<1>();
+  manifest_install_rollback<2>();
+  manifest_install_rollback<3>();
+}
+}  // namespace

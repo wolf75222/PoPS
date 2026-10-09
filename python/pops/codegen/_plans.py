@@ -135,6 +135,14 @@ def _evidence(value: Any, *, where: str) -> Any:
         rows = [_evidence(item, where=where) for item in value]
         return {"set": sorted(rows, key=canonical_bytes)}
 
+    from pops.external.artifacts import InstalledComponent
+
+    if type(value) is InstalledComponent:
+        return {
+            "type": "%s.%s" % (type(value).__module__, type(value).__qualname__),
+            "value": _evidence(value.bind_identity_data(), where=where),
+        }
+
     for name in ("artifact_data", "to_data", "to_manifest", "to_dict",
                  "canonical_identity", "options"):
         hook = getattr(value, name, None)
@@ -397,6 +405,11 @@ def provider_declaration_contract(block: Any) -> bytes:
         "model": _evidence(block.model, where="declaration.model"),
         "providers": _provider_graph_evidence(block.model),
     }
+    from .provider_instances import require_instance_contract
+    instance = require_instance_contract(getattr(block, 'resolved_operations', None),
+                                         owner_qid=block.instance_owner_qid)
+    if instance is not None:
+        payload['native_provider_instance'] = dict(instance)
     return canonical_bytes(payload)
 
 
@@ -518,6 +531,7 @@ class ResolvedSimulationPlan:
     continuation_transitions: Any = field(init=False)
     resolved_dimension: int = field(init=False)
     plan_identity: Identity = field(init=False)
+    _physical_global_sources: Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         from pops.problem._snapshot import AuthoringSnapshot
@@ -689,6 +703,8 @@ class ResolvedSimulationPlan:
         self._validate_amr_authorities()
         from pops.runtime._continuation_transitions import derive_continuation_transitions
         object.__setattr__(self, "continuation_transitions", derive_continuation_transitions(self))
+        from pops.time._program.global_source_plan import prepare_source_globals
+        object.__setattr__(self, "_physical_global_sources", prepare_source_globals(self.time))
         object.__setattr__(self, "plan_identity", make_identity("resolved-plan", self._payload()))
 
     def _validate_amr_authorities(self) -> None:
@@ -780,6 +796,8 @@ class ResolvedSimulationPlan:
     def verify(self) -> None:
         from pops.runtime._continuation_transitions import require_resolved_continuation
         require_resolved_continuation(self)
+        from pops.time._program.global_source_plan import require_source_global_plan
+        require_source_global_plan(self._physical_global_sources, self.time)
         expected = make_identity("resolved-plan", self._payload())
         if self.plan_identity != expected:
             raise ValueError("ResolvedSimulationPlan identity verification failed")
@@ -834,6 +852,29 @@ def _canonical_initial_values(artifact: Any, values: Any) -> Mapping[Any, Any]:
     if initial_plan is None:
         raise ValueError("pops.bind initial_values requires a resolved InitialConditionPlan")
     return _canonicalize_initial_value_mapping(initial_plan, values)
+
+
+def _canonical_bind_params(schema: Any, values: Any) -> Mapping[Any, Any]:
+    """Authenticate authored parameter aliases before recording immutable evidence.
+
+    The compiled BindSchema is the sole authority for aliases. In particular,
+    neither a matching local name nor a fresh canonical projection authenticates
+    a handle from another Case. Value/domain checks remain in resolve_bind.
+    """
+    from pops.model.bind_schema import BindSchema
+    if type(schema) is not BindSchema:
+        raise TypeError("pops.bind parameter normalization requires an exact BindSchema")
+    if not isinstance(values, Mapping):
+        raise TypeError("pops.bind params must be a ParamHandle-keyed mapping")
+    canonical = {}
+    for handle, value in values.items():
+        slot = schema.slot(handle)
+        if slot.kind != "runtime":
+            raise TypeError("only RuntimeParam slots are settable at bind: %s" % slot.qid)
+        if slot.handle in canonical:
+            raise ValueError("multiple bind entries resolve to the same ParamHandle %s" % slot.qid)
+        canonical[slot.handle] = value
+    return canonical
 
 
 @dataclass(frozen=True, slots=True)
@@ -1005,6 +1046,29 @@ class InstallPlan:
     @property
     def resolved_hierarchy(self) -> Any:
         return self.artifact.plan.resolved_hierarchy
+
+    def _resolved_tagging_for_layout(self, layout_id: str) -> Any:
+        """Return only the exact registered local tagging authority."""
+        from pops.amr._resolution import ResolvedTaggingAuthority
+        from pops.codegen._layout_amr_authorities import ResolvedLayoutAMRAuthorities
+
+        if layout_id not in {row.handle.qualified_id
+                             for row in self.artifact.layout_plan.layouts}:
+            raise ValueError("tagging requires an exact registered layout identity")
+        local = self.layout_amr_authorities.get(layout_id)
+        if type(local) is not ResolvedLayoutAMRAuthorities or local.layout_id != layout_id:
+            raise TypeError("tagging requires an exact registered local AMR authority")
+        tagging = local.authorities.tagging
+        if type(tagging) is not ResolvedTaggingAuthority:
+            raise TypeError("local AMR tagging must be an exact ResolvedTaggingAuthority")
+        return tagging
+
+    @property
+    def resolved_tagging(self) -> Any:
+        layouts = self.artifact.layout_plan.layouts
+        if len(layouts) != 1:
+            raise ValueError("tagging requires a single layout or an exact layout projection")
+        return self._resolved_tagging_for_layout(layouts[0].handle.qualified_id)
 
     @property
     def amr_transfer(self) -> Any:

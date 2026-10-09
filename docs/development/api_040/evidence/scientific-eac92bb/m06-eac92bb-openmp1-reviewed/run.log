@@ -1,0 +1,1040 @@
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.1.0 | resolved simulation launch
+================================================================
+  case                : M06_4_4
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 1
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : material
+  numerics material   : state_storage, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 4 x 4 cells; 1 level; [0, 1] x [0, 2]
+  step strategy       : fixed_dt (dt=0.125)
+  interval            : 0 -> 1 (max 16 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 80ad5630a50943b4
+  run identity        : 89d6b63a018e3e09
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 8 / 0
+  final time / step   : 1 / 8
+  elapsed             : 0.003422 s
+  run identity        : 89d6b63a018e3e09
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.1.0 | resolved simulation launch
+================================================================
+  case                : M06_4_4
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 1
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : material
+  numerics material   : state_storage, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 4 x 4 cells; 1 level; [0, 1] x [0, 2]
+  step strategy       : fixed_dt (dt=0.125)
+  interval            : 0 -> 0.5 (max 16 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 80ad5630a50943b4
+  run identity        : f719651615cf4eee
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 4 / 0
+  final time / step   : 0.5 / 4
+  elapsed             : 0.001785 s
+  run identity        : f719651615cf4eee
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.1.0 | resolved simulation launch
+================================================================
+  case                : M06_4_4
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 1
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : material
+  numerics material   : state_storage, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 4 x 4 cells; 1 level; [0, 1] x [0, 2]
+  step strategy       : fixed_dt (dt=0.125)
+  interval            : 0 -> 1 (max 16 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 80ad5630a50943b4
+  run identity        : 35eda996253b1bf2
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 8 / 0
+  final time / step   : 1 / 8
+  elapsed             : 0.002785 s
+  run identity        : 35eda996253b1bf2
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.1.0 | resolved simulation launch
+================================================================
+  case                : M06_4_4
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 1
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : material
+  numerics material   : state_storage, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 4 x 4 cells; 1 level; [0, 1] x [0, 2]
+  step strategy       : fixed_dt (dt=0.125)
+  interval            : 0 -> 0.5 (max 16 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 80ad5630a50943b4
+  run identity        : 1dfedb714053665d
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 4 / 0
+  final time / step   : 0.5 / 4
+  elapsed             : 0.001612 s
+  run identity        : 1dfedb714053665d
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.1.0 | resolved simulation launch
+================================================================
+  case                : M06_6_8
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 1
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : material
+  numerics material   : state_storage, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 6 x 8 cells; 1 level; [0, 2] x [0, 1]
+  step strategy       : fixed_dt (dt=0.125)
+  interval            : 0 -> 1 (max 16 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 58aad8599df0a842
+  run identity        : 2fd93fbdf8a0388c
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 8 / 0
+  final time / step   : 1 / 8
+  elapsed             : 0.003077 s
+  run identity        : 2fd93fbdf8a0388c
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.1.0 | resolved simulation launch
+================================================================
+  case                : M06_6_8
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 1
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : material
+  numerics material   : state_storage, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 6 x 8 cells; 1 level; [0, 2] x [0, 1]
+  step strategy       : fixed_dt (dt=0.125)
+  interval            : 0 -> 0.5 (max 16 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 58aad8599df0a842
+  run identity        : 89286ba6067b60e7
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 4 / 0
+  final time / step   : 0.5 / 4
+  elapsed             : 0.002001 s
+  run identity        : 89286ba6067b60e7
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.1.0 | resolved simulation launch
+================================================================
+  case                : M06_6_8
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 1
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : material
+  numerics material   : state_storage, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 6 x 8 cells; 1 level; [0, 2] x [0, 1]
+  step strategy       : fixed_dt (dt=0.125)
+  interval            : 0 -> 1 (max 16 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 58aad8599df0a842
+  run identity        : b37be85231622ae1
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 8 / 0
+  final time / step   : 1 / 8
+  elapsed             : 0.003070 s
+  run identity        : b37be85231622ae1
+ ____       ____  ____
+|  _ \ ___ |  _ \/ ___|
+| |_) / _ \| |_) \___ \
+|  __/ (_) |  __/ ___) |
+|_|   \___/|_|   |____/
+PoPS 1.1.0 | resolved simulation launch
+================================================================
+  case                : M06_6_8
+  target / backend    : system / production
+  compute             : native C++ / Kokkos OpenMP
+  execution lanes     : 1
+  precision           : double (8 bytes)
+  communicator        : MPI_COMM_WORLD (1 rank)
+  blocks              : material
+  numerics material   : state_storage, formal_order=1, ghost_depth=1
+  layout 0            : Uniform; 6 x 8 cells; 1 level; [0, 2] x [0, 1]
+  step strategy       : fixed_dt (dt=0.125)
+  interval            : 0 -> 0.5 (max 16 accepted steps)
+  consumers           : none
+  output root         : none
+  artifact identity   : 58aad8599df0a842
+  run identity        : 9d31200e0024d253
+================================================================
+----------------------------------------------------------------
+PoPS run completed
+  accepted / rejected : 4 / 0
+  final time / step   : 0.5 / 4
+  elapsed             : 0.002016 s
+  run identity        : 9d31200e0024d253
+{
+  "schema_version": 1,
+  "case": "M06",
+  "status": "failed",
+  "scope": "homogeneous H accumulation only; no Stefan front",
+  "equation": "dH/dt=input; H=2T+3f with T=1 on 0<f<1",
+  "method": "native StateStorage/Program Euler on H",
+  "dt": 0.125,
+  "criteria": {
+    "energy_max_error": 2e-13,
+    "temperature_max_error": 2e-13,
+    "phase_max_error": 2e-13,
+    "time_error": 1e-14,
+    "initial_max_error": 1e-14,
+    "phase_bound_slack": 1e-14,
+    "constitution_max_error": 5e-13
+  },
+  "scenarios": [
+    {
+      "cells": [
+        4,
+        4
+      ],
+      "domain_upper": [
+        1.0,
+        2.0
+      ],
+      "label": "sensible",
+      "initial_h": 1.5,
+      "input_rate": 0.25,
+      "t_end": 1.0,
+      "metrics": {
+        "initial_max_error": 0.0,
+        "energy_max_error": 0.0,
+        "temperature_max_error": 0.015625,
+        "phase_max_error": 0.0,
+        "constitution_max_error": 0.03125,
+        "phase_min": 0.0,
+        "phase_max": 0.0,
+        "time_error": 0.0
+      },
+      "accepted": false,
+      "accepted_steps": 8,
+      "mpi_ranks": 1,
+      "saved_state": "state_4_4_sensible.npz",
+      "saved_state_sha256": "740b66fe0869cdfd9a4d8a8978a04aeac7611ad0f09b26ae5f6141e2343b8209",
+      "run_report": {
+        "accepted_steps": 8,
+        "rejected_steps": 0,
+        "final_time": 1.0,
+        "final_macro_step": 8,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "89d6b63a018e3e09a7da776c0c8a0e40101312a9e980947d3907dc133bf4371a"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "8d2a7311eec000c3427e1c65c5a72f2da9f693411513a478b416071d3c12859c"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "80ad5630a50943b4d68141da0e02d40b130d3bece1f0b6d0d02c9a9495347989"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6dcd17d08c5fae490ec40c8638b2d18495f32165d31f75ad0b72eadf5ae9728d"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      }
+    },
+    {
+      "cells": [
+        4,
+        4
+      ],
+      "domain_upper": [
+        1.0,
+        2.0
+      ],
+      "label": "melting_plateau",
+      "initial_h": 1.5,
+      "input_rate": 4.0,
+      "t_end": 0.5,
+      "metrics": {
+        "initial_max_error": 0.0,
+        "energy_max_error": 0.0,
+        "temperature_max_error": 0.0,
+        "phase_max_error": 0.16666666666666669,
+        "constitution_max_error": 0.5,
+        "phase_min": 0.3333333333333333,
+        "phase_max": 0.3333333333333333,
+        "time_error": 0.0
+      },
+      "accepted": false,
+      "accepted_steps": 4,
+      "mpi_ranks": 1,
+      "saved_state": "state_4_4_melting_plateau.npz",
+      "saved_state_sha256": "e590045c83a507409dbf06f079fe174b72c49b8201e816bef089591089f76c70",
+      "run_report": {
+        "accepted_steps": 4,
+        "rejected_steps": 0,
+        "final_time": 0.5,
+        "final_macro_step": 4,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "f719651615cf4eee15b0e5797de01f6fec295ec3442f7e38ab2202cda9606742"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "a49b642088e7cea75218e33c69940c207ca69a078142ed717c04204600c9daae"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "80ad5630a50943b4d68141da0e02d40b130d3bece1f0b6d0d02c9a9495347989"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6dcd17d08c5fae490ec40c8638b2d18495f32165d31f75ad0b72eadf5ae9728d"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      }
+    },
+    {
+      "cells": [
+        4,
+        4
+      ],
+      "domain_upper": [
+        1.0,
+        2.0
+      ],
+      "label": "fully_melted",
+      "initial_h": 1.5,
+      "input_rate": 4.0,
+      "t_end": 1.0,
+      "metrics": {
+        "initial_max_error": 0.0,
+        "energy_max_error": 0.0,
+        "temperature_max_error": 0.25,
+        "phase_max_error": 0.0,
+        "constitution_max_error": 0.5,
+        "phase_min": 1.0,
+        "phase_max": 1.0,
+        "time_error": 0.0
+      },
+      "accepted": false,
+      "accepted_steps": 8,
+      "mpi_ranks": 1,
+      "saved_state": "state_4_4_fully_melted.npz",
+      "saved_state_sha256": "e0133afc008e243c19b7592d0137966818ef01a680901f5c25b9caa76b46fc67",
+      "run_report": {
+        "accepted_steps": 8,
+        "rejected_steps": 0,
+        "final_time": 1.0,
+        "final_macro_step": 8,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "35eda996253b1bf2cea685eb71ec687ab45b6d582ec4798135874e8f0d4203fb"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "a49b642088e7cea75218e33c69940c207ca69a078142ed717c04204600c9daae"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "80ad5630a50943b4d68141da0e02d40b130d3bece1f0b6d0d02c9a9495347989"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6dcd17d08c5fae490ec40c8638b2d18495f32165d31f75ad0b72eadf5ae9728d"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      }
+    },
+    {
+      "cells": [
+        4,
+        4
+      ],
+      "domain_upper": [
+        1.0,
+        2.0
+      ],
+      "label": "reverse_plateau",
+      "initial_h": 5.5,
+      "input_rate": -4.0,
+      "t_end": 0.5,
+      "metrics": {
+        "initial_max_error": 0.0,
+        "energy_max_error": 0.0,
+        "temperature_max_error": 0.0,
+        "phase_max_error": 0.16666666666666663,
+        "constitution_max_error": 0.5,
+        "phase_min": 0.6666666666666666,
+        "phase_max": 0.6666666666666666,
+        "time_error": 0.0
+      },
+      "accepted": false,
+      "accepted_steps": 4,
+      "mpi_ranks": 1,
+      "saved_state": "state_4_4_reverse_plateau.npz",
+      "saved_state_sha256": "dd20fad6d2b0eb1a31ea389af3655bd64354a185efd11fe5955c077f947e78fe",
+      "run_report": {
+        "accepted_steps": 4,
+        "rejected_steps": 0,
+        "final_time": 0.5,
+        "final_macro_step": 4,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "1dfedb714053665d6d3bbe4be4d11b7208b5641ca1b531ff85934a928a1f0fad"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "73dd99766f6df0f1083126bb0755ddf991e7a1a8255b9faddeead48106f5d993"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "80ad5630a50943b4d68141da0e02d40b130d3bece1f0b6d0d02c9a9495347989"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6dcd17d08c5fae490ec40c8638b2d18495f32165d31f75ad0b72eadf5ae9728d"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      }
+    },
+    {
+      "cells": [
+        6,
+        8
+      ],
+      "domain_upper": [
+        2.0,
+        1.0
+      ],
+      "label": "sensible",
+      "initial_h": 1.5,
+      "input_rate": 0.25,
+      "t_end": 1.0,
+      "metrics": {
+        "initial_max_error": 0.0,
+        "energy_max_error": 0.0,
+        "temperature_max_error": 0.015625,
+        "phase_max_error": 0.0,
+        "constitution_max_error": 0.03125,
+        "phase_min": 0.0,
+        "phase_max": 0.0,
+        "time_error": 0.0
+      },
+      "accepted": false,
+      "accepted_steps": 8,
+      "mpi_ranks": 1,
+      "saved_state": "state_6_8_sensible.npz",
+      "saved_state_sha256": "fae573f3aeb98e47245fa202ad2196f26652d8863c581802e7e2f85d35c61344",
+      "run_report": {
+        "accepted_steps": 8,
+        "rejected_steps": 0,
+        "final_time": 1.0,
+        "final_macro_step": 8,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "2fd93fbdf8a0388c26217c577df2ca4d23c781fa7c9abe8fd40820cec71ebc4c"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "e7ce8865f2ca3e67227cf072f7b48519e932672b09174325a9ca3875162f9bcf"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "58aad8599df0a8424b89fec2c80a1b32403f03b2acece55ac1d4f659fdcb0e90"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6dcd17d08c5fae490ec40c8638b2d18495f32165d31f75ad0b72eadf5ae9728d"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      }
+    },
+    {
+      "cells": [
+        6,
+        8
+      ],
+      "domain_upper": [
+        2.0,
+        1.0
+      ],
+      "label": "melting_plateau",
+      "initial_h": 1.5,
+      "input_rate": 4.0,
+      "t_end": 0.5,
+      "metrics": {
+        "initial_max_error": 0.0,
+        "energy_max_error": 0.0,
+        "temperature_max_error": 0.0,
+        "phase_max_error": 0.16666666666666669,
+        "constitution_max_error": 0.5,
+        "phase_min": 0.3333333333333333,
+        "phase_max": 0.3333333333333333,
+        "time_error": 0.0
+      },
+      "accepted": false,
+      "accepted_steps": 4,
+      "mpi_ranks": 1,
+      "saved_state": "state_6_8_melting_plateau.npz",
+      "saved_state_sha256": "fd6a6ca442e7bd449102c55272ecff594ecfbdf1384ce9be0951c00486a7e85b",
+      "run_report": {
+        "accepted_steps": 4,
+        "rejected_steps": 0,
+        "final_time": 0.5,
+        "final_macro_step": 4,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "89286ba6067b60e7d14be03bb7739de384e7e9de2b38e8c395bf1876bdfa6438"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "affb8427f0530e6c044941232a3457aec943f6f9d3a5cfd5c6e46dc53a942d9e"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "58aad8599df0a8424b89fec2c80a1b32403f03b2acece55ac1d4f659fdcb0e90"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6dcd17d08c5fae490ec40c8638b2d18495f32165d31f75ad0b72eadf5ae9728d"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      }
+    },
+    {
+      "cells": [
+        6,
+        8
+      ],
+      "domain_upper": [
+        2.0,
+        1.0
+      ],
+      "label": "fully_melted",
+      "initial_h": 1.5,
+      "input_rate": 4.0,
+      "t_end": 1.0,
+      "metrics": {
+        "initial_max_error": 0.0,
+        "energy_max_error": 0.0,
+        "temperature_max_error": 0.25,
+        "phase_max_error": 0.0,
+        "constitution_max_error": 0.5,
+        "phase_min": 1.0,
+        "phase_max": 1.0,
+        "time_error": 0.0
+      },
+      "accepted": false,
+      "accepted_steps": 8,
+      "mpi_ranks": 1,
+      "saved_state": "state_6_8_fully_melted.npz",
+      "saved_state_sha256": "4ab81ab38ceff7fed9c160b26cd5eb1fb85922adc3fe05b358b3a655cfb94634",
+      "run_report": {
+        "accepted_steps": 8,
+        "rejected_steps": 0,
+        "final_time": 1.0,
+        "final_macro_step": 8,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "b37be85231622ae1bd7655d19482458cd3bfe90a9f2c08c1f26f3425ec31703e"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "affb8427f0530e6c044941232a3457aec943f6f9d3a5cfd5c6e46dc53a942d9e"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "58aad8599df0a8424b89fec2c80a1b32403f03b2acece55ac1d4f659fdcb0e90"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6dcd17d08c5fae490ec40c8638b2d18495f32165d31f75ad0b72eadf5ae9728d"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      }
+    },
+    {
+      "cells": [
+        6,
+        8
+      ],
+      "domain_upper": [
+        2.0,
+        1.0
+      ],
+      "label": "reverse_plateau",
+      "initial_h": 5.5,
+      "input_rate": -4.0,
+      "t_end": 0.5,
+      "metrics": {
+        "initial_max_error": 0.0,
+        "energy_max_error": 0.0,
+        "temperature_max_error": 0.0,
+        "phase_max_error": 0.16666666666666663,
+        "constitution_max_error": 0.5,
+        "phase_min": 0.6666666666666666,
+        "phase_max": 0.6666666666666666,
+        "time_error": 0.0
+      },
+      "accepted": false,
+      "accepted_steps": 4,
+      "mpi_ranks": 1,
+      "saved_state": "state_6_8_reverse_plateau.npz",
+      "saved_state_sha256": "51b4bce8a77a3bea138f4a3389f5819212fcbecd550f658fa7d54ba4abcfc326",
+      "run_report": {
+        "accepted_steps": 4,
+        "rejected_steps": 0,
+        "final_time": 0.5,
+        "final_macro_step": 4,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9d31200e0024d253fe55b205434d549baebb4d6b01571454f1c77fa9d9dd292a"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9636566c3a91847167551e60d6a8db1a9dbdf71fe91ebda51bb2d8511532417f"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "58aad8599df0a8424b89fec2c80a1b32403f03b2acece55ac1d4f659fdcb0e90"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6dcd17d08c5fae490ec40c8638b2d18495f32165d31f75ad0b72eadf5ae9728d"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      }
+    }
+  ],
+  "threads_requested": "1",
+  "package_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py",
+  "package_version": "1.1.0",
+  "native_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+  "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+  "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=dfcd85eba73c963aaceeaf85738296e5a46272e3f76aff1890a2f7850c4b94d8;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2"
+}
+Traceback (most recent call last):
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/examples/migration/scientific/api040_m06_enthalpy.py", line 209, in <module>
+    main()
+  File "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/examples/migration/scientific/api040_m06_enthalpy.py", line 205, in main
+    raise RuntimeError(failure.decode())
+RuntimeError: M06 scientific acceptance failed

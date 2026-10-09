@@ -1,0 +1,11 @@
+{
+  "date_utc": "2026-10-08T19:34:48.728845+00:00",
+  "Source": "53fd6ec25fd67351aefe0a5d2ac1101be7041a78",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "core_fingerprint": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "peer_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-independent-public-SSPRK2-rates-53fd-ed2-reception-20261008/reception.json",
+  "peer_sha256": "7475d33e4d1aa3c3216b3e30ac4c8dce3471cec4a67f3cc33d15f04419fbe18e",
+  "physical_pins_rehashed": 26,
+  "RootGO_finite_requalification": true,
+  "scope": "FirstpublicRK2rates AMR1 world1, no MPI/GPU/3D/full94 reception."
+}

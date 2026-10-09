@@ -220,8 +220,15 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any,
             lines.append("  " + statement)
     if policy.off_cadence:
         lines.append("} else {")
+        from .program_value_authority import begin_value_write_cpp, complete_value_cpp
+        produces_off = any(action in (ScheduleAction.ZERO, ScheduleAction.RESTORE)
+                           for action in policy.off_cadence)
+        if produces_off:
+            lines += ["  " + line for line in begin_value_write_cpp(v, var, alternate=True)]
         for action in policy.off_cadence:
             statement = _schedule_action_line(action, v=v, out=out, is_aux=is_aux)
             if statement:
                 lines.append("  " + statement)
+        if produces_off:
+            lines += ["  " + line for line in complete_value_cpp(v, var)]
     lines.append("}")

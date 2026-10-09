@@ -1,0 +1,26 @@
+{
+  "schema": "pops.actual-source-integration@1",
+  "timestamp_utc": "2026-10-09T02:56:57.286423+00:00",
+  "base_head": "397626de9e003ab15a076319d2ee4c3d227a389c",
+  "patch": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-gpu-private-kernel-compiler-candidate-20261009/gpu-private-kernel-visibility.patch",
+  "patch_sha256": "7b96a394fe9bc8f8b90bb970c16ceb42cafb85281ea0074adee1d3d060e036e6",
+  "independent_review": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-gpu-private-kernel-independent-review-20261009/independent-cpp-private-kernel-review.json",
+  "independent_review_sha256": "58018ceec923a07e23f9504dcad4d24698a770130257b692ebff7983ba937376",
+  "source_preservation_proof": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-gpu-private-kernel-independent-review-20261009/independent-source-preservation-proof.json",
+    "sha256": "ef93f9f3959848a6d6a002fcd79fd7b0cec64bbb8851f692fd00a55bae6c88a7"
+  },
+  "before": {
+    "include/pops/runtime/amr/tensor_composite_fac.hpp": "0aa1aefbcb79c732e6ebdcbd0633f7d5d9ecb6682cf02aad1eefb0a8e35e7b33",
+    "src/runtime/amr/amr_system.cpp": "59e3fd9fe42cc8c31d2999840d16b1e2ac5ca399a828986126c98265add0a185",
+    "include/pops/numerics/elliptic/amr/partitioned_region_transfer.hpp": "c423e3da0fa67622664cdb161d1bf737c519c07b213f09e3673f58de109a93da"
+  },
+  "after": {
+    "include/pops/runtime/amr/tensor_composite_fac.hpp": "fb5ac6e8226a85c178dcf1bf2eecd556086aa57203f5000cb77d3ce543ca53eb",
+    "src/runtime/amr/amr_system.cpp": "91626d2c8118440584ee1a83d47ade9df32149f7c07d080f45420a369efbe6fb",
+    "include/pops/numerics/elliptic/amr/partitioned_region_transfer.hpp": "011c3b54a7d606bd34cb8264962d820ee3bdeeb9347ecbf6096abaa2f858c90c"
+  },
+  "status": "INTEGRATED_SOURCE_PENDING_COHERENT_NATIVE_BUILD_AND_RUNTIME",
+  "actual_compile_or_runtime": false,
+  "existing_stage_provider_source_preserved": true
+}

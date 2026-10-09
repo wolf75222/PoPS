@@ -82,7 +82,7 @@ def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
             block.resolved_operations, block.instance_owner_qid,
             where="compiled block %r" % block.name, required=True)
     compile_options = {
-        key: value for key, value in options.items() if key in ("include", "cxx", "std")
+        key: value for key, value in options.items() if key in ("include", "cxx", "std", "model_source_policy")
     }
     roles = _resolved_native_amr_field_roles(plan)
     compiled: dict[str, Any] = {}
@@ -103,6 +103,7 @@ def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
             consumer_owner_qid=block.instance_owner_qid,
             declare_auxiliary_providers=block.declares_auxiliary_providers,
             resolved_operations=block.resolved_operations,
+            numerics=block.numerics,
         )
     return compiled
 
@@ -120,7 +121,8 @@ def build_program_model_graph(plan: Any) -> Any:
         require_block_plan_owner(
             block.resolved_operations, block.instance_owner_qid,
             where="Program block %r" % block.name, required=True)
-    return ProgramModelGraph.from_resolved_blocks(plan.blocks)
+    return ProgramModelGraph.from_resolved_blocks(plan.blocks,
+                                                   program_field_plans=plan.program_field_plans)
 
 
 def compile_install_model(
@@ -135,6 +137,7 @@ def compile_install_model(
     consumer_owner_qid: Any = None,
     declare_auxiliary_providers: bool = True,
     resolved_operations: Any = None,
+    numerics: Any = None,
 ) -> Any:
     from pops.codegen.loader import CompiledModel
     from pops.codegen._compiled_model_boundary import validate_compiled_model_result
@@ -183,7 +186,7 @@ def compile_install_model(
     facade = model
     model, source_module = lower_and_validate(
         model, facade=facade, state_space=state_spaces[0],
-        resolved_operations=resolved_operations)
+        resolved_operations=resolved_operations, numerics=numerics)
     if source_module is None:
         raise TypeError(
             "resolved block %r compiler lowering has no operator-first Module authority" % name

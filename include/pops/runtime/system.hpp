@@ -1,5 +1,7 @@
 #pragma once
 
+#include <pops/runtime/system/prepared_field_rhs_inputs.hpp>
+
 #include <pops/runtime/program/accepted_exchange.hpp>
 #include <limits>
 
@@ -146,6 +148,9 @@ struct SystemLayoutTransferSpec {
   std::array<std::int32_t, Dim> physical_source_active{};
   std::array<std::int32_t, Dim> physical_target_active{};
   std::string program_invocation;
+  // Zero preserves the State port contract. Positive width denotes an
+  // authenticated, private consumed-Field candidate, never accepted State.
+  std::int32_t mapped_field_components = 0;
 };
 
 /// Owned projection of PopsExecutionContextV1. Strings are values, never borrowed Python pointers.
@@ -260,6 +265,7 @@ class System {
   ~System();
   System(System&&) noexcept;
   System& operator=(System&&) noexcept;
+
 
   /// Adds an equation block (one species).
   /// @param model    composition of bricks (transport/source/elliptic + parameters)
@@ -531,16 +537,22 @@ class System {
   /// owner-qualified ComponentKeys, shapes, and accepted provider generations before publication.
   [[nodiscard]] POPS_EXPORT runtime::system::AuxiliaryCheckpointAcceptedState<Dim>
   capture_auxiliary_checkpoint_accepted_state() const;
-  /// Rank-local checkpoint capacity derived from the sealed auxiliary registry. The pair is
-  /// ``(payload-free POPSAUX2 bytes, scalar values per full-domain level)``.
+  /// Current accepted-image size observation for raw System callers. Pending task inputs are
+  /// excluded. Arbitrary raw logical clocks make this a dynamic observation, not a future bound.
+  /// The pair is ``(payload-free POPSAUX2/3 bytes, scalar values per full-domain level)``.
   [[nodiscard]] POPS_EXPORT std::pair<std::size_t, std::size_t> checkpoint_auxiliary_capacity()
       const;
+  /// Future accepted-image reserve owned by the authenticated installed Program clock manifest.
+  /// Raw publication outside that manifest is not covered by this certificate.
+  [[nodiscard]] POPS_EXPORT std::pair<std::size_t, std::size_t> checkpoint_program_auxiliary_capacity() const;
+  /// Restore supersedes transient staged input work with the checkpoint's accepted input cache;
+  /// attempt rollback separately snapshots the complete transient journal and dirty set.
   /// Restore the accepted provider provenance only after the checkpoint backend has staged a
   /// compatible rank-local group payload privately.  The collective preflight and rollback image
   /// ensure a rejected checkpoint cannot expose a partial auxiliary generation.
   POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state(
       const runtime::system::AuxiliaryCheckpointAcceptedState<Dim>& state);
-  /// Decode one sealed POPSAUX2 image inside the authenticated System execution lane.  Local
+  /// Decode one sealed POPSAUX2/3 image inside the authenticated System execution lane.  Local
   /// decode/allocation failure is agreed before the typed restore enters its first collective.
   using AuxiliaryCheckpointByteViewProvider = std::function<std::span<const std::uint8_t>()>;
   POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state_bytes(
@@ -627,6 +639,11 @@ class System {
   void set_field_newton_plan(const std::string& provider_slot, double tolerance, int max_iterations,
                              double linear_tolerance, int linear_max_iterations, int restart,
                              double armijo, double minimum_step);
+  void set_field_newton_convergence_plan(const std::string& provider_slot, double tolerance,
+                                         int max_iterations, double linear_tolerance,
+                                         int linear_max_iterations, int restart, double armijo,
+                                         double minimum_step, int convergence_kind, double relative,
+                                         double absolute);
 
   /// Select one prepared nullspace provider. The schema and scalar values remain opaque to System;
   /// the selected provider validates them after the concrete operator/layout facts are available.
@@ -839,6 +856,12 @@ class System {
   POPS_EXPORT void set_block_elliptic_field(
       const std::string& block_name, const std::string& field,
       std::function<void(const MultiFab<Dim>&, MultiFab<Dim>&)> rhs);
+  /// Attach a separately qualified State/Auxiliary Field density. Its inputs are issued only
+  /// from the current FieldSolveRequest, never from layout-compatible raw pointers.
+  POPS_EXPORT void set_block_elliptic_field_v2(
+      const std::string& block_name, const std::string& field,
+      const std::string& binding_identity, const std::string& consumer_qid,
+      std::size_t provider_count, runtime::system::FieldRhsCallbackV2<Dim> rhs);
   /// @}
   void step(double dt);  ///< solve_fields, then advances each block according to its scheme
   void advance(double dt, int nsteps);
@@ -851,7 +874,15 @@ class System {
   POPS_EXPORT void stage_program_exchange(runtime::program::ExchangeRecord record);
   POPS_EXPORT void stage_program_exchanges(std::span<runtime::program::ExchangeRecord> records);
   POPS_EXPORT std::vector<runtime::program::ExchangeRecord> program_exchange_records() const;
-  POPS_EXPORT std::vector<std::uint8_t> checkpoint_program_exchanges() const;
+  POPS_EXPORT void declare_program_integral(const std::string& identity, Real initial);
+  POPS_EXPORT Real program_integral(const std::string& identity) const;
+  POPS_EXPORT Real consume_program_external_trace(
+      const std::string& integral_identity,
+      const runtime::program::AcceptedExchangeLedger::TraceSelection& selection, Real scale);
+  POPS_EXPORT std::vector<std::uint8_t> checkpoint_program_exchanges(bool provisional_capture=false) const;
+  POPS_EXPORT void validate_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes) const;
+  POPS_EXPORT void validate_checkpoint_moving_geometry(std::span<const std::uint8_t> bytes,
+                                                      double accepted_time, int macro_step) const;
   POPS_EXPORT void restore_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes);
   /// Seal the native state while retaining its accepted snapshot until external effects publish.
   void commit_step_transaction();
@@ -999,6 +1030,26 @@ class System {
   /// Point-qualified twin used by compiled Programs and native boundary components.
   POPS_EXPORT void block_rhs_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                      int b, MultiFab<Dim>& U, MultiFab<Dim>& R);
+  /// Dedicated first-order path balance. The complete F/L/R face tuple is evaluated and
+  /// published only after collective finite-value and incident-face CFL validation.
+  POPS_EXPORT void block_path_rhs_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
+      MultiFab<Dim>& R, Real courant, const System* prepared_system, int prepared_block,
+      const runtime::multiblock::BoundaryEvaluationPoint& prepared_point,
+      const ExecutionLane& lane,
+      const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
+  /// Capture the actual incident-face frequency for a separately certified
+  /// explicit consumer. A null result retains the immediate full-step check.
+  /// The result is assigned only after successful residual publication.
+  POPS_EXPORT void block_path_rhs_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
+      MultiFab<Dim>& R, Real courant, const System* prepared_system, int prepared_block,
+      const runtime::multiblock::BoundaryEvaluationPoint& prepared_point,
+      const ExecutionLane& lane,
+      const runtime::program::PreparedScalarBoundarySession<Dim>& transport,
+      Real* evaluated_frequency);
+  /// The active authored step_cfl request; zero denotes a fixed/external time step.
+  POPS_EXPORT double active_program_step_courant() const;
   /// R <- -div F(U) for block @p b -- the SAME flux divergence as block_rhs_into but WITHOUT the
   /// model's default/composite source (Poisson frozen, ghosts filled identically). The block's
   /// flux-only closure is the rhs_into path on SourceFreeModel<Model> (the zero-source adapter the
@@ -1349,6 +1400,17 @@ class System {
   /// All recorded diagnostics (name -> last recorded value). Empty when the program records none.
   /// Exposed to Python as sim.program_diagnostics() (a dict); program_diagnostic(name) reads one.
   POPS_EXPORT std::map<std::string, Real> program_diagnostics() const;
+  /// Accepted, rank-local diagnostic image. Refuses an active native attempt.
+  POPS_EXPORT std::vector<std::uint8_t> checkpoint_program_diagnostics() const;
+  /// Checkpoint capture@1: idle or one uncommitted external candidate, never an observer.
+  POPS_EXPORT std::vector<std::uint8_t> checkpoint_capture_program_diagnostics() const;
+  /// Decode/allocate without changing the live table; all values retain exact bits.
+  POPS_EXPORT void validate_checkpoint_program_diagnostics(std::span<const std::uint8_t>) const;
+  /// Replace the entire table inside an authenticated external restart transaction.
+  /// Empty bytes explicitly clear diagnostics absent from legacy archives.
+  POPS_EXPORT void restore_checkpoint_program_diagnostics(
+      std::span<const std::uint8_t> (*producer)(const void*), const void* context);
+
   /// Five current-attempt scalars for one typed balance route. RuntimeInstance calls this only
   /// inside its active outer accepted-step transaction; missing/stale/non-finite evidence fails.
   POPS_EXPORT std::map<std::string, Real> accepted_balance_terms(const std::string& route) const;
@@ -1437,8 +1499,8 @@ class System {
   /// box 0 on rank 0). The accessors above (density / get_state / potential) read fab(0):
   /// VALID on the owner rank (mono-rank OR rank 0 under MPI), but fab(0) is OUT OF BOUNDS on
   /// a rank without a box (local_size()==0). The _global variants fill a GLOBAL buffer from the
-  /// LOCAL fabs (in GLOBAL indices; nothing on an empty rank) then all_reduce_sum_inplace -> EACH
-  /// rank holds the complete field (AMR reflux pattern, comm.hpp). They are COLLECTIVE: all the
+  /// LOCAL fabs (in GLOBAL indices; nothing on an empty rank), then assemble their exact bytes
+  /// under the domain/ownership contract. EACH rank holds the complete field. They are COLLECTIVE: all the
   /// ranks MUST call them. On mono-rank they return EXACTLY the same array as the non-global
   /// accessors (all_reduce = identity, box = complete domain) -> bit-identical output.
   /// RuntimeInstance uses them for accepted-state checkpoint capture, then seals and publishes
@@ -1446,6 +1508,18 @@ class System {
   /// @{
   std::vector<double> density_global(
       const std::string& name) const;  ///< comp0, global cell product
+  /// accepted-state-storage-observation@1: [rank-local, complete] POPSCAR1 bytes.
+  /// Collective, accepted idle only; copies actual grown storage without refresh or fill.
+  [[nodiscard]] POPS_EXPORT std::vector<std::vector<std::uint8_t>>
+  observe_accepted_state_storage() const;
+  /// Checkpoint capture may serialize the current provisional effect under its active outer
+  /// transaction; this is distinct from accepted-idle observation and makes no publication.
+  [[nodiscard]] POPS_EXPORT std::vector<std::uint8_t> checkpoint_state_carriers() const;
+  /// uniform-state-carriers@1: complete actual storage, no ghost refresh.
+  [[nodiscard]] POPS_EXPORT std::uint64_t checkpoint_state_carriers_capacity() const;
+  POPS_EXPORT void validate_checkpoint_state_carriers(std::span<const std::uint8_t> bytes) const;
+  /// Requires active outer restart transaction; publication preserves storage allocations.
+  POPS_EXPORT void restore_checkpoint_state_carriers(std::span<const std::uint8_t> bytes);
   std::vector<double> state_global(
       const std::string& name) const;      ///< U, ncomp*global cell product
   std::vector<double> potential_global();  ///< phi, global cell product
@@ -1495,11 +1569,15 @@ class System {
                                                   /// @}
 
  private:
+  std::vector<std::vector<std::uint8_t>> capture_state_storage_(bool provisional_capture) const;
   typename SystemInterfaceProvider<Dim>::CoreEvaluator prepare_interface_core_evaluator_(
       typename SystemInterfaceProvider<Dim>::CoreFaceEvaluator* retained_evaluator = nullptr);
   void prepare_bound_physical_group_();
   friend class runtime::program::ProgramContext<Dim>;
   friend class PreparedSystemLayoutTransfer<Dim>;
+  POPS_EXPORT void require_solve_outcome_creation_(long solve_kind) const;
+  /// Internal result boundary shared by field, local-source and Program prepared-linear solves.
+  [[nodiscard]] POPS_EXPORT SolveOutcome track_solve_outcome(SolveOutcome outcome) const noexcept;
   /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains
   /// private to ProgramContext and is deliberately absent from Python bindings.
   POPS_EXPORT void record_program_balance_term(const std::string& route, const std::string& term,
@@ -1521,6 +1599,8 @@ class System {
   /// become a public publication route.
   [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_program_block_active_mask_(
       int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const;
+  [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_program_block_volume_fraction_(
+      int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const;
   /// Immediate provider calls are an exported implementation seam for generated ProgramContext
   /// code, never a public publication route. Every public field solve and every Program solve wraps
   /// these methods in the same physical accepted/candidate transaction.
@@ -1539,6 +1619,11 @@ class System {
   POPS_EXPORT SolveReport solve_fields_from_blocks_at_in_place_(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
       const std::vector<const MultiFab<Dim>*>& U_stages);
+  POPS_EXPORT SolveReport solve_fields_from_request_in_place_(
+      const runtime::system::FieldSolveRequest<Dim>& request);
+  void invoke_field_rhs_v2_(const std::string& field, int block, const MultiFab<Dim>& state,
+      MultiFab<Dim>& rhs, const std::string& binding, const std::string& consumer,
+      std::size_t count, const runtime::system::FieldRhsCallbackV2<Dim>& callback);
   POPS_EXPORT void prepare_default_field_publication_storage_();
   POPS_EXPORT void prepare_named_field_publication_storage_(const std::string& field);
   POPS_EXPORT void begin_field_publication_transaction();
@@ -1572,6 +1657,7 @@ class System {
   // destroyed before the owning communicator is released.
   std::shared_ptr<ExecutionLane> prepared_boundary_execution_lane_;
   std::unique_ptr<Impl> p_;
+  std::shared_ptr<SolveOutcomeAttemptAuthority> solve_outcome_authority_;
 };
 
 /// Persistent System-to-System transfer session with no per-step field allocation or Python staging.

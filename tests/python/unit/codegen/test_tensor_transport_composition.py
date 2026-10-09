@@ -68,7 +68,7 @@ def test_shared_endpoint_frequency_contract_authenticates_supported_fluxes(flux)
 
     selected = SimpleNamespace(reconstruction=reconstruction.FirstOrder(),
                                riemann=riemann.Rusanov() if flux == "rusanov" else riemann.HLL())
-    assert transport_frequency_contract(selected)["provider"] == "native_endpoint_model_wave_envelope"
+    assert transport_frequency_contract(selected)["provider"] == "native_incident_face_stability"
 
 
 @pytest.mark.parametrize("reconstruction_name,flux_name,waves", (

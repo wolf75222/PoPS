@@ -1,0 +1,633 @@
+{
+  "schema_version": 1,
+  "case": "M03",
+  "eos": "ideal",
+  "status": "passed",
+  "criteria": {
+    "density_l1_max": {
+      "100": 0.09,
+      "200": 0.07,
+      "400": 0.055
+    },
+    "density_l1_strictly_decreasing": true,
+    "mass_defect_max": 2e-10,
+    "energy_defect_max": 2e-10,
+    "momentum_balance_defect_max": 3e-09,
+    "transverse_momentum_max": 2e-11,
+    "y_invariance_max": 2e-11,
+    "initial_max_error": 1e-12,
+    "time_error_max": 1e-12,
+    "minimum_density": 0.0,
+    "minimum_internal_energy_density": 0.0,
+    "minimum_pressure": 0.0
+  },
+  "scope": "Dim=2 NxN, 1D solution invariant in y; not Dim=1",
+  "method": "authored Euler/EOS; first-order Rusanov; SSPRK2",
+  "cfl": 0.25,
+  "t_end": 0.15,
+  "resolutions": [
+    100,
+    200,
+    400
+  ],
+  "component_names": [
+    "mass",
+    "longitudinal_impulse",
+    "lateral_impulse",
+    "energy"
+  ],
+  "parameter_names": [
+    "adiabatic_index",
+    "background_pressure"
+  ],
+  "state_name": "fluid_conserved_ideal",
+  "block_name": "shock_tube_fluid",
+  "package_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py",
+  "package_version": "1.1.0",
+  "native_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+  "native_sha256": "e1070cb63a8e733b0a6032ac4d2b8ad003756668c100e057e5f8edd5b9c01280",
+  "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=aa301ce673e78b6833d4cd25c3dfe283d3eb8e6506795f7a50dc5b88a6feff2f;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+  "prefix": "/Users/romaindespoulain/miniforge3/envs/pops-api040",
+  "threads_requested": "1",
+  "records": [
+    {
+      "eos": "ideal",
+      "gamma": 1.4,
+      "p_inf": 0.0,
+      "cells": [
+        100,
+        100
+      ],
+      "time": 0.15,
+      "accepted_steps": 121,
+      "density_l1": 0.022324762183213085,
+      "rho_min": 0.12500000000969205,
+      "internal_energy_density_min": 0.25000000002713757,
+      "pressure_min": 0.100000000010855,
+      "mass_defect": 2.865485626557529e-13,
+      "energy_defect": 1.028954699222595e-12,
+      "momentum_balance_defect": 4.239109063775004e-13,
+      "transverse_momentum_max": 7.444565027389166e-17,
+      "y_invariance_max": 4.440892098500626e-16,
+      "initial_max_error": 0.0,
+      "compile_seconds": 32.79089816706255,
+      "run_seconds": 0.896382125094533,
+      "run_report": {
+        "accepted_steps": 121,
+        "rejected_steps": 0,
+        "final_time": 0.15,
+        "final_macro_step": 121,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "c3a9a432e91a364a7e3282c368e7a499224346ea95b69caaef5c23b4e4d4a259"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "a6c1fe2aeff42956f446d0f928bc29d23644731dd3fbb4b6fe3bb4b35f620eba"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "60cb7f9078e144527fc6335fe2a35d83d2bc478f407802974c26591ec5b6b68a"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "b92f70a007a1231eb8000738c3131a8344ae60620cbc67a025c87f928377b765"
+          }
+        },
+        "field_providers": []
+      },
+      "mpi_ranks": 1,
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "4f0b25caa22b4aaf5fc10e81b5b07f6c30e9a311614a8e08ea1444c5ea167359"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      },
+      "runtime_backend": {
+        "schema_version": 1,
+        "backend": {
+          "value": "production",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "target": {
+          "value": "system",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "abi": {
+          "value": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=aa301ce673e78b6833d4cd25c3dfe283d3eb8e6506795f7a50dc5b88a6feff2f;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "precision": {
+          "storage": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "compute": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "accumulation": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "reduction": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          }
+        },
+        "device": {
+          "value": "cpu",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "memory_spaces": {
+          "value": [
+            "host"
+          ],
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "communicator": {
+          "value": "MPI_COMM_WORLD",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "capabilities": {
+          "centerings": {
+            "value": [
+              "cell"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "execution_backend": {
+            "value": "OpenMP",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "generic_field_view": {
+            "value": true,
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "layouts": {
+            "value": [
+              "right",
+              "left",
+              "strided"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "ownership": {
+            "value": [
+              "borrowed",
+              "owned",
+              "shared"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "scalars": {
+            "value": [
+              "float64"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "shared_space": {
+            "value": "Host",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "stream_identity": {
+            "value": "Kokkos::OpenMP::synchronous",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "supported_dimensions": {
+            "value": [
+              2
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          }
+        }
+      },
+      "saved_state": "state_100.npz",
+      "saved_state_sha256": "67422adb5598dd2f34af1b1603f589db53ad34c665002f2cc8db992246512827"
+    },
+    {
+      "eos": "ideal",
+      "gamma": 1.4,
+      "p_inf": 0.0,
+      "cells": [
+        200,
+        200
+      ],
+      "time": 0.15,
+      "accepted_steps": 252,
+      "density_l1": 0.015722941494383746,
+      "rho_min": 0.12499999999999996,
+      "internal_energy_density_min": 0.24999999999999994,
+      "pressure_min": 0.09999999999999995,
+      "mass_defect": 1.1102230246251565e-16,
+      "energy_defect": 4.440892098500626e-16,
+      "momentum_balance_defect": 1.1102230246251565e-16,
+      "transverse_momentum_max": 1.064208292750392e-16,
+      "y_invariance_max": 8.881784197001252e-16,
+      "initial_max_error": 0.0,
+      "compile_seconds": 8.678588666021824,
+      "run_seconds": 6.610681958962232,
+      "run_report": {
+        "accepted_steps": 252,
+        "rejected_steps": 0,
+        "final_time": 0.15,
+        "final_macro_step": 252,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9bb898c2316902c702b747da064f9aab355a578c20a4378d259372418e0931b2"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "2517e0e055d7bdf2f056b168cd24129d95103c3391cbb24736b7a7ecb91a02f1"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "60cb7f9078e144527fc6335fe2a35d83d2bc478f407802974c26591ec5b6b68a"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "f4170d1b2915806b19f7d44452a45f25097aa885b3a8a524b9d9df3ed0e224ae"
+          }
+        },
+        "field_providers": []
+      },
+      "mpi_ranks": 1,
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "4f0b25caa22b4aaf5fc10e81b5b07f6c30e9a311614a8e08ea1444c5ea167359"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      },
+      "runtime_backend": {
+        "schema_version": 1,
+        "backend": {
+          "value": "production",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "target": {
+          "value": "system",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "abi": {
+          "value": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=aa301ce673e78b6833d4cd25c3dfe283d3eb8e6506795f7a50dc5b88a6feff2f;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "precision": {
+          "storage": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "compute": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "accumulation": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "reduction": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          }
+        },
+        "device": {
+          "value": "cpu",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "memory_spaces": {
+          "value": [
+            "host"
+          ],
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "communicator": {
+          "value": "MPI_COMM_WORLD",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "capabilities": {
+          "centerings": {
+            "value": [
+              "cell"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "execution_backend": {
+            "value": "OpenMP",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "generic_field_view": {
+            "value": true,
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "layouts": {
+            "value": [
+              "right",
+              "left",
+              "strided"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "ownership": {
+            "value": [
+              "borrowed",
+              "owned",
+              "shared"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "scalars": {
+            "value": [
+              "float64"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "shared_space": {
+            "value": "Host",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "stream_identity": {
+            "value": "Kokkos::OpenMP::synchronous",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "supported_dimensions": {
+            "value": [
+              2
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          }
+        }
+      },
+      "saved_state": "state_200.npz",
+      "saved_state_sha256": "d2952cb7ae31ad3f987d4e083067ec01e419ad19cc755252a1a4e3f8c5aa9bc6"
+    },
+    {
+      "eos": "ideal",
+      "gamma": 1.4,
+      "p_inf": 0.0,
+      "cells": [
+        400,
+        400
+      ],
+      "time": 0.15,
+      "accepted_steps": 514,
+      "density_l1": 0.010562146738457144,
+      "rho_min": 0.125,
+      "internal_energy_density_min": 0.2500000000000001,
+      "pressure_min": 0.10000000000000002,
+      "mass_defect": 0.0,
+      "energy_defect": 0.0,
+      "momentum_balance_defect": 0.0,
+      "transverse_momentum_max": 1.651664874089807e-16,
+      "y_invariance_max": 8.881784197001252e-16,
+      "initial_max_error": 0.0,
+      "compile_seconds": 9.500465250108391,
+      "run_seconds": 52.37473649997264,
+      "run_report": {
+        "accepted_steps": 514,
+        "rejected_steps": 0,
+        "final_time": 0.15,
+        "final_macro_step": 514,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "7071168f7b1735812bcd571a5d94d6e71115eb54e20a279a5bb51214c3f1f864"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "819f7cf6a31e78eaf5c7cfcf6f5943092650c6f8394bef527574d091f2288d4f"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "60cb7f9078e144527fc6335fe2a35d83d2bc478f407802974c26591ec5b6b68a"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "b2decceb32c011d178a481327670a0984995e46cafc6309324edad2852fd4887"
+          }
+        },
+        "field_providers": []
+      },
+      "mpi_ranks": 1,
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "4f0b25caa22b4aaf5fc10e81b5b07f6c30e9a311614a8e08ea1444c5ea167359"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      },
+      "runtime_backend": {
+        "schema_version": 1,
+        "backend": {
+          "value": "production",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "target": {
+          "value": "system",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "abi": {
+          "value": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=aa301ce673e78b6833d4cd25c3dfe283d3eb8e6506795f7a50dc5b88a6feff2f;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "precision": {
+          "storage": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "compute": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "accumulation": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "reduction": {
+            "value": "float64",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          }
+        },
+        "device": {
+          "value": "cpu",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "memory_spaces": {
+          "value": [
+            "host"
+          ],
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "communicator": {
+          "value": "MPI_COMM_WORLD",
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+        },
+        "capabilities": {
+          "centerings": {
+            "value": [
+              "cell"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "execution_backend": {
+            "value": "OpenMP",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "generic_field_view": {
+            "value": true,
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "layouts": {
+            "value": [
+              "right",
+              "left",
+              "strided"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "ownership": {
+            "value": [
+              "borrowed",
+              "owned",
+              "shared"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "scalars": {
+            "value": [
+              "float64"
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "shared_space": {
+            "value": "Host",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "stream_identity": {
+            "value": "Kokkos::OpenMP::synchronous",
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          },
+          "supported_dimensions": {
+            "value": [
+              2
+            ],
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=6bd5e8adfe8ac62d0b0999e12cb422843910027d3a06931352504e0a0d156555"
+          }
+        }
+      },
+      "saved_state": "state_400.npz",
+      "saved_state_sha256": "56b26dba392cbd10b3aa3bbf504a98103b6e7fa77442d8cde9de493bcd712733"
+    }
+  ]
+}

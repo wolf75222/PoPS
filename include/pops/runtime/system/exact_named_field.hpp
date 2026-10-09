@@ -4,6 +4,7 @@
 #pragma once
 
 #include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/parallel/collective_exception.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/runtime/named_field_output.hpp>
 #include <pops/runtime/named_field_publication.hpp>
@@ -238,28 +239,36 @@ class ExactNamedField final {
     active_ = true;
     candidate_ready_ = false;
 
-    std::exception_ptr rhs_error;
-    try {
-      solver_->rhs().set_val(Real(0));
+    const auto rhs_phase = [&](const auto& operation, const char* message) {
+      std::exception_ptr error;
+      try { operation(); Kokkos::fence(); }
+      catch (...) {
+        error = std::current_exception();
+        try { Kokkos::fence(); } catch (...) { error = std::current_exception(); }
+      }
+      if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+        clear_candidate_();
+        collectively_rethrow_exception(error, lane, message);
+      }
+    };
+    // A V2 callback enters its own preflight votes. No rank may reach it while a peer has
+    // already failed a contribution allocation or initialization outside that vote.
+    rhs_phase([&] {
       if (!contribution_scratch_)
         contribution_scratch_.emplace(solver_->rhs().layout(), solver_->rhs().distribution(),
                                       solver_->rhs().local_rank(), 1, Extent<Dim>{});
-      for (std::size_t block = 0; block < states.size(); ++block)
-        for (const PreparedRhs& provider : rhs_by_block_[block]) {
-          contribution_scratch_->set_val(Real(0));
-          provider.evaluate(*states[block], *contribution_scratch_);
-          saxpy(solver_->rhs(), provider.coefficient, *contribution_scratch_);
-        }
-      Kokkos::fence();
-    } catch (...) {
-      rhs_error = std::current_exception();
-    }
-    if (all_reduce_max(rhs_error ? 1L : 0L, lane) != 0) {
-      clear_candidate_();
-      if (lane.size() == 1 && rhs_error)
-        std::rethrow_exception(rhs_error);
-      throw std::runtime_error("named-field RHS assembly failed collectively");
-    }
+    }, "named-field RHS allocation failed collectively");
+    rhs_phase([&] { solver_->rhs().set_val(Real(0)); },
+              "named-field RHS initialization failed collectively");
+    for (std::size_t block = 0; block < states.size(); ++block)
+      for (const PreparedRhs& provider : rhs_by_block_[block]) {
+        rhs_phase([&] { contribution_scratch_->set_val(Real(0)); },
+                  "named-field contribution initialization failed collectively");
+        rhs_phase([&] { provider.evaluate(*states[block], *contribution_scratch_); },
+                  "named-field contribution failed collectively");
+        rhs_phase([&] { saxpy(solver_->rhs(), provider.coefficient, *contribution_scratch_); },
+                  "named-field contribution assembly failed collectively");
+      }
 
     try {
       SolveReport report = solver_->solve(accepted_, lane);
@@ -315,11 +324,7 @@ class ExactNamedField final {
 
   static void collective_rethrow_(const std::exception_ptr& error, const char* message,
                                   const ExecutionLane& lane) {
-    if (all_reduce_max(error ? 1L : 0L, lane) == 0)
-      return;
-    if (lane.size() == 1 && error)
-      std::rethrow_exception(error);
-    throw std::runtime_error(message);
+    collectively_rethrow_exception(error, lane, message);
   }
 
   static Extent<Dim> unit_ghosts_() {

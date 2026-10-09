@@ -1,0 +1,8 @@
+{
+  "peer": "/Users/romaindespoulain/dev/tmp/PoPS-independent-original-PDE-e01-ed2-reception-20261008/reception.json",
+  "peer_sha256": "92ec8b8e647b4231fd39dc9a8af78de6fc924c879276a70df4d4e7ff717fa886",
+  "pins_rehashed": 36,
+  "Source": "e01eb5b8b39b20762639be1e7dde45d12542b770",
+  "core": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "scope": "Fresh original PDE1 rationaloracle/actualNPY/46payloadCP on currentcore; OwnRetryNative8 stillactive, no fullmissionqualification"
+}

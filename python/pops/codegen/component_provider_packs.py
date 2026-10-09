@@ -18,6 +18,7 @@ from pops.model.provider_pack import (
     build_operator_provider_pack,
     build_provider_pack,
     compact_auxiliary_provider_pack,
+    _field_input_spaces_after_binding,
 )
 
 
@@ -95,7 +96,7 @@ def canonical_emitter_carrier_value(value: Any) -> Any:
         )
     # Typed auxiliary routes deliberately retain executable descriptors.  A witness must not retain
     # those objects by reference: their exact data is the compiler-visible identity instead.
-    from pops.fields.aux import AuxiliaryBoundary, DerivedAux, InputAux, strict_field_data
+    from pops.fields.aux import AuxiliaryBoundary, AnalyticAux, DerivedAux, InputAux, strict_field_data
     from pops.model.provider_pack import ComponentContract
 
     if type(value) in (AuxiliaryBoundary, ComponentContract):
@@ -118,6 +119,13 @@ def canonical_emitter_carrier_value(value: Any) -> Any:
             "regrid": value.regrid_policy,
             "boundary": value.boundary,
             "expression": strict_field_data(value.expression),
+        })
+    if type(value) is AnalyticAux:
+        return canonical_emitter_carrier_value({
+            "type": "AnalyticAux", "target": value.target.qualified_id,
+            "producer": value.producer_kind, "restart": value.restart_policy,
+            "regrid": value.regrid_policy, "boundary": value.boundary,
+            "expression": value.expression.to_data(), "frame": value.frame.to_dict(),
         })
     if isinstance(value, Mapping):
         return {
@@ -144,10 +152,13 @@ def canonical_emitter_carrier_value(value: Any) -> Any:
 
 def emitter_carrier_snapshot(target: Any) -> dict[str, Any]:
     """Return canonical values of every carrier member plus typed routes."""
-    return {
+    result = {
         name: canonical_emitter_carrier_value(getattr(target, name, None))
         for name in EMITTER_CARRIER_ATTRS
     }
+    if hasattr(target, '_native_provider_instance'):
+        result['_native_provider_instance'] = canonical_emitter_carrier_value(target._native_provider_instance)
+    return result
 
 
 def require_emitter_provider_carrier(target: Any, *, where: str = "emitter") -> None:
@@ -201,6 +212,7 @@ class ComponentProviderPacks:
     auxiliary_route_metadata: tuple[Mapping[str, Any], ...]
     consumer_plans: Mapping[str, tuple[Mapping[str, Any], ...]]
     physical_flux_plan: tuple[Mapping[str, Any], ...]
+    native_instance: Mapping[str, str] | None = None
 
     def __post_init__(self) -> None:
         if type(self.complete) is not ProviderPack:
@@ -250,6 +262,10 @@ class ComponentProviderPacks:
             tuple(MappingProxyType(dict(row)) for row in self.physical_flux_plan),
         )
         object.__setattr__(self, "consumer_plans", MappingProxyType(plans))
+        if self.native_instance is not None:
+            from .provider_instances import validate_instance_contract
+            validate_instance_contract(self.native_instance)
+            object.__setattr__(self, 'native_instance', MappingProxyType(dict(self.native_instance)))
 
     def attach(self, target: Any) -> None:
         """Attach compiler-owned immutable evidence to one emitter carrier.
@@ -274,6 +290,10 @@ class ComponentProviderPacks:
             "_component_flux_consumer_plan": self.physical_flux_plan,
             "_auxiliary_provider_routes": self.auxiliary_routes,
         }
+        if self.native_instance is not None:
+            values['_native_provider_instance'] = self.native_instance
+        elif hasattr(target, '_native_provider_instance'):
+            raise ValueError('compiler emitter cannot revoke its native provider instance contract')
 
         for name, value in values.items():
             previous = getattr(target, name, None)
@@ -310,7 +330,7 @@ def unbound_emitter_attributes(target: Any) -> dict[str, Any]:
     projection without overwriting the source's pack or copying its object witness.
     """
     attrs = vars(target)
-    binding_names = (*EMITTER_CARRIER_ATTRS, _WITNESS_ATTR)
+    binding_names = (*EMITTER_CARRIER_ATTRS, _WITNESS_ATTR, '_native_provider_instance')
     if any(name in attrs for name in binding_names):
         require_emitter_provider_carrier(target, where="source of private emitter")
     return {name: value for name, value in attrs.items()
@@ -362,6 +382,33 @@ def resolve_component_provider_packs(module: Any) -> ComponentProviderPacks:
         for name, pack in by_operator.items()
     }
     routes, route_metadata = auxiliary_provider_routes(module, complete)
+    # Producers may be registered after Program clock authoring. Do not rewrite an operator's
+    # sealed signature at that point: refuse a hidden solved-field dependency instead.
+    for operator in module.operator_registry():
+        if operator.kind not in {"local_linear_operator", "field_operator"}:
+            continue
+        declared_fields = {name for _, name in _field_input_spaces_after_binding(
+            module, [("field", space.name) for space in operator.signature.inputs
+                     if getattr(space, "kind", None) == "field"], pack=complete)}
+        pending = list(by_operator[operator.name])
+        seen = set()
+        while pending:
+            key = pending.pop()
+            if key in seen:
+                continue
+            seen.add(key)
+            if operator.kind == "field_operator" and key.space_kind == "field":
+                raise ValueError(
+                    "field RHS operator %r requires a FieldContext input for solved "
+                    "FieldSpace dependency %r; its State+Aux contract cannot hide that read"
+                    % (operator.name, key.space_name))
+            if key.space_kind == "field" and key.space_name not in declared_fields:
+                raise ValueError(
+                    "local-linear operator %r hides solved FieldSpace dependency %r; "
+                    "declare its Field operand explicitly" % (operator.name, key.space_name))
+            route = routes.get(key)
+            if route is not None:
+                pending.extend(route.get("dependencies", ()))
     return ComponentProviderPacks(
         complete=complete,
         by_operator=by_operator,
@@ -427,6 +474,7 @@ def auxiliary_provider_routes(
     DAG validation at global package seal, while this authoring pass catches
     a self-contained module error before source emission.
     """
+    from pops.fields.aux import AnalyticAux
     declared = module.aux_providers()
     owner_qid = str(module.owner_path.canonical())
     routes: dict[ComponentKey, Mapping[str, Any]] = {}
@@ -449,7 +497,7 @@ def auxiliary_provider_routes(
         elif producer.producer_kind == "derived":
             if entry.producer != "derived:%s" % name:
                 raise ValueError("DerivedAux target %r has conflicting ProviderPack producer" % name)
-            dependencies = tuple(
+            dependencies = () if isinstance(producer, AnalyticAux) else tuple(
                 _component_key_for_auxiliary_reference(module, pack, reference)
                 for reference in producer.expression.declaration_references()
             )

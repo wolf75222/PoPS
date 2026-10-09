@@ -1,0 +1,89 @@
+{
+  "receipts": [
+    {
+      "name": "root-sdk21-build-reception-732100.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk21-build-reception-732100.json",
+      "schema": "root.sdk21.build-install-reception@1",
+      "sha256": "b4361a6ec3e94a3e0f5905c5b6c40550a6a37d82dec155a9d3096b34678e884b"
+    },
+    {
+      "name": "root-sdk21-source-terminal-reception.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk21-source-terminal-reception.json",
+      "schema": "root.sdk21.source-terminal-reception@1",
+      "sha256": "c91eecf6b336bc7708a1a93b63a5079c73e7539687b954d1563ba17cb6b12e40"
+    },
+    {
+      "name": "root-sdk21-fanli8-canonical-cpu-scientific-reception.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk21-fanli8-canonical-cpu-scientific-reception.json",
+      "schema": "root.sdk21-fanli-eight-canonical-cpu-scoped-scientific-reception@1",
+      "sha256": "3a90b3a5a9232a419b840a6c192deca321cc2b59b69d9ce8a98a6289a8b2c224"
+    },
+    {
+      "name": "root-sdk21-fanli8-reverse-cpu-scientific-reception.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk21-fanli8-reverse-cpu-scientific-reception.json",
+      "schema": "root.sdk21-fanli-eight-reverse-cpu-scoped-scientific-reception@1",
+      "sha256": "abaf1da85eda3324201851689b2365c97f7be93a9a48d7f6de54706c9024f046"
+    },
+    {
+      "name": "root-sdk21-fanli8-canonical-mpi2-scientific-reception.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk21-fanli8-canonical-mpi2-scientific-reception.json",
+      "schema": "root.sdk21-fanli-eight-canonical-mpi2-scoped-scientific-reception@1",
+      "sha256": "776b94d191bcbeb90dc24ca3476f474e47fdb630a68d89aded58f10e4d391305"
+    },
+    {
+      "name": "root-sdk21-fanli8-reverse-mpi2-scientific-reception.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk21-fanli8-reverse-mpi2-scientific-reception.json",
+      "schema": "root.sdk21-fanli-eight-reverse-mpi2-scoped-scientific-reception@1",
+      "sha256": "d3d51b41dfa891d49300f400598f96b1b07e56b7bb6a2f940ea4ace572cbcba8"
+    },
+    {
+      "name": "root-sdk21-publication-compiler-mock-reception.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk21-publication-compiler-mock-reception.json",
+      "schema": "root.sdk21-publication-compiler-mock-reception@1",
+      "sha256": "3b09481b97153c060a766f84f29c9f8bc5c4b9632c6e85ab9a451208574ef87c"
+    },
+    {
+      "name": "root-sdk21-amr-v12-partial-refinement-cpu-reception.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk21-amr-v12-partial-refinement-cpu-reception.json",
+      "schema": "root.sdk21-amr-v12-partial-refinement-cpu-scoped-reception@1",
+      "sha256": "69674d530137506b14a2807cc4e2518981192eea3106d185d8bf8a34815e7889"
+    },
+    {
+      "name": "root-sdk21-amr-v12-partial-refinement-mpi2-reception.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk21-amr-v12-partial-refinement-mpi2-reception.json",
+      "schema": "root.sdk21-amr-v12-partial-refinement-mpi2-scoped-reception@1",
+      "sha256": "25a25dd8a0bd84a9b52ffad06542335f8cd8733737212915c8f46dfbebebc611"
+    },
+    {
+      "name": "root-sdk21-uniform-mpi2-engineering-reception.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk21-uniform-mpi2-engineering-reception.json",
+      "schema": "root.sdk21.engineering-mpi-profile-reception@1",
+      "sha256": "3109f6f8e31760f3d45d9d77109a918afe3d33fd74bb4d1338c53bc1a14cdce2"
+    },
+    {
+      "name": "root-sdk21-replicated-mpi2-engineering-reception.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk21-replicated-mpi2-engineering-reception.json",
+      "schema": "root.sdk21.engineering-mpi-profile-reception@1",
+      "sha256": "0d18de0d5a2fc1c9de25653554648660562673b9a58eaced272a096468098df8"
+    },
+    {
+      "name": "root-sdk21-partitioned-mpi2-engineering-reception.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk21-partitioned-mpi2-engineering-reception.json",
+      "schema": "root.sdk21.engineering-mpi-profile-reception@1",
+      "sha256": "03874e407bb62a972c13b76d9c724ea47b6bfd5e02cb5d3adf9a5902b593f3d3"
+    },
+    {
+      "name": "root-sdk21-empty-owner-mpi2-engineering-reception.json",
+      "origin": "/Users/romaindespoulain/dev/tmp/sol61-romeo-api040-composition15-preparation-20261002/root-sdk21-empty-owner-mpi2-engineering-reception.json",
+      "schema": "root.sdk21.engineering-mpi-profile-reception@1",
+      "sha256": "a4122628abf6acc3facc1cb02851b7685adcefdb9afd46530b9cd1074a962b83"
+    }
+  ],
+  "schema": "root.sdk21-compact-receipt-copies@1",
+  "scope": "byte-exact compact copies; complete raw archives and independent readers retained at origins",
+  "scripts": {
+    "build21.sbatch": "2051e819163be5596186d943c9434ca54b2da52db2839b46c4fbf6ef772b3c5e",
+    "native-run.sbatch": "ff2f056d2d50619a3c02d40d70b2a3e66cd8547e4fcacb122a42f73ca04977d6"
+  },
+  "source_freeze": "3302c4a19d94a0b08dbba9c05c4de3ae2debb232"
+}

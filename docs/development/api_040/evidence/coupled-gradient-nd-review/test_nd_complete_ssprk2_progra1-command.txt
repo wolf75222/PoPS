@@ -1,0 +1,15 @@
+/usr/bin/clang++
+-std=c++20
+-fsyntax-only
+-fno-fast-math
+-DPOPS_NATIVE_DIM=3
+-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI
+-DPOPS_HAS_KOKKOS
+-DKOKKOS_DEPENDENCE
+-DPOPS_HAS_MPI
+-I/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-numerical-bodies/include
+-I/Users/romaindespoulain/miniforge3/envs/pops-api040/include
+-Xpreprocessor
+-fopenmp
+-I/opt/homebrew/opt/libomp/include
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-resource-lifetime/outputs/coupled-gradient-nd-review-final/test_nd_complete_ssprk2_progra1/complete_program.cpp

@@ -16,6 +16,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from pops._report import ReportTree
+from pops.blockage import Blockage
 
 if TYPE_CHECKING:
     from pops.descriptors_report import (
@@ -53,14 +54,17 @@ class Availability:
     _STATUSES = ("yes", "no", "partial")
 
     def __init__(self, status: str, reason: str = "", *, missing: Any = None,
-                 alternatives: Any = None) -> None:
+                 alternatives: Any = None, blockage: Blockage | None = None) -> None:
         if status not in self._STATUSES:
             raise ValueError("Availability status must be one of %s (got %r)"
                              % (", ".join(self._STATUSES), status))
+        if blockage is not None and type(blockage) is not Blockage:
+            raise TypeError("Availability blockage must be an exact Blockage")
         self.status = status
         self.reason = str(reason)
         self.missing = list(missing or [])
         self.alternatives = list(alternatives or [])
+        self.blockage = blockage
 
     @classmethod
     def yes(cls, reason: str = "") -> Availability:
@@ -68,9 +72,10 @@ class Availability:
         return cls("yes", reason)
 
     @classmethod
-    def no(cls, reason: str, *, missing: Any = None, alternatives: Any = None) -> Availability:
+    def no(cls, reason: str, *, missing: Any = None, alternatives: Any = None,
+           blockage: Blockage | None = None) -> Availability:
         """An unavailable status (falsy) carrying the reason, what is missing and alternatives."""
-        return cls("no", reason, missing=missing, alternatives=alternatives)
+        return cls("no", reason, missing=missing, alternatives=alternatives, blockage=blockage)
 
     @classmethod
     def partial(cls, reason: str, *, missing: Any = None,
@@ -169,6 +174,15 @@ class Descriptor:
                 "from; author a fresh descriptor / Problem and recompile instead of mutating this one."
                 % (getattr(self, "name", type(self).__name__), self.category, key))
         object.__setattr__(self, key, value)
+
+    def __delattr__(self, key: str) -> None:
+        """Deletion is a mutation too, including deletion of the freeze marker itself."""
+        if getattr(self, "_frozen", False):
+            raise RuntimeError(
+                "%s [%s] is frozen (ADC-563): cannot delete %r after validation. "
+                "Author a fresh descriptor / Case and repeat validate/resolve/compile instead."
+                % (getattr(self, "name", type(self).__name__), self.category, key))
+        object.__delattr__(self, key)
 
     @property
     def name(self) -> str:

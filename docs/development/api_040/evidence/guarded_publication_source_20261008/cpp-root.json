@@ -1,0 +1,30 @@
+{
+  "date_utc": "2026-10-08T20:25:04.739001+00:00",
+  "peer": "/Users/romaindespoulain/dev/tmp/PoPS-independent-composed-cpp-source-review-20261008/review.json",
+  "peer_sha256": "6f912a6f3384988e920d4b2e4223c4c6d7663a096f2ee27f471446716e0e2fc3",
+  "pins_rehashed": 19,
+  "checks": [
+    "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/composed-source-repairs-v1.patch",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include/pops/runtime/program/program_context_moving_projection.inc",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/system/system_fields.cpp",
+    "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/overlay/include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp",
+    "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/overlay/include/pops/runtime/program/program_context_moving_projection.inc",
+    "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/overlay/src/runtime/system/system_fields.cpp",
+    "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/composed-host-dimension-gates-v1.json",
+    "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/strict-exact-aux.xml",
+    "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/copy-bit-gate",
+    "/Users/romaindespoulain/dev/tmp/sol61-composite-fac-copy-cuda-db206-20261008/job737990-monitor/received/run/candidate.o",
+    "/Users/romaindespoulain/dev/tmp/sol61-composite-fac-copy-cuda-db206-20261008/job737990-monitor/received/result.json",
+    "/Users/romaindespoulain/dev/tmp/sol61-composite-fac-copy-cuda-db206-20261008/job737990-monitor/received/result.json",
+    "/Users/romaindespoulain/dev/tmp/sol61-composite-fac-copy-cuda-db206-20261008/job737990-monitor/received/run/baseline-kept/fac_install_gate.cpp4.ii",
+    "/Users/romaindespoulain/dev/tmp/sol61-composite-fac-copy-cuda-db206-20261008/job737990-monitor/received/run/candidate-kept/fac_install_gate.cpp1.ii",
+    "/Users/romaindespoulain/dev/tmp/sol61-composite-fac-copy-cuda-db206-20261008/job737990-monitor/received/run/candidate-kept/fac_install_gate.cpp4.ii",
+    "/Users/romaindespoulain/dev/tmp/sol61-composite-fac-copy-cuda-db206-20261008/job737990-monitor/received/run/candidate-kept/fac_install_gate.cudafe1.cpp",
+    "/Users/romaindespoulain/dev/tmp/sol61-composite-fac-copy-cuda-db206-20261008/job737990-monitor/received/run/candidate-kept/fac_install_gate.ptx",
+    "/Users/romaindespoulain/dev/tmp/sol61-composite-fac-copy-cuda-db206-20261008/job737990-monitor/received/run/candidate.o"
+  ],
+  "status": "GO_SOURCE_INTEGRATION_AFTER_CURRENT_NATIVE_TRANCHE",
+  "next": "CombinedSDK8994 official Native rebuild allheaderconsumers+7bindings; then actual scientific/native/GPU qualification",
+  "scope": "Sourceonly, host syntax/replay and physicalO0CompositeCUDA differential; no full Native/System producer/GPU O3/PDE receipt"
+}

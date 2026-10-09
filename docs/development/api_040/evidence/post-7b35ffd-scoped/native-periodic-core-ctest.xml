@@ -1,0 +1,1635 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)"
+	tests="95"
+	failures="0"
+	disabled="0"
+	skipped="3"
+	hostname=""
+	time="69"
+	timestamp="2026-09-29T08:47:42"
+	>
+	<testcase name="GeneratedAmrSystemBlock.PreparesOneExactNativePackageImage" classname="GeneratedAmrSystemBlock.PreparesOneExactNativePackageImage" time="0.058733" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.PreparesOneExactNativePackageImage
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.PreparesOneExactNativePackageImage
+[       OK ] GeneratedAmrSystemBlock.PreparesOneExactNativePackageImage (1 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.ProgramStateHaloRequirementReachesUniformAndAmrFactories" classname="GeneratedAmrSystemBlock.ProgramStateHaloRequirementReachesUniformAndAmrFactories" time="0.0602428" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.ProgramStateHaloRequirementReachesUniformAndAmrFactories
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.ProgramStateHaloRequirementReachesUniformAndAmrFactories
+[       OK ] GeneratedAmrSystemBlock.ProgramStateHaloRequirementReachesUniformAndAmrFactories (1 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.ComposedProgramHalosPreserveHyperbolicReconstructionRequirements" classname="GeneratedAmrSystemBlock.ComposedProgramHalosPreserveHyperbolicReconstructionRequirements" time="0.0699167" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.ComposedProgramHalosPreserveHyperbolicReconstructionRequirements
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.ComposedProgramHalosPreserveHyperbolicReconstructionRequirements
+[       OK ] GeneratedAmrSystemBlock.ComposedProgramHalosPreserveHyperbolicReconstructionRequirements (5 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (5 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (5 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.ProgramStateRouteDoesNotInstantiateHyperbolicPhysics" classname="GeneratedAmrSystemBlock.ProgramStateRouteDoesNotInstantiateHyperbolicPhysics" time="0.0694309" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.ProgramStateRouteDoesNotInstantiateHyperbolicPhysics
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.ProgramStateRouteDoesNotInstantiateHyperbolicPhysics
+[       OK ] GeneratedAmrSystemBlock.ProgramStateRouteDoesNotInstantiateHyperbolicPhysics (2 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (2 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (3 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.CoordinatedFacePreflightDoesNotAuthenticateTheBody" classname="GeneratedAmrSystemBlock.CoordinatedFacePreflightDoesNotAuthenticateTheBody" time="0.0696342" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.CoordinatedFacePreflightDoesNotAuthenticateTheBody
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.CoordinatedFacePreflightDoesNotAuthenticateTheBody
+[       OK ] GeneratedAmrSystemBlock.CoordinatedFacePreflightDoesNotAuthenticateTheBody (0 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.SourceRoutePreflightDefersAuthenticationToCompiledPolicies" classname="GeneratedAmrSystemBlock.SourceRoutePreflightDefersAuthenticationToCompiledPolicies" time="0.0725601" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.SourceRoutePreflightDefersAuthenticationToCompiledPolicies
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.SourceRoutePreflightDefersAuthenticationToCompiledPolicies
+[       OK ] GeneratedAmrSystemBlock.SourceRoutePreflightDefersAuthenticationToCompiledPolicies (0 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.SourceRoutePreflightRefusesMalformedIdentityAndInvalidControls" classname="GeneratedAmrSystemBlock.SourceRoutePreflightRefusesMalformedIdentityAndInvalidControls" time="0.0559982" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.SourceRoutePreflightRefusesMalformedIdentityAndInvalidControls
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.SourceRoutePreflightRefusesMalformedIdentityAndInvalidControls
+[       OK ] GeneratedAmrSystemBlock.SourceRoutePreflightRefusesMalformedIdentityAndInvalidControls (0 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.PhysicalFacesUseTheirAuthenticatedNumericalAuthority" classname="GeneratedAmrSystemBlock.PhysicalFacesUseTheirAuthenticatedNumericalAuthority" time="0.063724" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.PhysicalFacesUseTheirAuthenticatedNumericalAuthority
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.PhysicalFacesUseTheirAuthenticatedNumericalAuthority
+[       OK ] GeneratedAmrSystemBlock.PhysicalFacesUseTheirAuthenticatedNumericalAuthority (1 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.PackageContractAuthenticatesPhysicalModelParameters" classname="GeneratedAmrSystemBlock.PackageContractAuthenticatesPhysicalModelParameters" time="0.0723218" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.PackageContractAuthenticatesPhysicalModelParameters
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.PackageContractAuthenticatesPhysicalModelParameters
+[       OK ] GeneratedAmrSystemBlock.PackageContractAuthenticatesPhysicalModelParameters (2 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (2 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (2 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.PackageContractAuthenticatesVariableNamesRolesAndUserRoles" classname="GeneratedAmrSystemBlock.PackageContractAuthenticatesVariableNamesRolesAndUserRoles" time="0.0907913" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.PackageContractAuthenticatesVariableNamesRolesAndUserRoles
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.PackageContractAuthenticatesVariableNamesRolesAndUserRoles
+[       OK ] GeneratedAmrSystemBlock.PackageContractAuthenticatesVariableNamesRolesAndUserRoles (6 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (6 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (7 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.RejectsUnpreparedOptionalAuthorities" classname="GeneratedAmrSystemBlock.RejectsUnpreparedOptionalAuthorities" time="0.0600426" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.RejectsUnpreparedOptionalAuthorities
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.RejectsUnpreparedOptionalAuthorities
+[       OK ] GeneratedAmrSystemBlock.RejectsUnpreparedOptionalAuthorities (0 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.CellPrimitiveConversionConsumesPreparedRecoveryOutcome" classname="GeneratedAmrSystemBlock.CellPrimitiveConversionConsumesPreparedRecoveryOutcome" time="0.0570749" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.CellPrimitiveConversionConsumesPreparedRecoveryOutcome
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.CellPrimitiveConversionConsumesPreparedRecoveryOutcome
+[       OK ] GeneratedAmrSystemBlock.CellPrimitiveConversionConsumesPreparedRecoveryOutcome (1 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.PrimitiveToConservativePublicationRoundtripsBeforeCommit" classname="GeneratedAmrSystemBlock.PrimitiveToConservativePublicationRoundtripsBeforeCommit" time="0.072401" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.PrimitiveToConservativePublicationRoundtripsBeforeCommit
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.PrimitiveToConservativePublicationRoundtripsBeforeCommit
+[       OK ] GeneratedAmrSystemBlock.PrimitiveToConservativePublicationRoundtripsBeforeCommit (1 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.FacadeRetainsAndExecutesPreparedRootLevel" classname="GeneratedAmrSystemBlock.FacadeRetainsAndExecutesPreparedRootLevel" time="0.0686383" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.FacadeRetainsAndExecutesPreparedRootLevel
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.FacadeRetainsAndExecutesPreparedRootLevel
+[       OK ] GeneratedAmrSystemBlock.FacadeRetainsAndExecutesPreparedRootLevel (12 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (12 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (12 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.VariableNamesReadAuthenticatedPreparedBlockMetadata" classname="GeneratedAmrSystemBlock.VariableNamesReadAuthenticatedPreparedBlockMetadata" time="0.0646074" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.VariableNamesReadAuthenticatedPreparedBlockMetadata
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.VariableNamesReadAuthenticatedPreparedBlockMetadata
+[       OK ] GeneratedAmrSystemBlock.VariableNamesReadAuthenticatedPreparedBlockMetadata (9 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.RegridRebuildsExactFineGhostProvidersAndInvalidatesLedger" classname="GeneratedAmrSystemBlock.RegridRebuildsExactFineGhostProvidersAndInvalidatesLedger" time="0.068293" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.RegridRebuildsExactFineGhostProvidersAndInvalidatesLedger
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.RegridRebuildsExactFineGhostProvidersAndInvalidatesLedger
+[       OK ] GeneratedAmrSystemBlock.RegridRebuildsExactFineGhostProvidersAndInvalidatesLedger (13 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (13 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (13 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts" classname="GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts" time="0.0843028" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts
+[       OK ] GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts (27 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (27 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (27 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.SparseParentRegridRequiresOnlyChildInterpolationSources" classname="GeneratedAmrSystemBlock.SparseParentRegridRequiresOnlyChildInterpolationSources" time="0.148712" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.SparseParentRegridRequiresOnlyChildInterpolationSources
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.SparseParentRegridRequiresOnlyChildInterpolationSources
+[       OK ] GeneratedAmrSystemBlock.SparseParentRegridRequiresOnlyChildInterpolationSources (92 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (92 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (92 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.SubcyclingRetainsDeclaredDurationAcrossAbsoluteTimeBinade" classname="GeneratedAmrSystemBlock.SubcyclingRetainsDeclaredDurationAcrossAbsoluteTimeBinade" time="31.446" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.SubcyclingRetainsDeclaredDurationAcrossAbsoluteTimeBinade
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.SubcyclingRetainsDeclaredDurationAcrossAbsoluteTimeBinade
+[       OK ] GeneratedAmrSystemBlock.SubcyclingRetainsDeclaredDurationAcrossAbsoluteTimeBinade (29408 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (29408 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (29408 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.EmbeddedBoundaryRematerializesPerLevelAndWeightsCompositeMassAndSidecars" classname="GeneratedAmrSystemBlock.EmbeddedBoundaryRematerializesPerLevelAndWeightsCompositeMassAndSidecars" time="0.0650318" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.EmbeddedBoundaryRematerializesPerLevelAndWeightsCompositeMassAndSidecars
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.EmbeddedBoundaryRematerializesPerLevelAndWeightsCompositeMassAndSidecars
+[       OK ] GeneratedAmrSystemBlock.EmbeddedBoundaryRematerializesPerLevelAndWeightsCompositeMassAndSidecars (11 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (12 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (12 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.CutCellCapabilityExecutesAtExactRank" classname="GeneratedAmrSystemBlock.CutCellCapabilityExecutesAtExactRank" time="0.0711187" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.CutCellCapabilityExecutesAtExactRank
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.CutCellCapabilityExecutesAtExactRank
+[       OK ] GeneratedAmrSystemBlock.CutCellCapabilityExecutesAtExactRank (13 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (13 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (13 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.DiffusiveEmbeddedRoutesRefuseWithoutFaceGeometry" classname="GeneratedAmrSystemBlock.DiffusiveEmbeddedRoutesRefuseWithoutFaceGeometry" time="0.0652984" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.DiffusiveEmbeddedRoutesRefuseWithoutFaceGeometry
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.DiffusiveEmbeddedRoutesRefuseWithoutFaceGeometry
+[       OK ] GeneratedAmrSystemBlock.DiffusiveEmbeddedRoutesRefuseWithoutFaceGeometry (11 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.EmbeddedBoundaryAuthoringRejectsDivergentMpiInputBeforeMutation" classname="GeneratedAmrSystemBlock.EmbeddedBoundaryAuthoringRejectsDivergentMpiInputBeforeMutation" time="0.0605241" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.EmbeddedBoundaryAuthoringRejectsDivergentMpiInputBeforeMutation
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.EmbeddedBoundaryAuthoringRejectsDivergentMpiInputBeforeMutation
+[       OK ] GeneratedAmrSystemBlock.EmbeddedBoundaryAuthoringRejectsDivergentMpiInputBeforeMutation (0 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.ProgramContextOwnsOneExactHierarchyTensorAuthority" classname="GeneratedAmrSystemBlock.ProgramContextOwnsOneExactHierarchyTensorAuthority" time="0.0687892" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.ProgramContextOwnsOneExactHierarchyTensorAuthority
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.ProgramContextOwnsOneExactHierarchyTensorAuthority
+[       OK ] GeneratedAmrSystemBlock.ProgramContextOwnsOneExactHierarchyTensorAuthority (15 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (15 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (15 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.ProgramContextEvaluatesExactStageStateWithoutPublishingIt" classname="GeneratedAmrSystemBlock.ProgramContextEvaluatesExactStageStateWithoutPublishingIt" time="0.0651566" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.ProgramContextEvaluatesExactStageStateWithoutPublishingIt
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.ProgramContextEvaluatesExactStageStateWithoutPublishingIt
+[       OK ] GeneratedAmrSystemBlock.ProgramContextEvaluatesExactStageStateWithoutPublishingIt (11 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.RhsGroupPrevalidatesAndPublishesFullAndFluxRoundsAtomically" classname="GeneratedAmrSystemBlock.RhsGroupPrevalidatesAndPublishesFullAndFluxRoundsAtomically" time="0.0806735" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.RhsGroupPrevalidatesAndPublishesFullAndFluxRoundsAtomically
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.RhsGroupPrevalidatesAndPublishesFullAndFluxRoundsAtomically
+[       OK ] GeneratedAmrSystemBlock.RhsGroupPrevalidatesAndPublishesFullAndFluxRoundsAtomically (24 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (24 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (24 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.RegistersOnlyExactRankedNullspaceProviders" classname="GeneratedAmrSystemBlock.RegistersOnlyExactRankedNullspaceProviders" time="0.0645198" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.RegistersOnlyExactRankedNullspaceProviders
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.RegistersOnlyExactRankedNullspaceProviders
+[       OK ] GeneratedAmrSystemBlock.RegistersOnlyExactRankedNullspaceProviders (7 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (7 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (7 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptance" classname="GeneratedAmrSystemBlock.DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptance" time="0.0705083" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptance
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptance
+[       OK ] GeneratedAmrSystemBlock.DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptance (15 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (15 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (15 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.NamedFieldConsumesExactStageWithoutPublishingState" classname="GeneratedAmrSystemBlock.NamedFieldConsumesExactStageWithoutPublishingState" time="0.070355" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.NamedFieldConsumesExactStageWithoutPublishingState
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.NamedFieldConsumesExactStageWithoutPublishingState
+[       OK ] GeneratedAmrSystemBlock.NamedFieldConsumesExactStageWithoutPublishingState (14 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (14 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (14 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.ExplicitFieldTopologyIsIndependentOfPeriodicTransport" classname="GeneratedAmrSystemBlock.ExplicitFieldTopologyIsIndependentOfPeriodicTransport" time="0.0864121" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.ExplicitFieldTopologyIsIndependentOfPeriodicTransport
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.ExplicitFieldTopologyIsIndependentOfPeriodicTransport
+[       OK ] GeneratedAmrSystemBlock.ExplicitFieldTopologyIsIndependentOfPeriodicTransport (31 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (31 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (31 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance" classname="GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance" time="0.0715397" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance
+[       OK ] GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance (16 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (16 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (17 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.CompositeFieldInstallsCoverageAwareNullspaceOnEveryLiveLevel" classname="GeneratedAmrSystemBlock.CompositeFieldInstallsCoverageAwareNullspaceOnEveryLiveLevel" time="0.0765728" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.CompositeFieldInstallsCoverageAwareNullspaceOnEveryLiveLevel
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.CompositeFieldInstallsCoverageAwareNullspaceOnEveryLiveLevel
+[       OK ] GeneratedAmrSystemBlock.CompositeFieldInstallsCoverageAwareNullspaceOnEveryLiveLevel (19 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (19 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (19 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.BootstrapRecomputeHelmholtzAfterCreateLevel" classname="GeneratedAmrSystemBlock.BootstrapRecomputeHelmholtzAfterCreateLevel" time="0.252056" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.BootstrapRecomputeHelmholtzAfterCreateLevel
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.BootstrapRecomputeHelmholtzAfterCreateLevel
+[       OK ] GeneratedAmrSystemBlock.BootstrapRecomputeHelmholtzAfterCreateLevel (194 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (194 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (194 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.ProgramContextRefusesUnsynchronizedHierarchyBeforeMutation" classname="GeneratedAmrSystemBlock.ProgramContextRefusesUnsynchronizedHierarchyBeforeMutation" time="0.067752" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.ProgramContextRefusesUnsynchronizedHierarchyBeforeMutation
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.ProgramContextRefusesUnsynchronizedHierarchyBeforeMutation
+[       OK ] GeneratedAmrSystemBlock.ProgramContextRefusesUnsynchronizedHierarchyBeforeMutation (13 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (13 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (13 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.SpatialHierarchyTraversalRequiresReleasedLevelEnvelopes" classname="GeneratedAmrSystemBlock.SpatialHierarchyTraversalRequiresReleasedLevelEnvelopes" time="0.0701971" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.SpatialHierarchyTraversalRequiresReleasedLevelEnvelopes
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.SpatialHierarchyTraversalRequiresReleasedLevelEnvelopes
+[       OK ] GeneratedAmrSystemBlock.SpatialHierarchyTraversalRequiresReleasedLevelEnvelopes (13 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (13 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (13 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.ProgramContextRetainsAndInterpolatesExactLevelHistory" classname="GeneratedAmrSystemBlock.ProgramContextRetainsAndInterpolatesExactLevelHistory" time="0.0678777" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.ProgramContextRetainsAndInterpolatesExactLevelHistory
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.ProgramContextRetainsAndInterpolatesExactLevelHistory
+[       OK ] GeneratedAmrSystemBlock.ProgramContextRetainsAndInterpolatesExactLevelHistory (12 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (12 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (12 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.FluxHistoryMigratesDeclaredFamiliesAndPreservesNativeEmptyMode" classname="GeneratedAmrSystemBlock.FluxHistoryMigratesDeclaredFamiliesAndPreservesNativeEmptyMode" time="0.0732119" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.FluxHistoryMigratesDeclaredFamiliesAndPreservesNativeEmptyMode
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.FluxHistoryMigratesDeclaredFamiliesAndPreservesNativeEmptyMode
+[       OK ] GeneratedAmrSystemBlock.FluxHistoryMigratesDeclaredFamiliesAndPreservesNativeEmptyMode (19 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (19 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (19 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.EmptyStateHistoryFluxRegistryIsExplicitAndMissingProvenanceRefuses" classname="GeneratedAmrSystemBlock.EmptyStateHistoryFluxRegistryIsExplicitAndMissingProvenanceRefuses" time="0.0656455" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.EmptyStateHistoryFluxRegistryIsExplicitAndMissingProvenanceRefuses
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.EmptyStateHistoryFluxRegistryIsExplicitAndMissingProvenanceRefuses
+[       OK ] GeneratedAmrSystemBlock.EmptyStateHistoryFluxRegistryIsExplicitAndMissingProvenanceRefuses (12 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (12 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (12 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.ProgramContextRefusesHistoryRegridBeforeTopologyMutation" classname="GeneratedAmrSystemBlock.ProgramContextRefusesHistoryRegridBeforeTopologyMutation" time="0.0696439" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.ProgramContextRefusesHistoryRegridBeforeTopologyMutation
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.ProgramContextRefusesHistoryRegridBeforeTopologyMutation
+[       OK ] GeneratedAmrSystemBlock.ProgramContextRefusesHistoryRegridBeforeTopologyMutation (10 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords" classname="GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords" time="0.0648578" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords
+[       OK ] GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords (0 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically" classname="GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically" time="0.182977" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically
+[       OK ] GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically (120 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (120 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (120 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.ProjectedSharedSourcesKeepDistinctLedgerIdentities" classname="GeneratedAmrSystemBlock.ProjectedSharedSourcesKeepDistinctLedgerIdentities" time="0.0590273" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.ProjectedSharedSourcesKeepDistinctLedgerIdentities
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.ProjectedSharedSourcesKeepDistinctLedgerIdentities
+[       OK ] GeneratedAmrSystemBlock.ProjectedSharedSourcesKeepDistinctLedgerIdentities (0 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.ProjectedSharedSourcesRequireCapturedAssociation" classname="GeneratedAmrSystemBlock.ProjectedSharedSourcesRequireCapturedAssociation" time="0.0600001" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.ProjectedSharedSourcesRequireCapturedAssociation
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.ProjectedSharedSourcesRequireCapturedAssociation
+[       OK ] GeneratedAmrSystemBlock.ProjectedSharedSourcesRequireCapturedAssociation (1 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.PreparedHistoryRemapAcceptsPublishedReplacement" classname="GeneratedAmrSystemBlock.PreparedHistoryRemapAcceptsPublishedReplacement" time="0.665878" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.PreparedHistoryRemapAcceptsPublishedReplacement
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.PreparedHistoryRemapAcceptsPublishedReplacement
+[       OK ] GeneratedAmrSystemBlock.PreparedHistoryRemapAcceptsPublishedReplacement (610 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (610 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (610 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences" classname="GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences" time="0.168394" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences
+[       OK ] GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences (109 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (109 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (109 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.NoopPreparedRegridPreservesInitializedHistory" classname="GeneratedAmrSystemBlock.NoopPreparedRegridPreservesInitializedHistory" time="0.0710844" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.NoopPreparedRegridPreservesInitializedHistory
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.NoopPreparedRegridPreservesInitializedHistory
+[       OK ] GeneratedAmrSystemBlock.NoopPreparedRegridPreservesInitializedHistory (16 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (16 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (16 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.CflUsesFinestExactGeometryAndPreparedModelSpeed" classname="GeneratedAmrSystemBlock.CflUsesFinestExactGeometryAndPreparedModelSpeed" time="0.0644443" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.CflUsesFinestExactGeometryAndPreparedModelSpeed
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.CflUsesFinestExactGeometryAndPreparedModelSpeed
+[       OK ] GeneratedAmrSystemBlock.CflUsesFinestExactGeometryAndPreparedModelSpeed (11 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.DiffusiveCflUsesFinestParabolicGeometryAndReportsFrequency" classname="GeneratedAmrSystemBlock.DiffusiveCflUsesFinestParabolicGeometryAndReportsFrequency" time="0.0646368" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.DiffusiveCflUsesFinestParabolicGeometryAndReportsFrequency
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.DiffusiveCflUsesFinestParabolicGeometryAndReportsFrequency
+[       OK ] GeneratedAmrSystemBlock.DiffusiveCflUsesFinestParabolicGeometryAndReportsFrequency (11 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.CflAuthenticatesRequestsAndBoundOrderBeforeCallbacks" classname="GeneratedAmrSystemBlock.CflAuthenticatesRequestsAndBoundOrderBeforeCallbacks" time="0.0681741" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.CflAuthenticatesRequestsAndBoundOrderBeforeCallbacks
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.CflAuthenticatesRequestsAndBoundOrderBeforeCallbacks
+[       OK ] GeneratedAmrSystemBlock.CflAuthenticatesRequestsAndBoundOrderBeforeCallbacks (11 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.ConstantBootstrapReprojectionPreservesExactValue" classname="GeneratedAmrSystemBlock.ConstantBootstrapReprojectionPreservesExactValue" time="0.0739651" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.ConstantBootstrapReprojectionPreservesExactValue
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.ConstantBootstrapReprojectionPreservesExactValue
+[       OK ] GeneratedAmrSystemBlock.ConstantBootstrapReprojectionPreservesExactValue (19 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (19 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (19 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.CellIntegralBootstrapReprojectionPreservesConstant" classname="GeneratedAmrSystemBlock.CellIntegralBootstrapReprojectionPreservesConstant" time="0.0663159" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.CellIntegralBootstrapReprojectionPreservesConstant
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.CellIntegralBootstrapReprojectionPreservesConstant
+[       OK ] GeneratedAmrSystemBlock.CellIntegralBootstrapReprojectionPreservesConstant (12 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (12 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (12 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry" classname="GeneratedAmrSystemBlock.CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry" time="0.0571096" status="notrun">
+		<skipped message="SKIP_REGULAR_EXPRESSION_MATCHED"/>
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/unit/runtime/test_generated_amr_system_block.cpp:3687: Skipped
+requires the registered two-rank analytic program consensus control
+
+[  SKIPPED ] GeneratedAmrSystemBlock.CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry (0 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 0 tests.
+[  SKIPPED ] 1 test, listed below:
+[  SKIPPED ] GeneratedAmrSystemBlock.CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.GaussianBootstrapReprojectionPreservesExactNeutrality" classname="GeneratedAmrSystemBlock.GaussianBootstrapReprojectionPreservesExactNeutrality" time="0.0680185" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.GaussianBootstrapReprojectionPreservesExactNeutrality
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.GaussianBootstrapReprojectionPreservesExactNeutrality
+[       OK ] GeneratedAmrSystemBlock.GaussianBootstrapReprojectionPreservesExactNeutrality (13 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (13 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (13 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry" classname="GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry" time="0.061142" status="notrun">
+		<skipped message="SKIP_REGULAR_EXPRESSION_MATCHED"/>
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_generated_amr_system_block;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/unit/runtime/test_generated_amr_system_block.cpp:3853: Skipped
+requires the registered two-rank Gaussian metadata consensus control
+
+[  SKIPPED ] GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry (0 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 0 tests.
+[  SKIPPED ] 1 test, listed below:
+[  SKIPPED ] GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry
+</system-out>
+	</testcase>
+	<testcase name="SystemInterfaceCoreSession.admission_failure_is_collective_before_any_core_or_callback" classname="SystemInterfaceCoreSession.admission_failure_is_collective_before_any_core_or_callback" time="0.935649" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_system_interface_core_session;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = SystemInterfaceCoreSession.admission_failure_is_collective_before_any_core_or_callback
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SystemInterfaceCoreSession
+[ RUN      ] SystemInterfaceCoreSession.admission_failure_is_collective_before_any_core_or_callback
+[       OK ] SystemInterfaceCoreSession.admission_failure_is_collective_before_any_core_or_callback (8 ms)
+[----------] 1 test from SystemInterfaceCoreSession (8 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (8 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="SystemInterfaceCoreSession.exact_group_and_lifetime_all_dimensions" classname="SystemInterfaceCoreSession.exact_group_and_lifetime_all_dimensions" time="0.0683202" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_system_interface_core_session;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = SystemInterfaceCoreSession.exact_group_and_lifetime_all_dimensions
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SystemInterfaceCoreSession
+[ RUN      ] SystemInterfaceCoreSession.exact_group_and_lifetime_all_dimensions
+[       OK ] SystemInterfaceCoreSession.exact_group_and_lifetime_all_dimensions (0 ms)
+[----------] 1 test from SystemInterfaceCoreSession (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="SystemInterfaceCoreSession.two_owning_stores_and_foreign_thread_all_dimensions" classname="SystemInterfaceCoreSession.two_owning_stores_and_foreign_thread_all_dimensions" time="0.0666345" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_system_interface_core_session;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = SystemInterfaceCoreSession.two_owning_stores_and_foreign_thread_all_dimensions
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SystemInterfaceCoreSession
+[ RUN      ] SystemInterfaceCoreSession.two_owning_stores_and_foreign_thread_all_dimensions
+[       OK ] SystemInterfaceCoreSession.two_owning_stores_and_foreign_thread_all_dimensions (0 ms)
+[----------] 1 test from SystemInterfaceCoreSession (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="SystemInterfaceCoreSession.exception_and_missing_core_all_dimensions" classname="SystemInterfaceCoreSession.exception_and_missing_core_all_dimensions" time="0.0674883" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_system_interface_core_session;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = SystemInterfaceCoreSession.exception_and_missing_core_all_dimensions
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SystemInterfaceCoreSession
+[ RUN      ] SystemInterfaceCoreSession.exception_and_missing_core_all_dimensions
+[       OK ] SystemInterfaceCoreSession.exception_and_missing_core_all_dimensions (0 ms)
+[----------] 1 test from SystemInterfaceCoreSession (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="SystemInterfaceCoreSession.path_only_boundary_installs_without_legacy_linearization" classname="SystemInterfaceCoreSession.path_only_boundary_installs_without_legacy_linearization" time="0.0782647" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_system_interface_core_session;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = SystemInterfaceCoreSession.path_only_boundary_installs_without_legacy_linearization
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SystemInterfaceCoreSession
+[ RUN      ] SystemInterfaceCoreSession.path_only_boundary_installs_without_legacy_linearization
+[       OK ] SystemInterfaceCoreSession.path_only_boundary_installs_without_legacy_linearization (12 ms)
+[----------] 1 test from SystemInterfaceCoreSession (12 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (12 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="SystemInterfaceCoreSession.path_and_legacy_boundary_routes_still_require_their_authority" classname="SystemInterfaceCoreSession.path_and_legacy_boundary_routes_still_require_their_authority" time="0.0776261" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_system_interface_core_session;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = SystemInterfaceCoreSession.path_and_legacy_boundary_routes_still_require_their_authority
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SystemInterfaceCoreSession
+[ RUN      ] SystemInterfaceCoreSession.path_and_legacy_boundary_routes_still_require_their_authority
+[       OK ] SystemInterfaceCoreSession.path_and_legacy_boundary_routes_still_require_their_authority (9 ms)
+[----------] 1 test from SystemInterfaceCoreSession (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="SystemInterfaceCoreSession.prepared_analytic_inflow_uses_the_stage_physical_time" classname="SystemInterfaceCoreSession.prepared_analytic_inflow_uses_the_stage_physical_time" time="0.0797043" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_system_interface_core_session;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = SystemInterfaceCoreSession.prepared_analytic_inflow_uses_the_stage_physical_time
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SystemInterfaceCoreSession
+[ RUN      ] SystemInterfaceCoreSession.prepared_analytic_inflow_uses_the_stage_physical_time
+[       OK ] SystemInterfaceCoreSession.prepared_analytic_inflow_uses_the_stage_physical_time (11 ms)
+[----------] 1 test from SystemInterfaceCoreSession (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="SystemInterfaceCoreSession.real_system_exact_request_after_move_and_stale_refusal" classname="SystemInterfaceCoreSession.real_system_exact_request_after_move_and_stale_refusal" time="0.0757984" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_system_interface_core_session;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = SystemInterfaceCoreSession.real_system_exact_request_after_move_and_stale_refusal
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SystemInterfaceCoreSession
+[ RUN      ] SystemInterfaceCoreSession.real_system_exact_request_after_move_and_stale_refusal
+[       OK ] SystemInterfaceCoreSession.real_system_exact_request_after_move_and_stale_refusal (9 ms)
+[----------] 1 test from SystemInterfaceCoreSession (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="SystemInterfaceCoreSession.real_system_rejects_divergent_group_before_output_then_retries" classname="SystemInterfaceCoreSession.real_system_rejects_divergent_group_before_output_then_retries" time="0.068621" status="notrun">
+		<skipped message="SKIP_REGULAR_EXPRESSION_MATCHED"/>
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_system_interface_core_session;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = SystemInterfaceCoreSession.real_system_rejects_divergent_group_before_output_then_retries
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SystemInterfaceCoreSession
+[ RUN      ] SystemInterfaceCoreSession.real_system_rejects_divergent_group_before_output_then_retries
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/unit/runtime/test_system_interface_core_session.cpp:599: Skipped
+requires distinct MPI ranks
+
+[  SKIPPED ] SystemInterfaceCoreSession.real_system_rejects_divergent_group_before_output_then_retries (0 ms)
+[----------] 1 test from SystemInterfaceCoreSession (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 0 tests.
+[  SKIPPED ] 1 test, listed below:
+[  SKIPPED ] SystemInterfaceCoreSession.real_system_rejects_divergent_group_before_output_then_retries
+</system-out>
+	</testcase>
+	<testcase name="SystemInterfaceCoreSession.real_system_cannot_consume_another_system_active_session" classname="SystemInterfaceCoreSession.real_system_cannot_consume_another_system_active_session" time="0.0751965" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_system_interface_core_session;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = SystemInterfaceCoreSession.real_system_cannot_consume_another_system_active_session
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SystemInterfaceCoreSession
+[ RUN      ] SystemInterfaceCoreSession.real_system_cannot_consume_another_system_active_session
+[       OK ] SystemInterfaceCoreSession.real_system_cannot_consume_another_system_active_session (10 ms)
+[----------] 1 test from SystemInterfaceCoreSession (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="SystemInterfaceCoreSession.real_physical_group_without_interfaces_retains_transport_and_ghost_hook" classname="SystemInterfaceCoreSession.real_physical_group_without_interfaces_retains_transport_and_ghost_hook" time="0.084787" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_system_interface_core_session;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = SystemInterfaceCoreSession.real_physical_group_without_interfaces_retains_transport_and_ghost_hook
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SystemInterfaceCoreSession
+[ RUN      ] SystemInterfaceCoreSession.real_physical_group_without_interfaces_retains_transport_and_ghost_hook
+[       OK ] SystemInterfaceCoreSession.real_physical_group_without_interfaces_retains_transport_and_ghost_hook (13 ms)
+[----------] 1 test from SystemInterfaceCoreSession (13 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (13 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="SystemInterfaceCoreSession.real_system_rank_local_boundary_discard_retains_runtime_lane" classname="SystemInterfaceCoreSession.real_system_rank_local_boundary_discard_retains_runtime_lane" time="0.0791182" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_system_interface_core_session;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = SystemInterfaceCoreSession.real_system_rank_local_boundary_discard_retains_runtime_lane
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SystemInterfaceCoreSession
+[ RUN      ] SystemInterfaceCoreSession.real_system_rank_local_boundary_discard_retains_runtime_lane
+[       OK ] SystemInterfaceCoreSession.real_system_rank_local_boundary_discard_retains_runtime_lane (9 ms)
+[----------] 1 test from SystemInterfaceCoreSession (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh" classname="test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh" time="2.05498" status="run">
+		<properties>
+			<property name="cmake_labels" value="codegen;compiler;cpp-target:test_amr_synthetic_program_loader_transaction;integration;medium;native_loader"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_synthetic_program_loader_transaction
+[ RUN      ] test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh
+[       OK ] test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh (2019 ms)
+[----------] 1 test from test_amr_synthetic_program_loader_transaction (2019 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (2019 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synthetic_program_loader_transaction.SourceBuiltArtifactLoadsBudgetRollsBackAndRetries" classname="test_amr_synthetic_program_loader_transaction.SourceBuiltArtifactLoadsBudgetRollsBackAndRetries" time="3.28057" status="run">
+		<properties>
+			<property name="cmake_labels" value="codegen;compiler;cpp-target:test_amr_synthetic_program_loader_transaction;integration;medium;native_loader"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_synthetic_program_loader_transaction.SourceBuiltArtifactLoadsBudgetRollsBackAndRetries
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_synthetic_program_loader_transaction
+[ RUN      ] test_amr_synthetic_program_loader_transaction.SourceBuiltArtifactLoadsBudgetRollsBackAndRetries
+[       OK ] test_amr_synthetic_program_loader_transaction.SourceBuiltArtifactLoadsBudgetRollsBackAndRetries (3242 ms)
+[----------] 1 test from test_amr_synthetic_program_loader_transaction (3242 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (3242 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack" classname="test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack" time="2.24078" status="run">
+		<properties>
+			<property name="cmake_labels" value="codegen;compiler;cpp-target:test_amr_synthetic_program_loader_transaction;integration;medium;native_loader"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_synthetic_program_loader_transaction
+[ RUN      ] test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack
+[       OK ] test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack (2204 ms)
+[----------] 1 test from test_amr_synthetic_program_loader_transaction (2204 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (2204 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage" classname="test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage" time="6.6782" status="run">
+		<properties>
+			<property name="cmake_labels" value="codegen;compiler;cpp-target:test_amr_synthetic_program_loader_transaction;integration;medium;native_loader"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_synthetic_program_loader_transaction
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage (4195 ms)
+[----------] 1 test from test_amr_synthetic_program_loader_transaction (4195 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (4195 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes" classname="test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes" time="3.01352" status="run">
+		<properties>
+			<property name="cmake_labels" value="codegen;compiler;cpp-target:test_amr_synthetic_program_loader_transaction;integration;medium;native_loader"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_synthetic_program_loader_transaction
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes (2977 ms)
+[----------] 1 test from test_amr_synthetic_program_loader_transaction (2977 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (2977 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback" classname="test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback" time="1.42897" status="run">
+		<properties>
+			<property name="cmake_labels" value="codegen;compiler;cpp-target:test_amr_synthetic_program_loader_transaction;integration;medium;native_loader"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_synthetic_program_loader_transaction
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback (1392 ms)
+[----------] 1 test from test_amr_synthetic_program_loader_transaction (1392 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1392 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart" classname="test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart" time="1.48363" status="run">
+		<properties>
+			<property name="cmake_labels" value="codegen;compiler;cpp-target:test_amr_synthetic_program_loader_transaction;integration;medium;native_loader"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_synthetic_program_loader_transaction
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart (1446 ms)
+[----------] 1 test from test_amr_synthetic_program_loader_transaction (1446 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1446 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority" classname="test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority" time="1.57348" status="run">
+		<properties>
+			<property name="cmake_labels" value="codegen;compiler;cpp-target:test_amr_synthetic_program_loader_transaction;integration;medium;native_loader"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_synthetic_program_loader_transaction
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority (1536 ms)
+[----------] 1 test from test_amr_synthetic_program_loader_transaction (1536 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1536 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements" classname="test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements" time="2.14694" status="run">
+		<properties>
+			<property name="cmake_labels" value="codegen;compiler;cpp-target:test_amr_synthetic_program_loader_transaction;integration;medium;native_loader"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_synthetic_program_loader_transaction
+[ RUN      ] test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements
+[       OK ] test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements (2112 ms)
+[----------] 1 test from test_amr_synthetic_program_loader_transaction (2112 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (2112 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication" classname="test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication" time="2.68466" status="run">
+		<properties>
+			<property name="cmake_labels" value="codegen;compiler;cpp-target:test_amr_synthetic_program_loader_transaction;integration;medium;native_loader"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_synthetic_program_loader_transaction
+[ RUN      ] test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication
+scheduled-history-remap rank=0 retry=0 fine=1296-&gt;2304 epoch=1-&gt;2 generation=1-&gt;2 C=0-&gt;1 regrids=1-&gt;2 histories=4 initialized=4 fill=1 step=1 time=0.125
+scheduled-history-remap rank=0 refused=injected history resource refresh
+scheduled-history-remap rank=0 retry=1 fine=1296-&gt;2304 epoch=1-&gt;2 generation=1-&gt;2 C=0-&gt;2 regrids=1-&gt;2 histories=4 initialized=4 fill=1 step=1 time=0.125
+[       OK ] test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication (2642 ms)
+[----------] 1 test from test_amr_synthetic_program_loader_transaction (26...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback" classname="test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback" time="2.69808" status="run">
+		<properties>
+			<property name="cmake_labels" value="codegen;compiler;cpp-target:test_amr_synthetic_program_loader_transaction;integration;medium;native_loader"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_synthetic_program_loader_transaction
+[ RUN      ] test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback
+[       OK ] test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback (2657 ms)
+[----------] 1 test from test_amr_synthetic_program_loader_transaction (2657 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (2657 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_history_ring.RetainsAndInterpolatesExactRankedState" classname="test_amr_history_ring.RetainsAndInterpolatesExactRankedState" time="0.0617867" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_history_ring;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_history_ring.RetainsAndInterpolatesExactRankedState
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_history_ring
+[ RUN      ] test_amr_history_ring.RetainsAndInterpolatesExactRankedState
+[       OK ] test_amr_history_ring.RetainsAndInterpolatesExactRankedState (11 ms)
+[----------] 1 test from test_amr_history_ring (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_history_ring.FacadeTransactionRestoresAcceptedHistoryImage" classname="test_amr_history_ring.FacadeTransactionRestoresAcceptedHistoryImage" time="0.0571051" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_history_ring;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_history_ring.FacadeTransactionRestoresAcceptedHistoryImage
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_history_ring
+[ RUN      ] test_amr_history_ring.FacadeTransactionRestoresAcceptedHistoryImage
+[       OK ] test_amr_history_ring.FacadeTransactionRestoresAcceptedHistoryImage (11 ms)
+[----------] 1 test from test_amr_history_ring (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction" classname="test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction" time="0.843517" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_history_ring;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_history_ring
+[ RUN      ] test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction
+[       OK ] test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction (19 ms)
+[----------] 1 test from test_amr_history_ring (19 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (19 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore" classname="test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore" time="0.0602817" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_history_ring;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_history_ring
+[ RUN      ] test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore
+[       OK ] test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore (13 ms)
+[----------] 1 test from test_amr_history_ring (13 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (13 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_history_ring.RegisteredHistoryRejectsTopologyPublicationBeforeMutation" classname="test_amr_history_ring.RegisteredHistoryRejectsTopologyPublicationBeforeMutation" time="0.0732005" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_history_ring;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_history_ring.RegisteredHistoryRejectsTopologyPublicationBeforeMutation
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_history_ring
+[ RUN      ] test_amr_history_ring.RegisteredHistoryRejectsTopologyPublicationBeforeMutation
+[       OK ] test_amr_history_ring.RegisteredHistoryRejectsTopologyPublicationBeforeMutation (14 ms)
+[----------] 1 test from test_amr_history_ring (14 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (14 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_history_ring.ThreeLevelProgramFailsClosedWithoutExactFluxExpressionBudget" classname="test_amr_history_ring.ThreeLevelProgramFailsClosedWithoutExactFluxExpressionBudget" time="0.0741805" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_history_ring;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_history_ring.ThreeLevelProgramFailsClosedWithoutExactFluxExpressionBudget
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_history_ring
+[ RUN      ] test_amr_history_ring.ThreeLevelProgramFailsClosedWithoutExactFluxExpressionBudget
+[       OK ] test_amr_history_ring.ThreeLevelProgramFailsClosedWithoutExactFluxExpressionBudget (19 ms)
+[----------] 1 test from test_amr_history_ring (19 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (19 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_temporal_partition_restart.PendingRemapKeepsOriginAcrossTwoUnchangedQualifications" classname="test_temporal_partition_restart.PendingRemapKeepsOriginAcrossTwoUnchangedQualifications" time="0.348953" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;checkpoint;cpp-target:test_temporal_partition_restart;integration;medium;nd;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_temporal_partition_restart.PendingRemapKeepsOriginAcrossTwoUnchangedQualifications
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_temporal_partition_restart
+[ RUN      ] test_temporal_partition_restart.PendingRemapKeepsOriginAcrossTwoUnchangedQualifications
+[       OK ] test_temporal_partition_restart.PendingRemapKeepsOriginAcrossTwoUnchangedQualifications (0 ms)
+[----------] 1 test from test_temporal_partition_restart (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_temporal_partition_restart.PendingRemapRefusesForgedQualificationAndChangedSample" classname="test_temporal_partition_restart.PendingRemapRefusesForgedQualificationAndChangedSample" time="0.0252673" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;checkpoint;cpp-target:test_temporal_partition_restart;integration;medium;nd;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_temporal_partition_restart.PendingRemapRefusesForgedQualificationAndChangedSample
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_temporal_partition_restart
+[ RUN      ] test_temporal_partition_restart.PendingRemapRefusesForgedQualificationAndChangedSample
+[       OK ] test_temporal_partition_restart.PendingRemapRefusesForgedQualificationAndChangedSample (0 ms)
+[----------] 1 test from test_temporal_partition_restart (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_temporal_partition_restart.PendingRemapRejectedSecondTransitionDoesNotMutateCandidate" classname="test_temporal_partition_restart.PendingRemapRejectedSecondTransitionDoesNotMutateCandidate" time="0.0325253" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;checkpoint;cpp-target:test_temporal_partition_restart;integration;medium;nd;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_temporal_partition_restart.PendingRemapRejectedSecondTransitionDoesNotMutateCandidate
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_temporal_partition_restart
+[ RUN      ] test_temporal_partition_restart.PendingRemapRejectedSecondTransitionDoesNotMutateCandidate
+[       OK ] test_temporal_partition_restart.PendingRemapRejectedSecondTransitionDoesNotMutateCandidate (0 ms)
+[----------] 1 test from test_temporal_partition_restart (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_temporal_partition_restart.BatchedAttemptCommitRollbackAndCheckpointAreExact" classname="test_temporal_partition_restart.BatchedAttemptCommitRollbackAndCheckpointAreExact" time="0.0305797" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;checkpoint;cpp-target:test_temporal_partition_restart;integration;medium;nd;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_temporal_partition_restart.BatchedAttemptCommitRollbackAndCheckpointAreExact
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_temporal_partition_restart
+[ RUN      ] test_temporal_partition_restart.BatchedAttemptCommitRollbackAndCheckpointAreExact
+[       OK ] test_temporal_partition_restart.BatchedAttemptCommitRollbackAndCheckpointAreExact (0 ms)
+[----------] 1 test from test_temporal_partition_restart (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_temporal_partition_restart.MalformedStateAndBatchesFailBeforeMutation" classname="test_temporal_partition_restart.MalformedStateAndBatchesFailBeforeMutation" time="0.0306538" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;checkpoint;cpp-target:test_temporal_partition_restart;integration;medium;nd;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_temporal_partition_restart.MalformedStateAndBatchesFailBeforeMutation
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_temporal_partition_restart
+[ RUN      ] test_temporal_partition_restart.MalformedStateAndBatchesFailBeforeMutation
+[       OK ] test_temporal_partition_restart.MalformedStateAndBatchesFailBeforeMutation (0 ms)
+[----------] 1 test from test_temporal_partition_restart (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_temporal_partition_restart.AcceptedImageIsCanonicalInOneTwoAndThreeDimensions" classname="test_temporal_partition_restart.AcceptedImageIsCanonicalInOneTwoAndThreeDimensions" time="0.0281707" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;checkpoint;cpp-target:test_temporal_partition_restart;integration;medium;nd;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_temporal_partition_restart.AcceptedImageIsCanonicalInOneTwoAndThreeDimensions
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_temporal_partition_restart
+[ RUN      ] test_temporal_partition_restart.AcceptedImageIsCanonicalInOneTwoAndThreeDimensions
+[       OK ] test_temporal_partition_restart.AcceptedImageIsCanonicalInOneTwoAndThreeDimensions (0 ms)
+[----------] 1 test from test_temporal_partition_restart (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_temporal_partition_restart.RegridRequiresAnExactRematerializablePartition" classname="test_temporal_partition_restart.RegridRequiresAnExactRematerializablePartition" time="0.029156" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;checkpoint;cpp-target:test_temporal_partition_restart;integration;medium;nd;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_temporal_partition_restart.RegridRequiresAnExactRematerializablePartition
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_temporal_partition_restart
+[ RUN      ] test_temporal_partition_restart.RegridRequiresAnExactRematerializablePartition
+[       OK ] test_temporal_partition_restart.RegridRequiresAnExactRematerializablePartition (0 ms)
+[----------] 1 test from test_temporal_partition_restart (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_temporal_partition_restart.LegacyAndTruncatedImagesAreRefused" classname="test_temporal_partition_restart.LegacyAndTruncatedImagesAreRefused" time="0.0336545" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;checkpoint;cpp-target:test_temporal_partition_restart;integration;medium;nd;runtime"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_temporal_partition_restart.LegacyAndTruncatedImagesAreRefused
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_temporal_partition_restart
+[ RUN      ] test_temporal_partition_restart.LegacyAndTruncatedImagesAreRefused
+[       OK ] test_temporal_partition_restart.LegacyAndTruncatedImagesAreRefused (0 ms)
+[----------] 1 test from test_temporal_partition_restart (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_amr_synthetic_program_loader_transaction_np2" classname="test_amr_synthetic_program_loader_transaction_np2" time="34.2303" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;cpp-target:test_amr_synthetic_program_loader_transaction;medium;mpi"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh:test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack:test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements:test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication:test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback:test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage:test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes:test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback:test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridO...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="test_amr_history_ring_np2" classname="test_amr_history_ring_np2" time="0.130557" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;cpp-target:test_amr_history_ring;medium;mpi"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction:test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore
+[==========] Running 2 tests from 1 test suite.
+[----------] Global test environment set-up.
+Note: Google Test filter = test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction:test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore
+[==========] Running 2 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 2 tests from test_amr_history_ring
+[----------] 2 tests from test_amr_history_ring
+[ RUN      ] test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction
+[ RUN      ] test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction
+[       OK ] test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction (37 ms)
+[ RUN      ] test_amr_history_ring.FrozenRestartImageRefusesLate...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="test_generated_amr_system_block_np2" classname="test_generated_amr_system_block_np2" time="0.490787" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;cpp-target:test_generated_amr_system_block;medium;mpi"/>
+		</properties>
+		<system-out>Note: Google Test filter = GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance:GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords:GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically:GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences:GeneratedAmrSystemBlock.CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry:GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry:GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts
+[==========] Running 7 tests from 1 test suite.
+[----------] Global test environment set-up.
+Note: Google Test filter = GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance:GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords:GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically:GeneratedAmrSystemBlock.DeferredHi...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="test_system_interface_core_session_np2" classname="test_system_interface_core_session_np2" time="0.16931" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;cpp-target:test_system_interface_core_session;medium;mpi"/>
+		</properties>
+		<system-out>[==========] Running 12 tests from 1 test suite.
+[----------] Global test environment set-up.
+[==========] Running 12 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 12 tests from SystemInterfaceCoreSession
+[ RUN      ] SystemInterfaceCoreSession.admission_failure_is_collective_before_any_core_or_callback
+[----------] 12 tests from SystemInterfaceCoreSession
+[ RUN      ] SystemInterfaceCoreSession.admission_failure_is_collective_before_any_core_or_callback
+[       OK ] SystemInterfaceCoreSession.admission_failure_is_collective_before_any_core_or_callback (21 ms)
+[ RUN      ] SystemInterfaceCoreSession.exact_group_and_lifetime_all_dimensions
+[       OK ] SystemInterfaceCoreSession.admission_failure_is_collective_before_any_core_or_callback (21 ms)
+[ RUN      ] SystemInterfaceCoreSession.exact_group_and_lifetime_all_dimensions
+[       OK ] SystemInterfaceCoreSession.exact_group_and_lifetime_all_dimensions (0 ms)
+[       OK ] SystemInterfaceCoreSession.exact_group_and_lifetime_...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+</testsuite>

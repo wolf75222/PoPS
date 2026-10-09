@@ -1,0 +1,10 @@
+{
+  "source_object": "5e69b3425184446ea2cd318fe2d31d038cca3035",
+  "source_tree_sha256": "5993364d4d0f2bba7872037aea7caea4ba85627f0174afe6b2676bae84ca2865",
+  "probe_sha256": "9c1436bdedaa69715ca607555bb402f0ffb994814b64d0d01cef299e86b000f7",
+  "scope": "source lifecycle/envelope protocol only; fake bound identity provider and ABI equality seam; no native capture/MPI/PDE",
+  "observations": {
+    "legacy_manifest_sha256": "eef0d0c581509257b2bab5678e2c01c4a645ca4254491ab9473fb5eca7edb9c4",
+    "legacy_restart_token": "pops.restart.v1:sha256:7d846e571b77eecc88beeb19ff4f031c475e44a80080166117244669e7ccb7f2"
+  }
+}

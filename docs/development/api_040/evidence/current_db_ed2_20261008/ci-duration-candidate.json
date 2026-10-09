@@ -1,0 +1,284 @@
+{
+  "CI": {
+    "critical_failures": {
+      "amr_convergence_topology": {
+        "diagnostic": "coverage mask mismatch32/256 atN16, actual fine-covered band4:12 versus expected3:13",
+        "job_ids": [
+          113406777509
+        ],
+        "phase": "actual topology assertion before convergence/order oracle",
+        "source": "tests/python/integration/runtime/test_amr_implicit_diffusion.py:289"
+      },
+      "aux_capacity": {
+        "diagnostic": "auxiliary checkpoint invalidation requires an accepted non-input provider",
+        "job_ids": [
+          113406776820,
+          113406776836
+        ],
+        "phase": "actual Uniform bind/capacity validation before scientific oracle",
+        "source": "include/pops/runtime/system/auxiliary_checkpoint.hpp:431 reached from installed python/pops/runtime/_checkpoint_resource_budget.py:908 _checkpoint_auxiliary_capacity",
+        "tests": "three public_diffusion_matrix variants and three public_drift_diffusion_matrix cases"
+      },
+      "duration_missing": {
+        "diagnostic": "selected files lack explicit duration entries; refuses before pytest",
+        "job_ids": [
+          113406776758
+        ],
+        "phase": "CI metadata planning",
+        "source": "scripts/ci_pytest_timings.py:selected_budget"
+      },
+      "moving_compile": {
+        "diagnostic": "program_context_moving_interval.inc:97 assigns MovingIntervalInputs<2> from Producer returning void; projected callable instantiated through program_context_moving_projection.inc:28 and moving_interval_projection_tests.inc:43",
+        "job_ids": [
+          113405530135,
+          113405788222,
+          113406023346
+        ],
+        "phase": "actual C++ compilation, not runtime numerical failure"
+      },
+      "two_block_decomposition": {
+        "diagnostic": "exact field decomposition must tile the domain once and map one rank coordinate per MPI process",
+        "job_ids": [
+          113405529941,
+          113405788194
+        ],
+        "phase": "actual CTest execution/admission;155cases1failure per recorded job",
+        "source": "include/pops/runtime/system/exact_field_marshaling.hpp:161",
+        "test": "test_amr_system_contract.TwoBlockFacadeRegridsConservativelyAndSharesPreparedBz"
+      }
+    },
+    "joblogs": [
+      {
+        "actual_checkout_prefixes": [
+          "f81ab4c"
+        ],
+        "bytes": 627960,
+        "job": "113404398884",
+        "sha256": "07a0ffddfefe2ba6f18e893f26786d40fc1b33c44c006b7cf80c95c74f090561"
+      },
+      {
+        "actual_checkout_prefixes": [
+          "f81ab4c"
+        ],
+        "bytes": 138755,
+        "job": "113405529941",
+        "sha256": "52059851b2c5224fba8c27658246fa90c1ce02042fe07b3276a44a2d238140e8"
+      },
+      {
+        "actual_checkout_prefixes": [
+          "f81ab4c"
+        ],
+        "bytes": 87760,
+        "job": "113405530135",
+        "sha256": "39e8ffbc1da17c8ae61fd8ccbeba0f8251b584d405c96d2e820d07c69104c85b"
+      },
+      {
+        "actual_checkout_prefixes": [
+          "f81ab4c"
+        ],
+        "bytes": 138048,
+        "job": "113405788194",
+        "sha256": "e72c4b26abc44f19f2901b5c84ae65675d33f4cb13d5845ef3dae0c3b0bb3d70"
+      },
+      {
+        "actual_checkout_prefixes": [
+          "f81ab4c"
+        ],
+        "bytes": 83891,
+        "job": "113405788222",
+        "sha256": "fb75f3d28486e8c1ec0d160341c4d283b562b65431b1fb8d07cfe3ed20eed15b"
+      },
+      {
+        "actual_checkout_prefixes": [
+          "f81ab4c"
+        ],
+        "bytes": 144815,
+        "job": "113406023346",
+        "sha256": "e5ef401a56a409fafc428d40aba194a8e8d8226692cd60551caa0413210f8b2c"
+      },
+      {
+        "actual_checkout_prefixes": [
+          "f81ab4c"
+        ],
+        "bytes": 29672,
+        "job": "113406776758",
+        "sha256": "b70e95b79d8863b7bce769f669dc844a4c879e68377ab759ca1ff35dc76107dc"
+      },
+      {
+        "actual_checkout_prefixes": [
+          "f81ab4c"
+        ],
+        "bytes": 95438,
+        "job": "113406776820",
+        "sha256": "4976ede250e92195dc4ac7d1731eff6899bc12c304f72681f73016afc64908d3"
+      },
+      {
+        "actual_checkout_prefixes": [
+          "f81ab4c"
+        ],
+        "bytes": 87924,
+        "job": "113406776836",
+        "sha256": "671b8002a5c201f1e9e15c83c50a559c1da086f987cdb603cd1a2e43b9de8ff9"
+      },
+      {
+        "actual_checkout_prefixes": [
+          "f81ab4c"
+        ],
+        "bytes": 128533,
+        "job": "113406777509",
+        "sha256": "aa0d7cb15499755f82d2e4bb86b489686fab771bb1e926e26512b2bd4e44959f"
+      }
+    ],
+    "latest_architecture_job": 113425462888,
+    "latest_architecture_summary": "25FAILED816PASS1SKIP",
+    "latest_failed_nodes": [
+      "FAILED tests/python/architecture/test_ci_shard_binpack.py::test_duration_catalog_exactly_matches_manifest_selection_universe - AssertionError: duration catalog drift: missing=['tests/python/integration/amr/test_accepted_halo_extent_binding.py', 'tests/python/integration/amr/test_public_accepted_halo_stage_failure.py', 'tests/python/integration/amr/test_public_accepted_halo_substep_growth.py', 'tests/python/integration/amr/test_public_evolving_accepted_halo.py', 'tests/python/integration/amr/test_public_initial_field_ghost.py', 'tests/python/integration/amr/test_public_initial_field_ghost_failure.py', 'tests/python/integration/amr/test_public_tag_selection_native.py', 'tests/python/integration/amr/test_symbolic_path_amr_runtime.py', 'tests/python/integration/native_loader/test_external_field_dispatch_faults_runtime.py', 'tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py', 'tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py', 'tests/python/integration/runtime/test_affine_push_forward_runtime.py', 'tests/python/integration/runtime/test_amr_gather_object_bytes_runtime.py', 'tests/python/integration/runtime/test_api040_c17_stagnation_runtime.py', 'tests/python/integration/runtime/test_api040_coordinated_face_independent_runtime.py', 'tests/python/integration/runtime/test_api040_m04_combined_bound_runtime.py', 'tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py', 'tests/python/integration/runtime/test_api040_m13_negative_rate_native.py', 'tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py', 'tests/python/integration/runtime/test_api040_m22_h05_runtime.py', 'tests/python/integration/runtime/test_api040_m26_finite_interaction_runtime.py', 'tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py', 'tests/python/integration/runtime/test_atomic_cubature_parametric_refusal_runtime.py', 'tests/python/integration/runtime/test_atomic_cubature_public_path_runtime.py', 'tests/python/integration/runtime/test_balance_multiplicity_runtime.py', 'tests/python/integration/runtime/test_computed_program_frontier_runtime.py', 'tests/python/integration/runtime/test_conditional_consumers_runtime.py', 'tests/python/integration/runtime/test_coupled_gradient_dim2_fourier_runtime.py', 'tests/python/integration/runtime/test_coupled_gradient_dim3_fourier_runtime.py', 'tests/python/integration/runtime/test_coupled_gradient_exchange_runtime.py', 'tests/python/integration/runtime/test_coupled_provider_data_runtime.py', 'tests/python/integration/runtime/test_dt_bound_capture_independent_runtime.py', 'tests/python/integration/runtime/test_external_grid_frontier_runtime.py', 'tests/python/integration/runtime/test_fan_li15_full_eight_step_public_runtime.py', 'tests/python/integration/runtime/test_fan_li15_full_eight_storage_runtime.py', 'tests/python/integration/runtime/test_fan_li15_public_composition_runtime.py', 'tests/python/integration/runtime/test_field_publication_instances_runtime.py', 'tests/python/integration/runtime/test_final_imex_original_reception.py', 'tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py', 'tests/python/integration/runtime/test_finite_m09_runtime.py', 'tests/python/integration/runtime/test_imex_checkpoint_publication_rollback.py', 'tests/python/integration/runtime/test_imex_checkpoint_sealed_retry.py', 'tests/python/integration/runtime/test_imex_nonautonomous_field.py', 'tests/python/integration/runtime/test_integral_diffusion_trace_runtime.py', 'tests/python/integration/runtime/test_integral_state_public_restart.py', 'tests/python/integration/runtime/test_integral_state_trace_runtime.py', 'tests/python/integration/runtime/test_local_product_operators_runtime.py', 'tests/python/integration/runtime/test_local_product_readonly_runtime.py', 'tests/python/integration/runtime/test_local_residual_domain_runtime.py', 'tests/python/integration/runtime/test_local_residual_product_runtime.py', 'tests/python/integration/runtime/test_m07_coordinated_hydrostatic_runtime.py', 'tests/python/integration/runtime/test_m10_self_consistent_sg.py', 'tests/python/integration/runtime/test_m11_w10_constrained_runtime.py', 'tests/python/integration/runtime/test_m15_axial_b1_runtime.py', 'tests/python/integration/runtime/test_m15_mpi_collective_rejection.py', 'tests/python/integration/runtime/test_m18_discrete_entropy_runtime.py', 'tests/python/integration/runtime/test_m18_w09_declared_domain_runtime.py', 'tests/python/integration/runtime/test_m19_amr_consumed_runtime.py', 'tests/python/integration/runtime/test_m19_bgk_runtime.py', 'tests/python/integration/runtime/test_m19_freestreaming_runtime.py', 'tests/python/integration/runtime/test_m19_product_support_runtime.py', 'tests/python/integration/runtime/test_m19_thermal_consumed_runtime.py', 'tests/python/integration/runtime/test_m19_vlasov_poisson_runtime.py', 'tests/python/integration/runtime/test_m23_hall_fourier_runtime.py', 'tests/python/integration/runtime/test_mapped_field_binding_collective_runtime.py', 'tests/python/integration/runtime/test_native_amr12_state_carrier_failures.py', 'tests/python/integration/runtime/test_nonlinear_mixed_field_runtime.py', 'tests/python/integration/runtime/test_nonnegative_diagonal_diffusion_runtime.py', 'tests/python/integration/runtime/test_principal_amr_runtime.py', 'tests/python/integration/runtime/test_principal_group_runtime.py', 'tests/python/integration/runtime/test_principal_numerical_bodies_runtime.py', 'tests/python/integration/runtime/test_principal_primitive_runtime.py', 'tests/python/integration/runtime/test_program_affine_moment_explicit_basis_runtime.py', 'tests/python/integration/runtime/test_program_affine_moment_second_state_runtime.py', 'tests/python/integration/runtime/test_program_diagnostic_checkpoint_runtime.py', 'tests/python/integration/runtime/test_program_expression_runtime.py', 'tests/python/integration/runtime/test_public_amr_original_field.py', 'tests/python/integration/runtime/test_public_captured_diffusion.py', 'tests/python/integration/runtime/test_public_completed_original_interaction.py', 'tests/python/integration/runtime/test_public_evolved_original_stage.py', 'tests/python/integration/runtime/test_public_evolved_stage_amr.py', 'tests/python/integration/runtime/test_public_evolved_stage_amr_spatial.py', 'tests/python/integration/runtime/test_public_evolved_stage_amr_spatial_v4.py', 'tests/python/integration/runtime/test_public_evolved_stage_amr_v3.py', 'tests/python/integration/runtime/test_public_integral_feedback.py', 'tests/python/integration/runtime/test_public_moving_interval.py', 'tests/python/integration/runtime/test_public_newton_typed_original.py', 'tests/python/integration/runtime/test_public_ns_conduction.py', 'tests/python/integration/runtime/test_public_spatial_interaction.py', 'tests/python/integration/runtime/test_rank_one_owned_amr_invalid.py', 'tests/python/integration/runtime/test_scoped_flux_wave_runtime.py', 'tests/python/integration/runtime/test_symbolic_path_adversarial_runtime.py', 'tests/python/integration/runtime/test_symbolic_path_four_state_runtime.py', 'tests/python/integration/runtime/test_symbolic_path_param_runtime.py', 'tests/python/integration/runtime/test_symbolic_path_runtime.py', 'tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py', 'tests/python/integration/runtime/test_uniform_accepted_storage_observation.py', 'tests/python/integration/runtime/test_uniform_accepted_storage_observation_v2.py', 'tests/python/integration/runtime/test_uniform_checkpoint_provisional_effect.py', 'tests/python/integration/runtime/test_uniform_cp9_dim1_runtime.py', 'tests/python/integration/runtime/test_uniform_cp9_dim2_runtime.py', 'tests/python/integration/runtime/test_uniform_cp9_dim3_runtime.py', 'tests/python/integration/runtime/test_uniform_state_carrier_checkpoint_runtime.py', 'tests/python/integration/runtime/test_user_joint_reconstruction_independent_runtime.py', 'tests/python/integration/runtime/test_user_numerical_bodies_runtime.py', 'tests/python/integration/runtime/test_user_reconstruction_adversarial_runtime.py', 'tests/python/integration/runtime/test_w11_child_trace_rollback.py', 'tests/python/unit/amr/test_accepted_halo_preparation.py', 'tests/python/unit/amr/test_explicit_local_storage_authority.py', 'tests/python/unit/amr/test_local_state_storage_adversarial.py', 'tests/python/unit/amr/test_local_state_storage_amr.py', 'tests/python/unit/codegen/test_accepted_exchange_coverage_independent.py', 'tests/python/unit/codegen/test_analytic_aux_time.py', 'tests/python/unit/codegen/test_analytic_aux_time_abi.py', 'tests/python/unit/codegen/test_api040_c17_independent.py', 'tests/python/unit/codegen/test_api040_c26_c27_authority.py', 'tests/python/unit/codegen/test_api040_cell_average_witness.py', 'tests/python/unit/codegen/test_api040_t3_condensation_failure.py', 'tests/python/unit/codegen/test_api040_t3_independent_division.py', 'tests/python/unit/codegen/test_api040_t3_original_residual_stagnation.py', 'tests/python/unit/codegen/test_api040_t3_residual_domain.py', 'tests/python/unit/codegen/test_bgk_declared_inputs.py', 'tests/python/unit/codegen/test_bgk_oracle.py', 'tests/python/unit/codegen/test_bind_parameter_evidence.py', 'tests/python/unit/codegen/test_block_scratch_identifiers.py', 'tests/python/unit/codegen/test_conditional_consumers.py', 'tests/python/unit/codegen/test_conditional_rounding.py', 'tests/python/unit/codegen/test_conditional_rounding_adversarial.py', 'tests/python/unit/codegen/test_coupled_gradient_dim3_reception_fixture.py', 'tests/python/unit/codegen/test_coupled_gradient_nd_review.py', 'tests/python/unit/codegen/test_coupled_provider_data.py', 'tests/python/unit/codegen/test_cpp_local_symbols.py', 'tests/python/unit/codegen/test_default_derived_event_policy.py', 'tests/python/unit/codegen/test_dt_bound_capture_closure.py', 'tests/python/unit/codegen/test_field_rhs_auxiliary_inputs.py', 'tests/python/unit/codegen/test_finite_m09_admission.py', 'tests/python/unit/codegen/test_finite_m09_full_program.py', 'tests/python/unit/codegen/test_finite_m09_host.py', 'tests/python/unit/codegen/test_finite_m09_source.py', 'tests/python/unit/codegen/test_implicit_state_bind_inspection.py', 'tests/python/unit/codegen/test_install_tagging_authority.py', 'tests/python/unit/codegen/test_integral_candidate_capture.py', 'tests/python/unit/codegen/test_integral_diffusion_trace.py', 'tests/python/unit/codegen/test_integral_state_independent.py', 'tests/python/unit/codegen/test_integral_state_names.py', 'tests/python/unit/codegen/test_integral_state_public_receipts.py', 'tests/python/unit/codegen/test_integral_state_trace.py', 'tests/python/unit/codegen/test_local_linear_auxiliary_preparation.py', 'tests/python/unit/codegen/test_local_product_independent_review.py', 'tests/python/unit/codegen/test_local_product_layout_vote.py', 'tests/python/unit/codegen/test_local_product_operator_host.py', 'tests/python/unit/codegen/test_local_product_operator_reception_oracle.py', 'tests/python/unit/codegen/test_local_product_operators.py', 'tests/python/unit/codegen/test_local_product_readonly_capture.py', 'tests/python/unit/codegen/test_local_residual_product.py', 'tests/python/unit/codegen/test_local_residual_product_host.py', 'tests/python/unit/codegen/test_local_state_storage_loader.py', 'tests/python/unit/codegen/test_m10_independent_review.py', 'tests/python/unit/codegen/test_m19_product_mpi_publication.py', 'tests/python/unit/codegen/test_m19_product_support_contracts.py', 'tests/python/unit/codegen/test_m23_complete_program_syntax.py', 'tests/python/unit/codegen/test_m26_complete_program_review.py', 'tests/python/unit/codegen/test_m27_complete_program_review.py', 'tests/python/unit/codegen/test_moving_interval_codegen.py', 'tests/python/unit/codegen/test_physical_global_primitive_authority.py', 'tests/python/unit/codegen/test_physical_global_source.py', 'tests/python/unit/codegen/test_principal_amr_review.py', 'tests/python/unit/codegen/test_principal_amr_stages.py', 'tests/python/unit/codegen/test_principal_group_codegen.py', 'tests/python/unit/codegen/test_principal_group_guards.py', 'tests/python/unit/codegen/test_principal_numerical_captures.py', 'tests/python/unit/codegen/test_principal_primitive.py', 'tests/python/unit/codegen/test_principal_primitive_independent.py', 'tests/python/unit/codegen/test_program_v8_contract.py', 'tests/python/unit/codegen/test_program_value_authority.py', 'tests/python/unit/codegen/test_qualified_parameter_inspection.py', 'tests/python/unit/codegen/test_qualified_parameter_inspection_review.py', 'tests/python/unit/codegen/test_readonly_control_input_review.py', 'tests/python/unit/codegen/test_resolved_local_storage_authority.py', 'tests/python/unit/codegen/test_resolved_local_storage_independent_review.py', 'tests/python/unit/codegen/test_resolved_physical_global_authority.py', 'tests/python/unit/codegen/test_selected_eigenvalues.py', 'tests/python/unit/codegen/test_state_read_extent.py', 'tests/python/unit/codegen/test_subcycle_integral_independent.py', 'tests/python/unit/codegen/test_symbolic_exp_local_residual.py', 'tests/python/unit/codegen/test_symbolic_path_name_hygiene.py', 'tests/python/unit/codegen/test_user_joint_reconstruction.py', 'tests/python/unit/codegen/test_user_joint_reconstruction_storage.py', 'tests/python/unit/codegen/test_user_numerical_capture_routing.py', 'tests/python/unit/codegen/test_user_reconstruction_gap_review.py', 'tests/python/unit/codegen/test_user_reconstruction_multiblock.py', 'tests/python/unit/fields/test_amr_original_field_codegen.py', 'tests/python/unit/fields/test_api040_m08_live_stage_authoring.py', 'tests/python/unit/fields/test_field_publication_frontier_independent.py', 'tests/python/unit/fields/test_field_publication_instance_oracle.py', 'tests/python/unit/fields/test_field_publication_instances.py', 'tests/python/unit/fields/test_field_publication_stage_frontier.py', 'tests/python/unit/fields/test_m27_mixed_public_source.py', 'tests/python/unit/fields/test_m27_projection_independent_review.py', 'tests/python/unit/fields/test_nonlinear_mixed_field_problem.py', 'tests/python/unit/mesh/test_moving_geometry_contract.py', 'tests/python/unit/moments/test_affine_push_forward.py', 'tests/python/unit/moments/test_affine_push_forward_host.py', 'tests/python/unit/moments/test_affine_push_forward_order_depth_review.py', 'tests/python/unit/moments/test_api040_m15_independent_oracle.py', 'tests/python/unit/moments/test_api040_m15_m16.py', 'tests/python/unit/moments/test_exp_entropy_independent_review.py', 'tests/python/unit/moments/test_hyqmom_b1_independent_review.py', 'tests/python/unit/moments/test_m15_axial_reception.py', 'tests/python/unit/moments/test_m18_discrete_entropy.py', 'tests/python/unit/moments/test_m18_entropy_host.py', 'tests/python/unit/numerics/test_api040_coordinated_face_oracle_independent.py', 'tests/python/unit/numerics/test_api040_coordinated_face_public_independent.py', 'tests/python/unit/numerics/test_api040_m02_burgers_oracle.py', 'tests/python/unit/numerics/test_api040_m03_boundary_oracle.py', 'tests/python/unit/numerics/test_api040_m03_riemann_oracle.py', 'tests/python/unit/numerics/test_api040_m03_riemann_oracle_adversarial.py', 'tests/python/unit/numerics/test_api040_m04_oracle.py', 'tests/python/unit/numerics/test_api040_m05_shear_oracle.py', 'tests/python/unit/numerics/test_api040_m07_lake_oracle_independent.py', 'tests/python/unit/numerics/test_api040_m08_oracle.py', 'tests/python/unit/numerics/test_api040_m09_hoffart_oracle.py', 'tests/python/unit/numerics/test_api040_m09_public_gap.py', 'tests/python/unit/numerics/test_api040_m17_oracle.py', 'tests/python/unit/numerics/test_api040_m26_finite_interaction.py', 'tests/python/unit/numerics/test_api040_path_consumer_stability.py', 'tests/python/unit/numerics/test_api040_path_ssp_stability.py', 'tests/python/unit/numerics/test_coordinated_face.py', 'tests/python/unit/numerics/test_coupled_gradient_hall_source.py', 'tests/python/unit/numerics/test_coupled_gradient_independent_review.py', 'tests/python/unit/numerics/test_coupled_gradient_nd_independent.py', 'tests/python/unit/numerics/test_finite_linear_maps.py', 'tests/python/unit/numerics/test_finite_linear_native_shapes.py', 'tests/python/unit/numerics/test_hall_independent_oracle.py', 'tests/python/unit/numerics/test_m05_shear_independent_review.py', 'tests/python/unit/numerics/test_m07_hydrostatic_public_gap.py', 'tests/python/unit/numerics/test_m08_independent_receipt.py', 'tests/python/unit/numerics/test_m23_ledger_stage_oracle.py', 'tests/python/unit/numerics/test_m26_measured_independent_review.py', 'tests/python/unit/numerics/test_nonnegative_diagonal_diffusion.py', 'tests/python/unit/numerics/test_path_sampling_resolution.py', 'tests/python/unit/numerics/test_principal_grouping_c11.py', 'tests/python/unit/numerics/test_principal_grouping_contract.py', 'tests/python/unit/numerics/test_principal_storage_route.py', 'tests/python/unit/numerics/test_symbolic_path.py', 'tests/python/unit/numerics/test_symbolic_path_adversarial.py', 'tests/python/unit/numerics/test_symbolic_path_consistency.py', 'tests/python/unit/numerics/test_symbolic_path_param_routing.py', 'tests/python/unit/numerics/test_symbolic_policy_layering.py', 'tests/python/unit/numerics/test_user_face_authoring.py', 'tests/python/unit/numerics/test_user_face_independent_review.py', 'tests/python/unit/numerics/test_user_joint_reconstruction_independent.py', 'tests/python/unit/numerics/test_user_reconstruction_adversarial.py', 'tests/python/unit/output/test_moving_geometry_observation.py', 'tests/python/unit/physics/test_api040_m06_m13_oracles.py', 'tests/python/unit/physics/test_api040_m22_h05.py', 'tests/python/unit/physics/test_api040_m27_mixed_oracle.py', 'tests/python/unit/physics/test_imex_imposed_aux_field_contract.py', 'tests/python/unit/physics/test_m11_w10_constrained.py', 'tests/python/unit/physics/test_m27_independent_mixed_equations.py', 'tests/python/unit/physics/test_multistate_local_linear_operator.py', 'tests/python/unit/physics/test_structural_cattaneo_authoring.py', 'tests/python/unit/physics/test_structural_cattaneo_oracle.py', 'tests/python/unit/problem/test_blockage_classification.py', 'tests/python/unit/runtime/test_amr_execution_contract.py', 'tests/python/unit/runtime/test_amr_local_box_bounds_contract.py', 'tests/python/unit/runtime/test_atomic_diagnostic_checkpoint_candidate.py', 'tests/python/unit/runtime/test_bound_initial_checkpoint_envelope.py', 'tests/python/unit/runtime/test_checkpoint_candidate_engine_routing.py', 'tests/python/unit/runtime/test_checkpoint_sealed_replay.py', 'tests/python/unit/runtime/test_collective_fixture_checks.py', 'tests/python/unit/runtime/test_computed_program_frontier.py', 'tests/python/unit/runtime/test_consumer_checkpoint_diagnostic_capacity.py', 'tests/python/unit/runtime/test_consumer_membership_independent.py', 'tests/python/unit/runtime/test_consumer_publication_c34.py', 'tests/python/unit/runtime/test_consumer_publication_c34_adversarial.py', 'tests/python/unit/runtime/test_dot_all_native_contract_host.py', 'tests/python/unit/runtime/test_evidence_json.py', 'tests/python/unit/runtime/test_external_grid_frontier.py', 'tests/python/unit/runtime/test_finite_amr_converged_checker.py', 'tests/python/unit/runtime/test_initial_checkpoint_strategy.py', 'tests/python/unit/runtime/test_initial_reference_geometry.py', 'tests/python/unit/runtime/test_joint_reconstruction_benchmark_v1_1.py', 'tests/python/unit/runtime/test_joint_reconstruction_protocol_v1_2.py', 'tests/python/unit/runtime/test_joint_reconstruction_resource_probe.py', 'tests/python/unit/runtime/test_joint_resource_v1_3_driver.py', 'tests/python/unit/runtime/test_m18_execution_owner_capture.py', 'tests/python/unit/runtime/test_m23_m05_converged_checker.py', 'tests/python/unit/runtime/test_mapped_field_release_admission.py', 'tests/python/unit/runtime/test_multi_layout_checkpoint_diagnostic_capacity.py', 'tests/python/unit/runtime/test_multi_layout_local_observation.py', 'tests/python/unit/time/test_affine_moment_explicit_basis.py', 'tests/python/unit/time/test_evolved_amr_history_slots.py', 'tests/python/unit/time/test_evolved_amr_spatial_reference.py', 'tests/python/unit/time/test_geometry_ssa.py', 'tests/python/unit/time/test_global_history_issuance.py', 'tests/python/unit/time/test_imex_field_stage_identity.py', 'tests/python/unit/time/test_program_certificate_affine_ssa.py', 'tests/python/unit/time/test_program_certificate_extrapolated_stages.py', 'tests/python/unit/time/test_program_certificate_refusals.py', 'tests/python/unit/time/test_program_expressions.py', 'tests/python/unit/time/test_program_expressions_adversarial.py', 'tests/python/unit/time/test_sparse_nested_detach_independent.py', 'tests/python/unit/time/test_sparse_program_detach.py', 'tests/python/unit/time/test_split_subflow_input_coordinates.py'] stale=[]",
+      "FAILED tests/python/architecture/test_ci_shard_binpack.py::test_full_manifest_pack_stays_within_python_shard_test_budget - ValueError: Python duration catalog is missing selected files: tests/python/integration/runtime/test_fan_li15_public_composition_runtime.py, tests/python/integration/runtime/test_principal_amr_runtime.py, tests/python/integration/runtime/test_uniform_cp9_dim3_runtime.py, tests/python/unit/codegen/test_coupled_gradient_dim3_reception_fixture.py, tests/python/unit/codegen/test_integral_state_names.py, tests/python/unit/codegen/test_subcycle_integral_independent.py, tests/python/unit/moments/test_api040_m15_m16.py, tests/python/unit/numerics/test_m08_independent_receipt.py, tests/python/unit/runtime/test_joint_reconstruction_benchmark_v1_1.py, tests/python/unit/time/test_geometry_ssa.py",
+      "FAILED tests/python/architecture/test_final_nd_system_runtime.py::test_system_step_driver_is_the_exact_ranked_facade_not_a_parallel_authority - assert 'if constexpr' not in '// Core exa...t8_t>);\\n}\\n'",
+      "FAILED tests/python/architecture/test_final_nd_system_runtime.py::test_layout_transfer_is_generic_with_exact_physical_support_contracts - assert 'physical maps require host memory' in '#include \"system_impl.hpp\"\\n\\n#include <pops/core/foundation/native_dimension.hpp>\\n#include <pops/mesh/layout/refine...n  p_->applied = false;\\n}\\n\\ntemplate class PreparedSystemLayoutTransfer<kNativeDimension>;\\n\\n}  // namespace pops\\n'",
+      "FAILED tests/python/architecture/test_final_public_api.py::test_runtime_instance_has_only_the_explicit_read_and_restart_surface - AssertionError: assert {'amr', 'bind...napshot', ...} == {'amr', 'bind...napshot', ...}",
+      "FAILED tests/python/architecture/test_import_graph.py::test_layering_respected - AssertionError: layering violations:",
+      "FAILED tests/python/architecture/test_import_graph.py::test_graph_is_acyclic - AssertionError: import cycle through edge(s): numerics -> moments",
+      "FAILED tests/python/architecture/test_m1_semantic_core_gate.py::test_public_phase_functions_do_not_probe_or_swallow_unknown_shapes - AssertionError: canonical phases must fail closed:",
+      "FAILED tests/python/architecture/test_m2_temporal_execution_gate.py::test_m2_manifest_references_only_real_mandatory_proofs - AssertionError: M2 gate matrix is incomplete:",
+      "FAILED tests/python/architecture/test_m2_temporal_execution_gate.py::test_m2_final_gate_has_no_deferred_requirement - assert not [\"check[30] target 'test_program_runtime' contains a skip marker\", \"check[31] target 'test_program_runtime' contains a skip marker\", \"check[32] target 'test_program_runtime' contains a skip marker\"]",
+      "FAILED tests/python/architecture/test_m2_temporal_execution_gate.py::test_m2_fallible_solver_evaluations_use_exact_native_proofs - assert not [\"check[30] target 'test_program_runtime' contains a skip marker\", \"check[31] target 'test_program_runtime' contains a skip marker\", \"check[32] target 'test_program_runtime' contains a skip marker\"]",
+      "FAILED tests/python/architecture/test_m2_temporal_execution_gate.py::test_m2_pytest_nodeids_are_individually_collectible - assert not [\"check[30] target 'test_program_runtime' contains a skip marker\", \"check[31] target 'test_program_runtime' contains a skip marker\", \"check[32] target 'test_program_runtime' contains a skip marker\"]",
+      "FAILED tests/python/architecture/test_m2_temporal_execution_gate.py::test_m2_adc667_history_and_migration_routes_use_exact_proofs - assert not [\"check[30] target 'test_program_runtime' contains a skip marker\", \"check[31] target 'test_program_runtime' contains a skip marker\", \"check[32] target 'test_program_runtime' contains a skip marker\"]",
+      "FAILED tests/python/architecture/test_m2_temporal_execution_gate.py::test_m2_restart_hierarchy_and_program_only_routes_use_real_exact_proofs - assert not [\"check[30] target 'test_program_runtime' contains a skip marker\", \"check[31] target 'test_program_runtime' contains a skip marker\", \"check[32] target 'test_program_runtime' contains a skip marker\"]",
+      "FAILED tests/python/architecture/test_manifest_suite_coverage.py::test_every_python_test_file_is_covered_by_a_suite_path - AssertionError: these test files are under no [[python.suite]] path in tests/test_manifest.toml, so scripts/ci_select_tests.py never runs them -- add a [[python.suite]] entry (and a ci_select_tests.py route + area alias) for their directory:",
+      "FAILED tests/python/architecture/test_native_stub_contract.py::test_every_native_plugin_compile_route_uses_the_central_loader_manifest - AssertionError: assert {('python/pop...e_component')} == {('python/pop...e_component')}",
+      "FAILED tests/python/architecture/test_native_stub_contract.py::test_bootstrap_types_match_the_native_config_pods_without_dynamic_escape_hatches - AssertionError: assert {'boxes', 'cl..._system', ...} == {'accepted_ha...iciency', ...}",
+      "FAILED tests/python/architecture/test_no_runtime_imports.py::test_output_has_no_runtime_dependency_at_any_scope - AssertionError: pops.output must own consumer declarations without any runtime dependency:",
+      "FAILED tests/python/architecture/test_public_api_parity_proof.py::test_exact_wheel_and_source_share_public_api_typing_and_lazy_authoring - _public_api_parity_test.PublicApiParityError: source public API version differs from wheel distribution METADATA",
+      "FAILED tests/python/architecture/test_public_api_parity_proof.py::test_installed_proof_rejects_distribution_identity_drift - AssertionError: Regex pattern did not match.",
+      "FAILED tests/python/architecture/test_public_api_parity_proof.py::test_installed_cli_resolves_distribution_after_install_without_checkout_shadowing - AssertionError: public API parity proof failed: source public API version differs from wheel distribution METADATA",
+      "FAILED tests/python/architecture/test_release_contract.py::test_release_contract_versions_every_protocol_and_declares_exact_matrix - assert 13 == 11",
+      "FAILED tests/python/architecture/test_time_package_layout.py::test_public_time_facade_is_exact_and_identity_preserving - AssertionError: assert ('Program', '...olution', ...) == ('Program', '...itEuler', ...)",
+      "FAILED tests/python/architecture/test_time_package_layout.py::test_time_sources_never_import_compiler_runtime_or_native_layers - AssertionError: forbidden temporal consumer imports:",
+      "FAILED tests/python/architecture/test_time_package_layout.py::test_time_module_graph_is_acyclic_and_respects_private_layering - AssertionError: forbidden temporal layer edges:"
+    ],
+    "latest_head": "db206100d81de834482c8a3b093ce30065aa1b43",
+    "latest_logs_sha256": "f17b48bb6eeccae0fcbeb2d8a5218ebbffd1d15d33d19e28d0066da8d26b4185",
+    "latest_run": 37810135995,
+    "mode_job": 113425379553,
+    "no_global_green_claim": true,
+    "old_actual_checkout": "f81ab4cd3eebe83780f2ca0c450136c279c87000",
+    "old_head_and_merge_checkout_distinct": true,
+    "old_run": 37804221197,
+    "old_run_conclusion": "cancelled",
+    "old_run_head": "65861f43124ebd70987af66908afe97f3f5286f3",
+    "routing_job": 113425267941,
+    "trigger": "actual pull_request full=true route;202Cpp876Python100architecture;not a missing-trigger defect"
+  },
+  "Main_head": "db206100d81de834482c8a3b093ce30065aa1b43",
+  "Main_modified": false,
+  "candidate_paths": [
+    {
+      "base_sha256": "c49bb4e35220c2e37ab8728a37038edb87682e4a663eefa72d23899e91d8df3f",
+      "candidate_sha256": "1ec9784f5f2b29d504b976ed4a7f943cd8569f50798458b6b3f8e3f6983d2a39",
+      "path": "tests/python/test_durations.json"
+    },
+    {
+      "base_sha256": "dec5b57e5720aca1f242d70608dd5060cdb9f69d1267043a878df03527b43352",
+      "candidate_sha256": "0cfe73add0e67d8e1631ce69eb0c074e3b25f499193d70fb4a23db021d5f0de2",
+      "path": "scripts/ci_pytest_timings.py"
+    },
+    {
+      "base_sha256": "23a2943123530bf7a9db4d34ccf05f99d61a788afd00cde0c5377f945e75c719",
+      "candidate_sha256": "e609f7870eef53a973cc6590382b536e82465181109bc1767c574850a95fd514",
+      "path": ".github/workflows/ci.yml"
+    },
+    {
+      "base_sha256": "88fc16b48729d1b706e513de5c170aa0ad35fca17e556fdfcb2024114ffebca4",
+      "candidate_sha256": "8343106bad09ac32b185af73dc9e95de06026a5df0f150d93516dfa0c790aadb",
+      "path": "tests/python/architecture/test_ci_impacted_selection.py"
+    }
+  ],
+  "catalog": {
+    "all_original_costs_exact": true,
+    "all_original_estimated_files_retained": true,
+    "missing_added": 305,
+    "new_analogue_per_row": true,
+    "new_estimated_count": 811,
+    "new_estimates_are_not_measurements": true,
+    "prior_catalog": 571,
+    "selected_universe": 876,
+    "stale": 0,
+    "tiers": {
+      "120_seconds_native_loader": 2,
+      "300_seconds_native_unit": 4,
+      "5_seconds_source_unit": 194,
+      "600_seconds_runtime_AMR": 105
+    }
+  },
+  "checks": {
+    "XML": "/Users/romaindespoulain/dev/tmp/PoPS-ci-duration-candidate-20261008/candidate-checks-v2.xml",
+    "errors": 0,
+    "failures": 0,
+    "scope": "Candidate scheduling/data checks against real Main selector/planner/binpacker; exact candidate timing module and workflow fixture. No Native/runtime/scientific run. Candidate test dependency paths explicitly bound; no fake Native.",
+    "sha256": "6c7bcc389827706239347bf4753548b88d36f442d5a5c95a85f2d9669d8ec7a3",
+    "skips": 0,
+    "tests": 33
+  },
+  "packing": {
+    "canonical_partial_selections_checked": 27,
+    "dynamic_matrix_uses_candidate_count": true,
+    "five_long_file_exceptions_and_job_timeouts_unchanged": true,
+    "fixed_shards_candidate": 70,
+    "fixed_shards_previous": 38,
+    "lower_counts_checked": [
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69
+    ],
+    "max_ordinary_modeled_seconds": 2075.7,
+    "minimal_feasible_for_current_full_catalog": 70,
+    "no_drop_no_downweight": true,
+    "ordinary_budget_seconds_unchanged": 2100
+  },
+  "patch": {
+    "git_apply_check_exit": 0,
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-ci-duration-candidate-20261008/python-duration-completion-and-shards70.patch",
+    "sha256": "1fc7c747d0a4bd513f38a32fd83595fac9c3ad787499d5b439483506eb7c4285"
+  },
+  "reviewer_actions": {
+    "Main_edits": 0,
+    "ROMEO_actions": 0,
+    "candidate_only": true,
+    "clones_worktrees": 0,
+    "github_jobs_mutated": 0,
+    "independent_review_pending": true,
+    "package_rebuild_install_import": 0
+  },
+  "schema": "pops.independent-ci-duration-candidate@1"
+}

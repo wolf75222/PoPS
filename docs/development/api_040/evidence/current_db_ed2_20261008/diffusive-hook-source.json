@@ -1,0 +1,122 @@
+{
+  "Main_edits": false,
+  "Native_build_import_or_runtime_qualification": false,
+  "Source_context": "db206100d81de834482c8a3b093ce30065aa1b43",
+  "baseline_real_authored_counterexample_sha256": "2c91208af6e1097a04d9450c66f0b110fcfb38df03887409bd9a9faa5ecb27fc",
+  "baseline_three_nonregression_failure_control": {
+    "counts": {
+      "errors": 0,
+      "failures": 3,
+      "skipped": 0,
+      "tests": 3
+    },
+    "failure_location": "tests/python/unit/codegen/test_amr_diffusion_codegen.py:150",
+    "same_failure_nodes": [
+      "test_actual_subcycled_diffusion_rhs_keeps_spatial_sum_at_dt_power_zero[16]",
+      "test_actual_subcycled_diffusion_rhs_keeps_spatial_sum_at_dt_power_zero[32]",
+      "test_actual_subcycled_diffusion_rhs_keeps_spatial_sum_at_dt_power_zero[64]"
+    ],
+    "sha256": "fd7f928d0a04793c1d98a30f788b9da14c866d11bd373c0135453089ee69fd93",
+    "xml": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/baseline-nonregression/pytest.xml"
+  },
+  "candidate_source_pins_sha256": "91166920e743ee271cd4847b8675b4316eb60d52acc7d47d8f94481a401a0687",
+  "existing_Native_rollback_witness_not_executed_by_child": "PreparedFieldRhsInputs.OneRankNonfiniteCandidateLeavesAcceptedStorageAndAuxiliaryExact",
+  "patch_sha256": "22ea1f575694ce8276cce5f19389faaa9f0c8d28cdecfc9ff8c9d2a558798028",
+  "phase_review": {
+    "all_math_endpoint_CPP_strings_coefficient_guard_thresholds_untouched": true,
+    "allocation_reordered_before_physical_preparation_for_top_level_only": true,
+    "complete_after_local_constitutive_combined_stability_and_source_guards": true,
+    "deferred_consuming_update_stability_phase_unchanged": true,
+    "foreign_boundary_metadata_fails_closed": true,
+    "implicit_and_residual_API_preserved": true,
+    "input_tickets_after_stage_before_first_write": true,
+    "only_actual_output_allocation_shared_with_off_cadence": true,
+    "only_new_admitted_producer_kind": "diffusive_rhs",
+    "private_spatial_residual_delegate_return_and_no_hook_order_preserved": true,
+    "rate_and_Field_candidate_are_not_AcceptedSnapshot": true,
+    "stage_and_preparation_inside_due_body": true,
+    "unknown_producer_refusal_unchanged": true
+  },
+  "real_counterexample": "state\u2192actual diffusive rate\u2192Euler predictor\u2192FieldV2 refuses missing issued storage lowering on baseline",
+  "remaining": "Root source admission, official rebuild, real diffusion\u2192FieldV2 runtime and late-failure rollback qualification; three pre-existing codegen assertions need separate Root accounting",
+  "remote_jobs_or_writes": false,
+  "schema": "sol61.diffusive-rhs-delegated-output-publication-source-review@1",
+  "source_runs": [
+    {
+      "Native_modules_loaded": [],
+      "actual_candidate_modules": {
+        "program_emit_diffusion": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/python/pops/codegen/program_emit_diffusion.py",
+        "program_emit_ops": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/python/pops/codegen/program_emit_ops.py",
+        "program_value_authority": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/python/pops/codegen/program_value_authority.py"
+      },
+      "counts": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 26
+      },
+      "exit": 0,
+      "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/test-runs/20261008T165224964323Z/receipt.json",
+      "receipt_sha256": "664e7ec8f5fbbfa312a3bd43c49ebe7fcd828a279dd5f9c2c04fddf162c4c4e0",
+      "xml": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/test-runs/20261008T165224964323Z/candidate-tests.xml",
+      "xml_sha256": "8818ef9b70d883bdcad3e3b4ec48902a0328a24931a38c46dce22293135bb2d6"
+    },
+    {
+      "Native_modules_loaded": [],
+      "actual_candidate_modules": {
+        "program_emit_diffusion": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/python/pops/codegen/program_emit_diffusion.py",
+        "program_emit_ops": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/python/pops/codegen/program_emit_ops.py",
+        "program_value_authority": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/python/pops/codegen/program_value_authority.py"
+      },
+      "counts": {
+        "errors": 0,
+        "failures": 3,
+        "skipped": 0,
+        "tests": 92
+      },
+      "exit": 1,
+      "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/test-runs/20261008T165429621839Z/receipt.json",
+      "receipt_sha256": "7f6c75766ae225192fed2af3fe23a0714ce012ad1d551b529b2e8b7ea1a15ab8",
+      "xml": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/test-runs/20261008T165429621839Z/candidate-tests.xml",
+      "xml_sha256": "03a90a6126e0a58ae953cae4713278024346669862234a3f4a1791db42198762"
+    },
+    {
+      "Native_modules_loaded": [],
+      "actual_candidate_modules": {
+        "program_emit_diffusion": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/python/pops/codegen/program_emit_diffusion.py",
+        "program_emit_ops": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/python/pops/codegen/program_emit_ops.py",
+        "program_value_authority": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/python/pops/codegen/program_value_authority.py"
+      },
+      "counts": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 27
+      },
+      "exit": 0,
+      "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/test-runs/20261008T165847468903Z/receipt.json",
+      "receipt_sha256": "732743f3b958329880599917f7b3f99bb085007ba398eaadb9bfd005e55e0053",
+      "xml": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/test-runs/20261008T165847468903Z/candidate-tests.xml",
+      "xml_sha256": "9a9bb25208098f3df5e00c1c4f329678644142a16c8b4c512d13c697389c46ab"
+    },
+    {
+      "Native_modules_loaded": [],
+      "actual_candidate_modules": {
+        "program_emit_diffusion": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/python/pops/codegen/program_emit_diffusion.py",
+        "program_emit_ops": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/python/pops/codegen/program_emit_ops.py",
+        "program_value_authority": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/python/pops/codegen/program_value_authority.py"
+      },
+      "counts": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 28
+      },
+      "exit": 0,
+      "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/test-runs/20261008T170123704221Z/receipt.json",
+      "receipt_sha256": "d0af2ba3ab50e7eb971828456bc7b58d9e4f5c2e73ba952467c576b7b2aef342",
+      "xml": "/Users/romaindespoulain/dev/tmp/PoPS-diffusive-rhs-value-authority-candidate-v1-db206100-20261008/test-runs/20261008T170123704221Z/candidate-tests.xml",
+      "xml_sha256": "a97897f76e32bbbbfdd3911aa3838918c133bb24275ebba552e735cb1d643e9d"
+    }
+  ]
+}

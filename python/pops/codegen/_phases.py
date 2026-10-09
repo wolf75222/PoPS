@@ -152,6 +152,8 @@ def resolve(
     )
 
     validate_program_spatial_dimension(resolved_time, resolved_dimension(native_layouts))
+    from .program_moving_layout_contract import validate_moving_layout_program
+    validate_moving_layout_program(resolved_time, layout_plan)
     validate_layout_mapping_components(layout_plan, components)
     from pops.codegen._physical_mapping_resolution import validate_physical_mapping_geometry
     validate_physical_mapping_geometry(layout_plan)
@@ -178,7 +180,10 @@ def resolve(
         else resolved_layouts
 
     options = dict(compile_options or {})
-    allowed_options = {"so_path", "force", "cxx", "include", "std", "debug"}
+    allowed_options = {"so_path", "force", "cxx", "include", "std", "debug", "model_source_policy"}
+    if "model_source_policy" in options:
+        from .model_compile_evidence import policy
+        policy(options["model_source_policy"])
     unknown_options = sorted(set(options) - allowed_options)
     if unknown_options:
         raise TypeError("pops.resolve received unsupported compile option(s) %s" % unknown_options)
@@ -214,6 +219,10 @@ def resolve(
             if spatial is not None:
                 raise ValueError("block %r has competing spatial and DiscretizationPlan authorities" % name)
             spatial = numerics.primary_spatial()
+        elif spatial is None:
+            from pops.codegen.state_storage_lowering import resolve_local_state_storage
+
+            spatial = resolve_local_state_storage(spec["model"], state_space=state_spaces[0])
         block = block_handles[name]
         state_handles = tuple(
             problem.resolve(state, block=block) for state in spec["states"])
@@ -253,6 +262,7 @@ def resolve(
             AMRLayoutResolver,
             AMRResolutionContext,
             ResolvedAMRAuthorities,
+            ResolvedAMRStateStorage,
         )
 
         from pops.codegen._layout_amr_authorities import ResolvedLayoutAMRAuthorities
@@ -280,6 +290,14 @@ def resolve(
                 numerics=tuple(block.numerics for block in blocks
                                if block.numerics is not None
                                and block_layouts[block.name] == layout_id),
+                state_storage=tuple(
+                    ResolvedAMRStateStorage(block, subject)
+                    for block in blocks
+                    if block_layouts[block.name] == layout_id
+                    and ResolvedAMRStateStorage.supports_block(block)
+                    for subject in subjects
+                    if block.state_identities == (subject.qualified_id,)
+                ),
                 initials=problem.initials.for_subjects(subjects),
                 program=resolved_time,
                 resolve=resolve_amr_handle,
@@ -319,12 +337,29 @@ def resolve(
         )
         for block in blocks
     )
+    # Pure generated package authorities are inferred from public boundary Exprs.
+    # Compile remains the sole native compilation phase; exact input validation follows.
+    generated=tuple(component for block in blocks if block.numerics is not None
+        for boundary in block.numerics.boundaries
+        for component in boundary.inferred_component_inputs)
+    # Preserve the explicit sequence: never deduplicate author input before its
+    # exact guards. The set is solely an additional generated-conflict check.
+    from pops.mesh.boundaries.component_binding import _component_identity
+    input_ids={_component_identity(item)[0] for item in components}
+    for item in generated:
+        identity=item.component_manifest.component_id
+        if identity in input_ids:
+            raise ValueError("inferred boundary component conflicts with an explicit component input")
+        input_ids.add(identity)
+    components=(*components,*generated)
     from pops.mesh.boundaries.composition import compose_shared_interfaces
     blocks = compose_shared_interfaces(blocks, layout_plan=layout_plan)
     from pops.codegen._resolved_block_operations import build_block_resolved_operations
 
     blocks = tuple(replace(block, resolved_operations=build_block_resolved_operations(
         block, resolved_time)) for block in blocks)
+    from .provider_instances import qualify_publication_instances
+    blocks = qualify_publication_instances(blocks)
     from pops.codegen._interface_validation import (
         validate_prepared_boundary_jacvec,
         validate_shared_interface_program,
@@ -348,6 +383,10 @@ def resolve(
                                       resolve=problem.resolve)
     from pops.codegen.program_emit_field_routes import validate_program_field_routes
     validate_program_field_routes(resolved_time, field_plans)
+    if any(value.op == "reynolds_update" for value in resolved_time._values):
+        from .program_models import ProgramModelGraph
+        from .program_emit_moving import check_moving_program
+        check_moving_program(resolved_time, ProgramModelGraph.from_resolved_blocks(blocks), target)
     snapshot = prepare_problem_snapshot(
         problem, resolved_time, layout=layout_plan, libraries=())
     from pops.codegen._resolution import resolve_capability_evidence
@@ -395,6 +434,8 @@ def resolve(
         else problem._consumers.resolve(
             problem.resolve, layout_plan, owner=problem.owner_path.canonical())
     )
+    from .program_moving_layout_contract import validate_moving_metric_consumers
+    validate_moving_metric_consumers(consumer_graph, layout_plan)
     from pops.output._restart_provider import RestartAuthority
     restart_authority = RestartAuthority.from_consumer_graph(consumer_graph)
     lowering_coverage = layout_lowering_coverage(layout_plan)
@@ -457,7 +498,8 @@ def compile(plan: Any) -> Any:
     from pops.codegen._orchestration_compile import compile_install_models
 
     models = compile_install_models(plan, plan.compile_options)
-    from pops.codegen._compile_drivers import _compile_resolved_problem, compile_problem
+    from pops.codegen._compile_drivers import (
+        _compile_resolved_problem, _program_compile_options, compile_problem)
     from pops.codegen._compiled_artifact import CompiledLayoutProgram
 
     program = None
@@ -475,8 +517,7 @@ def compile(plan: Any) -> Any:
         from pops.codegen.program_balance_due import validate_balance_due_contract
         from pops._balance_due_contract import BalanceDueContract
 
-        options = dict(plan.compile_options)
-        options["libraries"] = plan.libraries
+        options = _program_compile_options(plan)
         balance_due_contract = BalanceDueContract.from_consumer_graph(plan.consumer_graph)
         validate_balance_due_contract(plan.time, balance_due_contract)
 

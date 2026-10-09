@@ -1,0 +1,52 @@
+{
+  "schema": "pops.root.native-reception@1",
+  "utc": "2026-10-08T07:19:35.467404+00:00",
+  "source_head": "6d898599a3f66fa9aa3c049ba0f3114f1960b6dc",
+  "producer": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-next-sdkaf8-native-preparation-v2-20261008/complete-receipt.json",
+    "sha256": "f06b17ab03b2aa5f4e2f4b557e0d1fbf0f239984ed8da4393fa67d97c96cf4a3"
+  },
+  "independent": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-Native-af8-reception2-20261008/reception.json",
+    "sha256": "997a281b7cd4d6123eb84dc892c5108c254f981d6e3927fb5c7f8673ce2eebaf"
+  },
+  "physical_manifest": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-next-sdkaf8-native-preparation-v2-20261008/evidence-manifest.json",
+    "sha256": "b8b01e8c519ed5ba5b39e2824899e2d1f7da362b38bb366cd009cadc42535f78",
+    "entries_root_rehashed_bytes_modes": 62,
+    "root_mtime_requalification": false
+  },
+  "installed_native": {
+    "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "sha256": "a9367a4af3c9989ea03ebcaf66b76b8e20f5dd5bcd5bdf16b6b1172e942b5ca2"
+  },
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "wheel_sha256": "414add1e2b1289c31c37f51ca3bbf8476c2409839b069094ab5cd06071767622",
+  "actual_completed_CXX_actions": 24,
+  "completed_binding_actions": 7,
+  "Core_AMR_f3_proof": true,
+  "aggregate_ccache_delta": {
+    "Hits": 4,
+    "Misses": 20
+  },
+  "compiler_internal_execution_measured": false,
+  "raw_fullmanifest_source_wheel_installed_sha256": "3abe493f65ea3c9025e95fe22f1afac91df8dacccf1b891d454f5c66aa420406",
+  "actual_capabilities": {
+    "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584;dim=2",
+    "actual_module_header_signature": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+    "has_kokkos": true,
+    "has_mpi": true,
+    "has_parallel_hdf5": true,
+    "module_file": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "package_file": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/__init__.py",
+    "python": "/Users/romaindespoulain/miniforge3/envs/pops/bin/python"
+  },
+  "cached_SO_distinct_from_wheel_installed": true,
+  "cached_difference_receipt": "independent997:64-byte LC_RPATH removed, signature/padding/header changes; non-RPATH commands and payload bytes2744..14335600 equal",
+  "scope": "Actual official CPU Dim2 MPI/parallel-HDF5 build, exactwheel install/prove, physical module identity and doctor. Admitted for first original scientific test; no science/bootstrap inherited from build.",
+  "limits": [
+    "No Root new native import/build/run; independent receipt authenticates recorded module import",
+    "No PDE, OwnRetry, Native8, freshCPPaf8 DSOs/cohort, CUDA/GPU/Dim1/3 or complete94/CI qualification",
+    "OMP2 requested but effective concurrency not measured in build"
+  ]
+}

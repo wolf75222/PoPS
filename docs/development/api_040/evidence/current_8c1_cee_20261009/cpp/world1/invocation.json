@@ -1,0 +1,47 @@
+{
+  "compiled_Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "current_metadata_Source": "e27d065a5eb7c086ced60b751a2468f729361ff0",
+  "unchanged_compiled_core_proof": [
+    ".github/workflows/ci.yml",
+    "scripts/ci_pytest_timings.py",
+    "tests/python/architecture/test_ci_impacted_selection.py",
+    "tests/python/support/stage_fields_public_fixture.py",
+    "tests/python/test_durations.json"
+  ],
+  "binaries": [
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/bin/test_amr_tensor_fac_provider",
+      "bytes": 21023808,
+      "sha256": "d4f42545f8f7e1015bc5549ec70bbdcaaad08e99b555c50fe177a9813ee02435"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/bin/test_amr_program_field_publication",
+      "bytes": 24979424,
+      "sha256": "e05e66344ca75e38d6d640712edbe30570761749a12fe4f3dbba9dcbc627e97b"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/bin/test_field_nullspace",
+      "bytes": 2504200,
+      "sha256": "fff71cd6010fac9ba848437e03852fc3b0e6e32a8feeb39891e22650d23b9cb9"
+    }
+  ],
+  "argv": [
+    "ctest",
+    "--test-dir",
+    "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build",
+    "--output-on-failure",
+    "--no-tests=error",
+    "-j",
+    "1",
+    "-L",
+    "cpp-target:(test_amr_tensor_fac_provider|test_amr_program_field_publication|test_field_nullspace)$",
+    "--output-junit",
+    "/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/remaining-world1-e27d/ctest.xml"
+  ],
+  "disk_before": {
+    "total": 494384795648,
+    "used": 493990707200,
+    "free": 394088448
+  },
+  "scope": "Actual repository CTest registration for the three remaining already-built C++ targets. No new build or relabelling of existing build Source."
+}

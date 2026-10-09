@@ -1,0 +1,63 @@
+{
+  "abi_key": "compiler=15.3.0;std=202002L;headers=bc8ceef2cd0ff42555308da2f685c5663996a189a5d8e6bb4129e57b17ccca3b;kokkos=1;stdlib=libstdc++_20260612;mpi=1;mpi_abi=f0d5c4a08c55d4d84a14c6cfd4d12d992c3afa7c5f9c2ca3ee140e5d87a0fa9e;dim=2",
+  "changed_CXX_inputs": [],
+  "checks": {
+    "doctor_all_true": true,
+    "git_source_blobs_verified": 1191,
+    "installed_codegen_authority_matches_git": true,
+    "installed_files": 1156,
+    "observed_CXX_objects": 0,
+    "observed_snapshot_domain_count": 1191,
+    "old_environment_preserved": true,
+    "root_transfer_pins_rehashed": 23,
+    "sdk22_archive_verified_files": 1156,
+    "sdk22_matches_sdk22_prior_installation": true,
+    "shipped_source_verified_files": 1147,
+    "source_before_after_equal": true,
+    "wheel_nonRECORD_members_verified": 1152
+  },
+  "ci_qualified": false,
+  "codegen_source_authority": {
+    "contract": "pops.codegen-source@1",
+    "sha256": "07f1760e8a617f7a18cf81fc164db47e4704e17f6a3f0bd3b9287bae8154945a"
+  },
+  "compiler_to_dso_graph_proof": false,
+  "independent_artifacts_rewritten": false,
+  "independent_pins": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk23-build-independent-732279/pins.json",
+    "sha256": "acae96b09c827290437d5ce7fc18cda3f777ff26b0b31002f56851fadaf20614",
+    "verified": 54
+  },
+  "independent_reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk23-build-independent-732279/audit_build.py",
+    "sha256": "951a341eee0b3bb13ab6951bc2533b4ad7ea5885857836aa826406241e945753"
+  },
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk23-build-independent-732279/report.json",
+    "sha256": "130f17006142473ad4d2448820cc785f8b377692a2c198c4afbdbe63bc64fa59"
+  },
+  "installed_changes": [
+    "pops-1.1.0.dist-info/RECORD",
+    "pops-1.1.0.dist-info/direct_url.json",
+    "pops/runtime/_uniform_restart_preflight.py"
+  ],
+  "installed_header_signature": "bc8ceef2cd0ff42555308da2f685c5663996a189a5d8e6bb4129e57b17ccca3b",
+  "job": 732279,
+  "limitations": [
+    "Offline actual receipts; no Native import/execution by reviewer",
+    "CXX object count is observed from this build log only, not inherited from SDK21; command graph completeness is not claimed",
+    "Installed source and package hashes do not prove scientific correctness or transitive compiler graph",
+    "No MPI transport or M16/M17 performance/scientific qualification"
+  ],
+  "native_extension_changed": false,
+  "native_scientific_acceptance": false,
+  "native_sha256": "504c2418b028d408652426e66619d953e11a0d48d5792414090688de19dccfbd",
+  "reader_actually_replayed": true,
+  "replayed_report_byte_identical": true,
+  "schema": "root.sdk23-build-install-reception@1",
+  "source_and_installed_authority_not_inherited": true,
+  "source_freeze": "12320d97c060246c35f4a9b2a36b6f53798795ab",
+  "verdict": "BUILD_INSTALL_IDENTITY_APPROVED_NOT_SCIENCE",
+  "wheel_sha256": "5450aba52e435825e2db99205397a78223cf6da56d22ed095b45104e8ddb00bb",
+  "whole_mission_complete": false
+}

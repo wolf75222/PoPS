@@ -134,6 +134,7 @@ def _module_to_model(module: Any, state_space: Any = None,
             raise TypeError("compiler requires an exact resolved operation plan")
         provider_packs = resolved_operations.require_provider_packs(module)
         object.__setattr__(m, "_resolved_operations", resolved_operations)
+        object.__setattr__(m._m, "_resolved_operations", resolved_operations)
     m.__pops_bind_component_provider_packs__(provider_packs)
     # The facade is a lowering view of THIS Module, not a newly declared model. Re-anchor its empty
     # backing model before the first declaration so every derived operator registry retains the
@@ -222,11 +223,24 @@ def _module_to_model(module: Any, state_space: Any = None,
     }
     applicable_grid_names = {
         op.name for op in operators
-        if op.kind == "grid_operator" and (
+        if op.kind == "grid_operator" and op.signature.output.base_space == state and (
             not tuple(item for item in op.signature.inputs
                       if getattr(item, "kind", None) == "state")
             or state in op.signature.inputs)
     }
+    principal_rates = tuple(op for op in applicable_rates if op.lowering.get("principal_balance"))
+    principal_fluxes = {term.payload.reg_name for op in principal_rates
+                        for term in op.lowering["physical_balance"].occurrences}
+    if principal_rates:
+        frames = {(tuple(op.capabilities.get("storage_axes", ())),
+                   op.capabilities.get("storage_frame")) for op in principal_rates}
+        if len(frames) != 1:
+            raise ValueError("principal state storage requires one exact physical frame")
+        axes, frame = next(iter(frames))
+        if not axes or frame != state.frame:
+            raise ValueError("principal state storage requires its authored StateSpace frame")
+        object.__setattr__(m._m, "_program_only_storage_axes", axes)
+        applicable_grid_names -= principal_fluxes
     if not applicable_grid_names and any(op.lowering.get("joint_balance") for op in applicable_rates):
         # Geometry comes from the captured physical frame, never an invented transport law.
         joint_storage = {(tuple(op.capabilities.get("storage_axes", ())),
@@ -353,14 +367,27 @@ def _module_to_model(module: Any, state_space: Any = None,
         state_inputs = tuple(
             item for item in op.signature.inputs
             if getattr(item, "kind", None) == "state")
+        from pops.model.operators import LocalLinearOperator
+        if isinstance(op.signature.output, LocalLinearOperator):
+            state_inputs += (op.signature.output.domain,)
         if state_inputs and state not in state_inputs:
             coverage_rows.append(LoweringCoverageRow(
                 source, "documentary"))
             continue
         refusal = op.lowering.get("native_unsupported")
+        if op.lowering.get("principal_balance") or op.name in principal_fluxes:
+            coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:principal_finite_volume",)))
+            continue
         from pops.numerics.diffusion import diffusion_balance_supported
         from pops.numerics.scharfetter_gummel import fitted_balance_supported
         diffusion_view = op.lowering.get("physical_balance")
+        from pops.numerics.nonconservative import path_balance_supported
+        if path_balance_supported(diffusion_view):
+            coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:path_conservative_rhs",)))
+            continue
+        if op.lowering.get("nonconservative_law") is not None:
+            coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:nonconservative_constitutive_law",)))
+            continue
         from pops._ir.balance import source_balance_supported
         if source_balance_supported(diffusion_view):
             coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:source_balance",)))
@@ -461,22 +488,48 @@ def _module_to_model(module: Any, state_space: Any = None,
     retain_recipes(model_native_roots(m._m))
     from pops.codegen.diffusion_lowering import prepare_diffusion_carrier
     prepare_diffusion_carrier(m, module)
-    from pops.codegen.state_storage_lowering import prepare_source_storage_carrier
+    from pops.codegen.state_storage_lowering import (
+        prepare_local_state_storage_carrier, prepare_source_storage_carrier,
+    )
     prepare_source_storage_carrier(m, module, state_space=state)
+    # Source-only operator Modules have no physical flux axis authority. Their
+    # explicit Module frame and the exact selected StateSpace admit the existing
+    # Program-owned storage carrier; no transport law or backend rank is invented.
+    prepare_local_state_storage_carrier(
+        m, module, getattr(module, "frame", None), state_space=state)
     # The executable DSL validates the spectrum against the already-selected
     # physical flux axes.  A Module deliberately stores those two declarations
     # independently, so materialize all grid operators before attaching the
     # exact-ranked eigenvalue provider.
-    if module._eigenvalues is not None:
+    # Select waves from the exact physical flux/output-State operators in this view.
+    # A shared legacy Module law is a fallback, never a first-State selection.
+    # The single-StateSpace no-flux validation remains fail-closed.
+    from pops.model.flux_waves import common_flux_waves, common_flux_signed_bounds
+    selected_waves = None
+    if applicable_grid_names:
+        selected_waves = common_flux_waves(module, applicable_grid_names)
+    elif len(states) == 1:
+        selected_waves = module._eigenvalues
+    if (selected_waves is not None and not principal_rates
+            and (len(states) == 1 or applicable_grid_names)):
         m.eigenvalues(**{
             axis: _body_for_state(values)
-            for axis, values in module._eigenvalues.items()
+            for axis, values in selected_waves.items()
         })
         coverage_rows.append(LoweringCoverageRow(
             "module:%s:eigenvalues" % module.name, "lowered", ("dsl:eigenvalues",)))
     else:
         coverage_rows.append(LoweringCoverageRow(
             "module:%s:eigenvalues" % module.name, "documentary"))
+    selected_signed_bounds = common_flux_signed_bounds(module, applicable_grid_names)
+    if selected_signed_bounds is not None and not principal_rates:
+        m.wave_speeds(**{
+            axis: _body_for_state(pair)
+            for axis, pair in selected_signed_bounds.items()
+        })
+        coverage_rows.append(LoweringCoverageRow(
+            "module:%s:signed_bounds" % module.name, "lowered", ("dsl:wave_speeds",)))
+        retain_recipes(m._m._wave_speeds)
     retain_recipes(m._m._eig)
     from pops.codegen.state_storage_lowering import (
         prepare_named_flux_storage_carrier, prepare_state_storage_requirements,
@@ -539,7 +592,7 @@ def remap_lowering_error(exc: Any, facade: Any) -> None:
 
 
 def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
-                       *, resolved_operations: Any = None) -> Any:
+                       *, resolved_operations: Any = None, numerics: Any = None) -> Any:
     """The SINGLE validate + lower entry of the compile pipeline (ADC-557).
 
     Validates @p model ONCE and returns ``(emit_model, source_module)``:
@@ -584,6 +637,17 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
             emit_model = _module_to_model(
                 lowering.source_module, state_space=state_space,
                 resolved_operations=resolved_operations)
+            from pops.codegen.state_storage_lowering import prepare_local_state_storage_carrier
+            prepare_local_state_storage_carrier(
+                emit_model, lowering.source_module, getattr(lowering.facade, "frame", None),
+                state_space=state_space)
+            from pops.codegen.user_reconstruction_lowering import prepare_user_reconstruction_carrier
+
+            prepare_user_reconstruction_carrier(emit_model, numerics)
+            from pops.codegen.user_riemann_lowering import prepare_user_face_carrier
+            prepare_user_face_carrier(emit_model, numerics)
+            from pops.codegen.principal_lowering import prepare_principal_carrier
+            prepare_principal_carrier(emit_model, lowering.source_module, numerics)
             emit_model.check()
             return emit_model, lowering.source_module
         if resolved_operations is not None:
@@ -612,6 +676,14 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
                     owns_emitter=True,
                 )
             object.__setattr__(lowering.emit_model, "_resolved_operations", resolved_operations)
+            object.__setattr__(getattr(lowering.emit_model, "_m", lowering.emit_model),
+                               "_resolved_operations", resolved_operations)
+        from pops.codegen.nonconservative_lowering import prepare_path_carrier
+        prepare_path_carrier(lowering.emit_model, lowering.source_module, resolved_operations, numerics)
+        from pops.codegen.user_reconstruction_lowering import prepare_user_reconstruction_carrier
+        prepare_user_reconstruction_carrier(lowering.emit_model, numerics)
+        from pops.codegen.user_riemann_lowering import prepare_user_face_carrier
+        prepare_user_face_carrier(lowering.emit_model, numerics)
         lowering.bind_component_provider_packs(packs)
         lowering.emit_model.check()
         return lowering.emit_model, lowering.source_module

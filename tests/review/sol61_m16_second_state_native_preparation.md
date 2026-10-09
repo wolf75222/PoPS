@@ -1,0 +1,11 @@
+# M16 explicit degree-five second-State Native preparation @1
+
+One genuine public Model declares earlier_state with two unrelated components, then selected_state with 21 independently permuted monomials. Two explicit Case.blocks select those domains. The LocalLinear facade uses on=selected_state and registers through Model.operator in the public Module. The active flux/rate/FiniteVolume/Rusanov, dt, skew matrix, DenseLU endpoint, basis/binding and rational atom orbit are unchanged.
+
+The spectator is a passive identity Program commit, not an additional physical flux. Declaring two zero-wave arrays of unequal lengths currently refuses the shared model eigenvalue law; this known separate contract is not patched or bypassed. The passive State needs no flux evaluation. Its nonconstant dyadic initialization and negative-zero bit differ from the active atom mixture.
+
+The full compiled layout partition is authenticated by exact wrapper verify plus its resolved layout assignment and complete block-name set. The actual row order and identity are retained, not inferred from declaration position. Program block numbering is derived from the exact lowered affine value and checked against its C++ state view. All block/model and Program/native DSO pins, IR/C++/manifest are retained before bind. Both initial handles resolve publicly.
+
+Immediately before run and after run, the combined declared component order, full-grown POPSCAR1 bytes and clocks are saved; a capture failure records the actual refusal and preserves the original exception. The dummy assertion compares dtype/shape/tobytes, including negative zero. The selected population uses the independent rational orbit with the original absolute 3e-13 bound. Guards and all captures are genuine installed Native only when ROOT executes. Source preparation does not qualify the runtime.
+
+Node: tests/python/integration/runtime/test_program_affine_moment_second_state_runtime.py::test_installed_affine_degree_five_selected_second_state. ROOT owns installed-auth Serial and MPI2 execution, fresh SDK15 compile and external approval. Scope is single-level periodic synchronous AMR; no multilevel/GPU/full HyQMOM claim. No production, ENV, Native or ROMEO write accompanies this test-only gel.

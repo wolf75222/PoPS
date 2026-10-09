@@ -1,0 +1,92 @@
+"""Materialize mathematical expressions through the native Program IR."""
+from pops._ir.expr import is_scalar_expression
+from pops.time._authoring import atomic_authoring
+from pops.time.expressions import ProgramExpression, component_names, encode_expressions
+from pops.time._program.value_validation import require_compatible_spaces, require_owned
+
+
+def is_pointwise_expression(value):
+    return is_scalar_expression(value) or isinstance(value, (ProgramExpression, tuple, list))
+
+
+class _ProgramExpressions:
+    def _materialize_finite_vector(self, name, components, *, support, template, at=None):
+        from pops._ir.finite_linear import lower_finite_scalars
+        if component_names(template) != support[1]:
+            raise ValueError("finite output template differs from its ordered support")
+        expression = ProgramExpression(lower_finite_scalars(components), template)
+        return self._pointwise_expression(name, expression, at=at, finite_support=support)
+
+    @atomic_authoring
+    def _pointwise_expression(self, name, expression, *, at=None, finite_support=None,
+                              field_product_space=None, field_product_authority=None):
+        if isinstance(expression, ProgramExpression):
+            expressions = expression.components
+            template = expression.template
+        else:
+            expressions = tuple(expression) if isinstance(expression, (tuple, list)) else (expression,)
+            template = None
+        encoded, nodes, inputs = encode_expressions(expressions, self)
+        if not inputs:
+            raise ValueError("a pointwise expression needs a temporal value to define its support")
+        if template is None:
+            template = next((item for item in inputs if item.vtype == "state"), None)
+            if template is None:
+                template = next((item for item in inputs
+                                 if item.op != "integral_candidate"), None)
+        if template is None:
+            raise ValueError("a global capture cannot define cell support")
+        require_owned(self, template, "pointwise expression template")
+        if template.vtype != "state":
+            raise TypeError("pointwise materialization currently requires a typed State template")
+        if len(expressions) != len(component_names(template)) and field_product_space is None:
+            raise ValueError("pointwise output component count must match its StateSpace")
+        attrs = {"expressions": encoded, "expression_nodes": nodes}
+        if field_product_space is not None:
+            from pops.model.spaces import FieldSpace
+            if type(field_product_space) is not FieldSpace or field_product_authority is None or finite_support is not None:
+                raise TypeError("field seed product requires an explicit FieldSpace and original authority")
+            if len(expressions) != len(field_product_space.components):
+                raise ValueError("field seed product width differs from its physical FieldSpace")
+            attrs.update(field_product_seed=field_product_authority,
+                         ncomp=len(expressions), field_product_template_index=next(i for i, row in enumerate(inputs) if row is template))
+        globals_ = tuple(value for value in inputs if value.op == "integral_candidate")
+        if globals_:
+            if all(value is not template for value in inputs):
+                inputs = (*inputs, template)
+            attrs["global_template_index"] = next(i for i, value in enumerate(inputs) if value is template)
+            from pops.time._evaluation_point import evaluation_stage_fraction
+            if any(evaluation_stage_fraction(value) != evaluation_stage_fraction(template)
+                   for value in globals_):
+                raise ValueError("global capture and cell evaluation require the same exact point")
+        if finite_support is not None:
+            if type(finite_support) is not tuple or len(finite_support) != 2 or \
+                    type(finite_support[0]) is not str or not finite_support[0] or \
+                    finite_support[1] != component_names(template):
+                raise ValueError("finite materialization requires its exact output support")
+            if all(value is not template for value in inputs):
+                inputs = (*inputs, template)
+            attrs["finite_support_v1"] = finite_support
+            attrs["finite_template_index"] = next(i for i, value in enumerate(inputs) if value is template)
+            for value in inputs:
+                if value.op == "integral_candidate":
+                    continue
+                for attribute in ("layout", "centering", "support", "sampling", "frame", "clock"):
+                    if getattr(value.space, attribute) != getattr(template.space, attribute):
+                        raise ValueError("finite materialization co-location obligation: different " + attribute)
+        for value in (() if finite_support is not None else inputs):
+            if value.vtype == "scalar":
+                continue
+            if value.block != template.block:
+                raise ValueError("pointwise inputs require the same block support; use an explicit map")
+            require_compatible_spaces(template.space, value.space, "pointwise expression", typed_pair=True)
+        from pops.time.field_context import merge_field_provenance
+        context = None
+        for value in inputs:
+            context = merge_field_provenance(context, value.field_context)
+        return self._new("scalar_field" if field_product_space is not None else "state", "pointwise_expression", inputs,
+                         attrs, name, template.block,
+                         space=template.space if field_product_space is None else field_product_space,
+                         point=template.point if at is None else at,
+                         field_context=context, state_ref=template.state_ref if field_product_space is None else None,
+                         inherit_state_ref=field_product_space is None)

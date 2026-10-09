@@ -1,0 +1,7 @@
+{
+  "utc": "2026-10-09T01:08:21.714772+00:00",
+  "exit": 0,
+  "stdout": "{\"queue\": \"738174|PENDING|(DependencyNeverSatisfied)\\n\", \"cancel_exit\": 0, \"accounting\": \"738173|FAILED|1:0|00:00:10|romeo-a041\\n738174|CANCELLED by 100267|0:0|00:00:00|None assigned\\n\", \"accounting_exit\": 0}\n",
+  "stderr": "** WARNING: connection is not using a post-quantum key exchange algorithm.\n** This session may be vulnerable to \"store now, decrypt later\" attacks.\n** The server may need to be upgraded. See https://openssh.com/pq.html\n",
+  "scope": "Actual cancellation only of738174after its failed738173dependency, no build rerun."
+}

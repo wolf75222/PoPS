@@ -55,3 +55,6 @@ from .physical_mapping import AxisQuadrature, PhysicalSupportMap, VelocityQuadra
 __all__ += ["AxisQuadrature", "PhysicalSupportMap", "VelocityQuadrature"]
 from .native_physical_mapping import native_physical_mapping
 __all__ += ["native_physical_mapping"]
+
+from .moving import GeometryEvolution, MovingControlVolumes
+__all__ += ["GeometryEvolution", "MovingControlVolumes"]

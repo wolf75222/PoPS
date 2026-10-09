@@ -1,0 +1,314 @@
+{
+  "verdict": "ACCEPT bounded Dim1 metadata correction; M10 SSP dependent-field contract gap remains blocked/refused",
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "actual_CI_failed_log_sha256": "f5be705ca6ecd04d0e30044d701079a180d2cfef6e6c92a7eaa10015b8b60c5a",
+  "actual_selected_paths": [
+    "tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py",
+    "tests/python/integration/runtime/test_interface_boundary_flux_ownership.py",
+    "tests/python/integration/runtime/test_m10_self_consistent_sg.py",
+    "tests/python/integration/runtime/test_uniform_cp9_dim2_runtime.py",
+    "tests/python/unit/codegen/test_program_emit_kernels_nd.py",
+    "tests/python/unit/moments/test_fan_li15_path_native.py",
+    "tests/python/unit/runtime/test_auxiliary_component_routes.py",
+    "tests/python/unit/runtime/test_destring_finite_volume.py"
+  ],
+  "routes_before": {
+    "2": [
+      "tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py",
+      "tests/python/integration/runtime/test_interface_boundary_flux_ownership.py",
+      "tests/python/integration/runtime/test_m10_self_consistent_sg.py",
+      "tests/python/integration/runtime/test_uniform_cp9_dim2_runtime.py",
+      "tests/python/unit/codegen/test_program_emit_kernels_nd.py",
+      "tests/python/unit/moments/test_fan_li15_path_native.py",
+      "tests/python/unit/runtime/test_auxiliary_component_routes.py",
+      "tests/python/unit/runtime/test_destring_finite_volume.py"
+    ]
+  },
+  "routes_after": {
+    "1": [
+      "tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py",
+      "tests/python/integration/runtime/test_m10_self_consistent_sg.py"
+    ],
+    "2": [
+      "tests/python/integration/runtime/test_interface_boundary_flux_ownership.py",
+      "tests/python/integration/runtime/test_uniform_cp9_dim2_runtime.py",
+      "tests/python/unit/codegen/test_program_emit_kernels_nd.py",
+      "tests/python/unit/moments/test_fan_li15_path_native.py",
+      "tests/python/unit/runtime/test_auxiliary_component_routes.py",
+      "tests/python/unit/runtime/test_destring_finite_volume.py"
+    ]
+  },
+  "dimensional_evidence": "M05 explicitly selectsDim1 and actualexamplebuild_case usesCartesian1D,one-coordinatebounds,CartesianGridcells=(cells,),initialshape(1,cells); M10actual_case usesCartesian1D,one-coordinatebounds,UniformCartesianGridcells=(n,),actualresolvedDimension1. Source-only actualresolve confirmsbothdimensions1 withNative import blocked. NamesdidnotdetermineDimension.",
+  "metadata_patch": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/shard47-two-dimensional-routing.patch",
+  "metadata_patch_sha256": "d0300b8cf2311b5f48518b09daa596c381bd92992e6071967544c4b67878ff28",
+  "forward_apply_exact": true,
+  "existing_dimension_routes_unchanged": true,
+  "actual_source_probe_receipt_sha256": "05d048270050e78ee1786a69d92f6090fd1cb936ccb19137e8ace2d548f1414d",
+  "actual_source_probe": {
+    "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+    "test_source_sha256": "8fd87c8254c8fb153a9ccfbc420b663fe1dad6ea173362f3bf6bd255fd9730cc",
+    "resolved_dimension": 1,
+    "certificate": null,
+    "refusal": "forward-Euler premise unproved for dependent Field/evaluation inputs",
+    "actual_states_accepted": [
+      {
+        "block": "density",
+        "value_id": 14,
+        "op": "linear_combine"
+      },
+      {
+        "block": "background",
+        "value_id": 15,
+        "op": "linear_combine"
+      }
+    ],
+    "actual_SSA_rows": [
+      {
+        "id": 0,
+        "op": "state",
+        "input_ids": [],
+        "block": "density",
+        "stage": "TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='M10-one-stage'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)",
+        "field_context": "None",
+        "attrs_keys": [
+          "state"
+        ]
+      },
+      {
+        "id": 1,
+        "op": "state",
+        "input_ids": [],
+        "block": "background",
+        "stage": "TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='M10-one-stage'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)",
+        "field_context": "None",
+        "attrs_keys": [
+          "state"
+        ]
+      },
+      {
+        "id": 2,
+        "op": "field_problem_load",
+        "input_ids": [
+          0,
+          1
+        ],
+        "block": null,
+        "stage": "StagePoint(name='potential', _coordinates=(('main', TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='M10-one-stage'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)),))",
+        "field_context": "None",
+        "attrs_keys": [
+          "expressions",
+          "field_dependencies",
+          "field_handle",
+          "field_problem_identity",
+          "ncomp",
+          "physical_boundary",
+          "scope",
+          "stencil_access"
+        ]
+      },
+      {
+        "id": 3,
+        "op": "field_problem_coefficients",
+        "input_ids": [
+          0,
+          1
+        ],
+        "block": null,
+        "stage": "StagePoint(name='potential', _coordinates=(('main', TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='M10-one-stage'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)),))",
+        "field_context": "None",
+        "attrs_keys": [
+          "expressions",
+          "field_dependencies",
+          "field_handle",
+          "field_problem_identity",
+          "ncomp",
+          "physical_boundary",
+          "scope",
+          "stencil_access",
+          "unknown_ncomp"
+        ]
+      },
+      {
+        "id": 4,
+        "op": "matrix_free_operator",
+        "input_ids": [],
+        "block": null,
+        "stage": "TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='M10-one-stage'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)",
+        "field_context": "None",
+        "attrs_keys": [
+          "apply_block",
+          "apply_in",
+          "apply_out",
+          "apply_region",
+          "apply_result",
+          "declared_stencil_access",
+          "domain",
+          "ncomp",
+          "range",
+          "stencil_access"
+        ]
+      },
+      {
+        "id": 8,
+        "op": "solve_linear",
+        "input_ids": [
+          4,
+          2
+        ],
+        "block": null,
+        "stage": "StagePoint(name='potential', _coordinates=(('main', TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='M10-one-stage'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)),))",
+        "field_context": "None",
+        "attrs_keys": [
+          "abs_tol",
+          "gauge_contract",
+          "has_guess",
+          "krylov_footprint",
+          "max_iter",
+          "method_options",
+          "method_provider",
+          "ncomp",
+          "nullspace_contract",
+          "nullspace_provider",
+          "operator_properties",
+          "preconditioner_options",
+          "preconditioner_provider",
+          "problem_kind",
+          "solve_request",
+          "solver_identity",
+          "tol"
+        ]
+      },
+      {
+        "id": 9,
+        "op": "solve_outcome",
+        "input_ids": [
+          8
+        ],
+        "block": null,
+        "stage": "StagePoint(name='potential', _coordinates=(('main', TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='M10-one-stage'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)),))",
+        "field_context": "None",
+        "attrs_keys": [
+          "action"
+        ]
+      },
+      {
+        "id": 10,
+        "op": "solve_outcome_component",
+        "input_ids": [
+          9
+        ],
+        "block": null,
+        "stage": "StagePoint(name='potential', _coordinates=(('main', TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='M10-one-stage'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)),))",
+        "field_context": "None",
+        "attrs_keys": [
+          "index",
+          "ncomp",
+          "problem_identity",
+          "result_name",
+          "unknown_identity"
+        ]
+      },
+      {
+        "id": 11,
+        "op": "field_component",
+        "input_ids": [
+          10
+        ],
+        "block": null,
+        "stage": "StagePoint(name='potential', _coordinates=(('main', TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='M10-one-stage'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)),))",
+        "field_context": "None",
+        "attrs_keys": [
+          "component",
+          "field_problem_identity",
+          "field_unknown",
+          "ncomp",
+          "stencil_access"
+        ]
+      },
+      {
+        "id": 12,
+        "op": "field_publication",
+        "input_ids": [
+          11,
+          0
+        ],
+        "block": null,
+        "stage": "StagePoint(name='potential', _coordinates=(('main', TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='M10-one-stage'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)),))",
+        "field_context": "FieldContext(field=FieldHandle(local_id='M10-Poisson', kind='field', owner='case:M10-self-consistent-SG#authoring=0'), stage_sources=((BlockHandle(local_id='density', kind='block', owner='case:M10-self-consistent-SG#authoring=0'), 0), (BlockHandle(local_id='background', kind='block', owner='case:M10-self-consistent-SG#authoring=0'), 1)), outputs=('potential',))",
+        "attrs_keys": [
+          "bindings",
+          "consumer_states",
+          "field",
+          "field_problem_identity"
+        ]
+      },
+      {
+        "id": 13,
+        "op": "diffusive_rhs",
+        "input_ids": [
+          0,
+          12
+        ],
+        "block": "density",
+        "stage": "TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='M10-one-stage'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)",
+        "field_context": "FieldContext(field=FieldHandle(local_id='M10-Poisson', kind='field', owner='case:M10-self-consistent-SG#authoring=0'), stage_sources=((BlockHandle(local_id='density', kind='block', owner='case:M10-self-consistent-SG#authoring=0'), 0), (BlockHandle(local_id='background', kind='block', owner='case:M10-self-consistent-SG#authoring=0'), 1)), outputs=('potential',))",
+        "attrs_keys": [
+          "fitted",
+          "operator_handle",
+          "physical_balance"
+        ]
+      },
+      {
+        "id": 14,
+        "op": "linear_combine",
+        "input_ids": [
+          0,
+          13
+        ],
+        "block": "density",
+        "stage": "TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='M10-one-stage'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=1)",
+        "field_context": "FieldContext(field=FieldHandle(local_id='M10-Poisson', kind='field', owner='case:M10-self-consistent-SG#authoring=0'), stage_sources=((BlockHandle(local_id='density', kind='block', owner='case:M10-self-consistent-SG#authoring=0'), 0), (BlockHandle(local_id='background', kind='block', owner='case:M10-self-consistent-SG#authoring=0'), 1)), outputs=('potential',))",
+        "attrs_keys": [
+          "coeffs"
+        ]
+      },
+      {
+        "id": 15,
+        "op": "linear_combine",
+        "input_ids": [
+          1
+        ],
+        "block": "background",
+        "stage": "TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='M10-one-stage'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=1)",
+        "field_context": "None",
+        "attrs_keys": [
+          "coeffs"
+        ]
+      },
+      {
+        "id": 16,
+        "op": "store_history",
+        "input_ids": [
+          11
+        ],
+        "block": null,
+        "stage": "StagePoint(name='potential', _coordinates=(('main', TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='M10-one-stage'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)),))",
+        "field_context": "None",
+        "attrs_keys": [
+          "history",
+          "state"
+        ]
+      }
+    ],
+    "actual_Field_dependency_count": 2,
+    "Native_imported_or_executed": false,
+    "scope": "Actual Source-only author/resolved graph inspection. No emitter/guard modification, Native/load/compile/rebuild/install.",
+    "m05_actual_resolved_dimension": 1,
+    "m05_source_sha256": "d7a835ff121503082319e256344ebbf57482ab36e8aefe6f85d0a18f67d21c41"
+  },
+  "mathematical_diagnosis": "Notastaticinput_fields producer. ActualRHS diffusive_rhs13 reads densityState0 plusfield_publication12; publishedPhi11 derives solve8/load2 withdependenciesdensity0+background1. Densitycommit14=State0+dtRHS13; backgroundcommit15=State1 unchanged. ThusPhi genuinelydependsonupdatedState; frozen_read reachesnonfrozenState0 and refuses undercurrentconditionalSSPclosure. Baselineguarded3 differs: itsPhi dependsfrozendonor, so doesnot coverthisdynamicfeedback.",
+  "next_generic_contract_needed": "Authenticate exactone-stage FE evaluation snapshot U_n+dt R(U_n;Phi(U_n,B_n)) aspartof actualRHS, withresolved/emittedProviderPack authority, consumedsolve/publicationownership, ownState/samepoint+clock+region, completefieldreadcoverage/typedformalcomponents and frozenforeignstates. ConditionalexistingFEspatialstability/positivityguards remainmandatory. Refuseforeign/future/staleState, wrongstage/context/owner/component, mutation/producerreprojection andnegativeweights. Do notcallcomputedPhi frozen, do notinput_fields\u2192True, do not certifyauthoredpackalone, do notrestoreunusedsingleFEfallbackblindly orwaiveM10. NoImplementationclaimed.",
+  "generic_small_counterexample": "ScalarU evolving, Solve(-L_h Phi=U-B), publishPhi, acceptU+dtR(U,Phi): samecanonicalstageU means validpossible nonlinearFE composition, but cannot establishfrozenPhi because dPhi/dU is notzero. SwappingPhi to a solvefroma differentUstage can violate actual methodsemantics while leavingU+dtR form unchanged; snapshotauthority is required ratherthan numeric/modelpattern recognition.",
+  "Native_import_execute_or_Main_environment_modified": false,
+  "limits": "No actualDim1Native/build/run/CIrerun; correctedrouting alone doesnotremoveM10SourceSSPfailure and mayexpose thesamerefusal inNativeDim1. Mainandscientificfreeze untouched."
+}

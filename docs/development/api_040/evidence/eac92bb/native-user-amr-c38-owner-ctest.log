@@ -1,0 +1,277 @@
+Test project /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi
+      Start 1059: test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements
+      Start 1113: test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction
+ 1/73 Test #1113: test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction .........................................   Passed    1.05 sec
+      Start 1111: test_amr_history_ring.RetainsAndInterpolatesExactRankedState
+ 2/73 Test #1111: test_amr_history_ring.RetainsAndInterpolatesExactRankedState .................................................................   Passed    0.06 sec
+      Start 1116: test_amr_history_ring.ThreeLevelProgramFailsClosedWithoutExactFluxExpressionBudget
+ 3/73 Test #1116: test_amr_history_ring.ThreeLevelProgramFailsClosedWithoutExactFluxExpressionBudget ...........................................   Passed    0.06 sec
+      Start 1114: test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore
+ 4/73 Test #1114: test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore ..................................................   Passed    0.06 sec
+      Start 1112: test_amr_history_ring.FacadeTransactionRestoresAcceptedHistoryImage
+ 5/73 Test #1112: test_amr_history_ring.FacadeTransactionRestoresAcceptedHistoryImage ..........................................................   Passed    0.06 sec
+      Start 1115: test_amr_history_ring.RegisteredHistoryRejectsTopologyPublicationBeforeMutation
+ 6/73 Test #1115: test_amr_history_ring.RegisteredHistoryRejectsTopologyPublicationBeforeMutation ..............................................   Passed    0.06 sec
+      Start  869: GeneratedAmrSystemBlock.PreparesOneExactNativePackageImage
+ 7/73 Test  #869: GeneratedAmrSystemBlock.PreparesOneExactNativePackageImage ...................................................................   Passed    1.04 sec
+      Start  870: GeneratedAmrSystemBlock.ProgramStateHaloRequirementReachesUniformAndAmrFactories
+ 8/73 Test  #870: GeneratedAmrSystemBlock.ProgramStateHaloRequirementReachesUniformAndAmrFactories .............................................   Passed    0.05 sec
+      Start  871: GeneratedAmrSystemBlock.ComposedProgramHalosPreserveHyperbolicReconstructionRequirements
+ 9/73 Test  #871: GeneratedAmrSystemBlock.ComposedProgramHalosPreserveHyperbolicReconstructionRequirements .....................................   Passed    0.05 sec
+      Start  872: GeneratedAmrSystemBlock.ProgramStateRouteDoesNotInstantiateHyperbolicPhysics
+10/73 Test  #872: GeneratedAmrSystemBlock.ProgramStateRouteDoesNotInstantiateHyperbolicPhysics .................................................   Passed    0.06 sec
+      Start  873: GeneratedAmrSystemBlock.SourceRoutePreflightDefersAuthenticationToCompiledPolicies
+11/73 Test  #873: GeneratedAmrSystemBlock.SourceRoutePreflightDefersAuthenticationToCompiledPolicies ...........................................   Passed    0.05 sec
+      Start  874: GeneratedAmrSystemBlock.SourceRoutePreflightRefusesMalformedIdentityAndInvalidControls
+12/73 Test  #874: GeneratedAmrSystemBlock.SourceRoutePreflightRefusesMalformedIdentityAndInvalidControls .......................................   Passed    0.05 sec
+      Start  875: GeneratedAmrSystemBlock.PhysicalFacesUseTheirAuthenticatedNumericalAuthority
+13/73 Test  #875: GeneratedAmrSystemBlock.PhysicalFacesUseTheirAuthenticatedNumericalAuthority .................................................   Passed    0.05 sec
+      Start  876: GeneratedAmrSystemBlock.PackageContractAuthenticatesPhysicalModelParameters
+14/73 Test  #876: GeneratedAmrSystemBlock.PackageContractAuthenticatesPhysicalModelParameters ..................................................   Passed    0.06 sec
+      Start  877: GeneratedAmrSystemBlock.PackageContractAuthenticatesVariableNamesRolesAndUserRoles
+15/73 Test  #877: GeneratedAmrSystemBlock.PackageContractAuthenticatesVariableNamesRolesAndUserRoles ...........................................   Passed    0.05 sec
+      Start  878: GeneratedAmrSystemBlock.RejectsUnpreparedOptionalAuthorities
+16/73 Test  #878: GeneratedAmrSystemBlock.RejectsUnpreparedOptionalAuthorities .................................................................   Passed    0.05 sec
+      Start  879: GeneratedAmrSystemBlock.CellPrimitiveConversionConsumesPreparedRecoveryOutcome
+17/73 Test  #879: GeneratedAmrSystemBlock.CellPrimitiveConversionConsumesPreparedRecoveryOutcome ...............................................   Passed    0.05 sec
+      Start  880: GeneratedAmrSystemBlock.PrimitiveToConservativePublicationRoundtripsBeforeCommit
+18/73 Test  #880: GeneratedAmrSystemBlock.PrimitiveToConservativePublicationRoundtripsBeforeCommit .............................................   Passed    0.05 sec
+      Start  881: GeneratedAmrSystemBlock.FacadeRetainsAndExecutesPreparedRootLevel
+19/73 Test #1059: test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements .............***Failed    3.03 sec
+Note: Google Test filter = test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_amr_synthetic_program_loader_transaction
+[ RUN      ] test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/integration/native_loader/test_amr_synthetic_program_loader_transaction.cpp:1408: Failure
+Expected: system.regrid_on_restart() doesn't throw an exception.
+  Actual: it throws std::invalid_argument with description "exact AMR Program checkpoint has an invalid pending history remap".
+
+[  FAILED  ] test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements (2503 ms)
+[----------] 1 test from test_amr_synthetic_program_loader_transaction (2503 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (2503 ms total)
+[  PASSED  ] 0 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements
+
+ 1 FAILED TEST
+
+      Start 1054: test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage
+20/73 Test  #881: GeneratedAmrSystemBlock.FacadeRetainsAndExecutesPreparedRootLevel ............................................................   Passed    0.06 sec
+      Start  882: GeneratedAmrSystemBlock.VariableNamesReadAuthenticatedPreparedBlockMetadata
+21/73 Test  #882: GeneratedAmrSystemBlock.VariableNamesReadAuthenticatedPreparedBlockMetadata ..................................................   Passed    0.06 sec
+      Start  883: GeneratedAmrSystemBlock.RegridRebuildsExactFineGhostProvidersAndInvalidatesLedger
+22/73 Test  #883: GeneratedAmrSystemBlock.RegridRebuildsExactFineGhostProvidersAndInvalidatesLedger ............................................   Passed    0.06 sec
+      Start  884: GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts
+23/73 Test  #884: GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts .................................................   Passed    0.08 sec
+      Start  885: GeneratedAmrSystemBlock.SparseParentRegridRequiresOnlyChildInterpolationSources
+24/73 Test  #885: GeneratedAmrSystemBlock.SparseParentRegridRequiresOnlyChildInterpolationSources ..............................................   Passed    0.14 sec
+      Start  886: GeneratedAmrSystemBlock.SubcyclingRetainsDeclaredDurationAcrossAbsoluteTimeBinade
+25/73 Test #1054: test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage ....................   Passed    3.89 sec
+      Start 1052: test_amr_synthetic_program_loader_transaction.SourceBuiltArtifactLoadsBudgetRollsBackAndRetries
+26/73 Test #1052: test_amr_synthetic_program_loader_transaction.SourceBuiltArtifactLoadsBudgetRollsBackAndRetries ..............................   Passed    3.14 sec
+      Start 1055: test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes
+27/73 Test #1055: test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes .................   Passed    2.78 sec
+      Start 1060: test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication
+28/73 Test #1060: test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication ...........   Passed    2.55 sec
+      Start 1061: test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback
+29/73 Test #1061: test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback ............   Passed    2.53 sec
+      Start 1051: test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh
+30/73 Test #1051: test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh ...   Passed    1.93 sec
+      Start 1053: test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack
+31/73 Test #1053: test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack ...............   Passed    1.95 sec
+      Start 1058: test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority
+32/73 Test #1058: test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority .....................   Passed    1.37 sec
+      Start 1056: test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback
+33/73 Test #1056: test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback .................   Passed    1.35 sec
+      Start 1057: test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart
+34/73 Test #1057: test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart ....................   Passed    1.38 sec
+      Start  887: GeneratedAmrSystemBlock.EmbeddedBoundaryRematerializesPerLevelAndWeightsCompositeMassAndSidecars
+35/73 Test  #887: GeneratedAmrSystemBlock.EmbeddedBoundaryRematerializesPerLevelAndWeightsCompositeMassAndSidecars .............................   Passed    0.07 sec
+      Start  888: GeneratedAmrSystemBlock.CutCellCapabilityExecutesAtExactRank
+36/73 Test  #888: GeneratedAmrSystemBlock.CutCellCapabilityExecutesAtExactRank .................................................................   Passed    0.06 sec
+      Start  889: GeneratedAmrSystemBlock.DiffusiveEmbeddedRoutesRefuseWithoutFaceGeometry
+37/73 Test  #889: GeneratedAmrSystemBlock.DiffusiveEmbeddedRoutesRefuseWithoutFaceGeometry .....................................................   Passed    0.07 sec
+      Start  890: GeneratedAmrSystemBlock.EmbeddedBoundaryAuthoringRejectsDivergentMpiInputBeforeMutation
+38/73 Test  #890: GeneratedAmrSystemBlock.EmbeddedBoundaryAuthoringRejectsDivergentMpiInputBeforeMutation ......................................   Passed    0.05 sec
+      Start  891: GeneratedAmrSystemBlock.ProgramContextOwnsOneExactHierarchyTensorAuthority
+39/73 Test  #891: GeneratedAmrSystemBlock.ProgramContextOwnsOneExactHierarchyTensorAuthority ...................................................   Passed    0.07 sec
+      Start  892: GeneratedAmrSystemBlock.ProgramContextEvaluatesExactStageStateWithoutPublishingIt
+40/73 Test  #892: GeneratedAmrSystemBlock.ProgramContextEvaluatesExactStageStateWithoutPublishingIt ............................................   Passed    0.06 sec
+      Start  893: GeneratedAmrSystemBlock.RhsGroupPrevalidatesAndPublishesFullAndFluxRoundsAtomically
+41/73 Test  #893: GeneratedAmrSystemBlock.RhsGroupPrevalidatesAndPublishesFullAndFluxRoundsAtomically ..........................................   Passed    0.08 sec
+      Start  894: GeneratedAmrSystemBlock.RegistersOnlyExactRankedNullspaceProviders
+42/73 Test  #894: GeneratedAmrSystemBlock.RegistersOnlyExactRankedNullspaceProviders ...........................................................   Passed    0.06 sec
+      Start  895: GeneratedAmrSystemBlock.DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptance
+43/73 Test  #895: GeneratedAmrSystemBlock.DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptance .................................................   Passed    0.07 sec
+      Start  896: GeneratedAmrSystemBlock.NamedFieldConsumesExactStageWithoutPublishingState
+44/73 Test  #896: GeneratedAmrSystemBlock.NamedFieldConsumesExactStageWithoutPublishingState ...................................................   Passed    0.07 sec
+      Start  897: GeneratedAmrSystemBlock.ExplicitFieldTopologyIsIndependentOfPeriodicTransport
+45/73 Test  #897: GeneratedAmrSystemBlock.ExplicitFieldTopologyIsIndependentOfPeriodicTransport ................................................   Passed    0.08 sec
+      Start  898: GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance
+46/73 Test  #898: GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance ..........................   Passed    0.07 sec
+      Start  899: GeneratedAmrSystemBlock.CompositeFieldInstallsCoverageAwareNullspaceOnEveryLiveLevel
+47/73 Test  #899: GeneratedAmrSystemBlock.CompositeFieldInstallsCoverageAwareNullspaceOnEveryLiveLevel .........................................   Passed    0.07 sec
+      Start  900: GeneratedAmrSystemBlock.BootstrapRecomputeHelmholtzAfterCreateLevel
+48/73 Test  #900: GeneratedAmrSystemBlock.BootstrapRecomputeHelmholtzAfterCreateLevel ..........................................................   Passed    0.24 sec
+      Start  901: GeneratedAmrSystemBlock.ProgramContextRefusesUnsynchronizedHierarchyBeforeMutation
+49/73 Test  #901: GeneratedAmrSystemBlock.ProgramContextRefusesUnsynchronizedHierarchyBeforeMutation ...........................................   Passed    0.07 sec
+      Start  902: GeneratedAmrSystemBlock.SpatialHierarchyTraversalRequiresReleasedLevelEnvelopes
+50/73 Test  #902: GeneratedAmrSystemBlock.SpatialHierarchyTraversalRequiresReleasedLevelEnvelopes ..............................................   Passed    0.06 sec
+      Start  903: GeneratedAmrSystemBlock.ProgramContextRetainsAndInterpolatesExactLevelHistory
+51/73 Test  #903: GeneratedAmrSystemBlock.ProgramContextRetainsAndInterpolatesExactLevelHistory ................................................   Passed    0.06 sec
+      Start  904: GeneratedAmrSystemBlock.FluxHistoryMigratesDeclaredFamiliesAndPreservesNativeEmptyMode
+52/73 Test  #904: GeneratedAmrSystemBlock.FluxHistoryMigratesDeclaredFamiliesAndPreservesNativeEmptyMode .......................................   Passed    0.06 sec
+      Start  905: GeneratedAmrSystemBlock.EmptyStateHistoryFluxRegistryIsExplicitAndMissingProvenanceRefuses
+53/73 Test  #905: GeneratedAmrSystemBlock.EmptyStateHistoryFluxRegistryIsExplicitAndMissingProvenanceRefuses ...................................   Passed    0.07 sec
+      Start  906: GeneratedAmrSystemBlock.ProgramContextRefusesHistoryRegridBeforeTopologyMutation
+54/73 Test  #906: GeneratedAmrSystemBlock.ProgramContextRefusesHistoryRegridBeforeTopologyMutation .............................................   Passed    0.06 sec
+      Start  907: GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords
+55/73 Test  #907: GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords ..........................................   Passed    0.05 sec
+      Start  908: GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically
+56/73 Test  #908: GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically ................................................   Passed    0.16 sec
+      Start  909: GeneratedAmrSystemBlock.ProjectedSharedSourcesKeepDistinctLedgerIdentities
+57/73 Test  #909: GeneratedAmrSystemBlock.ProjectedSharedSourcesKeepDistinctLedgerIdentities ...................................................   Passed    0.05 sec
+      Start  910: GeneratedAmrSystemBlock.ProjectedSharedSourcesRequireCapturedAssociation
+58/73 Test  #910: GeneratedAmrSystemBlock.ProjectedSharedSourcesRequireCapturedAssociation .....................................................   Passed    0.05 sec
+      Start  911: GeneratedAmrSystemBlock.PreparedHistoryRemapAcceptsPublishedReplacement
+59/73 Test  #911: GeneratedAmrSystemBlock.PreparedHistoryRemapAcceptsPublishedReplacement ......................................................   Passed    0.62 sec
+      Start  912: GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences
+60/73 Test  #912: GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences ......................................................   Passed    0.16 sec
+      Start  913: GeneratedAmrSystemBlock.NoopPreparedRegridPreservesInitializedHistory
+61/73 Test  #913: GeneratedAmrSystemBlock.NoopPreparedRegridPreservesInitializedHistory ........................................................   Passed    0.07 sec
+      Start  914: GeneratedAmrSystemBlock.CflUsesFinestExactGeometryAndPreparedModelSpeed
+62/73 Test  #914: GeneratedAmrSystemBlock.CflUsesFinestExactGeometryAndPreparedModelSpeed ......................................................   Passed    0.06 sec
+      Start  915: GeneratedAmrSystemBlock.DiffusiveCflUsesFinestParabolicGeometryAndReportsFrequency
+63/73 Test  #915: GeneratedAmrSystemBlock.DiffusiveCflUsesFinestParabolicGeometryAndReportsFrequency ...........................................   Passed    0.06 sec
+      Start  916: GeneratedAmrSystemBlock.CflAuthenticatesRequestsAndBoundOrderBeforeCallbacks
+64/73 Test  #916: GeneratedAmrSystemBlock.CflAuthenticatesRequestsAndBoundOrderBeforeCallbacks .................................................   Passed    0.06 sec
+      Start  917: GeneratedAmrSystemBlock.ConstantBootstrapReprojectionPreservesExactValue
+65/73 Test  #917: GeneratedAmrSystemBlock.ConstantBootstrapReprojectionPreservesExactValue .....................................................   Passed    0.07 sec
+      Start  918: GeneratedAmrSystemBlock.CellIntegralBootstrapReprojectionPreservesConstant
+66/73 Test  #918: GeneratedAmrSystemBlock.CellIntegralBootstrapReprojectionPreservesConstant ...................................................   Passed    0.07 sec
+      Start  919: GeneratedAmrSystemBlock.CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry
+67/73 Test  #919: GeneratedAmrSystemBlock.CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry .......................................***Skipped   0.05 sec
+      Start  920: GeneratedAmrSystemBlock.GaussianBootstrapReprojectionPreservesExactNeutrality
+68/73 Test  #920: GeneratedAmrSystemBlock.GaussianBootstrapReprojectionPreservesExactNeutrality ................................................   Passed    0.07 sec
+      Start  921: GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry
+69/73 Test  #921: GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry ...........................................***Skipped   0.05 sec
+70/73 Test  #886: GeneratedAmrSystemBlock.SubcyclingRetainsDeclaredDurationAcrossAbsoluteTimeBinade ............................................   Passed   27.29 sec
+      Start 1355: test_amr_synthetic_program_loader_transaction_np2
+71/73 Test #1355: test_amr_synthetic_program_loader_transaction_np2 ............................................................................***Failed   28.73 sec
+Note: Google Test filter = test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh:test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack:test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements:test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication:test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback:test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage:test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes:test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback:test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart:test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority
+[==========] Running 10 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 10 tests from test_amr_synthetic_program_loader_transaction
+[ RUN      ] test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh
+Note: Google Test filter = test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh:test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack:test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements:test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication:test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback:test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage:test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes:test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback:test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart:test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority
+[==========] Running 10 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 10 tests from test_amr_synthetic_program_loader_transaction
+[ RUN      ] test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh
+[       OK ] test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh (2511 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack
+[       OK ] test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh (2511 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack
+[       OK ] test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack (2603 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage
+[       OK ] test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack (2603 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage (5339 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage (5339 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes (3681 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes (3681 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback (1830 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback (1830 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart (1809 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart (1810 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority (1881 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements
+[       OK ] test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority (1881 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/integration/native_loader/test_amr_synthetic_program_loader_transaction.cpp:1408: Failure
+Expected: system.regrid_on_restart() doesn't throw an exception.
+  Actual: it throws std::runtime_error with description "AMR restart regrid failed on at least one MPI rank".
+
+/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/integration/native_loader/test_amr_synthetic_program_loader_transaction.cpp:1408: Failure
+Expected: system.regrid_on_restart() doesn't throw an exception.
+  Actual: it throws std::runtime_error with description "AMR restart regrid failed on at least one MPI rank".
+
+[  FAILED  ] test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements (2249 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication
+[  FAILED  ] test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements (2249 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication
+scheduled-history-remap rank=1 retry=0 fine=1296->2304 epoch=1->2 generation=1->2 C=0->1 regrids=1->2 histories=4 initialized=4 fill=1 step=1 time=0.125
+scheduled-history-remap rank=0 retry=0 fine=1296->2304 epoch=1->2 generation=1->2 C=0->1 regrids=1->2 histories=4 initialized=4 fill=1 step=1 time=0.125
+scheduled-history-remap rank=0 refused=AMR Program completion failed collectively; rank 0: AMR Program hierarchy-state publication failed collectively; rank 0: fixture resource publication failed; rank 0: injected history resource refresh
+scheduled-history-remap rank=1 refused=AMR Program completion failed collectively; rank 0: AMR Program hierarchy-state publication failed collectively; rank 0: fixture resource publication failed; rank 0: injected history resource refresh
+scheduled-history-remap rank=0 retry=1 fine=1296->2304 epoch=1->2 generation=1->2 C=0->2 regrids=1->2 histories=4 initialized=4 fill=1 step=1 time=0.125
+scheduled-history-remap rank=1 retry=1 fine=1296->2304 epoch=1->2 generation=1->2 C=0->2 regrids=1->2 histories=4 initialized=4 fill=1 step=1 time=0.125
+[       OK ] test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication (3334 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback
+[       OK ] test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication (3334 ms)
+[ RUN      ] test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback
+[       OK ] test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback (3392 ms)
+[----------] 10 tests from test_amr_synthetic_program_loader_transaction (28635 ms total)
+
+[----------] Global test environment tear-down
+[       OK ] test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback (3392 ms)
+[----------] 10 tests from test_amr_synthetic_program_loader_transaction (28635 ms total)
+
+[----------] Global test environment tear-down
+[==========] 10 tests from 1 test suite ran. (28635 ms total)
+[  PASSED  ] 9 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements
+
+ 1 FAILED TEST
+[==========] 10 tests from 1 test suite ran. (28635 ms total)
+[  PASSED  ] 9 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements
+
+ 1 FAILED TEST
+
+      Start 1356: test_amr_history_ring_np2
+72/73 Test #1356: test_amr_history_ring_np2 ....................................................................................................   Passed    0.10 sec
+      Start 1359: test_generated_amr_system_block_np2
+73/73 Test #1359: test_generated_amr_system_block_np2 ..........................................................................................   Passed    0.40 sec
+
+97% tests passed, 2 tests failed out of 73
+
+Label Time Summary:
+amr                                                         =   1.35 sec*proc (6 tests)
+backend                                                     =  58.45 sec*proc (3 tests)
+codegen                                                     =  25.89 sec*proc (11 tests)
+compiler                                                    =  25.89 sec*proc (11 tests)
+cpp-target:test_amr_history_ring                            =   1.54 sec*proc (7 tests)
+cpp-target:test_amr_synthetic_program_loader_transaction    =  83.36 sec*proc (12 tests)
+cpp-target:test_generated_amr_system_block                  =  33.29 sec*proc (54 tests)
+fast                                                        =  32.50 sec*proc (53 tests)
+integration                                                 =  27.24 sec*proc (17 tests)
+medium                                                      =  85.69 sec*proc (20 tests)
+mpi                                                         =  58.45 sec*proc (3 tests)
+native_loader                                               =  25.89 sec*proc (11 tests)
+runtime                                                     =  32.50 sec*proc (53 tests)
+unit                                                        =  32.50 sec*proc (53 tests)
+
+Total Test time (real) =  59.97 sec
+
+The following tests did not run:
+	919 - GeneratedAmrSystemBlock.CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry (Skipped)
+	921 - GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry (Skipped)
+
+The following tests FAILED:
+	1059 - test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements (Failed) codegen compiler cpp-target:test_amr_synthetic_program_loader_transaction integration medium native_loader
+	1355 - test_amr_synthetic_program_loader_transaction_np2 (Failed) backend cpp-target:test_amr_synthetic_program_loader_transaction medium mpi
+Errors while running CTest

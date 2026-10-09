@@ -1,0 +1,7 @@
+{
+  "oldSource": "98804c6849c9966e05b5397126bab983a5fa0227",
+  "currentSource": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "late_refusal_fixture_byteidentical": true,
+  "fixture_sha256": "b2c7c89a7280656a4b4eb02607155c0285e31bbaa26c5678494a1559eab8580b",
+  "norm2_delta": "Same dot_active_local component0 and active mask, same per-level owner dispatch and allreduce/sqrt; only finite replicated contribution counted on rank0; nonfinite copy contributions retained."
+}

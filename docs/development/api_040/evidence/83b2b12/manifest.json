@@ -1,0 +1,798 @@
+{
+  "schema_version": 1,
+  "mapping_source_commit": "83b2b1239973f3e744f9e3975734a40a3abf65d6",
+  "policy": "Historical evidence retains its exact identity; current_head is source inspection, never automatic retest. No global acceptance. In-progress reruns excluded.",
+  "receipts": [
+    {
+      "id": "installed-83b2b12-critical",
+      "status": "failed",
+      "identity": {
+        "source_commit": "83b2b1239973f3e744f9e3975734a40a3abf65d6",
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "native_sha256": "4574ed6096650aa708ad040fd6ee056414a3cfa1735a0440bd74220170265beb",
+        "verified_source_files": 1079,
+        "source_files_sha256": "c1f5d8141ac858aa80efc7e24ca1c2960b2733b83084b97b7715fb08ffeacaf5",
+        "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=188bd89463b43e0e8edfed6123df93d7eded84803eacdc6359f48d151089cc68;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2"
+      },
+      "backend": "native Dim=2 CPU Kokkos/OpenMP + MPICH; AppleClang/libc++",
+      "ranks": 1,
+      "threads": 1,
+      "counts": {
+        "tests": 71,
+        "failures": 0,
+        "errors": 21,
+        "skipped": 0
+      },
+      "rank_counts": [],
+      "files": [
+        {
+          "path": "installed-83b2b12-critical/result.json",
+          "workspace_origin": "installed-83b2b12-critical/result.json",
+          "sha256": "769391fac51cfe29803e1b436f2929b49f7d110c029f7ec158cc613ca372396b"
+        },
+        {
+          "path": "installed-83b2b12-critical/identity.json",
+          "workspace_origin": "installed-83b2b12-critical/identity.json",
+          "sha256": "4a2cd643746068708d0a546eeafe439146e5bb4246277d8ab004290b7a725e0f"
+        },
+        {
+          "path": "installed-83b2b12-critical/pytest.xml",
+          "workspace_origin": "installed-83b2b12-critical/pytest.xml",
+          "sha256": "8dde085b5466e8b36dc59e1554c48561d57cd8de83bb162fb4851cd5a96f5847"
+        }
+      ],
+      "test_groups": {
+        "tests.python.unit.runtime.test_consumer_publication_c34": {
+          "passed": 10
+        },
+        "tests.python.unit.runtime.test_consumer_publication_c34_adversarial": {
+          "passed": 12
+        },
+        "tests.python.unit.runtime.test_consumer_membership_independent": {
+          "passed": 2
+        },
+        "tests.python.unit.runtime.test_consumer_transactions": {
+          "passed": 17
+        },
+        "tests.python.integration.runtime.test_api040_c17_stagnation_runtime": {
+          "error": 2
+        },
+        "tests.python.integration.runtime.test_principal_amr_runtime": {
+          "error": 6
+        },
+        "tests.python.integration.runtime.test_principal_primitive_runtime": {
+          "error": 7
+        },
+        "tests.python.integration.runtime.test_nonnegative_diagonal_diffusion_runtime": {
+          "passed": 9
+        },
+        "tests.python.integration.runtime.test_local_residual_domain_runtime": {
+          "error": 6
+        }
+      },
+      "nonpasses": [
+        {
+          "test": "tests.python.integration.runtime.test_api040_c17_stagnation_runtime::test_original_residual_is_required_before_publication_and_history_rotation[1.0-False]",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_api040_c17_stagnation_runtime::test_original_residual_is_required_before_publication_and_history_rotation[0.0-True]",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_amr_runtime::test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths0-False-1-False]",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_amr_runtime::test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths1-False-1-True]",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_amr_runtime::test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths2-True-2-True]",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_amr_runtime::test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths3-False-2-False]",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_amr_runtime::test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths4-True-2-True]",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_amr_runtime::test_principal_amr_active_singular_flux_rolls_back_all_rows_levels_and_time",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_primitive_runtime::test_joint_primitive_reconstruction_keeps_cross_fields_parameters_and_permutation[widths0-False]",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_primitive_runtime::test_joint_primitive_reconstruction_keeps_cross_fields_parameters_and_permutation[widths1-True]",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_primitive_runtime::test_joint_primitive_reconstruction_keeps_cross_fields_parameters_and_permutation[widths2-False]",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_primitive_runtime::test_joint_primitive_reconstruction_keeps_cross_fields_parameters_and_permutation[widths3-True]",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_primitive_runtime::test_joint_primitive_reconstruction_keeps_cross_fields_parameters_and_permutation[widths4-True]",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_primitive_runtime::test_joint_primitive_domain_failure_rejects_all_fields_and_time",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_primitive_runtime::test_joint_primitive_user_sampling_allocates_the_widest_halo_for_all_rows",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_local_residual_domain_runtime::test_local_residual_observes_invalid_intermediates_and_restores_real_history[source-False]",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_local_residual_domain_runtime::test_local_residual_observes_invalid_intermediates_and_restores_real_history[source-True]",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_local_residual_domain_runtime::test_local_residual_observes_invalid_intermediates_and_restores_real_history[primitive-False]",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_local_residual_domain_runtime::test_local_residual_observes_invalid_intermediates_and_restores_real_history[apply-False]",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_local_residual_domain_runtime::test_local_residual_observes_invalid_intermediates_and_restores_real_history[apply-True]",
+          "status": "error"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_local_residual_domain_runtime::test_local_residual_observes_invalid_intermediates_and_restores_real_history[lazy-False]",
+          "status": "error"
+        }
+      ]
+    },
+    {
+      "id": "installed-38faddb-unit",
+      "status": "failed",
+      "identity": {
+        "source_commit": "044fade295226226bbb77596a537c926297c5d13",
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "native_sha256": "be89992bb2a67a5e3b04dfeb2552d5954f4c7e8d8f1c2ba094e8f0452b4d466c",
+        "verified_source_files": 1079,
+        "source_files_sha256": "7a96401c0d681a40a4ca3b27ab21501a57e9419fbb95272b8175c48e52e2ed1f",
+        "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=88f64c8a329859e1fb91169a34eb52386b61b84847458c0c1fb986077f457c2c;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2"
+      },
+      "backend": "native Dim=2 CPU Kokkos/OpenMP + MPICH; AppleClang/libc++",
+      "ranks": 1,
+      "threads": 1,
+      "counts": {
+        "tests": 210,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      },
+      "rank_counts": [],
+      "files": [
+        {
+          "path": "installed-38faddb-unit/result.json",
+          "workspace_origin": "installed-38faddb-unit/result.json",
+          "sha256": "d9121600c4de8fe5682735869dd7420f94278ff56c3cbc7c06c787751106d762"
+        },
+        {
+          "path": "installed-38faddb-unit/identity.json",
+          "workspace_origin": "installed-38faddb-unit/identity.json",
+          "sha256": "74560d37a98bcfd386e56b76074717c2c188063a42f22859f2d2c530ef6da1a4"
+        },
+        {
+          "path": "installed-38faddb-unit/pytest.xml",
+          "workspace_origin": "installed-38faddb-unit/pytest.xml",
+          "sha256": "cbed805accc1955bfa78af88b7f7dd35cd3d77bcd415f452450fbdc5649a9a77"
+        }
+      ],
+      "test_groups": {
+        "tests.python.unit.codegen.test_principal_primitive": {
+          "passed": 12
+        },
+        "tests.python.unit.codegen.test_principal_primitive_independent": {
+          "passed": 3
+        },
+        "tests.python.unit.codegen.test_principal_amr_review": {
+          "passed": 10
+        },
+        "tests.python.unit.codegen.test_principal_amr_stages": {
+          "passed": 6
+        },
+        "tests.python.unit.numerics.test_api040_path_consumer_stability": {
+          "passed": 7
+        },
+        "tests.python.unit.numerics.test_api040_path_ssp_stability": {
+          "passed": 8
+        },
+        "tests.python.unit.codegen.test_partition_stability": {
+          "passed": 17
+        },
+        "tests.python.unit.problem.test_blockage_classification": {
+          "passed": 5
+        },
+        "tests.python.unit.codegen.test_api040_c26_c27_authority": {
+          "passed": 4
+        },
+        "tests.python.unit.codegen.test_api040_t3_residual_domain": {
+          "passed": 27
+        },
+        "tests.python.unit.codegen.test_api040_t3_independent_division": {
+          "passed": 1
+        },
+        "tests.python.unit.codegen.test_api040_t3_condensation_failure": {
+          "passed": 12
+        },
+        "tests.python.unit.numerics.test_api040_m04_oracle": {
+          "passed": 17
+        },
+        "tests.python.unit.numerics.test_api040_m17_oracle": {
+          "passed": 4
+        },
+        "tests.python.unit.physics.test_api040_m06_m13_oracles": {
+          "passed": 11
+        },
+        "tests.python.unit.physics.test_structural_cattaneo_authoring": {
+          "passed": 6
+        },
+        "tests.python.unit.physics.test_structural_cattaneo_oracle": {
+          "passed": 13
+        },
+        "tests.python.unit.fields.test_field_publication_stage_frontier": {
+          "passed": 1
+        },
+        "tests.python.unit.fields.test_field_publication_frontier_independent": {
+          "passed": 3
+        },
+        "tests.python.unit.fields.test_api040_m08_live_stage_authoring": {
+          "passed": 1
+        },
+        "tests.python.unit.numerics.test_api040_m08_oracle": {
+          "passed": 5
+        },
+        "tests.python.unit.numerics.test_m08_independent_receipt": {
+          "passed": 4
+        },
+        "tests.python.unit.moments.test_api040_m15_m16": {
+          "passed": 4
+        },
+        "tests.python.unit.runtime.test_consumer_transactions": {
+          "passed": 16,
+          "failure": 1
+        },
+        "tests.python.architecture.test_manifest_suite_coverage": {
+          "passed": 12
+        }
+      },
+      "nonpasses": [
+        {
+          "test": "tests.python.unit.runtime.test_consumer_transactions::test_accepted_publications_remain_compensatable_until_the_outer_transaction_seals",
+          "status": "failure"
+        }
+      ]
+    },
+    {
+      "id": "installed-c11-t2-c36-runtime",
+      "status": "failed",
+      "identity": {
+        "source_commit": "9e9a0e5bd56ebca6e0f678485f02f1d2b7ecfa78",
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "native_sha256": "220b48d3264f413aa5ccd8bba58a8b0d1a6b31bf5bade6faac904b1b7ef8cc87",
+        "verified_source_files": 1075,
+        "source_files_sha256": "dc1f309f7100dbc6fce203f83eed6082ac3438b2373229c0661064de20f3f872",
+        "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=47299dd6ba34f1d97464e06e06fb2fe3c4aab75958eb516cc0e57732437c39f6;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2"
+      },
+      "backend": "native Dim=2 CPU Kokkos/OpenMP + MPICH; AppleClang/libc++",
+      "ranks": 1,
+      "threads": 1,
+      "counts": {
+        "tests": 2,
+        "failures": 2,
+        "errors": 0,
+        "skipped": 0
+      },
+      "rank_counts": [],
+      "files": [
+        {
+          "path": "installed-c11-t2-c36-runtime/result.json",
+          "workspace_origin": "installed-c11-t2-c36-runtime/result.json",
+          "sha256": "014e873c9e167abe790e7378c1cea009766c3b3cee2eb2039457bf6e5189d15c"
+        },
+        {
+          "path": "installed-c11-t2-c36-runtime/identity.json",
+          "workspace_origin": "installed-c11-t2-c36-runtime/identity.json",
+          "sha256": "24b51dd7095952d176f3c4a03e5278b7fb0acca8a93e704cd7ec2d0ccdff114a"
+        },
+        {
+          "path": "installed-c11-t2-c36-runtime/pytest.xml",
+          "workspace_origin": "installed-c11-t2-c36-runtime/pytest.xml",
+          "sha256": "e965e65c75839ce1c3feb6919bde37e856d3ae1bf10e9cf894d26de7b03096d7"
+        }
+      ],
+      "test_groups": {
+        "tests.python.integration.runtime.test_principal_group_runtime": {
+          "failure": 2
+        }
+      },
+      "nonpasses": [
+        {
+          "test": "tests.python.integration.runtime.test_principal_group_runtime::test_native_principal_scalars_match_vector_and_independent_face_oracle[False-2]",
+          "status": "failure"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_group_runtime::test_native_principal_scalars_match_vector_and_independent_face_oracle[False-3]",
+          "status": "failure"
+        }
+      ],
+      "incomplete_xml_cases": 1
+    },
+    {
+      "id": "installed-t2-uniform-w02",
+      "status": "passed",
+      "identity": {
+        "source_commit": "9e9a0e5bd56ebca6e0f678485f02f1d2b7ecfa78",
+        "source_diff_sha256": "19c79ff16db6c5674a0dee8cc352712d804cf8e480ce6b5bc8a0e43364f9694f",
+        "native_sha256": "220b48d3264f413aa5ccd8bba58a8b0d1a6b31bf5bade6faac904b1b7ef8cc87",
+        "verified_source_files": 1075,
+        "source_files_sha256": "dc1f309f7100dbc6fce203f83eed6082ac3438b2373229c0661064de20f3f872",
+        "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=47299dd6ba34f1d97464e06e06fb2fe3c4aab75958eb516cc0e57732437c39f6;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2"
+      },
+      "backend": "native Dim=2 CPU Kokkos/OpenMP + MPICH; AppleClang/libc++",
+      "ranks": 1,
+      "threads": 1,
+      "counts": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "rank_counts": [],
+      "files": [
+        {
+          "path": "installed-t2-uniform-w02/result.json",
+          "workspace_origin": "installed-t2-uniform-w02/result.json",
+          "sha256": "d7139ee7a82508e8442246b79b0f469f9b526ab6bc05272622f59a456de4a7eb"
+        },
+        {
+          "path": "installed-t2-uniform-w02/identity.json",
+          "workspace_origin": "installed-t2-uniform-w02/identity.json",
+          "sha256": "81c7a47b3f7aae64882087585d183252008bd7000b3f1212954dce21d2d5eff0"
+        },
+        {
+          "path": "installed-t2-uniform-w02/pytest.xml",
+          "workspace_origin": "installed-t2-uniform-w02/pytest.xml",
+          "sha256": "ca158969c2929fc138c523ab47f935b6df2692a5a30a3b2c900c534afcf9165b"
+        }
+      ],
+      "test_groups": {
+        "tests.python.integration.runtime.test_user_numerical_bodies_runtime": {
+          "passed": 7
+        },
+        "tests.python.integration.runtime.test_api040_m04_combined_bound_runtime": {
+          "passed": 2
+        }
+      },
+      "nonpasses": []
+    },
+    {
+      "id": "installed-t2-uniform-w02-mpi2",
+      "status": "failed",
+      "identity": {
+        "source_commit": "9e9a0e5bd56ebca6e0f678485f02f1d2b7ecfa78",
+        "source_diff_sha256": "8997379d53b9e7734c6b14f04b351085ba03041a44fa1314c1aad498a2f737f4",
+        "native_sha256": "220b48d3264f413aa5ccd8bba58a8b0d1a6b31bf5bade6faac904b1b7ef8cc87",
+        "verified_source_files": 1075,
+        "source_files_sha256": "dc1f309f7100dbc6fce203f83eed6082ac3438b2373229c0661064de20f3f872",
+        "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=47299dd6ba34f1d97464e06e06fb2fe3c4aab75958eb516cc0e57732437c39f6;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2"
+      },
+      "backend": "native Dim=2 CPU Kokkos/OpenMP + MPICH; AppleClang/libc++",
+      "ranks": 2,
+      "threads": 1,
+      "counts": {},
+      "rank_counts": [
+        {
+          "rank": 0,
+          "counts": {
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 1
+          }
+        },
+        {
+          "rank": 1,
+          "counts": {
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 1
+          }
+        }
+      ],
+      "files": [
+        {
+          "path": "installed-t2-uniform-w02-mpi2/result.json",
+          "workspace_origin": "installed-t2-uniform-w02-mpi2/result.json",
+          "sha256": "9db0093bbd36ceee23a2af3f32dd577c04403937d42e1e0d94b1abcc469dd95e"
+        },
+        {
+          "path": "installed-t2-uniform-w02-mpi2/identity.json",
+          "workspace_origin": "installed-t2-uniform-w02-mpi2/before/identity.json",
+          "sha256": "20d23d00869ef0eaf07b2abf333ea9503bf73abeed3738ad9006eacbca49a3e0"
+        }
+      ]
+    },
+    {
+      "id": "m02-shock-220b-openmp1",
+      "status": "passed",
+      "identity": {
+        "source_commit": "9e9a0e5bd56ebca6e0f678485f02f1d2b7ecfa78",
+        "source_diff_sha256": "8997379d53b9e7734c6b14f04b351085ba03041a44fa1314c1aad498a2f737f4",
+        "native_sha256": "220b48d3264f413aa5ccd8bba58a8b0d1a6b31bf5bade6faac904b1b7ef8cc87",
+        "verified_source_files": 1075,
+        "source_files_sha256": "dc1f309f7100dbc6fce203f83eed6082ac3438b2373229c0661064de20f3f872",
+        "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=47299dd6ba34f1d97464e06e06fb2fe3c4aab75958eb516cc0e57732437c39f6;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2"
+      },
+      "backend": "native Dim=2 CPU Kokkos/OpenMP + MPICH; AppleClang/libc++",
+      "ranks": 1,
+      "threads": 1,
+      "counts": {},
+      "rank_counts": [],
+      "files": [
+        {
+          "path": "m02-shock-220b-openmp1/result.json",
+          "workspace_origin": "m02-shock-220b-openmp1/result.json",
+          "sha256": "1f9174a79056936217ce9b66ca26781e4724d80b7ad837c345ac66543de22105"
+        },
+        {
+          "path": "m02-shock-220b-openmp1/identity.json",
+          "workspace_origin": "m02-shock-220b-openmp1/before/identity.json",
+          "sha256": "20d23d00869ef0eaf07b2abf333ea9503bf73abeed3738ad9006eacbca49a3e0"
+        },
+        {
+          "path": "m02-shock-220b-openmp1/scientific-receipt.json",
+          "workspace_origin": "m02-shock-220b-openmp1/states/shock/receipt.json",
+          "sha256": "6dfb99300120ce664df10fa43e4b0d734181cf65f97c62b21c3dd0ba052635a1"
+        }
+      ],
+      "scientific_scope": {
+        "case": "M02",
+        "variant": "shock",
+        "status": "passed",
+        "scope": "Dim=2 NxN; y-invariant Burgers; no Dim=1 qualification",
+        "resolutions": [
+          100,
+          200,
+          400
+        ],
+        "t_end": 0.2
+      }
+    },
+    {
+      "id": "m02-rarefaction-220b-openmp1",
+      "status": "passed",
+      "identity": {
+        "source_commit": "9e9a0e5bd56ebca6e0f678485f02f1d2b7ecfa78",
+        "source_diff_sha256": "8997379d53b9e7734c6b14f04b351085ba03041a44fa1314c1aad498a2f737f4",
+        "native_sha256": "220b48d3264f413aa5ccd8bba58a8b0d1a6b31bf5bade6faac904b1b7ef8cc87",
+        "verified_source_files": 1075,
+        "source_files_sha256": "dc1f309f7100dbc6fce203f83eed6082ac3438b2373229c0661064de20f3f872",
+        "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=47299dd6ba34f1d97464e06e06fb2fe3c4aab75958eb516cc0e57732437c39f6;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2"
+      },
+      "backend": "native Dim=2 CPU Kokkos/OpenMP + MPICH; AppleClang/libc++",
+      "ranks": 1,
+      "threads": 1,
+      "counts": {},
+      "rank_counts": [],
+      "files": [
+        {
+          "path": "m02-rarefaction-220b-openmp1/result.json",
+          "workspace_origin": "m02-rarefaction-220b-openmp1/result.json",
+          "sha256": "10ec554bd9d056c5e65436c56d44ee3d9726d795576733aa9d8f38425244b36a"
+        },
+        {
+          "path": "m02-rarefaction-220b-openmp1/identity.json",
+          "workspace_origin": "m02-rarefaction-220b-openmp1/before/identity.json",
+          "sha256": "20d23d00869ef0eaf07b2abf333ea9503bf73abeed3738ad9006eacbca49a3e0"
+        },
+        {
+          "path": "m02-rarefaction-220b-openmp1/scientific-receipt.json",
+          "workspace_origin": "m02-rarefaction-220b-openmp1/states/rarefaction/receipt.json",
+          "sha256": "3b49db38eab18f383d12fefde801674e587fe340058b4a70e3154b0b279d41d6"
+        }
+      ],
+      "scientific_scope": {
+        "case": "M02",
+        "variant": "rarefaction",
+        "status": "passed",
+        "scope": "Dim=2 NxN; y-invariant Burgers; no Dim=1 qualification",
+        "resolutions": [
+          100,
+          200,
+          400
+        ],
+        "t_end": 0.2
+      }
+    },
+    {
+      "id": "m04-xonly-220b-openmp1",
+      "status": "failed",
+      "identity": {
+        "source_commit": "9e9a0e5bd56ebca6e0f678485f02f1d2b7ecfa78",
+        "source_diff_sha256": "19c79ff16db6c5674a0dee8cc352712d804cf8e480ce6b5bc8a0e43364f9694f",
+        "native_sha256": "220b48d3264f413aa5ccd8bba58a8b0d1a6b31bf5bade6faac904b1b7ef8cc87",
+        "verified_source_files": 1075,
+        "source_files_sha256": "dc1f309f7100dbc6fce203f83eed6082ac3438b2373229c0661064de20f3f872",
+        "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=47299dd6ba34f1d97464e06e06fb2fe3c4aab75958eb516cc0e57732437c39f6;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2"
+      },
+      "backend": "native Dim=2 CPU Kokkos/OpenMP + MPICH; AppleClang/libc++",
+      "ranks": 1,
+      "threads": 1,
+      "counts": {},
+      "rank_counts": [],
+      "files": [
+        {
+          "path": "m04-xonly-220b-openmp1/result.json",
+          "workspace_origin": "m04-xonly-220b-openmp1/result.json",
+          "sha256": "4779390619c5a77e8f9be06d7ce0cd2178ae842544afe0589d13c422e97ac064"
+        },
+        {
+          "path": "m04-xonly-220b-openmp1/identity.json",
+          "workspace_origin": "m04-xonly-220b-openmp1/before/identity.json",
+          "sha256": "81c7a47b3f7aae64882087585d183252008bd7000b3f1212954dce21d2d5eff0"
+        },
+        {
+          "path": "m04-xonly-220b-openmp1/scientific-receipt.json",
+          "workspace_origin": "m04-xonly-220b-openmp1/states/receipt.json",
+          "sha256": "8aab308a08c2a6c6c600db234fc89f3ef37421d9269e1355aea4f12e9b3b1355"
+        }
+      ],
+      "scientific_scope": {
+        "case": "M04/W02",
+        "status": "failed",
+        "scope": "Dim=2 authored diagonal tensor, y-invariant exact trajectory; not Dim=1",
+        "resolutions": [
+          32,
+          64,
+          128
+        ],
+        "diffusion_variant": "x_only",
+        "observed_orders": [
+          0.6063534245372065,
+          0.701766241133962
+        ]
+      }
+    },
+    {
+      "id": "m04-ssprk2-220b-openmp1",
+      "status": "passed",
+      "identity": {
+        "source_commit": "9e9a0e5bd56ebca6e0f678485f02f1d2b7ecfa78",
+        "source_diff_sha256": "e4cca706e098ef6ab700984288a1a51234345dd395980ad3b5e9e563c48d6558",
+        "native_sha256": "220b48d3264f413aa5ccd8bba58a8b0d1a6b31bf5bade6faac904b1b7ef8cc87",
+        "verified_source_files": 1075,
+        "source_files_sha256": "dc1f309f7100dbc6fce203f83eed6082ac3438b2373229c0661064de20f3f872",
+        "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=47299dd6ba34f1d97464e06e06fb2fe3c4aab75958eb516cc0e57732437c39f6;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2"
+      },
+      "backend": "native Dim=2 CPU Kokkos/OpenMP + MPICH; AppleClang/libc++",
+      "ranks": 1,
+      "threads": 1,
+      "counts": {},
+      "rank_counts": [],
+      "files": [
+        {
+          "path": "m04-ssprk2-220b-openmp1/result.json",
+          "workspace_origin": "m04-ssprk2-220b-openmp1/result.json",
+          "sha256": "af8a2e6b330859496a61de620413227acef16014fec476008edb2377e838a995"
+        },
+        {
+          "path": "m04-ssprk2-220b-openmp1/identity.json",
+          "workspace_origin": "m04-ssprk2-220b-openmp1/before/identity.json",
+          "sha256": "838597e84696cf36a5183399558ca38253c963be2b9e7161e3677a2dbc4a378e"
+        },
+        {
+          "path": "m04-ssprk2-220b-openmp1/scientific-receipt.json",
+          "workspace_origin": "m04-ssprk2-220b-openmp1/states/receipt.json",
+          "sha256": "7b492b4845d66c46014af6597e79d45f4e49a90cc306eb32faa32052f8fccd14"
+        }
+      ],
+      "scientific_scope": {
+        "case": "M04/W02",
+        "status": "passed",
+        "scope": "Dim=2 authored diagonal tensor, y-invariant exact trajectory; not Dim=1",
+        "resolutions": [
+          32,
+          64,
+          128
+        ],
+        "temporal_method": "ssprk2",
+        "diffusion_variant": "x_only",
+        "observed_orders": [
+          0.9781404189426818,
+          0.9888494119066084
+        ]
+      }
+    },
+    {
+      "id": "m17-220b-openmp1",
+      "status": "failed",
+      "identity": {
+        "source_commit": "9e9a0e5bd56ebca6e0f678485f02f1d2b7ecfa78",
+        "source_diff_sha256": "8997379d53b9e7734c6b14f04b351085ba03041a44fa1314c1aad498a2f737f4",
+        "native_sha256": "220b48d3264f413aa5ccd8bba58a8b0d1a6b31bf5bade6faac904b1b7ef8cc87",
+        "verified_source_files": 1075,
+        "source_files_sha256": "dc1f309f7100dbc6fce203f83eed6082ac3438b2373229c0661064de20f3f872",
+        "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=47299dd6ba34f1d97464e06e06fb2fe3c4aab75958eb516cc0e57732437c39f6;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2"
+      },
+      "backend": "native Dim=2 CPU Kokkos/OpenMP + MPICH; AppleClang/libc++",
+      "ranks": 1,
+      "threads": 1,
+      "counts": {},
+      "rank_counts": [],
+      "files": [
+        {
+          "path": "m17-220b-openmp1/result.json",
+          "workspace_origin": "m17-220b-openmp1/result.json",
+          "sha256": "89008ca6fbf1aa9e429746c6a86f86a0255d52c30ce742ffa59f21b50d5f633b"
+        },
+        {
+          "path": "m17-220b-openmp1/identity.json",
+          "workspace_origin": "m17-220b-openmp1/before/identity.json",
+          "sha256": "20d23d00869ef0eaf07b2abf333ea9503bf73abeed3738ad9006eacbca49a3e0"
+        }
+      ]
+    },
+    {
+      "id": "installed-83b2b12-critical-pde",
+      "status": "failed",
+      "identity": {
+        "source_commit": "83b2b1239973f3e744f9e3975734a40a3abf65d6",
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "native_sha256": "4574ed6096650aa708ad040fd6ee056414a3cfa1735a0440bd74220170265beb",
+        "verified_source_files": 1079,
+        "source_files_sha256": "c1f5d8141ac858aa80efc7e24ca1c2960b2733b83084b97b7715fb08ffeacaf5",
+        "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=188bd89463b43e0e8edfed6123df93d7eded84803eacdc6359f48d151089cc68;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2"
+      },
+      "backend": "native Dim=2 CPU Kokkos/OpenMP + MPICH; AppleClang/libc++",
+      "ranks": 1,
+      "threads": 1,
+      "counts": {
+        "tests": 21,
+        "failures": 9,
+        "errors": 0,
+        "skipped": 0
+      },
+      "rank_counts": [],
+      "files": [
+        {
+          "path": "installed-83b2b12-critical-pde/result.json",
+          "workspace_origin": "installed-83b2b12-critical-pde/result.json",
+          "sha256": "8524d01c30a66bfa3ffbefc38e9b022476645ed10e013bccb97ae4d6012ab1fc"
+        },
+        {
+          "path": "installed-83b2b12-critical-pde/identity.json",
+          "workspace_origin": "installed-83b2b12-critical-pde/identity.json",
+          "sha256": "4a2cd643746068708d0a546eeafe439146e5bb4246277d8ab004290b7a725e0f"
+        },
+        {
+          "path": "installed-83b2b12-critical-pde/pytest.xml",
+          "workspace_origin": "installed-83b2b12-critical-pde/pytest.xml",
+          "sha256": "fb33c0395be9ecffc2a999cde27ad22647b8e44bd766abdab89f0e928e599ef2"
+        }
+      ],
+      "test_groups": {
+        "tests.python.integration.runtime.test_api040_c17_stagnation_runtime": {
+          "failure": 2
+        },
+        "tests.python.integration.runtime.test_principal_amr_runtime": {
+          "failure": 6
+        },
+        "tests.python.integration.runtime.test_principal_primitive_runtime": {
+          "passed": 6,
+          "failure": 1
+        },
+        "tests.python.integration.runtime.test_local_residual_domain_runtime": {
+          "passed": 6
+        }
+      },
+      "nonpasses": [
+        {
+          "test": "tests.python.integration.runtime.test_api040_c17_stagnation_runtime::test_original_residual_is_required_before_publication_and_history_rotation[1.0-False]",
+          "status": "failure"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_api040_c17_stagnation_runtime::test_original_residual_is_required_before_publication_and_history_rotation[0.0-True]",
+          "status": "failure"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_amr_runtime::test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths0-False-1-False]",
+          "status": "failure"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_amr_runtime::test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths1-False-1-True]",
+          "status": "failure"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_amr_runtime::test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths2-True-2-True]",
+          "status": "failure"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_amr_runtime::test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths3-False-2-False]",
+          "status": "failure"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_amr_runtime::test_principal_amr_joint_faces_preserve_composite_components_and_rebind[widths4-True-2-True]",
+          "status": "failure"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_amr_runtime::test_principal_amr_active_singular_flux_rolls_back_all_rows_levels_and_time",
+          "status": "failure"
+        },
+        {
+          "test": "tests.python.integration.runtime.test_principal_primitive_runtime::test_joint_primitive_user_sampling_allocates_the_widest_halo_for_all_rows",
+          "status": "failure"
+        }
+      ]
+    }
+  ],
+  "ctest": {
+    "id": "native-38faddb",
+    "status": "failed",
+    "source_commit_at_python_authentication": "6d556cd76f626223577d979c11e3c6f213ebc0ed",
+    "counts": {
+      "run": 123,
+      "notrun": 9,
+      "fail": 1
+    },
+    "total": 133,
+    "nonpasses": [
+      "ProgramRuntimeStateCadence.SharedDispatcherOwnsHoldSubstepAndCursorCommit",
+      "ProgramRuntimeStateCadence.DispatchFailureRestoresCursorAndReentrancyLease",
+      "ProgramRuntimeStateCadence.MacroStepOverflowFailsBeforeProgramDispatch",
+      "ProgramRuntimeStateCadence.SuspendedRegionsKeepOneCadenceAndQualifiedScratchPort",
+      "ProgramRuntimeStateCadence.RejectedContinuationRestoresClockAndDiscardsBorrowedPorts",
+      "ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching",
+      "ProgramContextContract.AuxiliaryPublicationRefusesRankDivergentTransactionBeforeNoWorkBranch",
+      "ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection",
+      "ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation",
+      "test_amr_path_rhs_barrier_np2"
+    ],
+    "files": [
+      {
+        "path": "native-38faddb.xml",
+        "workspace_origin": "native-38faddb.xml",
+        "sha256": "952c592ba456c9703a608453ecccd8cb551dcf7138b5f8bcc727666f82aa3a80"
+      }
+    ],
+    "scope": "C++ test inventory, not a new 83b2b12 CTest run; obsolete FixedDt expectation failed; adapted in db486be; replacement not received here."
+  },
+  "source_reviews": [
+    {
+      "path": "source-reviews/astra-m15-m16-independent-review.md",
+      "repository_origin": "outputs/astra-m15-m16-independent-review.md",
+      "sha256": "1ed53ae8244be8365a172df05cbb50e9b1d4091f163289f104fe2483972c4789",
+      "qualification": "Source/host review only; claims do not replace authenticated installed reception."
+    },
+    {
+      "path": "source-reviews/independent-review-c38.md",
+      "repository_origin": "outputs/independent-review-c38.md",
+      "sha256": "3670d52ddddda3c16598f6887ef08b732f8cd64e3833a1817bbf54b5e2b4ab0a",
+      "qualification": "Source/host review only; claims do not replace authenticated installed reception."
+    },
+    {
+      "path": "source-reviews/astra-c17-original-residual.md",
+      "repository_origin": "outputs/astra-c17-original-residual.md",
+      "sha256": "8881e72899fdc49a6f2636d47616de7c63091a06e3a45ddaa98c71e5a61c2065",
+      "qualification": "Source/host review only; claims do not replace authenticated installed reception."
+    }
+  ]
+}

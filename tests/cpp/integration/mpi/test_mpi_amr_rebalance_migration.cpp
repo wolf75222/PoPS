@@ -126,7 +126,7 @@ void prove_migration_requires_rematerialization(int ranks, int rank) {
       std::string(source.spatial_contract()), source.topology_epoch(),
       source.materialization_generation(),
       {{0, 6, pops::amr::Rational(0, 1), 2.0}, {1, 6, pops::amr::Rational(0, 1), 2.0}}, temporal,
-      empty_ledger);
+      empty_ledger, 6);
   const auto bytes = program::serialize_amr_program_accepted_state(accepted);
   const auto decoded = program::deserialize_amr_program_accepted_state<Dim>(bytes);
   EXPECT_NO_THROW(program::require_collective_amr_program_checkpoint_consensus(decoded));

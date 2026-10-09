@@ -1,0 +1,22 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 6 items
+
+tests/python/unit/moments/test_m18_discrete_entropy.py::test_twenty_moderate_targets_are_interior_and_minimize_entropy PASSED [ 16%]
+tests/python/unit/moments/test_m18_discrete_entropy.py::test_rectangular_grid_matches_component_major_bind_arrays PASSED [ 33%]
+tests/python/unit/moments/test_m18_discrete_entropy.py::test_outside_and_boundary_are_distinct_from_interior PASSED [ 50%]
+tests/python/unit/moments/test_m18_discrete_entropy.py::test_parametric_quadrature_refuses_invalid_coefficients PASSED [ 66%]
+tests/python/unit/moments/test_m18_discrete_entropy.py::test_public_local_residual_compiles_exp_without_python_cell_callback PASSED [ 83%]
+tests/python/integration/runtime/test_m18_discrete_entropy_runtime.py::test_twenty_interior_targets_and_outside_cone_refusal PASSED [100%]
+
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_m18_discrete_entropy_runtime.py::test_twenty_interior_targets_and_outside_cone_refusal
+  tests/python/integration/runtime/test_m18_discrete_entropy_runtime.py:45: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    def test_twenty_interior_targets_and_outside_cone_refusal(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m18-rectangular-repaired/pytest.xml -
+======================== 6 passed, 1 warning in 17.54s =========================

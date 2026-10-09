@@ -1,0 +1,834 @@
+{
+  "schema_version": 1,
+  "case": "M13",
+  "status": "passed",
+  "scope": "homogeneous local A\u2192B\u2192C chemistry; no streamer/radiation closure",
+  "equation": "A'=-kAB*A; B'=kAB*A-kBC*B; C'=kBC*B",
+  "method": "native StateStorage/Program SSPRK2",
+  "dt": 0.002,
+  "t_end": 1.0,
+  "criteria": {
+    "state_max_error": 1e-06,
+    "inventory_max_error": 2e-12,
+    "minimum_species": -2e-13,
+    "initial_max_error": 1e-14,
+    "time_error": 1e-14,
+    "cell_mean_gap_min": 1e-05
+  },
+  "runs": [
+    {
+      "cells": [
+        4,
+        4
+      ],
+      "domain_upper": [
+        1.0,
+        2.0
+      ],
+      "order": [
+        "A",
+        "B",
+        "C"
+      ],
+      "label": "forward",
+      "rates": [
+        1.3,
+        0.4
+      ],
+      "cell_mean_gap": 0.007048700881896686,
+      "metrics": {
+        "initial_max_error": 0.0,
+        "state_max_error": 5.656994191971521e-07,
+        "inventory_max_error": 1.1102230246251565e-15,
+        "minimum_species": 0.25518225471584044,
+        "time_error": 0.0
+      },
+      "accepted": true,
+      "accepted_steps": 500,
+      "mpi_ranks": 1,
+      "saved_state": "state_4_4_forward.npz",
+      "saved_state_sha256": "69c328eeb9c11b60d6bc57c0a6cef82dd7e5ff700f07b36b1cb9cf98de0e8ceb",
+      "run_report": {
+        "accepted_steps": 500,
+        "rejected_steps": 0,
+        "final_time": 1.0,
+        "final_macro_step": 500,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "108f3de0c2cfa43543ac4cc2d03622b666fed0da308cd774980cc9ee3639497c"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "481e162d67cce67004a5fb30ccc041fa63f6cc7c2eff726f5888397e4b9ef068"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "cab9b424f3242ebd633a37b4ca236b3f1572104732b3f4226c0560fbcd76a4e2"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6dcd17d08c5fae490ec40c8638b2d18495f32165d31f75ad0b72eadf5ae9728d"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      }
+    },
+    {
+      "cells": [
+        4,
+        4
+      ],
+      "domain_upper": [
+        1.0,
+        2.0
+      ],
+      "order": [
+        "A",
+        "B",
+        "C"
+      ],
+      "label": "reversed_rates",
+      "rates": [
+        0.4,
+        1.3
+      ],
+      "cell_mean_gap": 0.007048700881896686,
+      "metrics": {
+        "initial_max_error": 0.0,
+        "state_max_error": 1.0828334048862409e-07,
+        "inventory_max_error": 1.5543122344752192e-15,
+        "minimum_species": 0.21137098884268096,
+        "time_error": 0.0
+      },
+      "accepted": true,
+      "accepted_steps": 500,
+      "mpi_ranks": 1,
+      "saved_state": "state_4_4_reversed_rates.npz",
+      "saved_state_sha256": "cc317429e391b2a5f7f7be1c117e600e6495a6ba9279e2ecbcb8fe3328600876",
+      "run_report": {
+        "accepted_steps": 500,
+        "rejected_steps": 0,
+        "final_time": 1.0,
+        "final_macro_step": 500,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "deffdd136f1b3d554fe0e5e3a0fde3e2b8931dc680216d3d45bf74577856fc3c"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "ea0c89cd3c26d0a786d7ec790f30f49f26657f85c45d84544613820bbd20682b"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "cab9b424f3242ebd633a37b4ca236b3f1572104732b3f4226c0560fbcd76a4e2"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6dcd17d08c5fae490ec40c8638b2d18495f32165d31f75ad0b72eadf5ae9728d"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      }
+    },
+    {
+      "cells": [
+        4,
+        4
+      ],
+      "domain_upper": [
+        1.0,
+        2.0
+      ],
+      "order": [
+        "A",
+        "B",
+        "C"
+      ],
+      "label": "equal_rates",
+      "rates": [
+        1.0,
+        1.0
+      ],
+      "cell_mean_gap": 0.007048700881896686,
+      "metrics": {
+        "initial_max_error": 0.0,
+        "state_max_error": 4.816022076137294e-07,
+        "inventory_max_error": 6.661338147750939e-16,
+        "minimum_species": 0.3444597385461992,
+        "time_error": 0.0
+      },
+      "accepted": true,
+      "accepted_steps": 500,
+      "mpi_ranks": 1,
+      "saved_state": "state_4_4_equal_rates.npz",
+      "saved_state_sha256": "a8d5bd62c4c1af659c4bd4e6c204faa7b090ccef75215fbe0e2f18e73f33ca29",
+      "run_report": {
+        "accepted_steps": 500,
+        "rejected_steps": 0,
+        "final_time": 1.0,
+        "final_macro_step": 500,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "5a2dbfe439f521cfeda228450d0aa58b99c2a162a283e4868cfd6d11ed82a25c"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "1cf423989f5ef2548bceabe0acd81b911c7a7f41d853202d5f2ea6b6ddab2564"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "cab9b424f3242ebd633a37b4ca236b3f1572104732b3f4226c0560fbcd76a4e2"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6dcd17d08c5fae490ec40c8638b2d18495f32165d31f75ad0b72eadf5ae9728d"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      }
+    },
+    {
+      "cells": [
+        4,
+        4
+      ],
+      "domain_upper": [
+        1.0,
+        2.0
+      ],
+      "order": [
+        "A",
+        "B",
+        "C"
+      ],
+      "label": "zero_rates",
+      "rates": [
+        0.0,
+        0.0
+      ],
+      "cell_mean_gap": 0.007048700881896686,
+      "metrics": {
+        "initial_max_error": 0.0,
+        "state_max_error": 1.3877787807814457e-16,
+        "inventory_max_error": 0.0,
+        "minimum_species": 0.1,
+        "time_error": 0.0
+      },
+      "accepted": true,
+      "accepted_steps": 500,
+      "mpi_ranks": 1,
+      "saved_state": "state_4_4_zero_rates.npz",
+      "saved_state_sha256": "234a68a810b758c1097a55148eb23450dbca864fdcb3d320d89bf0e5a4cb478e",
+      "run_report": {
+        "accepted_steps": 500,
+        "rejected_steps": 0,
+        "final_time": 1.0,
+        "final_macro_step": 500,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "20515976fa0f4a157cddc11d32b7c80c6b97fb175c6e741f3aa410f982e5db7f"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "3488fa4616f72569084279aa0f2b4da26e440ea708c5a8a6ddf0294889dd884b"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "cab9b424f3242ebd633a37b4ca236b3f1572104732b3f4226c0560fbcd76a4e2"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6dcd17d08c5fae490ec40c8638b2d18495f32165d31f75ad0b72eadf5ae9728d"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      }
+    },
+    {
+      "cells": [
+        6,
+        8
+      ],
+      "domain_upper": [
+        2.0,
+        1.0
+      ],
+      "order": [
+        "C",
+        "B",
+        "A"
+      ],
+      "label": "forward",
+      "rates": [
+        1.3,
+        0.4
+      ],
+      "cell_mean_gap": 0.0039032060651751355,
+      "metrics": {
+        "initial_max_error": 0.0,
+        "state_max_error": 5.756826778613444e-07,
+        "inventory_max_error": 2.886579864025407e-15,
+        "minimum_species": 0.24999396204320373,
+        "time_error": 0.0
+      },
+      "accepted": true,
+      "accepted_steps": 500,
+      "mpi_ranks": 1,
+      "saved_state": "state_6_8_forward.npz",
+      "saved_state_sha256": "f7ff30d2ebcb199f6eb3b81f97a3a777860fe68e74f53c19b7aa03575cd57c0a",
+      "run_report": {
+        "accepted_steps": 500,
+        "rejected_steps": 0,
+        "final_time": 1.0,
+        "final_macro_step": 500,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "163fbd12e5ede1d52b19fcd8879bb823d7bcd377ccd33a91a8d51748405a8539"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "cdead0edfa4187e4963bfe3f9271c8c2f5b649f589ad022a5bdb89b8cd67c4d8"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "7377bf5302d385cbf2bdbfb78301bcc524d0764dcb566d702b09130d1ad333e9"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6dcd17d08c5fae490ec40c8638b2d18495f32165d31f75ad0b72eadf5ae9728d"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      }
+    },
+    {
+      "cells": [
+        6,
+        8
+      ],
+      "domain_upper": [
+        2.0,
+        1.0
+      ],
+      "order": [
+        "C",
+        "B",
+        "A"
+      ],
+      "label": "reversed_rates",
+      "rates": [
+        0.4,
+        1.3
+      ],
+      "cell_mean_gap": 0.0039032060651751355,
+      "metrics": {
+        "initial_max_error": 0.0,
+        "state_max_error": 1.0824250032404059e-07,
+        "inventory_max_error": 1.7763568394002505e-15,
+        "minimum_species": 0.21017402892854498,
+        "time_error": 0.0
+      },
+      "accepted": true,
+      "accepted_steps": 500,
+      "mpi_ranks": 1,
+      "saved_state": "state_6_8_reversed_rates.npz",
+      "saved_state_sha256": "fefe8fc430321c9a2f7cddaee7f24f0048bf25b4673d7ce36397633250e6227f",
+      "run_report": {
+        "accepted_steps": 500,
+        "rejected_steps": 0,
+        "final_time": 1.0,
+        "final_macro_step": 500,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "855937aa09049c6f93217e72ab67927fd73eeddbe06d4289e95f4e93b54fadac"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "2fe5b29fa23336e1f2afc872ae76b8f54dc42170930bd1076111761f8dd26bf3"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "7377bf5302d385cbf2bdbfb78301bcc524d0764dcb566d702b09130d1ad333e9"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6dcd17d08c5fae490ec40c8638b2d18495f32165d31f75ad0b72eadf5ae9728d"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      }
+    },
+    {
+      "cells": [
+        6,
+        8
+      ],
+      "domain_upper": [
+        2.0,
+        1.0
+      ],
+      "order": [
+        "C",
+        "B",
+        "A"
+      ],
+      "label": "equal_rates",
+      "rates": [
+        1.0,
+        1.0
+      ],
+      "cell_mean_gap": 0.0039032060651751355,
+      "metrics": {
+        "initial_max_error": 0.0,
+        "state_max_error": 4.890065933293997e-07,
+        "inventory_max_error": 1.7763568394002505e-15,
+        "minimum_species": 0.33745628158753194,
+        "time_error": 0.0
+      },
+      "accepted": true,
+      "accepted_steps": 500,
+      "mpi_ranks": 1,
+      "saved_state": "state_6_8_equal_rates.npz",
+      "saved_state_sha256": "bb0b5f1fa6a8c86135d363696824eac53d51a0c8a206b764d0e062983acad286",
+      "run_report": {
+        "accepted_steps": 500,
+        "rejected_steps": 0,
+        "final_time": 1.0,
+        "final_macro_step": 500,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "c76e6c111a78e41201d6746171f334ca9efc6ae926e7378164cd56def8880390"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "92e4e815fa9f82d94e55515159a8b71411dee44db776eddb4dfc4a57e2b8e5c8"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "7377bf5302d385cbf2bdbfb78301bcc524d0764dcb566d702b09130d1ad333e9"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6dcd17d08c5fae490ec40c8638b2d18495f32165d31f75ad0b72eadf5ae9728d"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      }
+    },
+    {
+      "cells": [
+        6,
+        8
+      ],
+      "domain_upper": [
+        2.0,
+        1.0
+      ],
+      "order": [
+        "C",
+        "B",
+        "A"
+      ],
+      "label": "zero_rates",
+      "rates": [
+        0.0,
+        0.0
+      ],
+      "cell_mean_gap": 0.0039032060651751355,
+      "metrics": {
+        "initial_max_error": 0.0,
+        "state_max_error": 1.942890293094024e-16,
+        "inventory_max_error": 0.0,
+        "minimum_species": 0.1,
+        "time_error": 0.0
+      },
+      "accepted": true,
+      "accepted_steps": 500,
+      "mpi_ranks": 1,
+      "saved_state": "state_6_8_zero_rates.npz",
+      "saved_state_sha256": "dbce8218a9dbbd2fcad823517c3370b5e810ec1786f90c172d8b582d2a13bd73",
+      "run_report": {
+        "accepted_steps": 500,
+        "rejected_steps": 0,
+        "final_time": 1.0,
+        "final_macro_step": 500,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "87e80844f1ac80992e30c47a7700a7b95ffe545c499b70840fa93ef098035ac4"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "e2f28caf3b2868353934910e2412c6012842a497bd435883a27a6bdece821a22"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "7377bf5302d385cbf2bdbfb78301bcc524d0764dcb566d702b09130d1ad333e9"
+          }
+        },
+        "field_providers": []
+      },
+      "execution_context": {
+        "schema_version": 1,
+        "backend_identity": {
+          "domain": "runtime-backend-manifest",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "6dcd17d08c5fae490ec40c8638b2d18495f32165d31f75ad0b72eadf5ae9728d"
+          }
+        },
+        "communicator": {
+          "kind": "communicator",
+          "identity": "MPI_COMM_WORLD"
+        },
+        "datatype": {
+          "kind": "datatype",
+          "identity": "float64"
+        },
+        "device": {
+          "kind": "device",
+          "identity": "cpu"
+        }
+      }
+    }
+  ],
+  "threads_requested": "1",
+  "package_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py",
+  "package_version": "1.1.0",
+  "native_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+  "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+  "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=dfcd85eba73c963aaceeaf85738296e5a46272e3f76aff1890a2f7850c4b94d8;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2"
+}

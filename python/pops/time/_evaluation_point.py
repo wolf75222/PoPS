@@ -11,7 +11,7 @@ from pops.time.points import StagePoint, TimePoint
 
 _ACTIVE_PARTITION: ContextVar[Any] = ContextVar("pops_evaluation_partition", default=None)
 _EVALUATIONS = frozenset({
-    "rhs", "diffusive_rhs", "source", "implicit_source", "local_transform", "apply",
+    "rhs", "diffusive_rhs", "source", "implicit_source", "local_transform", "affine_moment_update", "apply",
     "solve_linear", "solve_local_linear", "solve_local_nonlinear", "solve_implicit_source",
 })
 

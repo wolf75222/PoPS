@@ -1,0 +1,808 @@
+{
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "Source_at_actual_run": "2487866c9be76f0482f8f485c5d903f64a21bc80",
+  "core_files_rehashed": 1198,
+  "core_fingerprint": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "exact_rankset": [
+    0,
+    1
+  ],
+  "limits": [
+    "Native.mpi_world rank,size assertions establish world2 context; no local ownership census/runtime perphase counter saved",
+    "Sameartifact two bound runtimeinstances, not sameinstance parameterupdate",
+    "Initial refused histories uninitialized/fill0; previouslypopulated ring rollback remains open",
+    "Private Native journal instrumentation, not public snapshot API",
+    "No CP, retainedticket validator/revocation, rank0-only refusal,AMR2,3D,GPU/full94 claim",
+    "Dispatch.json is preserved pre-run plan with run_executed false; actual admission derives result/XML/identity/actual files, not that plan flag",
+    "Program prefix through historyslots semantically decoded; remainder byte-equal only"
+  ],
+  "physical_pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-installed-build-53fd6ec2-20261008/core-manifest.json": {
+      "bytes": 197327,
+      "sha256": "0c871f738710bd736e099b0e7f21d2fb35d6b47958860556a08dc61c697b7ac5"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-independent-late-refusal-Euler-positive-29e-ed2-reception-20261008/review.py": {
+      "bytes": 13559,
+      "sha256": "98d11fa6283c3fbe1447f004877f1eeea7c629b89f43506436358902e72503bf"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/dispatch.json": {
+      "bytes": 578,
+      "sha256": "54d88895595d26fa58cab8418d3fcfc931a9cf25ee41ac44fa579d80a116336f"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/identity.json": {
+      "bytes": 2832,
+      "sha256": "9dc9ab655b7cba058f5efc15f7ed59b569d43d770602773d0bf26f997e490bdc"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/accepted.npy": {
+      "bytes": 1664,
+      "sha256": "c33033709cba59a30a0e606eaf39cb427d6e1dd7bc0c5a86f80185110c44c1cb"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/actual-receipt.json": {
+      "bytes": 10468,
+      "sha256": "14fe795c3cbceb55dfc2e8009640d2668d0d17623d972c06efb73f191d47625c"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/after-refusal.json": {
+      "bytes": 27578,
+      "sha256": "5cf6c4bd40ab627f211c48ebcad324d20af23aa8be87171ca7217872897d6ddf"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/before-refusal.json": {
+      "bytes": 27578,
+      "sha256": "5cf6c4bd40ab627f211c48ebcad324d20af23aa8be87171ca7217872897d6ddf"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/declared-inputs.json": {
+      "bytes": 827,
+      "sha256": "71b089af3b77fd4343e013a8b649a1bf89005017cea81690a328823d2eb952af"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/initial.npy": {
+      "bytes": 1664,
+      "sha256": "4102d2d4214ddb1a9f53e014eaa551448021d191025de25d150033d2a09a9085"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/inputs.json": {
+      "bytes": 805,
+      "sha256": "d2e26df1e892d446b3cbdafd51a923c93253a06b9e75553fa71b8e2dbe496586"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/model0.cpp": {
+      "bytes": 27192,
+      "sha256": "26040fe3c5f714d43f826b7b0de58764071623ca8b6fd8b84b7b665f1c432686"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/phi_stage.npy": {
+      "bytes": 1664,
+      "sha256": "f0a0f73e9926e20dbb4716594cb4841e77aff67ff8774823fdee4ea3e390b669"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/predictor.npy": {
+      "bytes": 1664,
+      "sha256": "3745eac39212385289e89e9ca72b7954e05d8a5a3323cd6769d9327580c07c5b"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/program0.cpp": {
+      "bytes": 38675,
+      "sha256": "9e8ae1266db7ebb86b4070828b5e75c35210acfb78de0aa635727e1902770ebe"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/refusal-diagnostics.json": {
+      "bytes": 1145,
+      "sha256": "aec2e78f385d6c8496608e01105d847130bd8c10c44b51f38bec7752aaa6c020"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank1/accepted.npy": {
+      "bytes": 1664,
+      "sha256": "c33033709cba59a30a0e606eaf39cb427d6e1dd7bc0c5a86f80185110c44c1cb"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank1/actual-receipt.json": {
+      "bytes": 10468,
+      "sha256": "e6aeb10f6a6ae460db78c84466361b46ba3239c11020d6da2409c6b79347e79c"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank1/after-refusal.json": {
+      "bytes": 27578,
+      "sha256": "5cf6c4bd40ab627f211c48ebcad324d20af23aa8be87171ca7217872897d6ddf"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank1/before-refusal.json": {
+      "bytes": 27578,
+      "sha256": "5cf6c4bd40ab627f211c48ebcad324d20af23aa8be87171ca7217872897d6ddf"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank1/declared-inputs.json": {
+      "bytes": 827,
+      "sha256": "31a2e00bd9f92bb827733b2056ee285de015b0d49dc0b0f31b5b5f5ccb09d015"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank1/initial.npy": {
+      "bytes": 1664,
+      "sha256": "4102d2d4214ddb1a9f53e014eaa551448021d191025de25d150033d2a09a9085"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank1/inputs.json": {
+      "bytes": 805,
+      "sha256": "12de67de25ce6528c6bfc2869f1c963ccffbfb1a19bae64f805f3921984e85fe"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank1/model0.cpp": {
+      "bytes": 27192,
+      "sha256": "26040fe3c5f714d43f826b7b0de58764071623ca8b6fd8b84b7b665f1c432686"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank1/phi_stage.npy": {
+      "bytes": 1664,
+      "sha256": "f0a0f73e9926e20dbb4716594cb4841e77aff67ff8774823fdee4ea3e390b669"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank1/predictor.npy": {
+      "bytes": 1664,
+      "sha256": "3745eac39212385289e89e9ca72b7954e05d8a5a3323cd6769d9327580c07c5b"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank1/program0.cpp": {
+      "bytes": 38675,
+      "sha256": "9e8ae1266db7ebb86b4070828b5e75c35210acfb78de0aa635727e1902770ebe"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank1/refusal-diagnostics.json": {
+      "bytes": 1145,
+      "sha256": "aec2e78f385d6c8496608e01105d847130bd8c10c44b51f38bec7752aaa6c020"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/pops-native-cache/6744227dbcf4c220669406275eb981faed5e5810274d1c55d19cf0a561d19230.so": {
+      "bytes": 2066592,
+      "sha256": "b77172833ee0ed41ecb29a8d7428d4ee04b2e594df4634bfc3de92424c2f976a"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/pops-native-cache/6744227dbcf4c220669406275eb981faed5e5810274d1c55d19cf0a561d19230.so.pops-artifact.json": {
+      "bytes": 490,
+      "sha256": "bce199617b9e80b84ed7065f9f60a1336258a390615dce0b0e360d59725306f6"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/pops-native-cache/8dfac5d602e3a214e4305764ea0eb3be5fa93ac04d2038bf4255a25b75bb5c4d.so": {
+      "bytes": 556200,
+      "sha256": "ab760e6c6dab2f9c31956986e4f1ca8391ac0dd258a6f7ff0f133cf3210dcee1"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/pops-native-cache/8dfac5d602e3a214e4305764ea0eb3be5fa93ac04d2038bf4255a25b75bb5c4d.so.pops-artifact.json": {
+      "bytes": 591,
+      "sha256": "e9b483e1469082352c423c9218fbbc0752dc50520989a3864d5bf9f23dcd3020"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/pops-native-cache/8dfac5d602e3a214e4305764ea0eb3be5fa93ac04d2038bf4255a25b75bb5c4d.so.pops-model-compile.json": {
+      "bytes": 2284,
+      "sha256": "08ec2a18120d18ae51817b212de613a76e9c4458dbad8b1ba41cd491d2470229"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest-tmp/test_public_late_refusal_same_0/pops-native-cache/8dfac5d602e3a214e4305764ea0eb3be5fa93ac04d2038bf4255a25b75bb5c4d.so.pops-model.cpp": {
+      "bytes": 27192,
+      "sha256": "26040fe3c5f714d43f826b7b0de58764071623ca8b6fd8b84b7b665f1c432686"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest.log": {
+      "bytes": 1242,
+      "sha256": "bc6c99142b4e14c94ff4540f6b74ab3b4c8d223a67f2b77089f3fc231368e1bf"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/pytest.xml": {
+      "bytes": 660,
+      "sha256": "65d0a7b9d57f10171d6ba8cb4f490d863ffc25b2321164af6f98d9494edee2b3"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/result.json": {
+      "bytes": 805,
+      "sha256": "90d7a8c06b7a6229e497096b471296dc368a045fc42abaae9de6e5df9fce7298"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank0/source-files.json": {
+      "bytes": 136555,
+      "sha256": "c3c4ebffbf50cf56cc7943b6af90b0e2ed5a8414889b930b35a88e94db7ba8b7"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank1/identity.json": {
+      "bytes": 2832,
+      "sha256": "9dc9ab655b7cba058f5efc15f7ed59b569d43d770602773d0bf26f997e490bdc"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank1/pytest.log": {
+      "bytes": 1242,
+      "sha256": "5e4ce8be053fa274205fb4dcb5029f4eaf0c6a52edcb60aa3a4f36812292ad1d"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank1/pytest.xml": {
+      "bytes": 660,
+      "sha256": "3928cf36601c7cac78666b308dcbd60a00b8e90d7ad68f71e673acd642fede08"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank1/result.json": {
+      "bytes": 806,
+      "sha256": "1724a253454d5e014c2a44e3509616572003c21100b3f1259d3c9ba7587ec7ce"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/rank1/source-files.json": {
+      "bytes": 136555,
+      "sha256": "c3c4ebffbf50cf56cc7943b6af90b0e2ed5a8414889b930b35a88e94db7ba8b7"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-MPI2-current-ed2-20261008/run_rank.py": {
+      "bytes": 1995,
+      "sha256": "be40bf5efbce41f7d4fde6c8366ee63c69e6ea428b60de56dbd2da35786bcccd"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/accepted.npy": {
+      "bytes": 1664,
+      "sha256": "c33033709cba59a30a0e606eaf39cb427d6e1dd7bc0c5a86f80185110c44c1cb"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/initial.npy": {
+      "bytes": 1664,
+      "sha256": "4102d2d4214ddb1a9f53e014eaa551448021d191025de25d150033d2a09a9085"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/phi_stage.npy": {
+      "bytes": 1664,
+      "sha256": "f0a0f73e9926e20dbb4716594cb4841e77aff67ff8774823fdee4ea3e390b669"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-late-refusal-SSPRK2-29e-ed2-20261008/pytest-tmp/test_public_late_refusal_same_0/late-refusal-ssprk2/rank0/predictor.npy": {
+      "bytes": 1664,
+      "sha256": "3745eac39212385289e89e9ca72b7954e05d8a5a3323cd6769d9327580c07c5b"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v4-physical-history-slots-20261008/tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py": {
+      "bytes": 15301,
+      "sha256": "8fea64a1bbd3465bc1137fced5be2b89becb2815e307d377d30da9a2126a4478"
+    },
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so": {
+      "bytes": 14446456,
+      "sha256": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b"
+    }
+  },
+  "rank_arrays_bitwise_equal": true,
+  "rank_snapshots": {
+    "0": {
+      "auxiliary_full_wire": [
+        {
+          "accepted_generation": 0,
+          "components": [
+            {
+              "component": 0,
+              "group": "t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-groups\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\tauxiliaryt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-shapes\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0002s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001",
+              "key": [
+                "model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26",
+                "aux",
+                "stage_tau",
+                "stage_tau"
+              ],
+              "kind": 1,
+              "provider": "provider:derived:stage_tau:model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26/stage_tau/stage_tau"
+            },
+            {
+              "component": 0,
+              "group": "t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-groups\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0005fieldt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-shapes\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0002s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000",
+              "key": [
+                "model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26",
+                "field",
+                "phi",
+                "screened_phi"
+              ],
+              "kind": 2,
+              "provider": "provider:pops.handle.v1::model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26::field_operator::fields::target::fields:model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26/phi/screened_phi"
+            }
+          ],
+          "dimension": 2,
+          "full_wire_consumed": true,
+          "groups": [
+            {
+              "components": 1,
+              "contract": [
+                "field",
+                "cell",
+                null,
+                "cell",
+                null
+              ],
+              "identity": "t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-groups\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0005fieldt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-shapes\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0002s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000",
+              "nonzero_payload_values": 0,
+              "payload_sha256": "80422bc3d307b4a25bdafcc84ac7fb01cb55a09810e8b0f37bb12e0edb5c48ca",
+              "payload_values": 192,
+              "shape": [
+                2,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "components": 1,
+              "contract": [
+                "auxiliary",
+                "cell",
+                "1",
+                "cell",
+                "cell_scalar"
+              ],
+              "identity": "t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-groups\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\tauxiliaryt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-shapes\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0002s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001",
+              "nonzero_payload_values": 0,
+              "payload_sha256": "80422bc3d307b4a25bdafcc84ac7fb01cb55a09810e8b0f37bb12e0edb5c48ca",
+              "payload_values": 192,
+              "shape": [
+                2,
+                1,
+                1,
+                1
+              ]
+            }
+          ],
+          "providers": [
+            {
+              "accepted_point": null,
+              "identity": "provider:derived:stage_tau:model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26/stage_tau/stage_tau",
+              "kind": 1
+            },
+            {
+              "accepted_point": null,
+              "identity": "provider:pops.handle.v1::model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26::field_operator::fields::target::fields:model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26/phi/screened_phi",
+              "kind": 2
+            }
+          ],
+          "registry_bytes": 7611,
+          "registry_sha256": "af900836e95ea57d3c4f88ec5b152b4d061ba25c5bd5257d87452ea97fa66dc7",
+          "wire_string_representation": "latin1 lossless byte mapping; sealed registry/contract strings may contain binary"
+        }
+      ],
+      "base64_verified": [
+        {
+          "bytes": 13508,
+          "path": "/auxiliary/0",
+          "sha256": "1a9c391e0ecf079219b65e7633eeabdce61b7113bc098c90f5c2cb560ed60bcf"
+        },
+        {
+          "bytes": 1536,
+          "path": "/potentials/0/4",
+          "sha256": "80422bc3d307b4a25bdafcc84ac7fb01cb55a09810e8b0f37bb12e0edb5c48ca"
+        },
+        {
+          "bytes": 3307,
+          "path": "/program",
+          "sha256": "b86b978c9b5fee9cd08980ecc14eaee78872ff3f15e196c7704c973203301355"
+        },
+        {
+          "bytes": 1536,
+          "path": "/state/2",
+          "sha256": "87d137cc9846e8f24d79c6e1185e2cf42086bc9c68a41f57324ceb5bff33dad6"
+        },
+        {
+          "bytes": 13508,
+          "path": "/auxiliary/0",
+          "sha256": "1a9c391e0ecf079219b65e7633eeabdce61b7113bc098c90f5c2cb560ed60bcf"
+        },
+        {
+          "bytes": 1536,
+          "path": "/potentials/0/4",
+          "sha256": "80422bc3d307b4a25bdafcc84ac7fb01cb55a09810e8b0f37bb12e0edb5c48ca"
+        },
+        {
+          "bytes": 3307,
+          "path": "/program",
+          "sha256": "b86b978c9b5fee9cd08980ecc14eaee78872ff3f15e196c7704c973203301355"
+        },
+        {
+          "bytes": 1536,
+          "path": "/state/2",
+          "sha256": "87d137cc9846e8f24d79c6e1185e2cf42086bc9c68a41f57324ceb5bff33dad6"
+        }
+      ],
+      "initial_histories": "physical depth2, allfour serialized slots uninitialized/fill0; no initially populated rawhistory",
+      "program_prefix": {
+        "accepted_attempt": 0,
+        "decoded_prefix_bytes": 2765,
+        "dimension": 2,
+        "histories": [
+          {
+            "clock": "pops.clock.v1::sha256:2a37b205466815eb786c943669fb51e60ca887e76640ed6b3a29e441b74c28bf",
+            "components": 1,
+            "depth": 2,
+            "interpolation": "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+            "name": "phi_stage",
+            "owner": 0,
+            "space": "{\"centering\":\"cell\",\"clock\":\"simulation\",\"components\":[\"u\"],\"domain\":\"real\",\"frame\":\"pops.domain-frame.v1:sha256:7ccc0bbf3405b5b895a5dd14958f69d1d0b5b6f97cd5edbbb1869e1c6d11007c\",\"kind\":\"state\",\"layout\":\"cell\",\"name\":\"U\",\"representation\":\"conservative\",\"roles\":{\"u\":\"velocity:0\"},\"sampling\":\"unspecified\",\"storage\":\"multifab\",\"support\":null,\"units\":[null],\"value_shape\":[1]}",
+            "state": "pops.handle.v1::case:diffusion_predictor_field_ssprk2/block:material/model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26::state::U"
+          },
+          {
+            "clock": "pops.clock.v1::sha256:2a37b205466815eb786c943669fb51e60ca887e76640ed6b3a29e441b74c28bf",
+            "components": 1,
+            "depth": 2,
+            "interpolation": "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+            "name": "predictor_Y",
+            "owner": 0,
+            "space": "{\"centering\":\"cell\",\"clock\":\"simulation\",\"components\":[\"u\"],\"domain\":\"real\",\"frame\":\"pops.domain-frame.v1:sha256:7ccc0bbf3405b5b895a5dd14958f69d1d0b5b6f97cd5edbbb1869e1c6d11007c\",\"kind\":\"state\",\"layout\":\"cell\",\"name\":\"U\",\"representation\":\"conservative\",\"roles\":{\"u\":\"velocity:0\"},\"sampling\":\"unspecified\",\"storage\":\"multifab\",\"support\":null,\"units\":[null],\"value_shape\":[1]}",
+            "state": "pops.handle.v1::case:diffusion_predictor_field_ssprk2/block:material/model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26::state::U"
+          }
+        ],
+        "level_clocks": [
+          {
+            "level": 0,
+            "macro_step": 0,
+            "phase_denominator": 1,
+            "phase_numerator": 0,
+            "physical_time": 0.0
+          }
+        ],
+        "logical_clock_ticks": [
+          [
+            "pops.clock.v1::sha256:2a37b205466815eb786c943669fb51e60ca887e76640ed6b3a29e441b74c28bf",
+            0
+          ]
+        ],
+        "materialization_generation": 0,
+        "slots": [
+          {
+            "fill_count": 0,
+            "initialized": 0,
+            "interval_bits": 0,
+            "level": 0,
+            "name": "phi_stage",
+            "ordinal": 0,
+            "outgoing_dt": 0.0,
+            "sample_kind": 1,
+            "slot": 0,
+            "start_bits": 0
+          },
+          {
+            "fill_count": 0,
+            "initialized": 0,
+            "interval_bits": 0,
+            "level": 0,
+            "name": "phi_stage",
+            "ordinal": 0,
+            "outgoing_dt": 0.0,
+            "sample_kind": 1,
+            "slot": 1,
+            "start_bits": 0
+          },
+          {
+            "fill_count": 0,
+            "initialized": 0,
+            "interval_bits": 0,
+            "level": 0,
+            "name": "predictor_Y",
+            "ordinal": 0,
+            "outgoing_dt": 0.0,
+            "sample_kind": 1,
+            "slot": 0,
+            "start_bits": 0
+          },
+          {
+            "fill_count": 0,
+            "initialized": 0,
+            "interval_bits": 0,
+            "level": 0,
+            "name": "predictor_Y",
+            "ordinal": 0,
+            "outgoing_dt": 0.0,
+            "sample_kind": 1,
+            "slot": 1,
+            "start_bits": 0
+          }
+        ],
+        "spatial_contract_sha256": "03dc338a454da36153903ddd642e814c9fe421d1cde958fa24016721a46b80ab",
+        "tail_bytes": 542,
+        "tail_scope": "remaining flux/temporal/tagging accepted-state bytes checked exact before/after, not semantically decoded here",
+        "topology_epoch": 0
+      },
+      "raw_JSON_bytes": 27578
+    },
+    "1": {
+      "auxiliary_full_wire": [
+        {
+          "accepted_generation": 0,
+          "components": [
+            {
+              "component": 0,
+              "group": "t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-groups\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\tauxiliaryt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-shapes\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0002s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001",
+              "key": [
+                "model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26",
+                "aux",
+                "stage_tau",
+                "stage_tau"
+              ],
+              "kind": 1,
+              "provider": "provider:derived:stage_tau:model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26/stage_tau/stage_tau"
+            },
+            {
+              "component": 0,
+              "group": "t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-groups\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0005fieldt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-shapes\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0002s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000",
+              "key": [
+                "model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26",
+                "field",
+                "phi",
+                "screened_phi"
+              ],
+              "kind": 2,
+              "provider": "provider:pops.handle.v1::model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26::field_operator::fields::target::fields:model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26/phi/screened_phi"
+            }
+          ],
+          "dimension": 2,
+          "full_wire_consumed": true,
+          "groups": [
+            {
+              "components": 1,
+              "contract": [
+                "field",
+                "cell",
+                null,
+                "cell",
+                null
+              ],
+              "identity": "t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-groups\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0005fieldt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-shapes\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0002s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0000",
+              "nonzero_payload_values": 0,
+              "payload_sha256": "80422bc3d307b4a25bdafcc84ac7fb01cb55a09810e8b0f37bb12e0edb5c48ca",
+              "payload_values": 192,
+              "shape": [
+                2,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "components": 1,
+              "contract": [
+                "auxiliary",
+                "cell",
+                "1",
+                "cell",
+                "cell_scalar"
+              ],
+              "identity": "t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-groups\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001t\u0000\u0000\u0000\u0000\u0000\u0000\u0000\tauxiliaryt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004cellt\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u001cpops.auxiliary-storage-shapes\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006u\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0002s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0006i\u0004\u0000\u0000\u0000\u0001",
+              "nonzero_payload_values": 0,
+              "payload_sha256": "80422bc3d307b4a25bdafcc84ac7fb01cb55a09810e8b0f37bb12e0edb5c48ca",
+              "payload_values": 192,
+              "shape": [
+                2,
+                1,
+                1,
+                1
+              ]
+            }
+          ],
+          "providers": [
+            {
+              "accepted_point": null,
+              "identity": "provider:derived:stage_tau:model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26/stage_tau/stage_tau",
+              "kind": 1
+            },
+            {
+              "accepted_point": null,
+              "identity": "provider:pops.handle.v1::model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26::field_operator::fields::target::fields:model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26/phi/screened_phi",
+              "kind": 2
+            }
+          ],
+          "registry_bytes": 7611,
+          "registry_sha256": "af900836e95ea57d3c4f88ec5b152b4d061ba25c5bd5257d87452ea97fa66dc7",
+          "wire_string_representation": "latin1 lossless byte mapping; sealed registry/contract strings may contain binary"
+        }
+      ],
+      "base64_verified": [
+        {
+          "bytes": 13508,
+          "path": "/auxiliary/0",
+          "sha256": "1a9c391e0ecf079219b65e7633eeabdce61b7113bc098c90f5c2cb560ed60bcf"
+        },
+        {
+          "bytes": 1536,
+          "path": "/potentials/0/4",
+          "sha256": "80422bc3d307b4a25bdafcc84ac7fb01cb55a09810e8b0f37bb12e0edb5c48ca"
+        },
+        {
+          "bytes": 3307,
+          "path": "/program",
+          "sha256": "b86b978c9b5fee9cd08980ecc14eaee78872ff3f15e196c7704c973203301355"
+        },
+        {
+          "bytes": 1536,
+          "path": "/state/2",
+          "sha256": "87d137cc9846e8f24d79c6e1185e2cf42086bc9c68a41f57324ceb5bff33dad6"
+        },
+        {
+          "bytes": 13508,
+          "path": "/auxiliary/0",
+          "sha256": "1a9c391e0ecf079219b65e7633eeabdce61b7113bc098c90f5c2cb560ed60bcf"
+        },
+        {
+          "bytes": 1536,
+          "path": "/potentials/0/4",
+          "sha256": "80422bc3d307b4a25bdafcc84ac7fb01cb55a09810e8b0f37bb12e0edb5c48ca"
+        },
+        {
+          "bytes": 3307,
+          "path": "/program",
+          "sha256": "b86b978c9b5fee9cd08980ecc14eaee78872ff3f15e196c7704c973203301355"
+        },
+        {
+          "bytes": 1536,
+          "path": "/state/2",
+          "sha256": "87d137cc9846e8f24d79c6e1185e2cf42086bc9c68a41f57324ceb5bff33dad6"
+        }
+      ],
+      "initial_histories": "physical depth2, allfour serialized slots uninitialized/fill0; no initially populated rawhistory",
+      "program_prefix": {
+        "accepted_attempt": 0,
+        "decoded_prefix_bytes": 2765,
+        "dimension": 2,
+        "histories": [
+          {
+            "clock": "pops.clock.v1::sha256:2a37b205466815eb786c943669fb51e60ca887e76640ed6b3a29e441b74c28bf",
+            "components": 1,
+            "depth": 2,
+            "interpolation": "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+            "name": "phi_stage",
+            "owner": 0,
+            "space": "{\"centering\":\"cell\",\"clock\":\"simulation\",\"components\":[\"u\"],\"domain\":\"real\",\"frame\":\"pops.domain-frame.v1:sha256:7ccc0bbf3405b5b895a5dd14958f69d1d0b5b6f97cd5edbbb1869e1c6d11007c\",\"kind\":\"state\",\"layout\":\"cell\",\"name\":\"U\",\"representation\":\"conservative\",\"roles\":{\"u\":\"velocity:0\"},\"sampling\":\"unspecified\",\"storage\":\"multifab\",\"support\":null,\"units\":[null],\"value_shape\":[1]}",
+            "state": "pops.handle.v1::case:diffusion_predictor_field_ssprk2/block:material/model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26::state::U"
+          },
+          {
+            "clock": "pops.clock.v1::sha256:2a37b205466815eb786c943669fb51e60ca887e76640ed6b3a29e441b74c28bf",
+            "components": 1,
+            "depth": 2,
+            "interpolation": "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+            "name": "predictor_Y",
+            "owner": 0,
+            "space": "{\"centering\":\"cell\",\"clock\":\"simulation\",\"components\":[\"u\"],\"domain\":\"real\",\"frame\":\"pops.domain-frame.v1:sha256:7ccc0bbf3405b5b895a5dd14958f69d1d0b5b6f97cd5edbbb1869e1c6d11007c\",\"kind\":\"state\",\"layout\":\"cell\",\"name\":\"U\",\"representation\":\"conservative\",\"roles\":{\"u\":\"velocity:0\"},\"sampling\":\"unspecified\",\"storage\":\"multifab\",\"support\":null,\"units\":[null],\"value_shape\":[1]}",
+            "state": "pops.handle.v1::case:diffusion_predictor_field_ssprk2/block:material/model_definition:public_diffusion_field@pops.module%3Asha256%3Aad25b765ab90aaafd5dbfd88a304e73eaeaacca4589699bf31fc718a9b758c26::state::U"
+          }
+        ],
+        "level_clocks": [
+          {
+            "level": 0,
+            "macro_step": 0,
+            "phase_denominator": 1,
+            "phase_numerator": 0,
+            "physical_time": 0.0
+          }
+        ],
+        "logical_clock_ticks": [
+          [
+            "pops.clock.v1::sha256:2a37b205466815eb786c943669fb51e60ca887e76640ed6b3a29e441b74c28bf",
+            0
+          ]
+        ],
+        "materialization_generation": 0,
+        "slots": [
+          {
+            "fill_count": 0,
+            "initialized": 0,
+            "interval_bits": 0,
+            "level": 0,
+            "name": "phi_stage",
+            "ordinal": 0,
+            "outgoing_dt": 0.0,
+            "sample_kind": 1,
+            "slot": 0,
+            "start_bits": 0
+          },
+          {
+            "fill_count": 0,
+            "initialized": 0,
+            "interval_bits": 0,
+            "level": 0,
+            "name": "phi_stage",
+            "ordinal": 0,
+            "outgoing_dt": 0.0,
+            "sample_kind": 1,
+            "slot": 1,
+            "start_bits": 0
+          },
+          {
+            "fill_count": 0,
+            "initialized": 0,
+            "interval_bits": 0,
+            "level": 0,
+            "name": "predictor_Y",
+            "ordinal": 0,
+            "outgoing_dt": 0.0,
+            "sample_kind": 1,
+            "slot": 0,
+            "start_bits": 0
+          },
+          {
+            "fill_count": 0,
+            "initialized": 0,
+            "interval_bits": 0,
+            "level": 0,
+            "name": "predictor_Y",
+            "ordinal": 0,
+            "outgoing_dt": 0.0,
+            "sample_kind": 1,
+            "slot": 1,
+            "start_bits": 0
+          }
+        ],
+        "spatial_contract_sha256": "03dc338a454da36153903ddd642e814c9fe421d1cde958fa24016721a46b80ab",
+        "tail_bytes": 542,
+        "tail_scope": "remaining flux/temporal/tagging accepted-state bytes checked exact before/after, not semantically decoded here",
+        "topology_epoch": 0
+      },
+      "raw_JSON_bytes": 27578
+    }
+  },
+  "results": [
+    {
+      "MPI_world_evidence": "Actual native.mpi_world rank,size assertions before pytest; fixture native context rank/ranks recorded",
+      "artifact": "pops.artifact.v1:sha256:62f45ab5a7f5af0d61f6d845e6e2a792aeaeefe59214984a498f219aeedaa328",
+      "collective_failures": [
+        [
+          "RuntimeError",
+          "collective step attempt failed during solve: rank 0 RuntimeError: Program cadence phase failed collectively; rank 0: multi-block AMR level-group callback failed collectively; rank 0: AMR Program level body failed collectively; rank 0: acceptance guard 'late_field_norm_refusal' failed; rank 1 RuntimeError: Program cadence phase failed collectively; rank 0: multi-block AMR level-group callback failed collectively; rank 0: AMR Program level body failed collectively; rank 0: acceptance guard 'late_field_norm_refusal' failed",
+          true
+        ],
+        [
+          "RuntimeError",
+          "collective step attempt failed during solve: rank 0 RuntimeError: Program cadence phase failed collectively; rank 0: multi-block AMR level-group callback failed collectively; rank 0: AMR Program level body failed collectively; rank 0: acceptance guard 'late_field_norm_refusal' failed; rank 1 RuntimeError: Program cadence phase failed collectively; rank 0: multi-block AMR level-group callback failed collectively; rank 0: AMR Program level body failed collectively; rank 0: acceptance guard 'late_field_norm_refusal' failed",
+          true
+        ]
+      ],
+      "control_math": {
+        "accepted": {
+          "bound": 2.2737367544323206e-12,
+          "max_abs_error": 6.661338147750939e-16,
+          "values": 192
+        },
+        "initial": {
+          "bound": 2.2737367544323206e-12,
+          "max_abs_error": 6.661338147750939e-16,
+          "values": 192
+        },
+        "phi_stage": {
+          "bound": 1.4647123675443233e-10,
+          "max_abs_error": 5.862865748440527e-12,
+          "values": 192
+        },
+        "predictor": {
+          "bound": 2.2737367544323206e-12,
+          "max_abs_error": 6.661338147750939e-16,
+          "values": 192
+        }
+      },
+      "counts": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 1
+      },
+      "rank": 0,
+      "ranks": 2,
+      "wall_seconds": 52.78467033299967,
+      "wrong_final_field_gap": 4.2432196982744586e-06
+    },
+    {
+      "MPI_world_evidence": "Actual native.mpi_world rank,size assertions before pytest; fixture native context rank/ranks recorded",
+      "artifact": "pops.artifact.v1:sha256:62f45ab5a7f5af0d61f6d845e6e2a792aeaeefe59214984a498f219aeedaa328",
+      "collective_failures": [
+        [
+          "RuntimeError",
+          "collective step attempt failed during solve: rank 0 RuntimeError: Program cadence phase failed collectively; rank 0: multi-block AMR level-group callback failed collectively; rank 0: AMR Program level body failed collectively; rank 0: acceptance guard 'late_field_norm_refusal' failed; rank 1 RuntimeError: Program cadence phase failed collectively; rank 0: multi-block AMR level-group callback failed collectively; rank 0: AMR Program level body failed collectively; rank 0: acceptance guard 'late_field_norm_refusal' failed",
+          true
+        ],
+        [
+          "RuntimeError",
+          "collective step attempt failed during solve: rank 0 RuntimeError: Program cadence phase failed collectively; rank 0: multi-block AMR level-group callback failed collectively; rank 0: AMR Program level body failed collectively; rank 0: acceptance guard 'late_field_norm_refusal' failed; rank 1 RuntimeError: Program cadence phase failed collectively; rank 0: multi-block AMR level-group callback failed collectively; rank 0: AMR Program level body failed collectively; rank 0: acceptance guard 'late_field_norm_refusal' failed",
+          true
+        ]
+      ],
+      "control_math": {
+        "accepted": {
+          "bound": 2.2737367544323206e-12,
+          "max_abs_error": 6.661338147750939e-16,
+          "values": 192
+        },
+        "initial": {
+          "bound": 2.2737367544323206e-12,
+          "max_abs_error": 6.661338147750939e-16,
+          "values": 192
+        },
+        "phi_stage": {
+          "bound": 1.4647123675443233e-10,
+          "max_abs_error": 5.862865748440527e-12,
+          "values": 192
+        },
+        "predictor": {
+          "bound": 2.2737367544323206e-12,
+          "max_abs_error": 6.661338147750939e-16,
+          "values": 192
+        }
+      },
+      "counts": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 1
+      },
+      "rank": 1,
+      "ranks": 2,
+      "wall_seconds": 52.777916833001655,
+      "wrong_final_field_gap": 4.2432196982744586e-06
+    }
+  ],
+  "status": "PASS_BOUNDED_MPI2_SSPRK2_COLLECTIVE_LATE_REFUSAL_CONTROL",
+  "world1_29e_comparison": {
+    "accepted": {
+      "bitwise_equal": true,
+      "max_abs_delta": 0.0
+    },
+    "initial": {
+      "bitwise_equal": true,
+      "max_abs_delta": 0.0
+    },
+    "phi_stage": {
+      "bitwise_equal": true,
+      "max_abs_delta": 0.0
+    },
+    "predictor": {
+      "bitwise_equal": true,
+      "max_abs_delta": 0.0
+    }
+  }
+}

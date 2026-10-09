@@ -6,10 +6,12 @@
 #include <pops/mesh/index/entity_index.hpp>
 #include <pops/mesh/storage/fab.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
-#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/numerics/spatial/nd/conservation_law.hpp>
 #include <pops/numerics/spatial/primitives/state_access.hpp>
 
 #include <concepts>
+#include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <type_traits>
 
@@ -53,17 +55,45 @@ struct ConservativeComponentSampler {
   POPS_HD Real operator()(int offset) const {
     return state(displaced<Axis, Orientation>(source, offset), component);
   }
+  POPS_HD Real operator()(int offset, int selected_component) const {
+    return state(displaced<Axis, Orientation>(source, offset), selected_component);
+  }
 };
 
-template <class Primitive, int MinimumOffset, int MaximumOffset>
+template <int Axis, int Orientation, int Dim, class Model, int MinimumOffset, int MaximumOffset>
 struct PrimitiveComponentSampler {
   static_assert(MinimumOffset <= MaximumOffset);
-  static constexpr int count = MaximumOffset - MinimumOffset + 1;
-
-  const Primitive* values = nullptr;
+  const Model& model;
+  FieldView<const Real, Dim> state{};
+  Index<Dim> source{};
+  typename Model::Primitive* values = nullptr;
+  bool* ready = nullptr;
+  StateConversionStatus* status = nullptr;
   int component = 0;
 
-  POPS_HD Real operator()(int offset) const { return values[offset - MinimumOffset][component]; }
+  POPS_HD Real operator()(int offset) const { return (*this)(offset, component); }
+
+  POPS_HD Real operator()(int offset, int selected_component) const {
+    const Real invalid = std::numeric_limits<Real>::quiet_NaN();
+    if (*status != StateConversionStatus::Success)
+      return invalid;
+    if (offset < MinimumOffset || offset > MaximumOffset) {
+      *status = StateConversionStatus::NonFiniteState;
+      return invalid;
+    }
+    const int slot = offset - MinimumOffset;
+    if (!ready[slot]) {
+      const auto recovered = model.recover(
+          pops::load_state<Model>(state, displaced<Axis, Orientation>(source, offset)));
+      if (!recovered.succeeded()) {
+        *status = recovered.status;
+        return invalid;
+      }
+      values[slot] = recovered.value;
+      ready[slot] = true;
+    }
+    return values[slot][selected_component];
+  }
 };
 
 template <class Model>
@@ -77,22 +107,31 @@ POPS_HD StateConversion<typename Model::State> reconstruct_conservative(
     const Model& model, const FieldView<const Real, Dim>& state, const Index<Dim>& source,
     const Reconstruction& reconstruction) {
   typename Model::State face = pops::load_state<Model>(state, source);
-  for (int component = 0; component < Model::n_vars; ++component) {
-    if constexpr (CellValueReconstruction<Reconstruction>) {
-      const ConservativeComponentSampler<Axis, Orientation, Dim> sample{state, source, component};
-      const Real center = sample(0);
-      face[component] = reconstruction.cell_face_value(center);
-    } else if constexpr (SlopeReconstruction<Reconstruction>) {
-      // Limiter differences are always formed in canonical axis order. Orientation selects the
-      // side of the resulting centered slope exactly once below.
-      const ConservativeComponentSampler<Axis, 1, Dim> sample{state, source, component};
-      const Real center = sample(0);
-      face[component] =
-          center + Real(0.5) * Real(Orientation) *
-                       reconstruction.limited_slope(center - sample(-1), sample(1) - center);
-    } else {
-      const ConservativeComponentSampler<Axis, Orientation, Dim> sample{state, source, component};
-      face[component] = reconstruction.stencil_face_value(sample);
+  if constexpr (JointStencilReconstruction<Reconstruction>) {
+    static_assert(Reconstruction::n_components == Model::n_vars,
+                  "joint reconstruction output differs from its physical state");
+    const ConservativeComponentSampler<Axis, Orientation, Dim> sample{state, source, 0};
+    const auto reconstructed = reconstruction.stencil_face_state(sample);
+    for (int component = 0; component < Model::n_vars; ++component)
+      face[component] = reconstructed[component];
+  } else {
+    for (int component = 0; component < Model::n_vars; ++component) {
+      if constexpr (CellValueReconstruction<Reconstruction>) {
+        const ConservativeComponentSampler<Axis, Orientation, Dim> sample{state, source, component};
+        const Real center = sample(0);
+        face[component] = reconstruction.cell_face_value(center);
+      } else if constexpr (SlopeReconstruction<Reconstruction>) {
+        // Limiter differences are always formed in canonical axis order. Orientation selects the
+        // side of the resulting centered slope exactly once below.
+        const ConservativeComponentSampler<Axis, 1, Dim> sample{state, source, component};
+        const Real center = sample(0);
+        face[component] =
+            center + Real(0.5) * Real(Orientation) *
+                         reconstruction.limited_slope(center - sample(-1), sample(1) - center);
+      } else {
+        const ConservativeComponentSampler<Axis, Orientation, Dim> sample{state, source, component};
+        face[component] = reconstruction.stencil_face_value(sample);
+      }
     }
   }
   return checked_conservative(model, face);
@@ -133,20 +172,36 @@ POPS_HD StateConversion<typename Model::State> reconstruct_primitive(
     using Envelope = ReconstructionStencilEnvelope<Reconstruction>;
     constexpr int minimum = Envelope::min_offset;
     constexpr int maximum = Envelope::max_offset;
-    constexpr int count = maximum - minimum + 1;
+    constexpr std::int64_t count_wide =
+        std::int64_t(maximum) - std::int64_t(minimum) + std::int64_t(1);
+    static_assert(count_wide <= std::numeric_limits<int>::max(),
+                  "sampled reconstruction envelope exceeds native storage metadata");
+    constexpr int count = static_cast<int>(count_wide);
     Primitive values[count]{};
-    for (int offset = minimum; offset <= maximum; ++offset) {
-      const auto recovered = model.recover(
-          pops::load_state<Model>(state, displaced<Axis, Orientation>(source, offset)));
-      if (!recovered.succeeded())
-        return {{}, recovered.status};
-      values[offset - minimum] = recovered.value;
-    }
+    bool ready[count]{};
+    StateConversionStatus status = StateConversionStatus::Success;
 
     Primitive face{};
-    for (int component = 0; component < Model::n_vars; ++component) {
-      const PrimitiveComponentSampler<Primitive, minimum, maximum> sample{values, component};
-      face[component] = reconstruction.stencil_face_value(sample);
+    if constexpr (JointStencilReconstruction<Reconstruction>) {
+      static_assert(Reconstruction::n_components == Model::n_vars,
+                    "joint reconstruction output differs from its physical state");
+      const PrimitiveComponentSampler<Axis, Orientation, Dim, Model, minimum, maximum> sample{
+          model, state, source, values, ready, &status, 0};
+      const auto reconstructed = reconstruction.stencil_face_state(sample);
+      for (int component = 0; component < Model::n_vars; ++component)
+        face[component] = reconstructed[component];
+      if (status != StateConversionStatus::Success)
+        return {{}, status};
+    } else {
+      for (int component = 0; component < Model::n_vars; ++component) {
+        // Conversion is shared across components but occurs only for offsets reached by the
+        // policy's control flow.  A failed active conversion cannot be hidden by min/where.
+        const PrimitiveComponentSampler<Axis, Orientation, Dim, Model, minimum, maximum> sample{
+            model, state, source, values, ready, &status, component};
+        face[component] = reconstruction.stencil_face_value(sample);
+        if (status != StateConversionStatus::Success)
+          return {{}, status};
+      }
     }
     return model.make_conservative(face);
   }

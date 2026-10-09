@@ -1,0 +1,456 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)"
+	tests="26"
+	failures="0"
+	disabled="0"
+	skipped="0"
+	hostname=""
+	time="2"
+	timestamp="2026-10-09T05:43:10"
+	>
+	<testcase name="HierarchyTensorExactRank.CoarseGmresNativeOptionsKeepExactWireTypes" classname="HierarchyTensorExactRank.CoarseGmresNativeOptionsKeepExactWireTypes" time="0.661074" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_amr_tensor_fac_provider;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = HierarchyTensorExactRank.CoarseGmresNativeOptionsKeepExactWireTypes
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HierarchyTensorExactRank
+[ RUN      ] HierarchyTensorExactRank.CoarseGmresNativeOptionsKeepExactWireTypes
+[       OK ] HierarchyTensorExactRank.CoarseGmresNativeOptionsKeepExactWireTypes (0 ms)
+[----------] 1 test from HierarchyTensorExactRank (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="HierarchyTensorExactRank.PolarCoarsePreconditionerRequiresExactWireAndArithmeticGMRES" classname="HierarchyTensorExactRank.PolarCoarsePreconditionerRequiresExactWireAndArithmeticGMRES" time="0.0521881" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_amr_tensor_fac_provider;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = HierarchyTensorExactRank.PolarCoarsePreconditionerRequiresExactWireAndArithmeticGMRES
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HierarchyTensorExactRank
+[ RUN      ] HierarchyTensorExactRank.PolarCoarsePreconditionerRequiresExactWireAndArithmeticGMRES
+[       OK ] HierarchyTensorExactRank.PolarCoarsePreconditionerRequiresExactWireAndArithmeticGMRES (0 ms)
+[----------] 1 test from HierarchyTensorExactRank (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="HierarchyTensorExactRank.FineFluxCouplingKeepsExactWireAndTypedContracts" classname="HierarchyTensorExactRank.FineFluxCouplingKeepsExactWireAndTypedContracts" time="0.0523361" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_amr_tensor_fac_provider;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = HierarchyTensorExactRank.FineFluxCouplingKeepsExactWireAndTypedContracts
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HierarchyTensorExactRank
+[ RUN      ] HierarchyTensorExactRank.FineFluxCouplingKeepsExactWireAndTypedContracts
+[       OK ] HierarchyTensorExactRank.FineFluxCouplingKeepsExactWireAndTypedContracts (0 ms)
+[----------] 1 test from HierarchyTensorExactRank (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="HierarchyTensorExactRank.OneTwoAndThreeDimensionalRequestsPrepare" classname="HierarchyTensorExactRank.OneTwoAndThreeDimensionalRequestsPrepare" time="0.071644" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_amr_tensor_fac_provider;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = HierarchyTensorExactRank.OneTwoAndThreeDimensionalRequestsPrepare
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HierarchyTensorExactRank
+[ RUN      ] HierarchyTensorExactRank.OneTwoAndThreeDimensionalRequestsPrepare
+[       OK ] HierarchyTensorExactRank.OneTwoAndThreeDimensionalRequestsPrepare (19 ms)
+[----------] 1 test from HierarchyTensorExactRank (19 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (19 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="HierarchyTensorExactRank.FacAcceptsRankedAndPartiallyRefinedAxes" classname="HierarchyTensorExactRank.FacAcceptsRankedAndPartiallyRefinedAxes" time="0.0564124" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_amr_tensor_fac_provider;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = HierarchyTensorExactRank.FacAcceptsRankedAndPartiallyRefinedAxes
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HierarchyTensorExactRank
+[ RUN      ] HierarchyTensorExactRank.FacAcceptsRankedAndPartiallyRefinedAxes
+[       OK ] HierarchyTensorExactRank.FacAcceptsRankedAndPartiallyRefinedAxes (4 ms)
+[----------] 1 test from HierarchyTensorExactRank (4 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (4 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="HierarchyTensorExactRank.OneTwoAndThreeDimensionalPublicationIsTransactional" classname="HierarchyTensorExactRank.OneTwoAndThreeDimensionalPublicationIsTransactional" time="0.0700906" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_amr_tensor_fac_provider;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = HierarchyTensorExactRank.OneTwoAndThreeDimensionalPublicationIsTransactional
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HierarchyTensorExactRank
+[ RUN      ] HierarchyTensorExactRank.OneTwoAndThreeDimensionalPublicationIsTransactional
+[       OK ] HierarchyTensorExactRank.OneTwoAndThreeDimensionalPublicationIsTransactional (17 ms)
+[----------] 1 test from HierarchyTensorExactRank (17 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (17 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="HierarchyTensorExactRank.DirectFacUsesTheSameOperatorInOneTwoAndThreeDimensions" classname="HierarchyTensorExactRank.DirectFacUsesTheSameOperatorInOneTwoAndThreeDimensions" time="0.0627976" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_amr_tensor_fac_provider;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = HierarchyTensorExactRank.DirectFacUsesTheSameOperatorInOneTwoAndThreeDimensions
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HierarchyTensorExactRank
+[ RUN      ] HierarchyTensorExactRank.DirectFacUsesTheSameOperatorInOneTwoAndThreeDimensions
+[       OK ] HierarchyTensorExactRank.DirectFacUsesTheSameOperatorInOneTwoAndThreeDimensions (10 ms)
+[----------] 1 test from HierarchyTensorExactRank (10 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="HierarchyTensorExactRank.ExactRankProvidesTheBuiltinFullTensorFacKernel" classname="HierarchyTensorExactRank.ExactRankProvidesTheBuiltinFullTensorFacKernel" time="0.0567906" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_amr_tensor_fac_provider;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = HierarchyTensorExactRank.ExactRankProvidesTheBuiltinFullTensorFacKernel
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HierarchyTensorExactRank
+[ RUN      ] HierarchyTensorExactRank.ExactRankProvidesTheBuiltinFullTensorFacKernel
+[       OK ] HierarchyTensorExactRank.ExactRankProvidesTheBuiltinFullTensorFacKernel (4 ms)
+[----------] 1 test from HierarchyTensorExactRank (4 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (4 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="HierarchyTensorExactRank.ExactRankPublishesOnlyAfterSolveOutcomeAccept" classname="HierarchyTensorExactRank.ExactRankPublishesOnlyAfterSolveOutcomeAccept" time="0.0583721" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_amr_tensor_fac_provider;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = HierarchyTensorExactRank.ExactRankPublishesOnlyAfterSolveOutcomeAccept
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HierarchyTensorExactRank
+[ RUN      ] HierarchyTensorExactRank.ExactRankPublishesOnlyAfterSolveOutcomeAccept
+[       OK ] HierarchyTensorExactRank.ExactRankPublishesOnlyAfterSolveOutcomeAccept (5 ms)
+[----------] 1 test from HierarchyTensorExactRank (5 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (5 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="HierarchyTensorExactRank.BuiltinExactRankFacSolvesARealCrossTensorMms" classname="HierarchyTensorExactRank.BuiltinExactRankFacSolvesARealCrossTensorMms" time="0.518496" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_amr_tensor_fac_provider;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = HierarchyTensorExactRank.BuiltinExactRankFacSolvesARealCrossTensorMms
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HierarchyTensorExactRank
+[ RUN      ] HierarchyTensorExactRank.BuiltinExactRankFacSolvesARealCrossTensorMms
+[       OK ] HierarchyTensorExactRank.BuiltinExactRankFacSolvesARealCrossTensorMms (464 ms)
+[----------] 1 test from HierarchyTensorExactRank (464 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (464 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="HierarchyTensorExactRank.ContractsAuthenticateRankGeometryAndOwnership" classname="HierarchyTensorExactRank.ContractsAuthenticateRankGeometryAndOwnership" time="0.0583144" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_amr_tensor_fac_provider;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = HierarchyTensorExactRank.ContractsAuthenticateRankGeometryAndOwnership
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HierarchyTensorExactRank
+[ RUN      ] HierarchyTensorExactRank.ContractsAuthenticateRankGeometryAndOwnership
+[       OK ] HierarchyTensorExactRank.ContractsAuthenticateRankGeometryAndOwnership (4 ms)
+[----------] 1 test from HierarchyTensorExactRank (4 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (4 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_field_nullspace.canonicalizes_generic_boundary_facts_and_rejects_forged_sequences" classname="test_field_nullspace.canonicalizes_generic_boundary_facts_and_rejects_forged_sequences" time="0.327313" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_field_nullspace;elliptic;fast;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_field_nullspace.canonicalizes_generic_boundary_facts_and_rejects_forged_sequences
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_field_nullspace
+[ RUN      ] test_field_nullspace.canonicalizes_generic_boundary_facts_and_rejects_forged_sequences
+[       OK ] test_field_nullspace.canonicalizes_generic_boundary_facts_and_rejects_forged_sequences (0 ms)
+[----------] 1 test from test_field_nullspace (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_field_nullspace.exact_ranked_boundary_adapter_covers_1d_2d_and_3d" classname="test_field_nullspace.exact_ranked_boundary_adapter_covers_1d_2d_and_3d" time="0.0186638" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_field_nullspace;elliptic;fast;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_field_nullspace.exact_ranked_boundary_adapter_covers_1d_2d_and_3d
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_field_nullspace
+[ RUN      ] test_field_nullspace.exact_ranked_boundary_adapter_covers_1d_2d_and_3d
+[       OK ] test_field_nullspace.exact_ranked_boundary_adapter_covers_1d_2d_and_3d (0 ms)
+[----------] 1 test from test_field_nullspace (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_field_nullspace.exact_ranked_nullspace_execution_covers_1d_2d_and_3d" classname="test_field_nullspace.exact_ranked_nullspace_execution_covers_1d_2d_and_3d" time="0.0316847" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_field_nullspace;elliptic;fast;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_field_nullspace.exact_ranked_nullspace_execution_covers_1d_2d_and_3d
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_field_nullspace
+[ RUN      ] test_field_nullspace.exact_ranked_nullspace_execution_covers_1d_2d_and_3d
+[       OK ] test_field_nullspace.exact_ranked_nullspace_execution_covers_1d_2d_and_3d (11 ms)
+[----------] 1 test from test_field_nullspace (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_field_nullspace.overlapping_independent_bases_cover_1d_2d_and_3d" classname="test_field_nullspace.overlapping_independent_bases_cover_1d_2d_and_3d" time="0.0250998" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_field_nullspace;elliptic;fast;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_field_nullspace.overlapping_independent_bases_cover_1d_2d_and_3d
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_field_nullspace
+[ RUN      ] test_field_nullspace.overlapping_independent_bases_cover_1d_2d_and_3d
+[       OK ] test_field_nullspace.overlapping_independent_bases_cover_1d_2d_and_3d (7 ms)
+[----------] 1 test from test_field_nullspace (7 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (7 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_field_nullspace.exact_ranked_level_local_contract_covers_1d_2d_and_3d" classname="test_field_nullspace.exact_ranked_level_local_contract_covers_1d_2d_and_3d" time="0.0251678" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_field_nullspace;elliptic;fast;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_field_nullspace.exact_ranked_level_local_contract_covers_1d_2d_and_3d
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_field_nullspace
+[ RUN      ] test_field_nullspace.exact_ranked_level_local_contract_covers_1d_2d_and_3d
+[       OK ] test_field_nullspace.exact_ranked_level_local_contract_covers_1d_2d_and_3d (7 ms)
+[----------] 1 test from test_field_nullspace (7 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (7 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_field_nullspace.active_mask_projects_only_marked_cells" classname="test_field_nullspace.active_mask_projects_only_marked_cells" time="0.0238413" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_field_nullspace;elliptic;fast;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_field_nullspace.active_mask_projects_only_marked_cells
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_field_nullspace
+[ RUN      ] test_field_nullspace.active_mask_projects_only_marked_cells
+[       OK ] test_field_nullspace.active_mask_projects_only_marked_cells (6 ms)
+[----------] 1 test from test_field_nullspace (6 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_field_nullspace.labelled_topology_preserves_target_component_and_rejects_bad_labels" classname="test_field_nullspace.labelled_topology_preserves_target_component_and_rejects_bad_labels" time="0.0246244" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_field_nullspace;elliptic;fast;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_field_nullspace.labelled_topology_preserves_target_component_and_rejects_bad_labels
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_field_nullspace
+[ RUN      ] test_field_nullspace.labelled_topology_preserves_target_component_and_rejects_bad_labels
+[       OK ] test_field_nullspace.labelled_topology_preserves_target_component_and_rejects_bad_labels (7 ms)
+[----------] 1 test from test_field_nullspace (7 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (7 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_field_nullspace.rejects_a_gauge_that_references_an_unknown_basis" classname="test_field_nullspace.rejects_a_gauge_that_references_an_unknown_basis" time="0.024576" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_field_nullspace;elliptic;fast;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_field_nullspace.rejects_a_gauge_that_references_an_unknown_basis
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_field_nullspace
+[ RUN      ] test_field_nullspace.rejects_a_gauge_that_references_an_unknown_basis
+[       OK ] test_field_nullspace.rejects_a_gauge_that_references_an_unknown_basis (6 ms)
+[----------] 1 test from test_field_nullspace (6 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_field_nullspace.validates_native_collective_capacities_before_size_arithmetic" classname="test_field_nullspace.validates_native_collective_capacities_before_size_arithmetic" time="0.0179017" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_field_nullspace;elliptic;fast;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_field_nullspace.validates_native_collective_capacities_before_size_arithmetic
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_field_nullspace
+[ RUN      ] test_field_nullspace.validates_native_collective_capacities_before_size_arithmetic
+[       OK ] test_field_nullspace.validates_native_collective_capacities_before_size_arithmetic (0 ms)
+[----------] 1 test from test_field_nullspace (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_field_nullspace.validates_hierarchy_level_capacity_without_materializing_levels" classname="test_field_nullspace.validates_hierarchy_level_capacity_without_materializing_levels" time="0.0168203" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_field_nullspace;elliptic;fast;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_field_nullspace.validates_hierarchy_level_capacity_without_materializing_levels
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_field_nullspace
+[ RUN      ] test_field_nullspace.validates_hierarchy_level_capacity_without_materializing_levels
+[       OK ] test_field_nullspace.validates_hierarchy_level_capacity_without_materializing_levels (0 ms)
+[----------] 1 test from test_field_nullspace (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_field_nullspace.shared_constant_mode_preserves_individual_means" classname="test_field_nullspace.shared_constant_mode_preserves_individual_means" time="0.0243216" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_field_nullspace;elliptic;fast;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_field_nullspace.shared_constant_mode_preserves_individual_means
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_field_nullspace
+[ RUN      ] test_field_nullspace.shared_constant_mode_preserves_individual_means
+[       OK ] test_field_nullspace.shared_constant_mode_preserves_individual_means (7 ms)
+[----------] 1 test from test_field_nullspace (7 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (7 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_field_nullspace.general_fields_complete_predeclared_refinement_matrix" classname="test_field_nullspace.general_fields_complete_predeclared_refinement_matrix" time="0.0584773" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_field_nullspace;elliptic;fast;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_field_nullspace.general_fields_complete_predeclared_refinement_matrix
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_field_nullspace
+[ RUN      ] test_field_nullspace.general_fields_complete_predeclared_refinement_matrix
+FIELD_MMS components=1 cells=16 constant=0 l2=0.00652732 linf=0.0134369 residual=3.60412e-13
+FIELD_MMS components=2 cells=16 constant=0 l2=0.0030311 linf=0.00542933 residual=6.83364e-12
+FIELD_MMS components=2 cells=16 constant=1 l2=1.02056e-15 linf=7.21645e-16 residual=1.92439e-15
+FIELD_MMS components=1 cells=32 constant=0 l2=0.00162181 linf=0.00337429 residual=4.90993e-12
+FIELD_MMS components=2 cells=32 constant=0 l2=0.000755108 linf=0.00137575 residual=7.15634e-12
+FIELD_MMS components=2 cells=32 constant=1 l2=4.55327e-15 linf=3.21965e-15 residual=8.58572e-15
+FIELD_MMS components=1 cells=64 constant=0 l2=0.00040483 linf=0.000847657 residual=6.03817e-12
+FIELD_MMS components=2 cells=64 co...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="test_field_nullspace.general_field_preflight_refuses_rank_local_storage_before_exchange" classname="test_field_nullspace.general_field_preflight_refuses_rank_local_storage_before_exchange" time="0.0238225" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_field_nullspace;elliptic;fast;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_field_nullspace.general_field_preflight_refuses_rank_local_storage_before_exchange
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_field_nullspace
+[ RUN      ] test_field_nullspace.general_field_preflight_refuses_rank_local_storage_before_exchange
+[       OK ] test_field_nullspace.general_field_preflight_refuses_rank_local_storage_before_exchange (5 ms)
+[----------] 1 test from test_field_nullspace (5 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (5 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_field_nullspace.three_field_cross_diffusion_uses_complete_matrix_and_strict_spd" classname="test_field_nullspace.three_field_cross_diffusion_uses_complete_matrix_and_strict_spd" time="0.023849" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_field_nullspace;elliptic;fast;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = test_field_nullspace.three_field_cross_diffusion_uses_complete_matrix_and_strict_spd
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_field_nullspace
+[ RUN      ] test_field_nullspace.three_field_cross_diffusion_uses_complete_matrix_and_strict_spd
+[       OK ] test_field_nullspace.three_field_cross_diffusion_uses_complete_matrix_and_strict_spd (5 ms)
+[----------] 1 test from test_field_nullspace (5 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (5 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="AmrProgramFieldPublication.ThreeFieldsReachPreparedSourcesAtEveryLevelAndRollback" classname="AmrProgramFieldPublication.ThreeFieldsReachPreparedSourcesAtEveryLevelAndRollback" time="0.562208" status="run">
+		<properties>
+			<property name="cmake_labels" value="amr;cpp-target:test_amr_program_field_publication;integration;medium"/>
+		</properties>
+		<system-out>Note: Google Test filter = AmrProgramFieldPublication.ThreeFieldsReachPreparedSourcesAtEveryLevelAndRollback
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from AmrProgramFieldPublication
+[ RUN      ] AmrProgramFieldPublication.ThreeFieldsReachPreparedSourcesAtEveryLevelAndRollback
+[       OK ] AmrProgramFieldPublication.ThreeFieldsReachPreparedSourcesAtEveryLevelAndRollback (42 ms)
+[----------] 1 test from AmrProgramFieldPublication (42 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (42 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+</testsuite>

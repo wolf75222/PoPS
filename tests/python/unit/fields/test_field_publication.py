@@ -181,7 +181,7 @@ def test_supplemental_consumer_state_refuses_stale_or_conflicting_authority(corr
         validate_field_publication(replaced)
 
 
-def test_same_model_instances_cannot_alias_distinct_consumed_publications():
+def test_same_model_publication_still_requires_each_instances_exact_stage_state():
     case, field, problem, program, values, point = field_case(publication_fields=True)
     first = case.blocks()["first"]
     model = case._block_registry.spec("first")["model"]
@@ -190,7 +190,7 @@ def test_same_model_instances_cannot_alias_distinct_consumed_publications():
     solution = field.observe(program.solve(field, values=values, at=point).consume(action=FailRun()))
     gradient = solution.gradient(field[problem.unknowns[0]], dimension=2)
     second_instance = case.block("repeated_definition", model)
-    with pytest.raises(ValueError, match="provider key across block instances"):
+    with pytest.raises(ValueError, match="destination block has no exact solve-stage state"):
         solution.publish({(first[declaration], "observed_gx"): (gradient, 0),
                           (second_instance[declaration], "observed_gy"): (gradient, 1)})
 

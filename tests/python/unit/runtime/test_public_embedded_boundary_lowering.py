@@ -76,16 +76,28 @@ class _RuntimeProbe:
     "provider",
     (_runtime_executor._UniformNativeProvider, _runtime_executor._AdaptiveNativeProvider),
 )
-def test_native_executors_install_signed_geometry_before_compiled_blocks(provider: type) -> None:
+def test_native_executors_install_geometry_at_provider_materialization_boundary(provider: type) -> None:
     if provider is _runtime_executor._AdaptiveNativeProvider:
         from pops.runtime._runtime_executor import _install_adaptive_native_engine
+        from pops.runtime._amr_system_install import _AmrSystemInstall
         assert "_install_adaptive_native_engine(plan)" in inspect.getsource(provider.install)
         source = inspect.getsource(_install_adaptive_native_engine)
+        # Native AMR geometry requires the authentic assembly lane AND exact generated
+        # blocks, then refuses an already materialized hierarchy. Uniform has no such
+        # prepared-block prerequisite and retains its existing construction order.
+        assert "install_embedded_boundary(engine" not in source
+        assert source.index("install_runtime_authorities(engine") < source.index(
+            "engine._install_compiled("
+        )
+        install = inspect.getsource(_AmrSystemInstall._install_compiled)
+        assert install.index("self.add_equation(") < install.index(
+            "install_embedded_boundary(self"
+        ) < install.index("self._finish_program_install(")
     else:
         source = inspect.getsource(provider.install)
-    assert source.index("install_embedded_boundary(engine") < source.index(
-        "engine._install_compiled("
-    )
+        assert source.index("install_embedded_boundary(engine") < source.index(
+            "engine._install_compiled("
+        )
 
 
 @pytest.mark.parametrize("dimension", (1, 2, 3))

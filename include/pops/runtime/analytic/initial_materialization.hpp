@@ -122,13 +122,16 @@ struct AnalyticCellAverage {
                  : std::numeric_limits<Real>::quiet_NaN();
     }
     constexpr int sample_count = 1 << (2 * Dim);  // 4^Dim tensor quadrature points.
-    constexpr Real normalization = Real(1) / static_cast<Real>(1 << Dim);
     const RealVector<Dim> center = geometry.cell_center(index);
     // A validated literal has an exact cell average. Summing rounded quadrature weights
     // would perturb even an unchanged conserved component during initialization/reprojection.
     if (program.instruction_count == 1 && program.instructions[0].op == AnalyticOp::Constant)
       return program.eval(center);
-    Real integral = Real(0);
+    // A progressive convex average normalizes the actual rounded weights and
+    // preserves identical samples exactly. Its sign-aware interpolation avoids
+    // overflowing value-mean for finite opposite-sign samples.
+    Real mean = Real(0);
+    Real total_weight = Real(0);
     for (int sample = 0; sample < sample_count; ++sample) {
       int encoded = sample;
       Real weight = Real(1);
@@ -139,9 +142,20 @@ struct AnalyticCellAverage {
         weight *= gauss_weight(quadrature_index);
         point[axis] += Real(0.5) * geometry.spacing(axis) * gauss_node(quadrature_index);
       }
-      integral += weight * program.eval(point);
+      const Real value = program.eval(point);
+      const Real next_weight = total_weight + weight;
+      if (sample == 0)
+        mean = value;
+      else if (value != mean) {
+        const Real fraction = weight / next_weight;
+        if ((value < Real(0)) != (mean < Real(0)))
+          mean = (Real(1) - fraction) * mean + fraction * value;
+        else
+          mean += fraction * (value - mean);
+      }
+      total_weight = next_weight;
     }
-    return normalization * integral;
+    return mean;
   }
 };
 

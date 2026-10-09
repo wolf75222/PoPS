@@ -226,6 +226,7 @@ def _manifest_character_budget(names: tuple[str, ...]) -> int:
         "artifact_identity": dict(identity, domain="artifact"),
         "bind_identity": dict(identity, domain="bind"),
         "run_identity": dict(identity, domain="run"),
+        "origin": {"schema_version": 1, "kind": "bound_initial"},
         "clock": {"time": "-0x1.fffffffffffffp+1023", "macro_step": -sys.maxsize},
         "arrays": evidence,
         "restart_identity": dict(identity, domain="restart"),
@@ -234,7 +235,10 @@ def _manifest_character_budget(names: tuple[str, ...]) -> int:
 
 
 def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) -> None:
-    from pops._generated_release_contract import CHECKPOINT_ENVELOPE_SCHEMA_VERSION
+    from pops.identity.checkpoint_origin import (
+        BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION, RUN_ORIGIN_CHECKPOINT_SCHEMA_VERSION,
+        _is_bound_initial_origin,
+    )
     from pops.identity import Identity, make_identity
 
     def identity(field: str, domain: str) -> Identity:
@@ -276,11 +280,16 @@ def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) 
         "arrays",
         "restart_identity",
     }
+    initial = manifest.get("schema_version") == BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION
+    if initial:
+        expected_keys.add("origin")
     if set(manifest) != expected_keys:
         raise ValueError("checkpoint manifest has an invalid exact schema")
     if (
         isinstance(manifest["schema_version"], bool)
-        or manifest["schema_version"] != CHECKPOINT_ENVELOPE_SCHEMA_VERSION
+        or not isinstance(manifest["schema_version"], int)
+        or manifest["schema_version"] not in {
+            RUN_ORIGIN_CHECKPOINT_SCHEMA_VERSION, BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION}
         or not isinstance(manifest["runtime_kind"], str)
         or manifest["runtime_kind"] not in {"uniform", "amr", "multi_layout_uniform", "multi_layout_amr"}
     ):
@@ -303,7 +312,13 @@ def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) 
     identity("semantic_identity", "semantic")
     identity("artifact_identity", "artifact")
     identity("bind_identity", "bind")
-    identity("run_identity", "run")
+    if initial:
+        if not _is_bound_initial_origin(manifest["origin"]) \
+                or manifest["run_identity"] is not None \
+                or clock != {"time": (0.).hex(), "macro_step": 0}:
+            raise ValueError("bound_initial checkpoint has invalid origin/run/clock authority")
+    else:
+        identity("run_identity", "run")
     base = {key: manifest[key] for key in expected_keys - {"restart_identity"}}
     expected = make_identity("restart", base)
     recorded = identity("restart_identity", "restart")
@@ -1166,6 +1181,7 @@ def restore_checkpoint_payload(
     payload: bytes,
     *,
     bit_identical: bool,
+    state_storage: str = "full",
     hierarchy_mode: str = "restore_recorded_hierarchy",
     hierarchy_identity: str | None = None,
     phase_prefix: str = "native restart",
@@ -1184,6 +1200,18 @@ def restore_checkpoint_payload(
     if not isinstance(phase_prefix, str) or not phase_prefix:
         raise TypeError("restart phase prefix must be non-empty text")
     topology = checkpoint_topology(owner)
+    storage_error = None
+    try:
+        from ._checkpoint_contract import require_checkpoint_resource_budget
+        if type(state_storage) is not str or state_storage not in ("full", "valid_only_legacy8"):
+            raise ValueError("restart state_storage must be full or valid_only_legacy8")
+        if state_storage != "full" and require_checkpoint_resource_budget(executor).runtime_kind != "uniform":
+            raise ValueError("valid_only_legacy8 is scoped to Uniform System")
+    except BaseException as error:
+        storage_error = error
+    rows = consensus(topology, "%s state-storage policy" % phase_prefix, error=storage_error, value=state_storage)
+    if any(row["value"] != state_storage for row in rows):
+        raise ValueError("restart state-storage policies differ across ranks")
     outer_active = False
     outer_protocol_error = None
     try:
@@ -1285,22 +1313,27 @@ def restore_checkpoint_payload(
                 hierarchy_identity=selected_hierarchy_identity,
             )
         else:
-            prepared = methods["_prepare_checkpoint_restart"](payload, bit_identical=policy)
+            options = {} if state_storage == "full" else {"state_storage": state_storage}
+            prepared = methods["_prepare_checkpoint_restart"](payload, bit_identical=policy, **options)
     except BaseException as error:
         prepare_error = error
     consensus(topology, "%s preflight" % phase_prefix, error=prepare_error)
 
     if outer_active:
         outer_prepare_error = None
+        outer_prepared_value = None
         try:
-            cast(Callable[[], Any], prepare_outer_state)()
+            outer_prepared_value = cast(Callable[[], Any], prepare_outer_state)()
         except BaseException as error:
             outer_prepare_error = error
-        consensus(
+        outer_rows = consensus(
             topology,
             "%s outer-state preparation" % phase_prefix,
             error=outer_prepare_error,
+            value=outer_prepared_value,
         )
+        if any(row["value"] != outer_rows[0]["value"] for row in outer_rows):
+            raise ValueError("restart outer-state continuation authority differs across ranks")
 
     active = False
     begin_error = None
@@ -1427,6 +1460,7 @@ def restore_checkpoint_path(
     path: Any,
     *,
     bit_identical: bool,
+    state_storage: str = "full",
     hierarchy_mode: str = "restore_recorded_hierarchy",
     hierarchy_identity: str | None = None,
     phase_prefix: str = "native restart",
@@ -1479,6 +1513,7 @@ def restore_checkpoint_path(
             executor,
             payload,
             bit_identical=policy,
+            state_storage=state_storage,
             hierarchy_mode=selected_hierarchy_mode,
             hierarchy_identity=hierarchy_identity,
             phase_prefix=phase_prefix,
@@ -1488,6 +1523,7 @@ def restore_checkpoint_path(
         executor,
         payload,
         bit_identical=policy,
+        state_storage=state_storage,
         phase_prefix=phase_prefix,
     )
 

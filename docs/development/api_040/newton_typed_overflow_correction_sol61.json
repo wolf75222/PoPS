@@ -1,0 +1,28 @@
+{
+  "schema": "sol61.newton-typed-overflow-source-host@1",
+  "parent_author": "53edf64c",
+  "counterreview": "7e1ce4fa",
+  "source_tests": 26,
+  "source_seconds": 20.87,
+  "actual_host_gtests": 6,
+  "host_failures": 0,
+  "host_skips": 0,
+  "mpi_test_execution": false,
+  "mpi_test_syntax_configuration": "Serial compile configuration; no MPI runtime execution",
+  "native_simulation": false,
+  "legacy_numeric_route": "unchanged calculation and emitted bytes; frozen byte parity test passes",
+  "typed_cutoff_domain": "finite coefficients, finite nonnegative Original reference, finite representable computed Real cutoff",
+  "mandatory_votes": "Uniform/AMR threshold phase independently of guard_local/collective_local_phases defaults; Original rechecks before continuation",
+  "pins": {
+    "include/pops/numerics/elliptic/interface/field_nonlinear.hpp": "c708e31ecc946c708ac64488dad75b1ef36d8897191220c92202b7c195fe75b8",
+    "include/pops/numerics/elliptic/interface/field_newton_krylov.hpp": "8e5e4a0b8168d38be8ff692ef54ca9e383872d58eac3551163d3af3ccc1686be",
+    "include/pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp": "829b4bfcf4d742e5a8aedb983368bb71081382cf87cb09c8bb9fbe2e344de612",
+    "include/pops/runtime/program/prepared_amr_field_residual.hpp": "2a01c728ee46f6dd13946759cd45f62d291478e271944d8aadc88a76e7df54a9",
+    "python/pops/codegen/program_emit_nonlinear_field.py": "fa54dad5e3f8d5019996bd749ffbec30ca1ea0360c9268a13259a89125c007af",
+    "tests/review/test_sol61_newton_typed_counterreview_adopted.py": "66297b3151251332e18ed5579b7ea3e0dd287e8b479a77d7bb1632aa1a724460",
+    "tests/cpp/unit/numerics/test_numerical_defaults.cpp": "e5ca72abad615bb14c333e5186a7ccd793f21568cc65ef47bc8fd0ae3303912a",
+    "tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp": "ca11bde4367eb5760f7fb5af0c52a2388c1058cfb8544114f91ddea1a0eaa29c",
+    "build-newton-typed-host/overflow-results.xml": "a231a266b30107a22a7ef6b3e8f9de5aff29dff7d24c1677de26bc99af87b64b",
+    "build-newton-typed-host/mpi-overflow-syntax.log": "463752ce4cec3f123754b728b781cd8fff63a20acaa1fb6187be16f54525fa3c"
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "schema_version": 2,
+  "status": "passed",
+  "pytest_base_temps": [
+    "rank0-tmp",
+    "rank1-tmp"
+  ],
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/mpiexec",
+    "-n",
+    "2",
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/docs/development/api_040/run_installed_mpi_checks.py",
+    "--worker",
+    "--output",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-m23-native-mpi2",
+    "--ranks",
+    "2",
+    "--dimension",
+    "1",
+    "--test",
+    "tests/python/integration/runtime/test_m23_hall_fourier_runtime.py",
+    "--test",
+    "tests/python/integration/runtime/test_coupled_gradient_exchange_runtime.py"
+  ],
+  "returncode": 0,
+  "timeout": false,
+  "seconds": 54.87374783400446,
+  "ranks": 2,
+  "threads": 1,
+  "dimension": 1,
+  "authentication_before": 0,
+  "authentication_after": 0,
+  "same_installation": true,
+  "test_sources_unchanged": true,
+  "rank_test_parity": true,
+  "rank_results": [
+    {
+      "rank": 0,
+      "counts": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_m23_hall_fourier_runtime",
+          "test_hall_fourier_signed_phase_norm_permutations_and_zero_limit"
+        ],
+        [
+          "tests.python.integration.runtime.test_coupled_gradient_exchange_runtime",
+          "test_matrix_flux_occurrences_and_rollback[order0]"
+        ],
+        [
+          "tests.python.integration.runtime.test_coupled_gradient_exchange_runtime",
+          "test_matrix_flux_occurrences_and_rollback[order1]"
+        ]
+      ],
+      "xml_sha256": "1ee6b2e360e87ef3f425b7e6cf3351fedc36bccee0cc56adc1f3a843c26ab9f5",
+      "log_sha256": "b09bd49617c3591c9c260a29c4392b2632f118c436db49be58b2089bef8e6f29"
+    },
+    {
+      "rank": 1,
+      "counts": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_m23_hall_fourier_runtime",
+          "test_hall_fourier_signed_phase_norm_permutations_and_zero_limit"
+        ],
+        [
+          "tests.python.integration.runtime.test_coupled_gradient_exchange_runtime",
+          "test_matrix_flux_occurrences_and_rollback[order0]"
+        ],
+        [
+          "tests.python.integration.runtime.test_coupled_gradient_exchange_runtime",
+          "test_matrix_flux_occurrences_and_rollback[order1]"
+        ]
+      ],
+      "xml_sha256": "e4f0cb78e5fae9dcfdeb499dd4cdd88040194e8066c160f36727314d0384b865",
+      "log_sha256": "1df92abecc510734f63071a91303d8b02a88796699e6cb4baf12bcb8374fb44d"
+    }
+  ],
+  "native_sha256": "42436a0ccef7c5504273c9e459f4bd946652597aa6ee025bc484ac595ad7ca02"
+}

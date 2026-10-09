@@ -13,7 +13,8 @@ three agree byte-for-byte. The per-cell read of the parameter (``params.get(inde
 """
 from __future__ import annotations
 
-import json
+from .cpp_strings import cpp_string_literal
+
 from typing import Any
 
 from pops.codegen.program_emit_kernels import _has_runtime_param
@@ -31,7 +32,8 @@ def _formula_carrier(model: Any) -> Any:
 
 
 _MODEL_PARAM_OPS = frozenset({
-    "source", "apply", "local_transform", "solve_local_linear", "rhs", "diffusive_rhs",
+    "principal_rate", "principal_capture",
+    "source", "apply", "local_transform", "affine_moment_update", "solve_local_linear", "rhs", "diffusive_rhs",
     "solve_local_nonlinear",
 })
 
@@ -65,7 +67,18 @@ def _op_model_exprs(impl: Any, v: Any) -> list:
     lin = getattr(impl, "_linear_sources", {}) or {}
     flux = getattr(impl, "_flux_terms", {}) or {}
     transforms = getattr(impl, "_local_transforms", {}) or {}
-    if v.op == "diffusive_rhs":
+    if v.op == "principal_capture":
+        out.extend(v.attrs["principal_expressions"])
+    elif v.op == "principal_rate":
+        from .principal_lowering import principal_for_value
+        entry = principal_for_value(impl, v)
+        out.extend(value for row in entry["row_expressions"] for value in row)
+    elif v.op == "rhs" and v.attrs.get("path_conservative", False):
+        path = impl._path_conservative
+        out.extend(path["kernel"].get("parameter_expressions", ()))
+        out.extend(value for row in path["covectors"] for value in row)
+        out.extend(value for row in impl._flux.values() for value in row)
+    elif v.op == "diffusive_rhs":
         from pops.codegen.program_emit_diffusion import _selected, _law_expressions
         _, selected, _ = _selected(v, impl, require_realization=False)
         # Parameter discovery follows the full constitutive declaration. It must
@@ -96,7 +109,18 @@ def _op_model_exprs(impl: Any, v: Any) -> list:
         if transform is not None:
             out += list(transform["expressions"])
             out.append(transform["valid_if"])
+    elif v.op == "affine_moment_update":
+        matrix = lin[v.attrs["linear_operator"]]
+        x, y = 1, v.attrs["order"] + 1
+        out.extend((matrix[x][x], matrix[x][y], matrix[y][x], matrix[y][y]))
     elif v.op == "rhs":
+        authored_reconstruction = getattr(impl, "_user_reconstruction", None)
+        if authored_reconstruction is not None:
+            out.extend(authored_reconstruction.expression if isinstance(authored_reconstruction.expression, tuple)
+                       else (authored_reconstruction.expression,))
+        authored_face = getattr(impl, "_user_face", None)
+        if authored_face is not None:
+            out.extend(authored_face.expression)
         for s in (v.attrs.get("sources") or []):
             if s != "default":
                 out += list(src.get(s, []))
@@ -141,12 +165,43 @@ def _qualified_param_identity(ref: Any, block: Any, *, graph_aware: bool) -> tup
                 "runtime parameter %r in block %r has no owner-qualified ParamHandle"
                 % (ref.name, block.local_id))
         return owner, ref.name
+    if handle.is_instance:
+        # Program nodes retain their authenticated authoring handle, while
+        # resolved numerical bodies use its detached canonical projection.
+        # Compare both at that same phase, including exact Case/model ownership.
+        if handle.block_ref is None or handle.block_ref._resolved() != block._resolved():
+            raise ValueError(
+                "runtime parameter %r is captured from a different block instance" % ref.name)
+        # The native slot belongs to the model declaration, while the routing
+        # key below retains the exact Program block. Do not drop block ownership
+        # merely because two instances share a scientific parameter definition.
+        handle = handle.declaration_ref
     actual = handle.owner_path.canonical()
     if actual != owner:
         raise ValueError(
             "runtime parameter %r in block %r belongs to model owner %s, not %s"
             % (ref.name, block.local_id, actual, owner))
-    return owner, handle.qualified_id
+    # Authoring reads and resolved numerical metadata name the same declaration
+    # through different phase handles. After exact owner/block authentication,
+    # compare both against its canonical resolved declaration identity.
+    return owner, handle._resolved().qualified_id
+
+
+def _parameter_read_sites(program, model):
+    """Each group flux and bound reads the exact parameter table of every sampled block."""
+    from types import SimpleNamespace
+    for value in _all_program_ops(program):
+        if value.op != "principal_rate":
+            yield value
+            continue
+        impl = _formula_carrier(model_for_node(model, value))
+        from .principal_lowering import principal_for_value
+        entry = principal_for_value(impl, value)
+        for state, expressions in zip(entry["group"].states, entry["row_expressions"], strict=True):
+            block, = {item.block for item in value.inputs
+                      if item.block._resolved() == state.block_ref}
+            yield SimpleNamespace(op="principal_capture", block=block, name=value.name,
+                attrs={"principal_expressions": expressions})
 
 
 def program_param_entries(program: Any, model: Any) -> list:
@@ -170,7 +225,7 @@ def program_param_entries(program: Any, model: Any) -> list:
     emitted_names = {}
     model_params = {}
     entries = []
-    for v in _all_program_ops(program):
+    for v in _parameter_read_sites(program, model):
         if v.op not in _MODEL_PARAM_OPS:
             continue
         emit_model = model_for_node(model, v)
@@ -184,7 +239,7 @@ def program_param_entries(program: Any, model: Any) -> list:
             nodes = impl.assign_runtime_indices()
             by_name = {node.name: (index, node) for index, node in enumerate(nodes)}
             by_identity = {
-                getattr(getattr(node, "handle", None), "qualified_id", None): node
+                (node.handle.declaration_ref if node.handle.is_instance else node.handle)._resolved().qualified_id: node
                 for node in nodes
                 if getattr(node, "handle", None) is not None
             }
@@ -231,14 +286,10 @@ def program_param_entries(program: Any, model: Any) -> list:
         # RuntimeParams is indexed by the model's complete stable declaration table.  If the only
         # read is at index N, indices 0..N-1 still have to be materialised from BindSchema; compacting
         # the vector here would silently redirect the generated ``params.get(N)`` read.
-        for index, node in enumerate(nodes):
-            handle = getattr(node, "handle", None)
-            if graph_aware and handle is None:
-                raise ValueError(
-                    "runtime parameter %r in block %r has no owner-qualified ParamHandle"
-                    % (node.name, v.block.local_id))
-            qualified_id = getattr(handle, "qualified_id", None) or node.name
-            route = (blk, v.block.model_owner_path.canonical(), qualified_id)
+        for index, node in sorted(by_name.values(), key=lambda item: item[0]):
+            owner, qualified_id = _qualified_param_identity(
+                node, v.block, graph_aware=graph_aware)
+            route = (blk, owner, qualified_id)
             collision_key = (blk, node.name)
             prior = emitted_names.get(collision_key)
             if prior is not None and prior != route:
@@ -280,7 +331,7 @@ def emit_program_params(program: Any, model: Any = None) -> str:
     # seeded neutrally and the immutable BindSchema installs either the supplied value or its explicit
     # declaration default before a kernel can run.
     defaults = ", ".join("0.0" for _ in entries)
-    name_cases = "".join('    case %d: return %s;\n' % (k, json.dumps(nm))
+    name_cases = "".join('    case %d: return %s;\n' % (k, cpp_string_literal(nm))
                          for k, (_, nm, _, _) in enumerate(entries))
 
     def ival(accessor: Any, csv: Any) -> str:

@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "-m",
+    "pytest",
+    "-q",
+    "-ra",
+    "-o",
+    "pythonpath=",
+    "-p",
+    "no:cacheprovider",
+    "--confcutdir=/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/tmp",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests-valid-e27d/cohort.xml",
+    "tests/python/integration/runtime/test_public_three_stage_screened_fields.py"
+  ],
+  "prior_independent_math_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/strict-array-math.json",
+  "prior_independent_math_sha256": "261b347e8da973b9080f31c117fce74d81eaecd5007a78fc198a1d693ed7d31f"
+}

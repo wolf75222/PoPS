@@ -23,7 +23,7 @@ _TABLE_ENTRY_POINT = "interface_table"
 _TABLE_SYMBOL = "pops_component_interface_v1"
 _NATIVE_DIMENSIONS = (1, 2, 3)
 _HOST_DEVICE = "cpu"
-_TAGGER_DEVICES = frozenset({_HOST_DEVICE, "cuda", "hip", "sycl", "openmptarget"})
+_MEMORY_CONTEXT_DEVICES = frozenset({_HOST_DEVICE, "cuda", "hip", "sycl", "openmptarget"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,14 +126,19 @@ class ComponentInterface:
         if manifest.entry_points[_TABLE_ENTRY_POINT] != _TABLE_SYMBOL:
             raise ValueError(
                 "component %r must export %s" % (manifest.component_id, _TABLE_SYMBOL))
+        required_native_interface_tables(manifest.signature,self)
 
     def native_target_variants(self, component: Any) -> tuple[dict[str, Any], ...]:
         """Return the supported ranked POD variants without selecting a domain dimension."""
         from pops.external._package_data import ComponentPackageError
 
         variants = tuple(component.component_manifest.target["variants"])
-        devices = _TAGGER_DEVICES if self.name == "tagger" and self.version >= 2 \
-            else frozenset({_HOST_DEVICE})
+        # These exact protocols carry both ExecutionContextV1 and residence-tagged field views.
+        # Other protocols retain their existing CPU envelope; build flags alone grant nothing.
+        memory_context = (self.name == "tagger" and self.version >= 2) or (
+            self.name in ("field_solver", "field_topology") and self.version == 2
+        )
+        devices = _MEMORY_CONTEXT_DEVICES if memory_context else frozenset({_HOST_DEVICE})
         supported = tuple(
             dict(row) for row in variants
             if row["dimension"] in _NATIVE_DIMENSIONS
@@ -201,6 +206,7 @@ def resolve(name: str) -> ComponentInterface:
 
 NumericalFlux = resolve("numerical_flux")
 GhostBoundary = resolve("ghost_boundary")
+AcceptedInitialGhost = resolve("accepted_initial_ghost")
 FieldBoundaryClosure = resolve("field_boundary_closure")
 Tagger = resolve("tagger")
 Clustering = resolve("clustering")
@@ -212,7 +218,40 @@ FieldTopology = resolve("field_topology")
 
 
 __all__ = [
-    "ComponentInterface", "resolve", "NumericalFlux", "GhostBoundary",
+    "ComponentInterface", "resolve", "NumericalFlux", "GhostBoundary", "AcceptedInitialGhost",
     "FieldBoundaryClosure", "Tagger", "Clustering", "Transfer", "Reflux",
     "FieldSolver", "Writer", "FieldTopology",
 ]
+
+
+def required_native_interface_tables(signature: Mapping[str, Any], primary: ComponentInterface) -> tuple[tuple[int,int,str], ...]:
+    """Authenticated additive companion tables, native-interface-extensions@1.
+
+    The primary facet/operation contract stays exact. Companion identities are
+    catalog-authenticated; lifecycle compatibility remains native-provider enforced.
+    """
+    tables=((primary.abi_id,primary.version,primary.cpp_table),)
+    extension=signature.get("native_interface_extensions")
+    if extension is None:return tables
+    if not isinstance(extension,Mapping) or set(extension)!={"schema_version","interfaces"} or type(extension["schema_version"]) is not int or extension["schema_version"]!=1:
+        raise ValueError("native-interface-extensions@1 requires an exact versioned declaration")
+    rows=extension["interfaces"]
+    if not isinstance(rows,(tuple,list)):
+        raise ValueError("native-interface-extensions@1 interfaces must be an ordered sequence")
+    from pops.identity import canonical_bytes
+    from pops.identity.semantic import semantic_value
+    seen={(primary.abi_id,primary.version)}
+    for row in rows:
+        if not isinstance(row,Mapping) or type(row.get("id")) is not int or type(row.get("version")) is not int:
+            raise ValueError("native-interface-extensions@1 requires exact catalog identities")
+        try:interface=resolve(row.get("name"))
+        except (TypeError,ValueError,KeyError):
+            raise ValueError("native-interface-extensions@1 contains an unknown interface") from None
+        expected=interface.signature_declaration()
+        if canonical_bytes(semantic_value(dict(row),where="companion interface"))!=canonical_bytes(semantic_value(expected,where="companion interface")):
+            raise ValueError("native-interface-extensions@1 companion differs from the generated catalog")
+        key=(interface.abi_id,interface.version)
+        if key in seen:raise ValueError("native-interface-extensions@1 duplicate interface, including primary")
+        seen.add(key)
+        tables+=((interface.abi_id,interface.version,interface.cpp_table),)
+    return tables

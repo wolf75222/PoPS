@@ -85,8 +85,23 @@ def _counters(value: Any, var: Any, lines: Any) -> tuple[str, str, str]:
     counters = var.setdefault(("field_counters",), {})
     if field not in counters:
         index = len(counters)
-        solve, reuse = "field_solve_count_%d" % index, "field_reuse_count_%d" % index
-        lines.append("pops::Real %s = pops::Real(0), %s = pops::Real(0);" % (solve, reuse))
+        owner = "field_counters_%d" % index
+        # Map continuations run after their creating stack frame has returned. This
+        # diagnostic effect belongs to one invocation, so capture its owning Host
+        # storage by value and mutate the common payload, rather than a scalar copy
+        # or a reference to the vanished frame. Prepare all owners at invocation
+        # entry, before any solve callback or suspended transport. Each allocation
+        # joins the existing execution-lane failure vote; retries allocate zeros.
+        var.setdefault(("field_counter_preparation",), []).extend((
+            "std::shared_ptr<std::array<pops::Real, 2>> %s;" % owner,
+            "std::exception_ptr %s_error;" % owner,
+            "try { %s = std::make_shared<std::array<pops::Real, 2>>(" % owner
+            + "std::array<pops::Real, 2>{pops::Real(0), pops::Real(0)}); }",
+            "catch (...) { %s_error = std::current_exception(); }" % owner,
+            "pops::collectively_rethrow_exception(%s_error, ctx.prepared_execution_lane(), " % owner
+            + '"Program field diagnostic preparation");',
+        ))
+        solve, reuse = "(*%s)[0]" % owner, "(*%s)[1]" % owner
         counters[field] = (solve, reuse)
     solve, reuse = counters[field]
     return field, solve, reuse

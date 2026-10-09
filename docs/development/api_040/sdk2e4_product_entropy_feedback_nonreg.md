@@ -1,0 +1,11 @@
+# SDK2e4 product, entropy and feedback non-regression - 2026-10-01
+
+The authenticated installed package completes the 13-case MPI2 selection at source `135179aa`: **seven pass and six fail per rank**, with no error, skip or timeout. Both rank inventories match. Before/after authentication succeeds and all installed Python/header bytes, native DSO bytes and test sources remain unchanged. The [machine receipt](sdk2e4_product_entropy_feedback_nonreg.json) pins both raw XMLs, logs, test sources and installation identities.
+
+All six finite-product variants compile and bind, then fail at the initial checkpoint before their first reduce/lift step. The collective exception is `Program diagnostic checkpoint exceeds its chosen resource capacity`. No initial checkpoint is published. This is a new failed reception; the older SDK7 product receipts remain historical. Source review locates the missing diagnostic inventory for verified multi-layout Program fragments. Its correction and fresh native reception remain required.
+
+The entropy fixture passes twenty interior targets and the outside-cone refusal. Four integral-feedback original-source fixtures pass at N8/N16, with the two physical global-source options. Both rejected-transport fixtures pass preservation of the accepted capture, integral and safe retry. These are native fixture assertions, not newly sealed independent scientific conclusions or full-model qualification.
+
+The installed ENV `pops-api040` is now preserved: all closed SDK2e4 scientific owner receipts refer to its actual files. The separate ENV `pops-api040-ir17` was cloned with an offline dependency copy for the next SDK. That clone is not a new compilation or qualification. Existing raw failures and receipts will not be overwritten.
+
+The exact command is retained in the pinned raw `result.json`, including all four selectors and the full interpreter path. Execute it only from a checkout at the pinned source, with a **fresh** output path, `env -u PYTHONPATH`, `PYTHONNOUSERSITE=1`, `POPS_REQUIRE_NATIVE_TESTS=1`, Dim2, one OpenMP thread per rank and `FI_PROVIDER=tcp`. It uses `docs/development/api_040/run_installed_mpi_checks.py --dimension 2 --ranks 2 --threads 1 --timeout 1800`. The expected result at this freeze is six failures. Neither later source nor a rebuilt SDK inherits these counts.

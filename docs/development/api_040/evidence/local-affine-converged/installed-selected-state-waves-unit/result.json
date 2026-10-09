@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='00b38fe09ba42678a5a2beda64a3767be9aa130455ecdfcf864a7182fc519cc9'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-selected-state-waves-unit/pytest.xml",
+    "tests/python/unit/codegen/test_selected_eigenvalues.py",
+    "tests/python/unit/codegen/test_resolved_local_storage_authority.py",
+    "tests/python/unit/codegen/test_resolved_local_storage_independent_review.py",
+    "tests/python/unit/codegen/test_local_product_readonly_capture.py",
+    "tests/python/unit/codegen/test_qualified_parameter_inspection_review.py"
+  ],
+  "returncode": 0,
+  "duration_seconds": 6.86892629112117,
+  "counts": {
+    "tests": 28,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "passed",
+  "identity_sha256": "9cf6c79b9ee8b18777496b4f175027d998b62c832d5c2b6ac3502600aca9831c",
+  "log_sha256": "0c91c3399f19c7798814ac5143ed9f3857d82965b5ead2f83d88b463daa2c87a"
+}

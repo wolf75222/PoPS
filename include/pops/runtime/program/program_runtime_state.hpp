@@ -60,11 +60,20 @@
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams, kMaxRuntimeParams
 #include <pops/runtime/program/accepted_exchange.hpp>
+#include <pops/runtime/program/moving_interval_geometry.hpp>
+#include <pops/runtime/program/collective_step_rejection.hpp>
 #include <pops/runtime/program/cache_manager.hpp>    // CacheManager (held-node scheduler cache)
+#include <pops/runtime/program/prepared_resource_lifetime.hpp>
 #include <pops/runtime/program/module_metadata.hpp>  // frozen checkpoint-shape metadata
 #include <pops/runtime/program/profiler.hpp>         // Profiler (per-node / per-brick timing)
 
 namespace pops::runtime::program {
+
+/// Frozen codegen capability: a width-one, two-slot scalar ring with no Program reader.
+inline constexpr std::string_view kScalarOutputHistorySpace = "scalar-output-field-v1";
+/// Artifact-issued store-only rings, including global observations and arbitrary typed depths.
+inline constexpr std::string_view kOutputHistoryProjectionSpace =
+    "pops.program.scalar-output-history-projection@2";
 
 enum class AmrProgramHistoryRemapSource : std::uint8_t {
   RetainedChild = 1,
@@ -72,6 +81,8 @@ enum class AmrProgramHistoryRemapSource : std::uint8_t {
   Removed = 3,
   /// Spatial projection of authenticated equal-clock state samples, retaining covered cells.
   ParentAlignedState = 4,
+  /// Equal-clock scalar output samples; retained overlap is not temporally interpolated.
+  ParentAlignedScalarOutput = 5,
 };
 
 /// One canonical affected-ring decision prepared by the AMR lane before topology publication.
@@ -90,6 +101,12 @@ struct AmrProgramHistoryRemapDescriptor {
   int parent_level = -1;
   int child_level = -1;
   bool child_published = false;
+  // The numeric hierarchy captures all source rings before a coarse-to-fine regrid sequence.
+  // Provenance must use that same accepted source generation when a parent replacement
+  // temporarily removes deeper levels before they are published again.
+  std::uint64_t source_topology_epoch = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t source_materialization_generation =
+      std::numeric_limits<std::uint64_t>::max();
   /// Geometry/ratio changed independently of a distribution-only ownership rebalance.  The
   /// accepted callback uses this exact engine-prepared fact to choose the same source for both
   /// numeric history slots and their FluxExpression provenance.
@@ -395,6 +412,10 @@ struct ArtifactFieldBoundaryStage {
 template <int Dim>
 struct ProgramRuntimeState {
   static_assert(Dim >= 1 && Dim <= 3, "ProgramRuntimeState only supports dimensions 1, 2, and 3");
+  /// Trial publications belong to the enclosing System transaction. Deep copies
+  /// in AcceptedSnapshot and the prepared restore below restore geometry together
+  /// with state, clock, histories, caches and the exchange mailbox.
+  std::map<std::string, MovingIntervalGeometry<Dim>> moving_interval_geometry_;
   /// Static field-boundary authoring image captured before the first successful artifact overlay.
   std::optional<ArtifactFieldBoundaryAuthorityRegistry<Dim>> artifact_field_boundary_baseline_;
   /// Candidate sink active only while pops_install_field_boundaries executes.
@@ -412,6 +433,9 @@ struct ProgramRuntimeState {
   /// the restored physical epoch/generation is unchanged. Never publishes accepted state.
   std::function<void()> resource_refresh_;
   bool resource_refresh_pending_ = false;
+  /// Weak native-resource hook distinguishes quiescence, region success and revocation.
+  /// Attempt identities live in the context cache, outside accepted snapshots.
+  std::function<void(PreparedResourceAction)> resource_lifetime_;
   /// AMR-only, artifact-owned remap boundary. Unlike hierarchy_refresh_, this callback is reached
   /// only after AmrSystem published a topology and atomically exchanged a prepared history manager.
   /// Keeping it distinct prevents a generic hierarchy refresh from accepting stale history storage.
@@ -593,6 +617,7 @@ struct ProgramRuntimeState {
     std::function<void()> hierarchy_refresh;
     std::function<void()> resource_refresh;
     bool resource_refresh_pending = false;
+    std::function<void(PreparedResourceAction)> resource_lifetime;
     std::function<void(const AmrProgramHistoryRemapDescriptor&)> history_remap_accepted;
     std::function<void()> restart_regrid_preflight;
     std::function<void()> restart_regrid;
@@ -607,6 +632,8 @@ struct ProgramRuntimeState {
     std::vector<int> block_map;
     std::map<int, RuntimeParams> block_params;
     std::map<std::string, Real> diagnostics;
+    AcceptedExchangeLedger accepted_exchanges;
+    std::map<std::string, MovingIntervalGeometry<Dim>> moving_interval_geometry;
     CacheManager<Dim> cache;
     HistoryManager<Dim> history;
     bool artifact_backed = false;
@@ -642,6 +669,7 @@ struct ProgramRuntimeState {
           diagnostics_(accepted.diagnostics_),
           step_balance_terms_(accepted.step_balance_terms_),
           accepted_exchanges_(accepted.accepted_exchanges_),
+          moving_interval_geometry_(accepted.moving_interval_geometry_),
           automatic_balance_terms_(accepted.automatic_balance_terms_),
           automatic_balance_due_(accepted.automatic_balance_due_),
           balance_due_window_active_(accepted.balance_due_window_active_),
@@ -670,6 +698,7 @@ struct ProgramRuntimeState {
     std::map<std::string, Real> diagnostics_;
     std::map<std::string, Real> step_balance_terms_;
     AcceptedExchangeLedger accepted_exchanges_;
+    std::map<std::string, MovingIntervalGeometry<Dim>> moving_interval_geometry_;
     std::map<AutomaticBalanceKey, Real> automatic_balance_terms_;
     bool automatic_balance_due_ = false;
     bool balance_due_window_active_ = false;
@@ -687,6 +716,7 @@ struct ProgramRuntimeState {
     if (this == &accepted)
       throw std::invalid_argument(
           "Program accepted restore requires an independent accepted image");
+    reject_resource_work();
     return PreparedProgramAcceptedRestore(*this, accepted);
   }
 
@@ -715,6 +745,7 @@ struct ProgramRuntimeState {
     diagnostics_.swap(prepared.diagnostics_);
     step_balance_terms_.swap(prepared.step_balance_terms_);
     accepted_exchanges_.swap(prepared.accepted_exchanges_);
+    moving_interval_geometry_.swap(prepared.moving_interval_geometry_);
     automatic_balance_terms_.swap(prepared.automatic_balance_terms_);
     automatic_balance_due_ = prepared.automatic_balance_due_;
     balance_due_window_active_ = prepared.balance_due_window_active_;
@@ -758,6 +789,8 @@ struct ProgramRuntimeState {
       throw std::invalid_argument("Program install requires a non-empty whole-system step");
     if (step_install_generation_ == std::numeric_limits<std::uint64_t>::max())
       throw std::overflow_error("Program step-install generation overflow");
+    reject_resource_work();
+    resource_lifetime_ = nullptr;
     step_ = std::move(step);
     hierarchy_refresh_ = nullptr;
     resource_refresh_ = nullptr;
@@ -783,6 +816,7 @@ struct ProgramRuntimeState {
                                        hierarchy_refresh_,
                                        resource_refresh_,
                                        resource_refresh_pending_,
+                                       resource_lifetime_,
                                        history_remap_accepted_,
                                        restart_regrid_preflight_,
                                        restart_regrid_,
@@ -797,6 +831,8 @@ struct ProgramRuntimeState {
                                        block_map_,
                                        block_params_,
                                        diagnostics_,
+                                       accepted_exchanges_,
+                                       moving_interval_geometry_,
                                        cache_,
                                        hist_,
                                        artifact_backed_};
@@ -809,11 +845,15 @@ struct ProgramRuntimeState {
   /// candidate restores the snapshot above.
   void reset_artifact_candidate_state() {
     diagnostics_.clear();
+    accepted_exchanges_.reset_artifact();
+    moving_interval_geometry_.clear();
     cache_.clear();
     hist_ = HistoryManager<Dim>{};
   }
 
   void rollback_artifact_step_install(ArtifactStepInstallSnapshot&& snapshot) noexcept {
+    reject_resource_work();
+    resource_lifetime_ = std::move(snapshot.resource_lifetime);
     step_ = std::move(snapshot.step);
     hierarchy_refresh_ = std::move(snapshot.hierarchy_refresh);
     resource_refresh_ = std::move(snapshot.resource_refresh);
@@ -832,6 +872,8 @@ struct ProgramRuntimeState {
     block_map_ = std::move(snapshot.block_map);
     block_params_ = std::move(snapshot.block_params);
     diagnostics_ = std::move(snapshot.diagnostics);
+    accepted_exchanges_.swap(snapshot.accepted_exchanges);
+    moving_interval_geometry_.swap(snapshot.moving_interval_geometry);
     cache_ = std::move(snapshot.cache);
     hist_ = std::move(snapshot.history);
     artifact_backed_ = snapshot.artifact_backed;
@@ -867,7 +909,41 @@ struct ProgramRuntimeState {
     resource_refresh_pending_ = false;
   }
 
+  void install_resource_lifetime(std::function<void(PreparedResourceAction)> hook) {
+    if (!step_ || !hook)
+      throw std::invalid_argument("Program resource lifetime requires an installed step and hook");
+    reject_resource_work();
+    resource_lifetime_ = std::move(hook);
+  }
+
+  /// A snapshot or regrid may proceed only after real queue completion. Drainage
+  /// alone deliberately does not accept a failed/rejected numerical attempt.
+  void drain_resource_work() const noexcept {
+    try {
+      if (resource_lifetime_)
+        resource_lifetime_(PreparedResourceAction::drain);
+    } catch (...) {
+      std::terminate();
+    }
+  }
+
+  void finish_resource_work() const {
+    if (resource_lifetime_)
+      resource_lifetime_(PreparedResourceAction::finish);
+  }
+
+  /// Rollback cannot overwrite accepted carriers if physical drainage is unproven.
+  void reject_resource_work() const noexcept {
+    try {
+      if (resource_lifetime_)
+        resource_lifetime_(PreparedResourceAction::reject);
+    } catch (...) {
+      std::terminate();
+    }
+  }
+
   void invalidate_resources() noexcept {
+    reject_resource_work();
     resource_refresh_pending_ = static_cast<bool>(resource_refresh_);
   }
 
@@ -910,6 +986,34 @@ struct ProgramRuntimeState {
     accepted_context_snapshot_ = std::move(accepted_context_snapshot);
   }
 
+  /// Authenticate every field against the installed DSO shape, before preparing a transfer.
+  /// The private space URI is not the physical observation space or its allocation State.
+  const ProgramCheckpointHistoryMetadata& require_frozen_output_history_projection(
+      const std::string& name, int runtime_owner, const std::string& state,
+      const std::string& space, const std::string& clock, const std::string& interpolation,
+      int depth, int components, int program_owner = -1) const {
+    if (!artifact_backed_ || installed_hash_.empty() || space != kOutputHistoryProjectionSpace ||
+        name.empty() || state.empty() || clock.empty() || interpolation.empty() ||
+        depth < 2 || components < 1 || runtime_owner < 0)
+      throw std::invalid_argument("AMR output history projection lacks its frozen artifact capability");
+    const ProgramCheckpointHistoryMetadata* issued = nullptr;
+    for (const auto& row : checkpoint_metadata_.histories)
+      if (row.name == name) {
+        if (issued != nullptr)
+          throw std::invalid_argument("AMR output history projection has duplicate frozen metadata");
+        issued = &row;
+      }
+    if (issued == nullptr || issued->program_owner < 0 ||
+        static_cast<std::size_t>(issued->program_owner) >= block_map_.size() ||
+        block_map_[static_cast<std::size_t>(issued->program_owner)] != runtime_owner ||
+        (program_owner >= 0 && issued->program_owner != program_owner) ||
+        issued->state_identity != state || issued->space_identity != space ||
+        issued->clock_identity != clock || issued->interpolation_identity != interpolation ||
+        issued->depth != depth || issued->components != components)
+      throw std::invalid_argument("AMR output history projection differs from its frozen DSO tuple");
+    return *issued;
+  }
+
   std::unique_ptr<AcceptedProgramContextSnapshot> capture_accepted_context_snapshot(
       const std::string& runtime) const {
     if (!artifact_backed_)
@@ -929,6 +1033,7 @@ struct ProgramRuntimeState {
     if (!restart_regrid_preflight_ || !restart_regrid_ || !restart_resync_ ||
         !accepted_context_snapshot_)
       throw std::logic_error(runtime + " artifact lacks its restart preflight/regrid/resync hooks");
+    drain_resource_work();
     restart_regrid_preflight_();
   }
 
@@ -966,6 +1071,12 @@ struct ProgramRuntimeState {
     if (!history_remap_accepted_)
       throw std::logic_error(runtime + " artifact lacks its accepted history-remap hook");
     if (descriptor.parent_level < 0 || descriptor.child_level != descriptor.parent_level + 1 ||
+        descriptor.source_topology_epoch == std::numeric_limits<std::uint64_t>::max() ||
+        descriptor.source_materialization_generation ==
+            std::numeric_limits<std::uint64_t>::max() ||
+        descriptor.source_topology_epoch > descriptor.prior_topology_epoch ||
+        descriptor.source_materialization_generation >
+            descriptor.prior_materialization_generation ||
         descriptor.prior_topology_epoch == std::numeric_limits<std::uint64_t>::max() ||
         descriptor.prior_materialization_generation == std::numeric_limits<std::uint64_t>::max() ||
         descriptor.published_topology_epoch != descriptor.prior_topology_epoch + 1 ||

@@ -1,0 +1,263 @@
+{
+  "verdict": "STATIC_R3_REVIEW_REQUIRES_EXIT_DELTA; ACTUAL_GPU_ADMISSION_PENDING",
+  "scope": "Non-author Source/static and local synthetic dependency-stub execution only. No ROMEO contact, Slurm submission, ARM binary, CUDA/Native import, Main/environment/build action.",
+  "Main_observed": {
+    "HEAD": "98804c6849c9966e05b5397126bab983a5fa0227",
+    "status": "?? PoPS_Codex_handoff_0.4.0/\n"
+  },
+  "candidate": "/Users/romaindespoulain/dev/tmp/sol61-gh200-runtime-linkage-resume-r3-20261009",
+  "candidate_files_sha256": {
+    "runtime_phase_r3.sbatch": "fcf5fae1511ca4c5a4ee3d1d1a9814f3789b3aae3c25a10ee946be1860576291",
+    "actual-r2-failure-reference.json": "39a20c8b8adac5f69d22f1d26c01c177581c2bb9a6ed7f68d8063d4ecbe0c5c2",
+    "read-r3-pins.py": "75f3a38eecf7472e23ecfb65078b215cb90f29f21fadc599345e01d1d7b82ceb",
+    "static-validation.json": "7518dcd1b2d85cbac126f53a9f71c1750aae9dcaa8cb105834d91088178472bd",
+    "phase_quota_r3.py": "4e259a66780641644487e0a9bb4e728a48da894e59381b0631d74aa2177d1d4f",
+    "build_phase_r3.sbatch": "69e04d86c84113aa2335eb7949b93f3b08f0665cdefc6ca72fb057cea7762243",
+    "run_campaign_r3.sh": "6cac13ceaff74a818f7052a49bb7e332434d518b209d6212af99f94486802cb8",
+    "capture_kokkos_profile_r3.py": "69d363bd814f36d70aa84519a5168b691f2d2088e96ee852f4b11d4f1a588e02",
+    "build_native_r3.sh": "8101a92fe9db0206f1436feecd5d7902c76728977bcf7c797cdb30225ece7323",
+    "README.md": "af4dc1afd3ef63cd20e97be472b9eea6baee41c278c56d3bf82acec732e0d295",
+    "resume_probe_r3.sh": "fd4b95dd6c48c9cad16a891b73e36370bca7fc70073c5c00d60633697a2992e9",
+    "candidate-manifest.json": "fb8d20adf245d7226307be63c1e16113a35bcf37ca8d3cd6af4e059a107c257c",
+    "capture_gpu_native_r3.py": "871380c566566c695c96334639307d243db91981403fdd03f8aabfc4c0a88ef3",
+    "r3-admission.template.json": "a9f042ce5c1922e8831a08226075e983a218bfa843f08c8fd930a18548550d7d",
+    "runtime_context_r3.sh": "b661aaac5c66d8441fd3eca5187ad6ea21b474aaf4928d19769107839de259d6"
+  },
+  "actual_R2_failure": "Job738116 FAILED127; compiledprobe sha7e0eec5471ae93f8635f5b1f1dc9791f7e67c8767358571bd1358da575936e95; empty probeJSON retained, no actual managed allocation/launch success.",
+  "pins": {
+    "Source": "98804c6849c9966e05b5397126bab983a5fa0227",
+    "SDK": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+    "Root_GO": false,
+    "growth_before_probe": null,
+    "growth_before_native": null,
+    "growth_before_runtime": null,
+    "probe_binary_sha256": "7e0eec5471ae93f8635f5b1f1dc9791f7e67c8767358571bd1358da575936e95",
+    "CUDA_cudart": {
+      "bytes": 699568,
+      "cache_entry": "CUDA_CUDART:FILEPATH=/apps/2025/manual_install/cuda_eviden/12.6/lib64/libcudart.so",
+      "exists": true,
+      "resolved": "/gpfs/app/2025/manual_install/cuda_eviden/12.6/targets/sbsa-linux/lib/libcudart.so.12.6.77",
+      "sha256": "a647c8437c8fd810f781a6cd1ceb3532be9d6765f489f0d84cd15d71afcc6a13"
+    },
+    "cache_ninja_setup_conda": {
+      "kokkos-unified-build/CMakeCache.txt": "065512c7593af9de245f09381cc2373037b027cf4a45dec1b1f9d822fbc34e94",
+      "profile-probe-build/CMakeCache.txt": "ac7bc0036f5c1b8926edde4d18050869dc908974af4acf342ec3c0c6f46d3fd5",
+      "profile-probe-build/build.ninja": "f5d6af4b893d7835d1608724a41da3a9451d509f543b0041940f86e7245a7754",
+      "results/conda-effective-context-resume.json": "c9e38b4558986955dbefc5f020ff3c75231e4c900655d7765bbdea671e377829",
+      "results/official-setup-entered.json": "beb492c967aba88d62c2fb8140a605b8d39da1f83c9f873cbf060be9e1738191"
+    }
+  },
+  "accepted_preparation_properties": [
+    "All14candidate-manifest members verified by independentbyte/hash comparison; everyPython AST andBash/sbatch parse passed.",
+    "FalseRootGO andnullgrowth eachrefused inlocal realadmission script execution, noinventedadmission.",
+    "No setup/envclone/sourceextract/Kokkos rebuild command inR3. Actualprobe/Native/runtime entries confined allocatedscripts; strictldd verifies pinnedresolvedCUDA path/hash, env/libfirst loadercontext no inheritedLD.",
+    "Compiledprobe allocation/launch JSON checks CUDAbackend/UM pointer access/managedtype/launchsync/stamp/compute9.0 beforeNative. This microprobe is explicitly notproductionPDE CUDAtrace.",
+    "Native capture requires genuineinstalledprefix/doctor/sourceheaders/SDK/runtimeCUDA/managed andownKokkoscontract,24exactsourceobjects/17runtime+7bindings graph/SM90/O3, Ninja/link records; futureactualNative remainspending.",
+    "Runtime sbatchchecks afterokpredecessor physicalreceipt hash/status; phases useexistingoriginalscientificguard tests; Source988 doesnotqualify futurerebuiltNorm2."
+  ],
+  "required_corrections": [
+    {
+      "file": "run_campaign_r3.sh",
+      "issue": "Foreground phaseparser failure swallowed byprocesssubstitution: malformedJSON actualsyntheticexit0/no launch/all-zero finally.",
+      "delta": "Foregroundvalidate nonemptyuniquewell-formed phases; write exclusivenewTSV; loopfromfile.",
+      "proved": "badplan exits1 andcapturesbody1 afterdelta."
+    },
+    {
+      "files": [
+        "resume_probe_r3.sh",
+        "build_native_r3.sh",
+        "run_campaign_r3.sh"
+      ],
+      "issue": "Finallytraps installedaftercontext/admission/quota; earlyrefusals skipreceiptcapture.",
+      "delta": "InitializeROOT andmoveexistingtrap beforecontext/readpins/freeze/quota.",
+      "proved": "early71/72/73/74 retainoriginalfailurecodes andgetfinallystatusreceipts."
+    }
+  ],
+  "minimal_delta": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-gpu-r3-independent-review-20261009/r3-finally-phase-exit-minimal.patch",
+    "sha256": "bb03890bb49473a983762d777511c0b9b278b966d315c711d1737f63b0d5e286",
+    "files": {
+      "run_campaign_r3.sh": "ddb93736c14e4432a0961da6d5a45f1a99ec0826515ec655ba9ef7cd09da6422",
+      "build_native_r3.sh": "69bc88e972458e836bc4cf061ad9faacc6cbb50a0527f472555400f8f0eafd66",
+      "resume_probe_r3.sh": "e463c50d3112431af3bc55482db4611e0ff59f16ddfe792d1f255ca687ded8b6"
+    },
+    "Bash_parse": "3pass",
+    "author_counterreview": "sol61_gpu_resume confirmed trap/parserminimaldelta; frozenR3 remainsuntouched"
+  },
+  "conditional_reception_risks": [
+    {
+      "file": "runtime_context_r3.sh",
+      "observation": "LD compiler path /project/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib differs capturedELFRPATH /project/r250127/sol61-gpu-bootstrap-20261004/compiler13/lib.",
+      "limit": "RPATH is a string, notphysicalexistence. Rootactualtoolchainmayuse/rmdraux path. Rootread-onlyremoteexistence/hashverificationpending; noabsentlib/causeclaim orpathchange."
+    },
+    {
+      "file": "capture_gpu_native_r3.py",
+      "observation": "assertcacheNativeSHA==installedNativeSHA canrefuse legitimatepackagingRPATH changes; repositorypython/CMakeLists165-177 explicitlyauthenticates separatebuildtree andinstalledimage manifests.",
+      "limit": "NoactualARMinstallimageyet, soobservedARMmismatchunproven. Onactualbuild retaincachemanifest+wheelfinalmanifest+installedwheelproof+bothhashes/linkage beforedeciding. Ifdifferent, exactphysicalRPATH-only difference needsboundedreceiver correction; neverwaivepayloadproof."
+    },
+    {
+      "file": "docs/development/api_040/run_installed_checks.py",
+      "observation": "Identityhelper emitsfixedscope text localCPU Kokkos despitegenericdoctor/sourcechecks.",
+      "limit": "FutureGPUreceipt musttakeactualruntimeCUDA/managedreport as authority; preserve originalidentity bytes and annotatehistoricalscope label, notclaim CPU/GPU fromthatlabel."
+    }
+  ],
+  "synthetic_cases": [
+    {
+      "case": "bad-phase-plan",
+      "baseline_exit": 0,
+      "delta_exit": 1,
+      "baseline_finally": {
+        "r3-runtime-finally-statuses.json": {
+          "body": 0,
+          "footprint": 0,
+          "quota": 0,
+          "registry": 0
+        }
+      },
+      "delta_finally": {
+        "r3-runtime-finally-statuses.json": {
+          "body": 1,
+          "footprint": 0,
+          "quota": 0,
+          "registry": 0
+        }
+      }
+    },
+    {
+      "case": "early-runtime-quota",
+      "baseline_exit": 71,
+      "delta_exit": 71,
+      "baseline_finally": {},
+      "delta_finally": {
+        "r3-runtime-finally-statuses.json": {
+          "body": 71,
+          "footprint": 0,
+          "quota": 0,
+          "registry": 0
+        }
+      }
+    },
+    {
+      "case": "early-probe-pins",
+      "baseline_exit": 72,
+      "delta_exit": 72,
+      "baseline_finally": {},
+      "delta_finally": {
+        "r3-probe-finally-statuses.json": {
+          "body": 72,
+          "footprint": 0,
+          "quota": 0,
+          "registry": 0
+        }
+      }
+    },
+    {
+      "case": "early-context",
+      "baseline_exit": 73,
+      "delta_exit": 73,
+      "baseline_finally": {},
+      "delta_finally": {
+        "r3-probe-finally-statuses.json": {
+          "body": 73,
+          "footprint": 0,
+          "quota": 0,
+          "registry": 0
+        }
+      }
+    },
+    {
+      "case": "early-native-freeze",
+      "baseline_exit": 74,
+      "delta_exit": 74,
+      "baseline_finally": {},
+      "delta_finally": {
+        "r3-native-finally-statuses.json": {
+          "body": 74,
+          "footprint": 0,
+          "quota": 0,
+          "registry": 0
+        }
+      }
+    },
+    {
+      "case": "quota-body-finally-priority",
+      "baseline_exit": 53,
+      "delta_exit": 53,
+      "baseline_finally": {
+        "r3-runtime-finally-statuses.json": {
+          "body": 53,
+          "footprint": 52,
+          "quota": 53,
+          "registry": 51
+        }
+      },
+      "delta_finally": {
+        "r3-runtime-finally-statuses.json": {
+          "body": 53,
+          "footprint": 52,
+          "quota": 53,
+          "registry": 51
+        }
+      }
+    },
+    {
+      "case": "body42-over-registry51",
+      "baseline_exit": 42,
+      "delta_exit": 42,
+      "baseline_finally": {
+        "r3-runtime-finally-statuses.json": {
+          "body": 42,
+          "footprint": 0,
+          "quota": 0,
+          "registry": 51
+        }
+      },
+      "delta_finally": {
+        "r3-runtime-finally-statuses.json": {
+          "body": 42,
+          "footprint": 0,
+          "quota": 0,
+          "registry": 51
+        }
+      }
+    },
+    {
+      "case": "registry-finally-priority",
+      "baseline_exit": 51,
+      "delta_exit": 51,
+      "baseline_finally": {
+        "r3-runtime-finally-statuses.json": {
+          "body": 0,
+          "footprint": 0,
+          "quota": 0,
+          "registry": 51
+        }
+      },
+      "delta_finally": {
+        "r3-runtime-finally-statuses.json": {
+          "body": 0,
+          "footprint": 0,
+          "quota": 0,
+          "registry": 51
+        }
+      }
+    }
+  ],
+  "evidence_sha256": {
+    "synthetic_exit_probe.py": "0896bb92da8f171654d89101fb9ddc7ddfc9d8cf8960fe32e18a24c53a5ec882",
+    "independent-static-and-admission-checks.json": "969c9087e5487658f0551f0afc7d876f5d4606525c8e7c810b12bf77a006986d",
+    "synthetic-delta-exit-results.json": "af3cb8052edc72303c97d243a235b71456b6cdd39af16e5790da79e7d9f0a57c",
+    "synthetic_exit_probe_v2.py.log": "96c7e8b650ed43a745d66088b2af0271e5091f969a20c682495cddefdba04935",
+    "synthetic_delta_exit_probe.py": "3dc79d559f23a37564892d29d2494dfc33330ab33b684290648693eb41163355",
+    "synthetic-exit-results.json": "7e918eb80a320c60a375d0dd08715982bd88b94c1f394063cce34ddbabce4f2e",
+    "synthetic-delta-v2-exit-results.json": "25f38474c3c6d3b75032f459f6e503210ee5ef1f743b305e2e209ff7c43f9940",
+    "synthetic_exit_probe_v2.py": "c8502409a74135c210c6517ad7bbe1a24dee0a9ef9f80e4ddff42d450bd58a87",
+    "synthetic-v2-exit-results.json": "61d41d3f1f1e910dcb8ca45c43b94a0b1366e34ba91d93fa427ed66126ae76fe",
+    "synthetic_delta_exit_probe_v2.py": "b809f2ad25569615d74f2910be3d0adf4faabc63aacfc01e361cde137311fed4",
+    "synthetic_delta_exit_probe_v2.py.log": "5d04f86acfdff86eb30e54458eed88daa29895edd95921b610c91e60793bc66f",
+    "r3-finally-phase-exit-minimal.patch": "bb03890bb49473a983762d777511c0b9b278b966d315c711d1737f63b0d5e286"
+  },
+  "GPU_scientific_claims": false,
+  "ROMEO_contact": false,
+  "Main_environment_mutations": false
+}

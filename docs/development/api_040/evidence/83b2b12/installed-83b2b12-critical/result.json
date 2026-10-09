@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='4574ed6096650aa708ad040fd6ee056414a3cfa1735a0440bd74220170265beb'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-83b2b12-critical/pytest.xml",
+    "tests/python/unit/runtime/test_consumer_publication_c34.py",
+    "tests/python/unit/runtime/test_consumer_publication_c34_adversarial.py",
+    "tests/python/unit/runtime/test_consumer_membership_independent.py",
+    "tests/python/unit/runtime/test_consumer_transactions.py",
+    "tests/python/integration/runtime/test_api040_c17_stagnation_runtime.py",
+    "tests/python/integration/runtime/test_principal_amr_runtime.py",
+    "tests/python/integration/runtime/test_principal_primitive_runtime.py",
+    "tests/python/integration/runtime/test_nonnegative_diagonal_diffusion_runtime.py",
+    "tests/python/integration/runtime/test_local_residual_domain_runtime.py"
+  ],
+  "returncode": 1,
+  "duration_seconds": 131.7285050000064,
+  "counts": {
+    "tests": 71,
+    "failures": 0,
+    "errors": 21,
+    "skipped": 0
+  },
+  "status": "failed",
+  "identity_sha256": "4a2cd643746068708d0a546eeafe439146e5bb4246277d8ab004290b7a725e0f",
+  "log_sha256": "e7de1b7e0020709ce19d6bc29cc87a493dc721b954957dcfdb3c1c54d8535bc7"
+}

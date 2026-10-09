@@ -17,8 +17,8 @@ class ScharfetterGummel(Diffusion):
         super().__init__(flux=flux)
 
     def validate(self):
-        from pops._ir.expr import Const
-        from pops._ir.quantity import QuantityRef
+        from pops.model.expression_language import Const
+        from pops.model.expression_language import QuantityRef
 
         super().validate()
         if len(self.law.variables)!=1 or self.drift.state!=self.law.state:

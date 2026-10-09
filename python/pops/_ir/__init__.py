@@ -33,7 +33,7 @@ Pure-symbolic helpers
 from .expr import (
     Expr, _wrap,
     Const, Var, _Bin, Add, Sub, Mul, Div, Pow, Minimum, Maximum, Compare,
-    BooleanAnd, BooleanOr, BooleanNot, Neg, Sqrt, Abs, Sign,
+    BooleanAnd, BooleanOr, BooleanNot, Neg, Sqrt, Exp, Abs, Sign,
     # board nodes
     Equation, _BoardNode,
     Partial, Gradient, GradientMagnitude, Laplacian,
@@ -54,7 +54,7 @@ from .values import (
 # -- free-function ops ----------------------------------------------------
 from .ops import (
     # flux-DSL
-    sqrt, abs_, sign, minimum, maximum,
+    sqrt, exp, abs_, sign, minimum, maximum,
     eig_max_im, eig_lmin, eig_lmin_bound, eig_lmax, eig_all_real, eig_real_status,
     left, right,
     # board
@@ -75,7 +75,7 @@ __all__ = [
     # node classes
     "Expr", "Const", "Var", "ValueExpr", "parameter_value", "Add", "Sub", "Mul", "Div", "Pow", "Minimum", "Maximum", "Compare",
     "BooleanAnd", "BooleanOr", "BooleanNot",
-    "Neg", "Sqrt", "Abs", "Sign",
+    "Neg", "Sqrt", "Exp", "Abs", "Sign",
     # board nodes
     "Equation",
     "Partial", "Gradient", "GradientMagnitude", "Laplacian",
@@ -84,7 +84,7 @@ __all__ = [
     # values
     "EigWitness", "StateRef", "RuntimeParamRef",
     # ops
-    "sqrt", "abs_", "sign", "minimum", "maximum",
+    "sqrt", "exp", "abs_", "sign", "minimum", "maximum",
     "eig_max_im", "eig_lmin", "eig_lmin_bound", "eig_lmax", "eig_all_real", "eig_real_status",
     "left", "right",
     "grad", "norm", "dx", "dy", "dz", "laplacian", "div", "ddt", "rate", "unknown", "integral",

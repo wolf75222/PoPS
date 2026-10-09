@@ -236,14 +236,20 @@ def _literal(data: Any) -> Fraction:
 def _polynomial(data: Any) -> dict[int, Fraction]:
     result: dict[int, Fraction] = {}
     for power, coefficient in data:
-        result[int(_literal(power))] = _literal(coefficient)
+        exact_power = _literal(power)
+        if exact_power.denominator != 1 or exact_power < 0:
+            raise ValueError("RK coefficient requires a non-negative integer dt power")
+        degree = int(exact_power)
+        if degree in result:
+            raise ValueError("RK coefficient repeats a canonical dt power")
+        result[degree] = _literal(coefficient)
     return result
 
 
 def _point_offset(point: Any) -> Fraction:
     if hasattr(point, "time"):
         point = point.time
-    return _literal(point.offset.to_data())
+    return Fraction(point.step) + _literal(point.offset.to_data())
 
 
 def _unknown_graph(graph: Any, reason: str, abscissae: Any = ()) -> ProgramMethodCertificate:
@@ -287,38 +293,104 @@ def certify_program_graph(graph: Any) -> ProgramMethodCertificate:
     states = [node for node in graph.nodes if node.kind == "state_read"]
     rhs = [node for node in graph.nodes if _is_explicit_rate_call(node)]
     commits = [node for node in graph.nodes if node.kind == "commit"]
-    abscissae = tuple(_point_offset(node.point) for node in rhs)
+    try:
+        abscissae = tuple(_point_offset(node.point) for node in rhs)
+    except (TypeError, ValueError) as exc:
+        return _unknown_graph(graph, str(exc))
     if len(states) != 1 or not rhs or len(commits) != 1:
         return _unknown_graph(graph, "graph is not a single-state explicit RK step", abscissae)
     state_id = states[0].node_id
     rhs_index = {node.node_id: i for i, node in enumerate(rhs)}
+    clock = states[0].clock
+    if not graph.cadence.is_default or any(node.clock != clock for node in graph.nodes):
+        return _unknown_graph(graph, "graph has a different clock or macro-step cadence", abscissae)
+    identities = tuple(node.operator.to_data() if node.kind == "operator_call" else
+                       {"op": node.op, "attrs": node.attrs.to_data()} for node in rhs)
+    if any(identity != identities[0] for identity in identities[1:]):
+        return _unknown_graph(graph, "RK stages call different rate operators or effects", abscissae)
+    for node in rhs:
+        payload = (node.operator.to_data()["lowering"].get("attrs", {})
+                   if node.kind == "operator_call" else node.attrs.to_data())
+        data = payload.get("attrs", payload)
+        if data.get("schedule") is not None:
+            return _unknown_graph(graph, "RK rate has a nontrivial scheduled evaluation effect", abscissae)
+
+    # Affine SSA expressions may materialize named stage/rate values before a
+    # later combination reads them. Trace their exact polynomial weights; never
+    # treat an arbitrary primitive or its debug label as a transparent alias.
+    cache: dict[tuple[int, int], tuple[dict[int, Fraction], ...]] = {}
+
+    def add_product(target: dict[int, Fraction], factor: dict[int, Fraction],
+                    expression: dict[int, Fraction]) -> None:
+        for left, coefficient in factor.items():
+            for right, value in expression.items():
+                degree = left + right
+                target[degree] = target.get(degree, Fraction()) + coefficient * value
+
+    def expression(node_id: int, *, stage: int) -> tuple[dict[int, Fraction], ...]:
+        key = (node_id, stage)
+        if key in cache:
+            return cache[key]
+        result = tuple({} for _ in range(stage + 1))
+        if node_id == state_id:
+            result[0][0] = Fraction(1)
+        elif node_id in rhs_index:
+            index = rhs_index[node_id]
+            if index >= stage:
+                raise ValueError("stage reads a non-previous rate")
+            result[index + 1][0] = Fraction(1)
+        else:
+            node = nodes[node_id]
+            if node.kind != "program_value" or node.op != "linear_combine":
+                raise ValueError("RK stage reads an opaque or non-affine primitive")
+            if node.value_type not in {"state", "rhs"}:
+                raise ValueError("RK affine value has an unknown state/rate representation")
+            payload = node.attrs.to_data()
+            data = payload.get("attrs", payload)
+            if set(data) != {"coeffs"}:
+                raise ValueError("RK affine value has an unknown evaluation effect")
+            for ref, encoded in zip(node.references(), data["coeffs"], strict=True):
+                polynomial = _polynomial(encoded)
+                # Visit even zero-weight inputs: an unknown effect or unavailable
+                # rate is not made safe by algebraic cancellation of its value.
+                terms = expression(ref.node_id, stage=stage)
+                for total, term in zip(result, terms, strict=True):
+                    add_product(total, polynomial, term)
+        cache[key] = result
+        return result
 
     def affine(node_id: int, *, stage: int) -> tuple[Fraction, tuple[Fraction, ...]]:
-        if node_id == state_id:
-            return Fraction(1), tuple(Fraction() for _ in range(stage))
-        node = nodes[node_id]
-        if node.kind != "program_value" or node.op != "linear_combine":
-            raise ValueError("RK stage is not an affine state expression")
-        data = node.attrs.to_data()["attrs"]["coeffs"]
-        refs = node.references()
-        base = Fraction()
-        row = [Fraction() for _ in range(stage)]
-        for ref, encoded in zip(refs, data, strict=True):
-            polynomial = _polynomial(encoded)
-            if ref.node_id == state_id:
-                if set(polynomial) - {0}:
-                    raise ValueError("base state has a non-constant coefficient")
-                base += polynomial.get(0, Fraction())
-                continue
-            index = rhs_index.get(ref.node_id)
-            if index is None or index >= stage or set(polynomial) - {1}:
-                raise ValueError("stage reads a non-previous rate or non-dt coefficient")
-            row[index] += polynomial.get(1, Fraction())
-        return base, tuple(row)
+        terms = tuple({power: value for power, value in term.items() if value}
+                      for term in expression(node_id, stage=stage))
+        if set(terms[0]) - {0}:
+            raise ValueError("base state has a non-constant coefficient")
+        if any(set(term) - {1} for term in terms[1:]):
+            raise ValueError("rate has a non-dt coefficient")
+        return terms[0].get(0, Fraction()), tuple(term.get(1, Fraction()) for term in terms[1:])
 
     try:
+        # Effects are properties of the whole executed graph, not just the
+        # endpoint's value dependencies. An unused state-mutating primitive can
+        # still invalidate every stage expression traced below.
+        for node in graph.nodes:
+            if node.kind in {"state_read", "commit"} or _is_explicit_rate_call(node):
+                continue
+            if node.kind != "program_value" or node.op != "linear_combine":
+                raise ValueError("graph contains an opaque or non-affine evaluation effect")
+            if node.value_type not in {"state", "rhs"}:
+                raise ValueError("graph contains an unknown affine representation")
+            payload = node.attrs.to_data()
+            data = payload.get("attrs", payload)
+            if set(data) != {"coeffs"}:
+                raise ValueError("graph contains an unknown affine evaluation effect")
+            for _, encoded in zip(node.references(), data["coeffs"], strict=True):
+                _polynomial(encoded)
+        if _point_offset(states[0].point) != 0 or _point_offset(commits[0].point) != 1:
+            raise ValueError("RK graph does not span its initial-to-next step window")
         A = []
         for i, rate in enumerate(rhs):
+            if len(rate.references()) != 1:
+                raise ValueError("RK rate has an unknown additional input effect")
             state_ref = rate.references()[0]
             base, row = affine(state_ref.node_id, stage=i)
             if base != 1:

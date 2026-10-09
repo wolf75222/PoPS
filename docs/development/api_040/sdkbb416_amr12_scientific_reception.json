@@ -1,0 +1,253 @@
+{
+  "accepted_amr_state_schema": 8,
+  "author_reader_freeze": "d8cca4597717c3e0b1fa0b0d4d4ea520304a002e",
+  "backends": {
+    "mpi2": {
+      "approval": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-amr12-root-reception-mpi2/root-approval3.json",
+        "sha256": "de4a3a5d45b0cdd99b7eaafb1bf75243d44fce893ca8047df28e7ad1f0001247"
+      },
+      "case_count": 4,
+      "command": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-amr12-root-reception-mpi2/receive-command.json",
+        "sha256": "2b121a12ef80841f0925647e7e60f3af8339d50b87db63c977fca066ff0c03fc"
+      },
+      "diagnostic_rank_images": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "external_seals": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-amr12-root-reception-mpi2/external-seals.json",
+        "sha256": "da51e717200d79d0e5dd7e589b7420148503dd964a6eddf0cc4feca6c088d9ef"
+      },
+      "limits": [
+        "homogeneous zero flux; not nonconstant AMR/restriction/constitutive flux qualification",
+        "not full M06/M13; no native execution performed by this reader",
+        "opaque Program/auxiliary images authenticated and replay-compared, not completely decoded",
+        "source/native/package provenance ROOT-attested; CPP-to-DSO build graph not cryptographically reconstructed",
+        "private capture leases/attempt authority not persisted; do not infer them from saved fields"
+      ],
+      "native_batch_result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-mpi2-dim2/result.json",
+        "sha256": "b6ab026a33315046dca8126fd0dc1c21a8ba5b583892aebd5469b20920e487a6"
+      },
+      "native_batch_seconds": 930.5870802910067,
+      "native_scientific_acceptance": true,
+      "owner": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-amr12-root-reception-mpi2/root-owner3.json",
+        "sha256": "df16494175a298b938e31cc316fa11086b0dceb822b442e827fec262928bea6f"
+      },
+      "raw_junit": [
+        {
+          "file": {
+            "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-mpi2-dim2/rank0.xml",
+            "sha256": "61923afbcc42d1fd96bf34ca6da58f85ec41297dda7ee7c963d9e07fa24bf22d"
+          },
+          "rank": 0
+        },
+        {
+          "file": {
+            "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-mpi2-dim2/rank1.xml",
+            "sha256": "cc6177b8f6a2492ca9bc84b464abfbce83cb02165e5b6ce1b818d1d015438463"
+          },
+          "rank": 1
+        }
+      ],
+      "receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-amr12-root-reception-mpi2/receive.json",
+        "sha256": "d44faa66b8ff3a5d04f4d1db1fb74604ad6803a2f2e8ddf8186eadf701546857"
+      },
+      "scope": "homogeneous-original-composite-Q-tag-selection@3",
+      "stderr": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-amr12-root-reception-mpi2/receive.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    "serial": {
+      "approval": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-amr12-root-reception-serial/root-approval3.json",
+        "sha256": "647e75645419d59aafb382684de7e6b52124ea362058e44961a6a2a23f533fd3"
+      },
+      "case_count": 4,
+      "command": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-amr12-root-reception-serial/receive-after-run-identity-command.json",
+        "sha256": "ffb4c4a32461b313c2adcb245f756f4bb42dbde77a7d80adabdaadd1d80ea76d"
+      },
+      "diagnostic_rank_images": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "external_seals": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-amr12-root-reception-serial/external-seals.json",
+        "sha256": "ebaab5041498df04cd518559da478212e189f52817579ead04e0235d0d7fbf99"
+      },
+      "limits": [
+        "homogeneous zero flux; not nonconstant AMR/restriction/constitutive flux qualification",
+        "not full M06/M13; no native execution performed by this reader",
+        "opaque Program/auxiliary images authenticated and replay-compared, not completely decoded",
+        "source/native/package provenance ROOT-attested; CPP-to-DSO build graph not cryptographically reconstructed",
+        "private capture leases/attempt authority not persisted; do not infer them from saved fields"
+      ],
+      "native_batch_result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-serial-dim2/result.json",
+        "sha256": "707662f0a1cec2a94e58a8ab3e05f7270ec948ddc69d284f4cb539c3d037ff24"
+      },
+      "native_batch_seconds": 454.00116754113697,
+      "native_scientific_acceptance": true,
+      "owner": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-amr12-root-reception-serial/root-owner3.json",
+        "sha256": "a70ded5561a0c224b1c99f2754bf137854a785ac0e49c30190ec665d71cfa174"
+      },
+      "raw_junit": [
+        {
+          "file": {
+            "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-serial-dim2/pytest.xml",
+            "sha256": "fd673e98e172bceebc510a8fc61d43c625b2d330fb4509ce0d8d1237968abb12"
+          },
+          "rank": 0
+        }
+      ],
+      "receipt": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-amr12-root-reception-serial/receive-after-run-identity.json",
+        "sha256": "4b4c4cd4a7a8db79ccfedb5f517ba2691bd6cab7e4572eb3288e9355d69a7720"
+      },
+      "scope": "homogeneous-original-composite-Q-tag-selection@3",
+      "stderr": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-amr12-root-reception-serial/receive-after-run-identity.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  },
+  "checkpoint_payload_version": 12,
+  "cpp_to_dso_cryptographic_graph_proof": false,
+  "failure_protocols": {
+    "mpi2": {
+      "contradiction": "64 positive coarse Q0 words increased by exactly one binary64 ULP",
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-refusals-mpi2-dim2/after/identity.json",
+        "sha256": "3e448c93e31dcbad8b6f4b2558f23f7d13205d8669dbe9ab0818cc665209280c"
+      },
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-refusals-mpi2-dim2/before/identity.json",
+        "sha256": "3e448c93e31dcbad8b6f4b2558f23f7d13205d8669dbe9ab0818cc665209280c"
+      },
+      "independent_stdout": {
+        "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/review/hooke_bb416_refusals_mpi2.actual.txt",
+        "sha256": "2f8f62b9b8972a8501f42da310a032524c003dff9c4e19cd335e6b35f3228b97"
+      },
+      "inventory_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-refusals-mpi2-dim2/after/source-files.json",
+        "sha256": "bb592911dad61f6bfb15bd0dda602235d8ea2c9dbd57cbd983bab63db3f51b84"
+      },
+      "inventory_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-refusals-mpi2-dim2/before/source-files.json",
+        "sha256": "bb592911dad61f6bfb15bd0dda602235d8ea2c9dbd57cbd983bab63db3f51b84"
+      },
+      "named_refusals": 10,
+      "rank_count": 2,
+      "result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-refusals-mpi2-dim2/result.json",
+        "sha256": "ad8a6f1880b2b2a7b46b373c74def08419a71d1aa54c7d46778509719642ffe5"
+      },
+      "rollback": "native full carrier and diagnostic blobs, all retained grown/valid state/history fields, temporal/diagnostic/meta images byte-exact",
+      "seconds": 262.3595331660472
+    },
+    "serial": {
+      "contradiction": "64 positive coarse Q0 words increased by exactly one binary64 ULP",
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-refusals-serial-dim2/after/identity.json",
+        "sha256": "3e448c93e31dcbad8b6f4b2558f23f7d13205d8669dbe9ab0818cc665209280c"
+      },
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-refusals-serial-dim2/identity.json",
+        "sha256": "3e448c93e31dcbad8b6f4b2558f23f7d13205d8669dbe9ab0818cc665209280c"
+      },
+      "independent_stdout": {
+        "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/review/hooke_bb416_refusals_serial.actual.txt",
+        "sha256": "cbca27ecc16c33c30819fa31f14137208c1e3a90f35c909273ada9092b250936"
+      },
+      "inventory_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-refusals-serial-dim2/after/source-files.json",
+        "sha256": "bb592911dad61f6bfb15bd0dda602235d8ea2c9dbd57cbd983bab63db3f51b84"
+      },
+      "inventory_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-refusals-serial-dim2/source-files.json",
+        "sha256": "bb592911dad61f6bfb15bd0dda602235d8ea2c9dbd57cbd983bab63db3f51b84"
+      },
+      "named_refusals": 9,
+      "rank_count": 1,
+      "result": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-refusals-serial-dim2/result.json",
+        "sha256": "ceb898e8048fee60f4a5944a4f58ab51a6a812cdc7580c2f51e77df49c0843f0"
+      },
+      "rollback": "native full carrier and diagnostic blobs, all retained grown/valid state/history fields, temporal/diagnostic/meta images byte-exact",
+      "seconds": 153.77768495795317
+    }
+  },
+  "independent_reader_freeze": "b3c293b34e9ff1ee466d87dcc997015e5a8d36fc",
+  "limits": [
+    "homogeneous zero flux; not nonconstant AMR/restriction/constitutive flux qualification",
+    "not full M06/M13; no native execution performed by this reader",
+    "opaque Program/auxiliary images authenticated and replay-compared, not completely decoded",
+    "source/native/package provenance ROOT-attested; CPP-to-DSO build graph not cryptographically reconstructed",
+    "private capture leases/attempt authority not persisted; do not infer them from saved fields",
+    "No current GPU/ROMEO/OpenMPI/GitHub CI qualification; no regrid/ownership redistribution or arbitrary device OOM qualification."
+  ],
+  "native": {
+    "path": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "sha256": "488123fe4d7c4ecb3ac604f4eec9e97525a8e745034ea01a69624616d8b09e54"
+  },
+  "native_abi_receipt": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-amr-tag-relay-dim2-fc670393/runtime-native-abi.json",
+    "sha256": "fa76ba93743ebf65fa60e37c9d858a0c7a9a7b02dc0c3ff12c3762a7e0836072"
+  },
+  "native_abi_version": 6,
+  "native_build_source_commit": "fc670393ce346557583a64dac82908541483fef8",
+  "native_scientific_acceptance": true,
+  "native_source_commit": "fc670393ce346557583a64dac82908541483fef8",
+  "package_manifest": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-amr-tag-relay-dim2-fc670393/installed-identity/source-files.json",
+    "sha256": "bb592911dad61f6bfb15bd0dda602235d8ea2c9dbd57cbd983bab63db3f51b84"
+  },
+  "qualification": "homogeneous-original-composite-Q-tag-selection@3",
+  "reader_executed_commit": "05159edd06dddd05ed23105d50a12bb65217e95e",
+  "retained_reader_refusal": {
+    "actual_gate": "run request digest differs",
+    "cause": "historical identity refs used printable hexdigest; current Identity.to_data uses raw32 bytes; strict@3 canonical CBOR major2 repair",
+    "command": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-amr12-root-reception-serial/receive-command.json",
+      "sha256": "ffb4c4a32461b313c2adcb245f756f4bb42dbde77a7d80adabdaadd1d80ea76d"
+    },
+    "stderr": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-amr12-root-reception-serial/receive.stderr.log",
+      "sha256": "0a26c5b54921a98c752cea810e53d330bfe42da3e104bc8cedd6f04c5e99c7c9"
+    },
+    "stdout": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sdkbb416-amr12-root-reception-serial/receive.json",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "schema": "root.api040.amr12-scientific-reception@1",
+  "sdk": {
+    "path": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/lib/python3.12/site-packages/pops/include/pops_headers.manifest",
+    "sha256": "48a6475ca7d3e658f0f66533e2d200b281f2a7717b16dfc3fcaf3f8f7435168d"
+  },
+  "source_reader_batch": {
+    "errors": 0,
+    "failed": 0,
+    "junit": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/amr-reader-v3-final-integrated-05159edd.xml",
+      "sha256": "b5737da599e9486e6c9ee58e07e4e675c3d6793dc27f945c0f002df8e1ea5520"
+    },
+    "passed": 357,
+    "scope": "offline Source reader/candidate/adversaries, no native simulation",
+    "seconds": 8.02,
+    "skips": 0,
+    "tests": 357
+  },
+  "tag_selection_version": 1
+}

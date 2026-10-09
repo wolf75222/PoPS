@@ -99,7 +99,7 @@ class _ExprCpp:
         return index
 
     def emit(self, value: Any) -> str:
-        from pops._ir.expr import Abs, Const, Neg, Pow, Sign, Sqrt, Var, _Bin
+        from pops._ir.expr import Abs, Const, Exp, Neg, Pow, Sign, Sqrt, Var, _Bin
         from pops._ir.handle_expr import ValueExpr
         from pops._ir.values import RuntimeParamRef
         from pops.fields.boundary_values import BoundaryValue, LogicalTimeValue
@@ -152,6 +152,8 @@ class _ExprCpp:
             return "(-%s)" % self.emit(value.a)
         if isinstance(value, Sqrt):
             return "std::sqrt(%s)" % self.emit(value.a)
+        if isinstance(value, Exp):
+            return "std::exp(%s)" % self.emit(value.a)
         if isinstance(value, Abs):
             return "std::fabs(%s)" % self.emit(value.a)
         if isinstance(value, Sign):

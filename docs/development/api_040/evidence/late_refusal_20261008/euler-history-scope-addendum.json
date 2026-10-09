@@ -1,0 +1,8 @@
+{
+  "explicit_unfinished": "Rollback from an already populated accepted history ring remains unqualified. Automatic retry fill2 detection alone would not qualify a failure from a previously populated accepted ring.",
+  "failed_binding_initial_history": "Two histories each physical depth2; uninitialized/fill0 before and after refusal. All four serialized metadata slots exact; no initially populated raw history ring available to compare.",
+  "positive_control_history": "Current predictor_Y and phi_stage slot0 NPY were gathered after one accepted step and independently checked; no deep control snapshot of both ring slots, Program/aux, or fill metadata was saved.",
+  "receipt_changed": false,
+  "reception_sha256": "761cbdc5ab5bb9754c781501bbd1fc3a7966797f2365bd443ea375b714bd4372",
+  "status": "SCOPE_ADDENDUM_NOT_ADDITIONAL_RUNTIME_TEST"
+}

@@ -79,7 +79,7 @@ def test_dsl_optflags_accept_only_closed_path_free_codegen_options(
 
     value = (
         "-O2 -DNDEBUG -march=armv8.2-a+simd -mtune=neoverse-v2 "
-        "-ffp-contract=fast -fno-math-errno -funroll-loops"
+        "-ffp-contract=off -fno-fast-math -fno-math-errno -funroll-loops"
     )
     monkeypatch.setenv("POPS_DSL_OPTFLAGS", value)
 

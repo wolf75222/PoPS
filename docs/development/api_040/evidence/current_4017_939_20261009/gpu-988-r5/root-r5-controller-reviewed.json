@@ -1,0 +1,9 @@
+{
+  "Root_GO": false,
+  "controller_delta_sha256": "54997ada78a03e2373cdcb36d5573184f874fbe4d6d7ae640223c4d08b918073",
+  "controller_sha256": "1eff9c31e231fb177a8c5e0c1900efdb4561aea816eeea337560f983cd2649b9",
+  "independent_source_peer": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-r5-independent-source-review-20261009/independent-r5-review-ready.json",
+  "independent_source_peer_sha256": "ac7955559983f9a2cc92e906c98a14b31fc3be3165f8e6d91a82117651ae39c3",
+  "scope": "Root private Source review and preparation. New R5 namespaces and physical fresh preflight, unchanged quota forecast; preserve global/R4/R5 Native-entry absence guards. No dispatch or Native/GPU success inferred.",
+  "utc": "2026-10-09T01:26:50.653831+00:00"
+}

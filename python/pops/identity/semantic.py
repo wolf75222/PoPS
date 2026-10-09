@@ -64,6 +64,12 @@ def model_semantic_data(model: Any) -> dict[str, Any]:
         "capabilities", "native_routes", "native_catalog", "abi_requirements",
         "expressions",
     }
+    if manifest["schema_version"] == 11:
+        required.add("global_quantities")
+    if manifest["schema_version"] == 12:
+        required.add("physical_frame")
+        if "global_quantities" in manifest:
+            required.add("global_quantities")
     if set(manifest) != required:
         raise TypeError("ModuleManifest semantic projection received an unsupported schema")
 
@@ -91,6 +97,8 @@ def model_semantic_data(model: Any) -> dict[str, Any]:
         operators.append(projected)
 
     return semantic_value({
+        **({"physical_frame_v1": manifest["physical_frame"]} if "physical_frame" in manifest else {}),
+        **({"global_quantities_v1": manifest["global_quantities"]} if "global_quantities" in manifest else {}),
         "owner": manifest["owner_path"],
         "spaces": {
             "state": _space_rows(manifest["state_spaces"], state=True),
@@ -126,9 +134,21 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
         "cadence",
         "cell_local_time",
         "post_synchronization_commits",
+        "integral_states",
+        "external_trace_transfers",
+        "integral_units_v2",
+        "external_trace_regions_v2",
     }
     if not expected.issubset(serialized) or not set(serialized).issubset(expected | optional):
         raise TypeError("Program semantic projection received an unsupported IR schema")
+    if "external_trace_regions_v2" in serialized:
+        if (type(serialized["version"]) is not int or serialized["version"] < 25 or
+                serialized["external_trace_regions_v2"] != {
+                    "contract": "pops.accepted-trace-regions@2",
+                    "carry": "unit-affine",
+                    "duration": "exact-logical-child",
+                }):
+            raise TypeError("Program regional trace semantic contract is unsupported")
     program_clock_owner = serialized["clock"].get("owner")
     result = {
         "version": serialized["version"],
@@ -145,6 +165,10 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
         "cadence",
         "cell_local_time",
         "post_synchronization_commits",
+        "integral_states",
+        "external_trace_transfers",
+        "integral_units_v2",
+        "external_trace_regions_v2",
     ):
         if key in serialized:
             result[key] = serialized[key]

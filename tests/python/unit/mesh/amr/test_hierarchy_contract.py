@@ -221,7 +221,7 @@ def test_shared_native_hierarchy_preserves_every_ranked_transition(dimension: in
     assert lowered.transition_buffers == (first_buffer, second_buffer)
     assert lowered.transition_lookaheads == (2, 3)
     assert lowered.to_data() == {
-        "schema_version": 2,
+        "schema_version": 3,
         "provider": native_provider.authority(),
         "dimension": dimension,
         "level_count": 3,

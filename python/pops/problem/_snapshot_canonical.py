@@ -329,6 +329,13 @@ def _canonical_object(
     projection_cache: dict[tuple[int, str], Any],
 ) -> Any:
     """Encode a non-container from explicit projections and/or public structural fields."""
+    from ._snapshot_immutable_data import snapshot_projection
+    immutable_projection = snapshot_projection(value)
+    if immutable_projection is not None:
+        return {"$immutable_data": _canonical(
+            immutable_projection, path=path + ".immutable_data", active=active,
+            handle_resolver=handle_resolver, artifact=artifact,
+            projection_cache=projection_cache)}
     if artifact:
         try:
             projection = getattr(value, "artifact_data", None)

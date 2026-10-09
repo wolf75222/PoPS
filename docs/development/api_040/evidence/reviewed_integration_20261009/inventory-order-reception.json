@@ -1,0 +1,11 @@
+{
+  "patch": "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/inventory-source-final-order-preserved.patch",
+  "sha256": "5566cfd30237b713a142a7db354446d7e1e0ceba7c6e9d8874bb46ee8cf042b3",
+  "diff_lines": 70,
+  "decoded_json_preserved": true,
+  "added_numeric_keys": [
+    "tests/python/unit/codegen/test_static_provider_ssp_proof.py",
+    "tests/python/unit/time/test_temporal_tau_program_authority.py"
+  ],
+  "changed_old_numeric_values": []
+}

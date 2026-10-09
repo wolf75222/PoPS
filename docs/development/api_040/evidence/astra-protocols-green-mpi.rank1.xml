@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="4" failures="0" disabled="0" errors="0" time="0.014" timestamp="2026-09-28T23:56:13.805" name="AllTests">
+  <properties>
+    <property name="pops_mpi_rank" value="1"/>
+    <property name="pops_mpi_expected_size" value="2"/>
+    <property name="pops_mpi_rank_source" value="PMI"/>
+  </properties>
+  <testsuite name="PreparedResourceCache" tests="4" failures="0" disabled="0" skipped="0" errors="0" time="0.014" timestamp="2026-09-28T23:56:13.805">
+    <testcase name="ReusesStorageWithoutAliasingNodesBlocksOrLevels" file="/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/unit/runtime/test_prepared_resource_cache.cpp" line="32" status="run" result="completed" time="0.012" timestamp="2026-09-28T23:56:13.805" classname="PreparedResourceCache" />
+    <testcase name="RankLocalInvalidationAndPreflightFailureAreCollective" file="/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/unit/runtime/test_prepared_resource_cache.cpp" line="59" status="run" result="completed" time="0." timestamp="2026-09-28T23:56:13.817" classname="PreparedResourceCache" />
+    <testcase name="FailedConstructionPreservesAcceptedBufferOnEveryRank" file="/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/unit/runtime/test_prepared_resource_cache.cpp" line="86" status="run" result="completed" time="0.001" timestamp="2026-09-28T23:56:13.817" classname="PreparedResourceCache" />
+    <testcase name="FailedInitialConstructionRemainsCollectivelyRetryable" file="/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/tests/cpp/unit/runtime/test_prepared_resource_cache.cpp" line="124" status="run" result="completed" time="0." timestamp="2026-09-28T23:56:13.819" classname="PreparedResourceCache" />
+  </testsuite>
+</testsuites>

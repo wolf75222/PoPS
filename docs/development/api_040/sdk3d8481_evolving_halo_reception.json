@@ -1,0 +1,258 @@
+{
+  "schema": "root.api040.sdk8-evolving-halo-runtime-reception@1",
+  "recorded_at": "2026-10-02T05:18:27.717902+00:00",
+  "native_build_source_commit": "3d8481c9d5dc0f2aaa99764a2dd7662ef4e1d23c",
+  "native_abi": 8,
+  "amr_payload": 12,
+  "accepted_state": 9,
+  "execution_contract": 3,
+  "native_sha256": "7fd8c7fef0ff8d330422c763c8b51afb10d4fae25f096d38a4154cbc2f846a44",
+  "routes": {
+    "affine-sync-serial": {
+      "mode": "serial",
+      "collective_cases": 1,
+      "execution": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-sync-serial-dim2/result.json",
+        "sha256": "786b38358c1d5da6708bae7d1c26ff4a8c6d472d5a74c9bd18afdc21f7e0dbc2",
+        "bytes": 1747
+      },
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-sync-serial-dim2/identity.json",
+        "sha256": "0a0a895d9fa05ee6792ec364d56c5d6908dc3bc419397fc7c6d353fb0914928e",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-sync-serial-dim2/after/identity.json",
+        "sha256": "0a0a895d9fa05ee6792ec364d56c5d6908dc3bc419397fc7c6d353fb0914928e",
+        "bytes": 2928
+      },
+      "sources_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-sync-serial-dim2/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "sources_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-sync-serial-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "junit": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-sync-serial-dim2/pytest.xml",
+          "sha256": "1153a71c539a8f45b9a1a07e9bb93e0d881210e7a62a9fcc85125f58afe5f4ec",
+          "bytes": 1047
+        }
+      ],
+      "harness_seconds": 46.22873237496242
+    },
+    "affine-subcycled-permuted-serial": {
+      "mode": "serial",
+      "collective_cases": 1,
+      "execution": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-subcycled-serial-dim2/result.json",
+        "sha256": "e701b0da1edbf109071766a9cf39e1129a7b09ef042da9bf83e495bbce03e2f9",
+        "bytes": 1756
+      },
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-subcycled-serial-dim2/identity.json",
+        "sha256": "0a0a895d9fa05ee6792ec364d56c5d6908dc3bc419397fc7c6d353fb0914928e",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-subcycled-serial-dim2/after/identity.json",
+        "sha256": "0a0a895d9fa05ee6792ec364d56c5d6908dc3bc419397fc7c6d353fb0914928e",
+        "bytes": 2928
+      },
+      "sources_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-subcycled-serial-dim2/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "sources_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-subcycled-serial-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "junit": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-subcycled-serial-dim2/pytest.xml",
+          "sha256": "5abaaca44dc1e3734b13e2c351a4d3cc323bc4cab165bc6f0cc1f43fef8ecbc9",
+          "bytes": 1051
+        }
+      ],
+      "harness_seconds": 45.50443112500943
+    },
+    "affine-two-cases-mpi2": {
+      "mode": "mpi2",
+      "collective_cases": 2,
+      "execution": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-mpi2-dim2/result.json",
+        "sha256": "1fb79d10df9703afb8c885f21be3b4bc049b356aae1e28d8ce231ee622fdcd0c",
+        "bytes": 2669
+      },
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-mpi2-dim2/before/identity.json",
+        "sha256": "0a0a895d9fa05ee6792ec364d56c5d6908dc3bc419397fc7c6d353fb0914928e",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-mpi2-dim2/after/identity.json",
+        "sha256": "0a0a895d9fa05ee6792ec364d56c5d6908dc3bc419397fc7c6d353fb0914928e",
+        "bytes": 2928
+      },
+      "sources_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-mpi2-dim2/before/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "sources_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-mpi2-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "junit": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-mpi2-dim2/rank0.xml",
+          "sha256": "2096397db0b59f4feda7264785bbc44e152c33de38ca2f73df748581377b4ff0",
+          "bytes": 1825
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src66a1e5-public-evolving-halo-mpi2-dim2/rank1.xml",
+          "sha256": "67f381350836c675e81f3bcf59c494cedcfe8999bfe4908f8bef4475cbcd9ccf",
+          "bytes": 1825
+        }
+      ],
+      "harness_seconds": 91.21129195904359
+    },
+    "temporal-discriminator-serial": {
+      "mode": "serial",
+      "collective_cases": 1,
+      "execution": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srca491ad-public-halo-temporal-discriminator-serial-dim2/result.json",
+        "sha256": "084395d9c610e3c003457684e41d96ae0247feb086bf51169412fb9f5c95531f",
+        "bytes": 1763
+      },
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srca491ad-public-halo-temporal-discriminator-serial-dim2/identity.json",
+        "sha256": "3c7a81cb20f2295c06e24766ca495495534b1995f9f88ba1cb6b21c96be98963",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srca491ad-public-halo-temporal-discriminator-serial-dim2/after/identity.json",
+        "sha256": "3c7a81cb20f2295c06e24766ca495495534b1995f9f88ba1cb6b21c96be98963",
+        "bytes": 2928
+      },
+      "sources_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srca491ad-public-halo-temporal-discriminator-serial-dim2/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "sources_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srca491ad-public-halo-temporal-discriminator-serial-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "junit": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srca491ad-public-halo-temporal-discriminator-serial-dim2/pytest.xml",
+          "sha256": "dcc27991347df6a907f203d87682da4d4a25efbc50d439fee17e13f9cce7d36d",
+          "bytes": 972
+        }
+      ],
+      "harness_seconds": 45.393707250012085
+    },
+    "temporal-discriminator-mpi2": {
+      "mode": "mpi2",
+      "collective_cases": 1,
+      "execution": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srca491ad-public-halo-temporal-discriminator-mpi2-dim2/result.json",
+        "sha256": "d14eac4744d820985e92118239f6f7a9cd804aacf2880b337541ad8f5a2415f4",
+        "bytes": 2395
+      },
+      "identity_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srca491ad-public-halo-temporal-discriminator-mpi2-dim2/before/identity.json",
+        "sha256": "3c7a81cb20f2295c06e24766ca495495534b1995f9f88ba1cb6b21c96be98963",
+        "bytes": 2928
+      },
+      "identity_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srca491ad-public-halo-temporal-discriminator-mpi2-dim2/after/identity.json",
+        "sha256": "3c7a81cb20f2295c06e24766ca495495534b1995f9f88ba1cb6b21c96be98963",
+        "bytes": 2928
+      },
+      "sources_before": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srca491ad-public-halo-temporal-discriminator-mpi2-dim2/before/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "sources_after": {
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srca491ad-public-halo-temporal-discriminator-mpi2-dim2/after/source-files.json",
+        "sha256": "f04c74f4ef675f131a88bdb0d4abcd699a866df353205e80d6e6dd42cf5bb939",
+        "bytes": 132916
+      },
+      "junit": [
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srca491ad-public-halo-temporal-discriminator-mpi2-dim2/rank0.xml",
+          "sha256": "dfc1f7da5c6a5bee038bba09b6edd6f119625c6d123ce26e3c481335efac2604",
+          "bytes": 969
+        },
+        {
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-srca491ad-public-halo-temporal-discriminator-mpi2-dim2/rank1.xml",
+          "sha256": "57ee78116f62a177f75623ab4cf61d002718a4b3231e0743db016748f08968ad",
+          "bytes": 969
+        }
+      ],
+      "harness_seconds": 47.38645966700278
+    }
+  },
+  "affine_independent_review": {
+    "REVIEW.md": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-evolving-halo-final-independent-20261002/REVIEW.md",
+      "sha256": "9a59abf6c5beb98e98cda7d4545e5fdd8cf973a6037be01b7b80161477e48841",
+      "bytes": 2509
+    },
+    "reception.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-evolving-halo-final-independent-20261002/reception.json",
+      "sha256": "ca0e25e5bca2c3010f2284f728787bb24926d5420c9b5a0ecc198f1d1bfeea82",
+      "bytes": 50834
+    },
+    "audit.py": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-evolving-halo-final-independent-20261002/audit.py",
+      "sha256": "9edefa1c5c91315e942ff5e9e20915e532a103921e365080394fd2cb79ae4a01",
+      "bytes": 7074
+    },
+    "carrier_parser.py": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-evolving-halo-final-independent-20261002/carrier_parser.py",
+      "sha256": "ee1e1dba49c790b694caa98efec8dbcb617a54cd13f63ababd2b6c525ba6ddfc",
+      "bytes": 1497
+    },
+    "freeze.json": {
+      "path": "/Users/romaindespoulain/dev/tmp/pops-evolving-halo-final-independent-20261002/freeze.json",
+      "sha256": "8350b4b88d7d65b10e06c3419e648d3acbbb29ac8e8130d95400a08743558919",
+      "bytes": 346
+    }
+  },
+  "temporal_independent_review": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/sol61-halo-temporal-discriminator-independent.json",
+    "sha256": "9f7381e9115056d0398709f55cc8d41de2507565a9fce56e83efbfd41f6d73e3",
+    "bytes": 978
+  },
+  "source_cohort": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/halo-m19-integrated-source-a491ad65.xml",
+    "sha256": "5ccf8b8461730f2d939da1c466b4b20c0a3d83a95ea06136bb0a27219ae3a5b6",
+    "bytes": 8502
+  },
+  "full_mission_received": false,
+  "halo_stage_failure_verified": false,
+  "field_dependency_rollback_verified": false,
+  "scope": "dc/dt=0, dm/dt=1 fullgrown affine oracle and dm/dt=m active-cell temporal discriminator; periodic8x8/twolevels/restart/replay; rank-local truncatedcarrier restart refusal only",
+  "limits": [
+    "Carrier preflight error is verified by exact Source assertion and passing NativeJUnit; raw exception text not separately persisted.",
+    "The multiplicative case proves temporal partition on active valid cells; fullgrown ghost formula is not independently derived for that case.",
+    "No after-halo-stage failed-attempt rollback, populated Field/GhostBC dependency, bootstrap point authority, regrid/generalAMR/GPU/ROMEO/CI reception."
+  ],
+  "historical_failed_injection": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdk3d8481-src5af964-public-evolving-halo-sync-serial-dim2/result.json",
+    "sha256": "f17daa814c7c57ea65dd3fa92135a71366741ef62ac8069f77e2a5e9c491ffea",
+    "bytes": 1747
+  }
+}

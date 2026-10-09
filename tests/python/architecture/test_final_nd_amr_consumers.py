@@ -22,7 +22,13 @@ UNCHANGED_CONSUMERS = (
 )
 CONTEXT_FRAGMENT_PATHS = frozenset(
     {
+        "pops/runtime/program/program_context_value_authority.inc",
+        "pops/runtime/program/amr_program_context_value_authority.inc",
+        "pops/runtime/program/amr_program_context_principal.inc",
+        "pops/runtime/program/amr_program_context_spatial_interaction.inc",
         "pops/runtime/program/amr_program_context_spatial.inc",
+        "pops/runtime/program/amr_program_context_rhs_input_trace.inc",
+        "pops/runtime/program/amr_program_context_path_rhs.inc",
         "pops/runtime/program/amr_program_context_spatial_implicit.inc",
         "pops/runtime/program/amr_program_context_spatial_imex.inc",
         "pops/runtime/program/amr_program_context_field_runtime_public.inc",
@@ -58,6 +64,20 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
     }
 )
 PROGRAM_RESPONSIBILITY_AUTHORITIES = {
+    "value_authority": frozenset({
+        "pops/runtime/program/program_context_value_authority.inc",
+        "pops/runtime/program/amr_program_context_value_authority.inc",
+    }),
+    "principal_publication": frozenset({
+        "pops/runtime/program/amr_program_context_principal.inc",
+    }),
+    "spatial_interaction": frozenset({
+        "pops/runtime/program/amr_program_context_spatial_interaction.inc",
+    }),
+    "rhs_input_trace": frozenset(
+        {"pops/runtime/program/amr_program_context_rhs_input_trace.inc"}
+    ),
+    "path_rhs": frozenset({"pops/runtime/program/amr_program_context_path_rhs.inc"}),
     "field_scratch": frozenset(
         {"pops/runtime/program/amr_program_context_general_field_scratch.inc"}
     ),
@@ -132,7 +152,19 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
         }
     ),
 }
+# The generic multilevel history remap now carries each retained flux source's
+# provenance through the same transaction as its numerical image (70 net lines).
+RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET = 80
 PROGRAM_RESPONSIBILITY_BUDGETS = {
+    # Newly integrated authorities have their own caps, rather than borrowing
+    # the existing field, diffusion, or subcycling responsibility allowances.
+    "value_authority": 320,
+    "principal_publication": 80,
+    "spatial_interaction": 640,
+    # Immutable same-SSA parent inputs and synchronized conservative/NCP face publication
+    # are new, separate responsibilities; both remain in the counted semantic closure.
+    "rhs_input_trace": 150,
+    "path_rhs": 560,
     # Collective shape authentication and stable per-level general-field scratch identity.
     "field_scratch": 96,
     "joint_field_publication": 350,
@@ -140,10 +172,12 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     # bounded extension to the former scalar implementation (12 source lines today).
     "spatial_implicit": 400 + 32,
     "diffusion": 180,
-    "spatial_context": 350,
-    "spatial_operations": 900,
+    # Tensor hierarchy access and exact input-trace lifetime extend the existing ports.
+    "spatial_context": 350 + 16,
+    "spatial_operations": 900 + 80,
     "field_runtime": 1_800,
-    "history_checkpoint": 1_800,
+    # Regrids retain accepted images, attempt authority, and flux provenance.
+    "history_checkpoint": 1_800 + 64 + RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET,
     "flux_expression": 1_200,
     "shared_flux": 400,
     "flux_family": 128,
@@ -152,9 +186,47 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     "mapping_continuation": 250,
     # Authenticate cross-level barrier requests before one collective callback and resume.
     "hierarchy_barriers": 150,
-    "subcycling_runtime": 800,
+    "subcycling_runtime": 800 + 24,
     "cell_temporal_runtime": 800,
 }
+# Additions since the b849289 architecture baseline are explicit contracts in
+# existing fragments. Keep every former cap unchanged and count these additions
+# in the fragment and aggregate closure as well as their owning responsibility.
+PROGRAM_CONTRACT_EXTENSIONS = {
+    "joint_field_publication": (64, (
+        ("amr_program_context_general_field_public.inc",
+         "/// Retain the actual prepared provider",
+         "#include <pops/runtime/program/amr_program_context_general_field_scratch.inc>"),
+    )),
+    "diffusion": (128, (
+        ("amr_program_context_diffusion.inc", "double numerical_face_courant()",
+         "/// Register the conservative flux"),
+    )),
+    "spatial_operations": (64, (
+        ("amr_program_context_spatial_operations.inc", "private:\n// Reuse",
+         "Geometry<Dim> geometry()"),
+    )),
+    "history_checkpoint": (416, (
+        ("amr_program_context_history_checkpoint_public.inc", "// Opt-in storage scope",
+         "void rotate_histories()"),
+        ("amr_program_context_history_checkpoint_public.inc", "/// Finest-owner coverage",
+         "/// Reduce generated per-cell status"),
+        ("amr_program_context_history_checkpoint_services.inc",
+         "void require_unfrozen_history_authoring_()", "void store_history_("),
+        ("amr_program_context_history_checkpoint_runtime.inc",
+         "void refresh_resources_after_accepted_history_remap_(",
+         "void publish_history_flux_snapshots_()"),
+    )),
+    "subcycling_runtime": (64, (
+        ("amr_program_context_subcycling_runtime.inc", "template <class ClockMatrix, class HistoryMatrix>",
+         "void stage_prepared_publication_candidates_("),
+    )),
+}
+PROGRAM_NEW_CONTRACT_BUDGET = (
+    sum(PROGRAM_RESPONSIBILITY_BUDGETS[name] for name in (
+        "value_authority", "principal_publication", "spatial_interaction"))
+    + sum(budget for budget, _ in PROGRAM_CONTRACT_EXTENSIONS.values())
+)
 # Intentional Phase 0 policy envelopes: fragment and scaffolding growth remain
 # separately bounded, and their aggregate remains independently enforced.
 # M6 solve outcomes, accepted exchange transactions, and authenticated history replay add
@@ -174,10 +246,22 @@ FIELD_SCRATCH_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["field_scratch"]
 # Resumable per-level map ports have their own authority and aggregate allowance.
 MAPPING_CONTINUATION_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["mapping_continuation"]
 HIERARCHY_BARRIER_FRAGMENT_BUDGET = PROGRAM_RESPONSIBILITY_BUDGETS["hierarchy_barriers"]
+PATH_INPUT_FRAGMENT_BUDGET = (
+    PROGRAM_RESPONSIBILITY_BUDGETS["rhs_input_trace"]
+    + PROGRAM_RESPONSIBILITY_BUDGETS["path_rhs"]
+)
+TENSOR_INPUT_HISTORY_PORT_BUDGET = 16 + 80 + 64 + 24
+# Parent-projected shared consumers retain captured source associations and stable deferred
+# history references: 104 net lines across six counted fragments, with a bounded allowance.
+# Existing per-file, responsibility and scaffolding caps remain unchanged.
+SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET = 112
 PROGRAM_FRAGMENT_BUDGET = (
     7_730 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
     + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
     + HIERARCHY_BARRIER_FRAGMENT_BUDGET + FIELD_SCRATCH_FRAGMENT_BUDGET
+    + PATH_INPUT_FRAGMENT_BUDGET + TENSOR_INPUT_HISTORY_PORT_BUDGET
+    + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET + RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET
+    + PROGRAM_NEW_CONTRACT_BUDGET
 )
 # Context-owned cache acquisition and independent field-resource handles extend the
 # existing scaffolding; numerical solve and publication bodies remain counted above.
@@ -185,15 +269,26 @@ CONTEXT_RESOURCE_SCAFFOLDING_BUDGET = 32
 # The shared subcycling engine retains synchronized attempts, callback authority and
 # rollback state across begin/resume/finish; this is distinct from context map ports.
 SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET = 200
+# Typed hierarchy tensor selection, retained boundaries and generation identities.
+HIERARCHY_TENSOR_SCAFFOLDING_BUDGET = 64
+# Typed integral captures, retained composite sources, stage scopes and resource
+# leases add 134 net lines to the ranked root since b849289. Numerical bodies
+# remain in their independently counted fragments/upstream contracts.
+PROGRAM_RESOURCE_AUTHORITY_SCAFFOLDING_BUDGET = 160
 PROGRAM_SCAFFOLDING_BUDGET = (
     1_850 + CONTEXT_RESOURCE_SCAFFOLDING_BUDGET
     + SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET
+    + HIERARCHY_TENSOR_SCAFFOLDING_BUDGET
 )
 PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
     9_580 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
     + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
     + HIERARCHY_BARRIER_FRAGMENT_BUDGET + FIELD_SCRATCH_FRAGMENT_BUDGET
     + CONTEXT_RESOURCE_SCAFFOLDING_BUDGET + SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET
+    + PATH_INPUT_FRAGMENT_BUDGET + TENSOR_INPUT_HISTORY_PORT_BUDGET
+    + HIERARCHY_TENSOR_SCAFFOLDING_BUDGET
+    + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET + RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET
+    + PROGRAM_NEW_CONTRACT_BUDGET
 )
 SEMANTIC_AUTHORITIES = frozenset(
     {
@@ -220,10 +315,12 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/numerics/elliptic/linear/generic_krylov.hpp",
         "pops/numerics/elliptic/linear/solve_outcome.hpp",
         "pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp",
+        "pops/numerics/spatial/nd/face_frequency.hpp",
         "pops/numerics/time/amr/levels/amr_patch_range.hpp",
         "pops/parallel/collective_exception.hpp",
         "pops/parallel/execution_lane.hpp",
         "pops/runtime/amr/amr_runtime.hpp",
+        "pops/runtime/amr/amr_tensor_elliptic.hpp",
         "pops/runtime/amr/prepared_multiblock_hierarchy.hpp",
         "pops/runtime/amr_system.hpp",
         "pops/runtime/builders/compiled/generated_amr_system_block.hpp",
@@ -239,6 +336,11 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/program/prepared_condensed_sampling.hpp",
         "pops/runtime/program/program_owner_field_identity.hpp",
         "pops/runtime/program/prepared_amr_spatial_residual.hpp",
+        "pops/runtime/program/prepared_amr_field_residual.hpp",
+        "pops/runtime/program/prepared_integral_capture.hpp",
+        "pops/runtime/program/program_value_authority.hpp",
+        "pops/runtime/program/spatial_direct_interaction.hpp",
+        "pops/runtime/program/spatial_interaction_history_source.hpp",
         "pops/runtime/program/prepared_tensor_boundary_session.hpp",
         "pops/runtime/program/program_runtime_state.hpp",
         "pops/runtime/program/profiler.hpp",
@@ -299,6 +401,55 @@ def _source(paths: tuple[str, ...]) -> str:
     return "\n".join((INCLUDE / path).read_text(encoding="utf-8") for path in paths)
 
 
+def _structural_region_lines(regions: tuple[tuple[str, str, str], ...]) -> int:
+    """Count exact, disjoint declaration/body regions under their own caps."""
+    occupied: dict[str, list[tuple[int, int]]] = {}
+    count = 0
+    for path, start, end in regions:
+        source = (INCLUDE / path).read_text(encoding="utf-8")
+        assert source.count(start) == source.count(end) == 1, (path, start, end)
+        begin, finish = source.index(start), source.index(end)
+        assert begin < finish, (path, start, end)
+        previous = occupied.setdefault(path, [])
+        assert all(finish <= a or begin >= b for a, b in previous), (path, start)
+        previous.append((begin, finish))
+        count += len(source[begin:finish].splitlines())
+    return count
+
+
+def _resource_authority_scaffolding_lines() -> int:
+    root = ROOTS["program"]
+    count = _structural_region_lines((
+        (root, "  void declare_integral_state(", "  template <class Producer>"),
+        (root, "  struct ClosedOriginalFieldSource", "  struct HierarchyFieldResource"),
+        (root, "  class StageEvaluationScope", "  class LogicalEvaluationScope"),
+        (root, "  template <class Resource, class Matches, class... Args>\n  PreparedResourceLease<Resource>",
+         "  // Class-scope responsibility fragments"),
+        (root, "  void reached_duration(", "  template <int TestDim>"),
+    ))
+    source = (INCLUDE / root).read_text(encoding="utf-8")
+    declarations = (
+        *[f"#include <{path}>" for path in (
+            "pops/numerics/spatial/nd/face_frequency.hpp",
+            "pops/runtime/program/prepared_amr_field_residual.hpp",
+            "pops/runtime/program/prepared_integral_capture.hpp",
+            "pops/runtime/program/program_value_authority.hpp",
+            "pops/runtime/program/spatial_direct_interaction.hpp",
+            "pops/runtime/program/spatial_interaction_history_source.hpp",
+            "pops/runtime/program/program_context_value_authority.inc",
+            "pops/runtime/program/amr_program_context_value_authority.inc",
+            "pops/runtime/program/amr_program_context_principal.inc",
+            "pops/runtime/program/amr_program_context_spatial_interaction.inc",
+        )],
+        "  mutable ProgramValueAuthority<Dim> program_values_;",
+        "  mutable std::map<std::int64_t, std::shared_ptr<const ClosedOriginalFieldSource>> closed_original_sources_;",
+        "  mutable std::map<std::int64_t, std::shared_ptr<const ClosedInteractionTower>> closed_interactions_;",
+    )
+    for declaration in declarations:
+        assert source.count(declaration) == 1, declaration
+    return count + len(declarations)
+
+
 def _unique_paths(*groups: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(path for group in groups for path in group))
 
@@ -338,10 +489,18 @@ def test_amr_consumer_closures_are_explicit_bounded_and_acyclic() -> None:
     assert sum(map(len, responsibility_groups)) == len(responsibility_union)
     for responsibility, paths in PROGRAM_RESPONSIBILITY_AUTHORITIES.items():
         lines = sum((INCLUDE / path).read_text(encoding="utf-8").count("\n") + 1 for path in paths)
-        assert lines <= PROGRAM_RESPONSIBILITY_BUDGETS[responsibility], (
+        extension_budget, regions = PROGRAM_CONTRACT_EXTENSIONS.get(responsibility, (0, ()))
+        qualified_regions = tuple(("pops/runtime/program/" + path, start, end)
+                                  for path, start, end in regions)
+        assert {path for path, _, _ in qualified_regions} <= paths
+        extension_lines = _structural_region_lines(qualified_regions)
+        assert extension_lines <= extension_budget, (responsibility, extension_lines, extension_budget)
+        budget = PROGRAM_RESPONSIBILITY_BUDGETS[responsibility]
+        assert lines - extension_lines <= budget, (
             responsibility,
             lines,
-            PROGRAM_RESPONSIBILITY_BUDGETS[responsibility],
+            extension_lines,
+            budget,
         )
 
     assert len(_source(closures["flux"]).splitlines()) <= 700
@@ -354,10 +513,13 @@ def test_amr_consumer_closures_are_explicit_bounded_and_acyclic() -> None:
         path for path in closures["program"] if path not in CONTEXT_FRAGMENT_PATHS
     )
     assert len(_source(program_fragments).splitlines()) <= PROGRAM_FRAGMENT_BUDGET
-    assert len(_source(program_scaffolding).splitlines()) <= PROGRAM_SCAFFOLDING_BUDGET
-    assert len(_source(closures["program"]).splitlines()) <= PROGRAM_SEMANTIC_CLOSURE_BUDGET
+    resource_lines = _resource_authority_scaffolding_lines()
+    assert resource_lines <= PROGRAM_RESOURCE_AUTHORITY_SCAFFOLDING_BUDGET
+    assert len(_source(program_scaffolding).splitlines()) - resource_lines <= PROGRAM_SCAFFOLDING_BUDGET
+    assert len(_source(closures["program"]).splitlines()) <= (
+        PROGRAM_SEMANTIC_CLOSURE_BUDGET + PROGRAM_RESOURCE_AUTHORITY_SCAFFOLDING_BUDGET)
     shallow_roots = (*UNCHANGED_CONSUMERS, *ROOTS.values())
-    assert len(_source(shallow_roots).splitlines()) < 1_000
+    assert len(_source(shallow_roots).splitlines()) - resource_lines < 1_000
 
 
 def test_condensed_sampling_utilities_remain_stateless_and_independently_bounded() -> None:
@@ -373,6 +535,34 @@ def test_condensed_sampling_utilities_remain_stateless_and_independently_bounded
         for forbidden in ("AmrProgramContext", "AmrSystem", "mutable ", "static std::map",
                           "prepare_amr_ghost_fill", "SolveOutcome", "MPI_"):
             assert forbidden not in source, (path, forbidden)
+
+
+def test_new_program_upstream_contracts_have_exact_ranked_owners_and_bounds() -> None:
+    # These are independent numerical/lifetime contracts used by the context,
+    # not hidden context-definition fragments or a permissive runtime glob.
+    contracts = {
+        "pops/numerics/spatial/nd/face_frequency.hpp":
+            (80, "maximum_incident_face_frequency"),
+        "pops/runtime/program/prepared_amr_field_residual.hpp":
+            (900, "class PreparedAmrFieldResidual"),
+        "pops/runtime/program/prepared_integral_capture.hpp":
+            (128, "class PreparedIntegralCapture"),
+        "pops/runtime/program/program_value_authority.hpp":
+            (480, "class ProgramValueAuthority"),
+        "pops/runtime/program/spatial_direct_interaction.hpp":
+            (384, "direct_spatial_interaction"),
+        "pops/runtime/program/spatial_interaction_history_source.hpp":
+            (96, "interaction_history_cold_equal"),
+    }
+    direct = set(_direct_local_includes(ROOTS["program"]))
+    assert contracts.keys() <= direct
+    assert contracts.keys() <= PERMITTED_UPSTREAM_BOUNDARIES
+    for path, (budget, owner) in contracts.items():
+        source = (INCLUDE / path).read_text(encoding="utf-8")
+        assert owner in source, (path, owner)
+        assert len(source.splitlines()) <= budget, (path, budget)
+        assert not _fixed_rank_authorities(source), path
+        assert not (set(_local_includes(source)) & (COMPATIBILITY_UMBRELLAS | CONTEXT_FRAGMENT_PATHS)), path
 
 
 def test_local_include_parser_authenticates_both_delimiters_and_hidden_fragments() -> None:
@@ -523,7 +713,8 @@ def test_composite_temporal_workspace_has_one_bounded_authority() -> None:
 # Program context. Their bodies retain explicit bounds instead of exempting context fragments.
 HISTORY_FLUX_UTILITY_BUDGETS = {
     "pops/runtime/program/amr_history_flux_snapshot.hpp": 400,
-    "pops/runtime/program/amr_history_flux_snapshot_codec.hpp": 550,
+    # Exact projection lineage and captured source association add 77 stateless lines.
+    "pops/runtime/program/amr_history_flux_snapshot_codec.hpp": 550 + 80,
     "pops/runtime/program/amr_history_flux_snapshot_execution.hpp": 350,
 }
 

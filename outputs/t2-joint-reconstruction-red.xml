@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="0.667" timestamp="2026-09-29T04:51:32.103595+02:00" hostname="macbookpro.home"><testcase classname="tests.python.unit.codegen.test_user_joint_reconstruction" name="test_cross_two_plus_three_body_is_a_real_vector_not_componentwise" time="0.011"><failure message="TypeError: User() got an unexpected keyword argument 'state'">tests/python/unit/codegen/test_user_joint_reconstruction.py:18: in test_cross_two_plus_three_body_is_a_real_vector_not_componentwise
+    policy = reconstruction.User(
+E   TypeError: User() got an unexpected keyword argument 'state'</failure></testcase></testsuite></testsuites>

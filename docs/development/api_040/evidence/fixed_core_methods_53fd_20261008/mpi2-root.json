@@ -1,0 +1,11 @@
+{
+  "date_utc": "2026-10-08T19:55:07.933856+00:00",
+  "Source": "53fd6ec25fd67351aefe0a5d2ac1101be7041a78",
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "core": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "peer_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-independent-public-SSPRK2-MPI2-53fd-ed2-reception-20261008/reception.json",
+  "peer_sha256": "7433e1416403bdf6b45325f95051bea6fce056e6aad2f25dc2d1d199c8cdce8e",
+  "physical_pins_rehashed": 39,
+  "scope": "One genuine world2 SSPRK2 rates AMR1 case; no local owner/cell census, universal-language, GPU or full94 inference.",
+  "RootGO_late_refusal_source_review": true
+}

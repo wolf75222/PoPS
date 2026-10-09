@@ -1,0 +1,177 @@
+{
+  "API_checks": {
+    "AMR.history_global": "public AMR wrapper requires name,level,slot; fixture supplies all three",
+    "AMR.history_initialized": "private native binding takes name,level",
+    "AMR.history_levels": "runtime wrapper delegates and binding takes name",
+    "RunReport.to_data": "actual dataclass method exists; failed run raises and produces no successful report",
+    "field_potential_level_global": "real native collective request agreement and prepared-lane gather; may materialize field storage before reading accepted potential; actual bind-time availability remains execution-gated",
+    "history_depth1": "native exact ring depth1; fill_count saturates min(ring.size,fill+1), hence expected1 after two accepts",
+    "program_accepted_state": "serialized committed authority, distinct from attempt allocation high-water mark"
+  },
+  "Source_basis": "53fd6ec25fd67351aefe0a5d2ac1101be7041a78",
+  "concrete_blockers_found": [],
+  "current_HEAD_at_receiving": "4fbd42ec55c6f2eb9948a410d7633f2594ec2ca3",
+  "final_V2_patch": {
+    "catalog": [
+      877,
+      878
+    ],
+    "ci_source_counts": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 25
+    },
+    "helper_oracle_AST_equal_V1": true,
+    "max_ordinary_seconds": 2088.0,
+    "new_scheduling_cost": {
+      "kind": "conservative scheduling estimate, not measured",
+      "seconds": 600
+    },
+    "old_costs_caps_exclusions_recorded_preserved": true,
+    "sha256": "a64d79a171b949405f528c39edab2c38e63372bcdf92ac9aff9a40099152a988",
+    "shards": 70,
+    "source_preparation_sha256": "809d9adf9969c8918114cf44006267326503b36f12e05ff0a7ab7f0cca41e6c3"
+  },
+  "independent_scalar_math": {
+    "accepted_gain_two_DT_intervals": 0.9697835860273427,
+    "final_field": "(3+2*DT)*(2 + .5*(1-z)^2*cell_average_mode/(1+lambda_h))",
+    "guards_and_tolerances_changed": false,
+    "lambda_h": 38.973679354221176,
+    "norm_Y_at_DT": 28.124317480256234,
+    "norm_increment_initial_2DT": 0.14820842583575788,
+    "norm_increment_retry_DT": 0.07410421291787894,
+    "norm_second_accepted_increment": 0.07297604345184053,
+    "z": 0.015224093497742647
+  },
+  "installed_Native_planned": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "instrumentation": "runtime._executor._s auxiliary accepted capture and history init/fill are existing private Native evidence seams. Public equations, compositions, guards, runtime binding and run are public. No public snapshot or parameter-update API admission.",
+  "limits": [
+    "Same compiled artifact uses two distinct bound runtime instances for limit0 failure and limit40 control; not same-instance parameter retry.",
+    "Automatic retry is public ErrorControlledDt, one refused2DT and two acceptedDT intervals; requires actual run receipt.",
+    "Initial uninitialized histories have no raw history arrays in snapshot; flags/fill and serialized Program/aux envelope checked. Generated order is not execution-count telemetry.",
+    "Fixed runtime parametrization covers Euler and weighted-rates SSP only; retained spelling has Source coverage, not a runtime late-refusal claim.",
+    "No rank0-only failure, retained ticket validator/revocation, local ownership census, GPU,3D or full94 claim.",
+    "No Native scientific or rollback claim until actual outputs and exception/byte snapshots are independently received."
+  ],
+  "physical_pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include/pops/runtime/program/amr_program_checkpoint.hpp": {
+      "bytes": 75767,
+      "sha256": "b5f4a7810e08850342a203be82d485c4ca63380ee954a3e364f200e4d121e9af"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include/pops/runtime/program/amr_program_context_history_checkpoint_services.inc": {
+      "bytes": 23062,
+      "sha256": "574880164931afbeaa5b85a0b8730d9330a8f8c406b674dc17e716aa586c77ac"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include/pops/runtime/program/amr_program_context_spatial_operations.inc": {
+      "bytes": 45401,
+      "sha256": "8344d7ed65eba11fc5ba0acbbeebc389e86975df0190cee2051e3b73f692985a"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/bindings/core/init/init_amr.cpp": {
+      "bytes": 118462,
+      "sha256": "2ffd4a0e6cbc1bdf94be9152660d31d9ef708f922eee3e01189bac77a10602b0"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/runtime/_runtime_instance.py": {
+      "bytes": 124402,
+      "sha256": "b8f80e3840c2c70301e734ad62ebeb32ccf452bc34dee0dc19064b56645bb90b"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/runtime/run_report.py": {
+      "bytes": 4202,
+      "sha256": "9e7dc28f832571f8d14d2e97bd5afa0512387eb7482dcb445546138c4e49340d"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/src/runtime/amr/amr_system.cpp": {
+      "bytes": 1349845,
+      "sha256": "59e3fd9fe42cc8c31d2999840d16b1e2ac5ca399a828986126c98265add0a185"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v1-20261008/declared-inputs-and-plan.json": {
+      "bytes": 2625,
+      "sha256": "2a82a7dd2453a6e0d3889016e23ae2593ab4ac4978031279157f7f9d2942bfc9"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v1-20261008/late-refusal-test-only-v1.patch": {
+      "bytes": 22311,
+      "sha256": "81b8fc6e1b8d3975abbcffd53fb66bc3bda09c9323941fe561e27530988c2dd9"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v1-20261008/preparation-receipt.json": {
+      "bytes": 1569,
+      "sha256": "e8307a13c3a4e17b1247094ee5a6dab72a156b89b50b663176f12a15babbc198"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v1-20261008/tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py": {
+      "bytes": 11731,
+      "sha256": "d430c056b5a96f7e8c5b3271ee23c212f684f877387dc864b225c7faaea59223"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v1-20261008/tests/python/support/diffusion_field_late_refusal_oracle.py": {
+      "bytes": 1992,
+      "sha256": "9367fddcc202ada58b01f0db2a0ba5d2beb85ca29e8079f0353044a047076a04"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v1-20261008/tests/python/support/public_diffusion_field_late_refusal_case.py": {
+      "bytes": 7938,
+      "sha256": "6e4009b5aaa810230b57dd308facf8627e5efceec552817b22cf2fd0c771141d"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/ci-source-runs/20261008T195920928838Z/pytest.xml": {
+      "bytes": 3717,
+      "sha256": "f8b812459e82b0016ff9b548979dcdfe35888761e6b354ad62e3f39d63f0bb62"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/ci-source-runs/20261008T195920928838Z/receipt.json": {
+      "bytes": 69741,
+      "sha256": "81a53a05cce1b4bdebfadd25243ce9d01db17773fb0f36b9e3a713eecddcf377"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/declared-inputs-and-plan.json": {
+      "bytes": 2846,
+      "sha256": "8ecd67a71eaa122268b1230ba44c4d2f337c7b0ab755d13f13a7bf994c72f512"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/late-refusal-v2-integration.patch": {
+      "bytes": 32071,
+      "sha256": "a64d79a171b949405f528c39edab2c38e63372bcdf92ac9aff9a40099152a988"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/run_source_panel.py": {
+      "bytes": 1304,
+      "sha256": "e1661e548319f5657a07e9c2a8866fa80409507f4d63d3323e8f38517c728316"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/source-preparation-receipt.json": {
+      "bytes": 4382,
+      "sha256": "809d9adf9969c8918114cf44006267326503b36f12e05ff0a7ab7f0cca41e6c3"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/source-runs/20261008T195839819765Z/pytest.xml": {
+      "bytes": 1193,
+      "sha256": "345a57a8894e46205443b6eee184786f492f50365d9819172fe62cb3aa428856"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/source-runs/20261008T195839819765Z/receipt.json": {
+      "bytes": 997,
+      "sha256": "1f7574c9b8cd79dd2290af4995a122d70058c0683b29500571f4f8b6a7f23f2e"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/source-tests/test_late_refusal_source.py": {
+      "bytes": 3059,
+      "sha256": "5c280e9ced304ab8d12e2aa1181b647c3b42fdcd1fd808a1b3d316c3ea1f88af"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py": {
+      "bytes": 14922,
+      "sha256": "94f3642d53d5f5e0dc677c76bb9fae81fa9581b8ba77e568486d5322cd957537"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/tests/python/support/diffusion_field_late_refusal_oracle.py": {
+      "bytes": 2460,
+      "sha256": "fe4922ae73c2ef2048194768db0c8a9ef50fab5a93ba0a10e42e2cf110d7ab20"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/tests/python/support/public_diffusion_field_late_refusal_case.py": {
+      "bytes": 9313,
+      "sha256": "b3aad8c9e9808ba12e8a70d35167677482be1dc4c83f35bc661bb46b793f539f"
+    },
+    "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/tests/python/test_durations.json": {
+      "bytes": 327533,
+      "sha256": "88aa1c818fa4adc1b0fd7d1dffc4859b50e427fb7956ade733477c9b7df6cfc3"
+    }
+  },
+  "scope": "V1 read-only Source/oracle review; V2 formatted fixtures and actual four-case Source emitter panel received separately; no Main/package edits or Native import/run by reviewer",
+  "source_panel": {
+    "Native_loaded": [],
+    "author_executed_reviewer_file_received": true,
+    "counts": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 4
+    },
+    "operations": "actual validate, resolve, detach_compiled_program, real model authority, SSP certificate and emit; Euler, both RK2 spellings, adaptive Euler",
+    "proves": "generated field solve and history stores precede named terminal guard, then commit; does not prove actual failure-time execution counters"
+  },
+  "status": "SOURCE_GO_FOR_BOUNDED_NATIVE_EXECUTION_NOT_RUNTIME_QUALIFICATION"
+}

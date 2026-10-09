@@ -1,0 +1,19 @@
+{
+  "base": "78c75abb8b20318c9c0a8d5d93a85e4ac4bdb965",
+  "change": "preflight exact version8/9; state_carriers_checkpoint required and allowed only9; Native dtype/capacity/validation/projection and existing outer transaction unchanged",
+  "collection_limit": "test_uniform_checkpoint_layout requires selected Native on import; collectionError preserved, not received Source",
+  "fixture_bytes": 18300,
+  "fixture_sha256": "622bdbed5df95fef86fe74490ba67ad5662a355c48988d569c519d4d08de9251",
+  "native_acceptance": false,
+  "native_job": 732268,
+  "original_run_status": "FAILED retained; four steps and checkpoint write do not qualify restart",
+  "proof_pins": {
+    "/Users/romaindespoulain/dev/tmp/sol61-cp9-admission-final.xml": "6ddcbd27508af4fd80f03c6f5334dfb57caed63417a5dd4e3fbc940ee94ebd17",
+    "/Users/romaindespoulain/dev/tmp/sol61-cp9-admission-red.xml": "f5c1a727fbcc50b3b78805bfd2bb397ff57d2f67b976c580aa7c5e3ab33d89bc",
+    "/Users/romaindespoulain/dev/tmp/sol61-cp9-admission-source-green.xml": "6311fdfe2fd99ae455bffcc1c17ea2de1f5ae81507ffa01889616433a0173d84"
+  },
+  "red": "actual preflight real Native accepted NPZ1FAIL6PASS",
+  "root_approval": false,
+  "schema": "sol61.cp9-member-admission-fix@1",
+  "source_cohort": "15PASS58.40s before2additional version/member adversaries; final admission9PASS.60s"
+}

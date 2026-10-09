@@ -27,7 +27,7 @@ from typing import Any
 
 from .. import math as _bm
 from .._ir import Expr
-from ..model.handles import Handle, OperatorHandle
+from ..model.handles import Handle, OperatorHandle, StateShapeHandle
 from ._board_contract import (normalize_components, normalize_roles, normalize_sequence,
                               normalize_string_mapping, require_bool, require_name)
 
@@ -77,7 +77,7 @@ def _roles_for(hyp: Any) -> Any:
     return roles_for(hyp.cons_names, hyp.cons_roles)
 
 
-class StateHandle(Handle):
+class StateHandle(StateShapeHandle):
     """A declared state: a name plus the ordered :mod:`pops.dsl` component vars.
 
     Unpacks into its components (``rho, mx, my = U``), indexes them by position
@@ -93,6 +93,10 @@ class StateHandle(Handle):
     """
 
     __slots__ = ("components", "vars", "roles", "space")
+
+    @property
+    def state_components(self):
+        return self.components
 
     def __init__(self, name: Any, components: Any, vars_: Any, roles: Any, *, owner: Any,
                  space: Any = None) -> None:
@@ -270,6 +274,14 @@ class RateHandle(OperatorHandle):
     @property
     def balance(self) -> Any:
         return self.view.balance
+
+    def __call__(self, *args: Any, bindings: Any = None, **kwargs: Any) -> Any:
+        if bindings is None:
+            return super().__call__(*args, **kwargs)
+        if len(args) != 1:
+            raise TypeError("rate(bindings=) requires exactly one positional target state")
+        from pops.time._program.principal import call_with_bindings
+        return call_with_bindings(self, args[0], bindings, **kwargs)
 
     @property
     def occurrences(self) -> Any:

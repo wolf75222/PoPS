@@ -1,0 +1,555 @@
+﻿2026-10-09T00:20:15.7721528Z Current runner version: '2.337.0'
+2026-10-09T00:20:15.7747783Z ##[group]Runner Image Provisioner
+2026-10-09T00:20:15.7748859Z Hosted Compute Agent
+2026-10-09T00:20:15.7749459Z Version: 20261002.596
+2026-10-09T00:20:15.7750501Z Commit: c3d12f3313a95f25162a1503be624f3b0617f8c0
+2026-10-09T00:20:15.7751422Z Build Date: 2026-10-02T22:28:27Z
+2026-10-09T00:20:15.7752143Z Worker ID: {fa9287b3-eb90-404b-b2aa-c1d9d4e2ec40}
+2026-10-09T00:20:15.7752993Z Region: eastus
+2026-10-09T00:20:15.7753551Z Cloud: Azure
+2026-10-09T00:20:15.7754138Z ##[endgroup]
+2026-10-09T00:20:15.7755808Z ##[group]Operating System
+2026-10-09T00:20:15.7756912Z Ubuntu
+2026-10-09T00:20:15.7757678Z 24.04.5
+2026-10-09T00:20:15.7758207Z LTS
+2026-10-09T00:20:15.7758768Z ##[endgroup]
+2026-10-09T00:20:15.7759353Z ##[group]Runner Image
+2026-10-09T00:20:15.7759977Z Image: ubuntu-24.04
+2026-10-09T00:20:15.7760662Z Version: 20261004.327.1
+2026-10-09T00:20:15.7761920Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261004.327/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-09T00:20:15.7763520Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261004.327
+2026-10-09T00:20:15.7764533Z ##[endgroup]
+2026-10-09T00:20:15.7765742Z ##[group]GITHUB_TOKEN Permissions
+2026-10-09T00:20:15.7768187Z Contents: read
+2026-10-09T00:20:15.7768826Z Metadata: read
+2026-10-09T00:20:15.7769406Z ##[endgroup]
+2026-10-09T00:20:15.7771690Z Secret source: Actions
+2026-10-09T00:20:15.7772674Z Cache mode: write
+2026-10-09T00:20:15.7773429Z Prepare workflow directory
+2026-10-09T00:20:15.8328720Z Prepare all required actions
+2026-10-09T00:20:15.8378253Z Getting action download info
+2026-10-09T00:20:16.0799190Z Download action repository 'actions/checkout@v7' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-10-09T00:20:16.1678082Z Download action repository 'actions/setup-python@v7' (SHA:5fda3b95a4ea91299a34e894583c3862153e4b97)
+2026-10-09T00:20:16.2543071Z Download action repository 'actions/download-artifact@v8' (SHA:9000827ccba6bdab643e8b6fd33ac0654aef8333)
+2026-10-09T00:20:16.4384960Z Download action repository 'actions/cache@v6' (SHA:55cc8345863c7cc4c66a329aec7e433d2d1c52a9)
+2026-10-09T00:20:16.5504168Z Download action repository 'actions/upload-artifact@v7' (SHA:cf430e030ddbb5b0abf93d22962f4752f3646cd9)
+2026-10-09T00:20:16.8585182Z Complete job name: ubuntu-latest / Kokkos Serial (Python) compile-cache
+2026-10-09T00:20:16.9515514Z ##[group]Run actions/checkout@v7
+2026-10-09T00:20:16.9517104Z with:
+2026-10-09T00:20:16.9517868Z   fetch-depth: 1
+2026-10-09T00:20:16.9518699Z   repository: wolf75222/PoPS
+2026-10-09T00:20:16.9527335Z   token: ***
+2026-10-09T00:20:16.9528124Z   ssh-strict: true
+2026-10-09T00:20:16.9528918Z   ssh-user: git
+2026-10-09T00:20:16.9529731Z   persist-credentials: true
+2026-10-09T00:20:16.9530633Z   clean: true
+2026-10-09T00:20:16.9531450Z   sparse-checkout-cone-mode: true
+2026-10-09T00:20:16.9532419Z   fetch-tags: false
+2026-10-09T00:20:16.9533233Z   show-progress: true
+2026-10-09T00:20:16.9534071Z   lfs: false
+2026-10-09T00:20:16.9534865Z   submodules: false
+2026-10-09T00:20:16.9535718Z   set-safe-directory: true
+2026-10-09T00:20:16.9536871Z   allow-unsafe-pr-checkout: false
+2026-10-09T00:20:16.9538150Z env:
+2026-10-09T00:20:16.9538891Z   POPS_NATIVE_DIM: 2
+2026-10-09T00:20:16.9539879Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T00:20:16.9541098Z   CCACHE_MAXSIZE: 2G
+2026-10-09T00:20:16.9542173Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T00:20:16.9543499Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T00:20:16.9544592Z   CCACHE_NOHASHDIR: true
+2026-10-09T00:20:16.9545491Z   CCACHE_SLOPPINESS: locale
+2026-10-09T00:20:16.9547003Z   COMPILE_CACHE_TEST: tests/python/integration/mpi/test_dsl_compile_cache.py
+2026-10-09T00:20:16.9548485Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T00:20:16.9549835Z   COMPILE_CACHE_TMP: /home/runner/work/PoPS/PoPS/.pops-ci/compile-cache-test
+2026-10-09T00:20:16.9633904Z ##[endgroup]
+2026-10-09T00:20:17.0730890Z Syncing repository: wolf75222/PoPS
+2026-10-09T00:20:17.0733948Z ##[group]Getting Git version info
+2026-10-09T00:20:17.0735214Z Working directory is '/home/runner/work/PoPS/PoPS'
+2026-10-09T00:20:17.0737538Z [command]/usr/bin/git version
+2026-10-09T00:20:17.0796441Z git version 2.55.0
+2026-10-09T00:20:17.0824313Z ##[endgroup]
+2026-10-09T00:20:17.0837577Z Temporarily overriding HOME='/home/runner/work/_temp/7bebcc60-ffa2-47b4-acd5-f460fb64199b' before making global git config changes
+2026-10-09T00:20:17.0842317Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-09T00:20:17.0845832Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/PoPS/PoPS
+2026-10-09T00:20:17.0894199Z Deleting the contents of '/home/runner/work/PoPS/PoPS'
+2026-10-09T00:20:17.0899735Z ##[group]Determining repository object format
+2026-10-09T00:20:17.0903094Z ##[endgroup]
+2026-10-09T00:20:17.0905728Z ##[group]Initializing the repository
+2026-10-09T00:20:17.0908630Z [command]/usr/bin/git init /home/runner/work/PoPS/PoPS
+2026-10-09T00:20:17.1018940Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-09T00:20:17.1022583Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-09T00:20:17.1025832Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-09T00:20:17.1028836Z hint: call:
+2026-10-09T00:20:17.1030307Z hint:
+2026-10-09T00:20:17.1032002Z hint: 	git config --global init.defaultBranch <name>
+2026-10-09T00:20:17.1034224Z hint:
+2026-10-09T00:20:17.1036669Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-09T00:20:17.1039607Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-09T00:20:17.1041877Z hint:
+2026-10-09T00:20:17.1043061Z hint: 	git branch -m <name>
+2026-10-09T00:20:17.1044622Z hint:
+2026-10-09T00:20:17.1045807Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-09T00:20:17.1047918Z Initialized empty Git repository in /home/runner/work/PoPS/PoPS/.git/
+2026-10-09T00:20:17.1051044Z [command]/usr/bin/git remote add origin https://github.com/wolf75222/PoPS
+2026-10-09T00:20:17.1096509Z ##[endgroup]
+2026-10-09T00:20:17.1099431Z ##[group]Disabling automatic garbage collection
+2026-10-09T00:20:17.1102088Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-09T00:20:17.1140581Z ##[endgroup]
+2026-10-09T00:20:17.1143300Z ##[group]Setting up auth
+2026-10-09T00:20:17.1144644Z Removing SSH command configuration
+2026-10-09T00:20:17.1148342Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-09T00:20:17.1194578Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-09T00:20:17.1562013Z Removing HTTP extra header
+2026-10-09T00:20:17.1568924Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-09T00:20:17.1618130Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-09T00:20:17.1857211Z Removing includeIf entries pointing to credentials config files
+2026-10-09T00:20:17.1862282Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-09T00:20:17.1908708Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-09T00:20:17.2160395Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-8376b020-6842-47d5-b8dd-0dd66e607321.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-09T00:20:17.2207422Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/PoPS/PoPS/.git.path /home/runner/work/_temp/git-credentials-8376b020-6842-47d5-b8dd-0dd66e607321.config
+2026-10-09T00:20:17.2244259Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/PoPS/PoPS/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-8376b020-6842-47d5-b8dd-0dd66e607321.config
+2026-10-09T00:20:17.2283820Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-8376b020-6842-47d5-b8dd-0dd66e607321.config
+2026-10-09T00:20:17.2321343Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-8376b020-6842-47d5-b8dd-0dd66e607321.config
+2026-10-09T00:20:17.2378341Z ##[endgroup]
+2026-10-09T00:20:17.2380538Z ##[group]Fetching the repository
+2026-10-09T00:20:17.2385118Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +7cb9204d9f9358d3443d20db7c8de163d2db4057:refs/remotes/pull/681/merge
+2026-10-09T00:20:17.9004135Z From https://github.com/wolf75222/PoPS
+2026-10-09T00:20:17.9005261Z  * [new ref]         7cb9204d9f9358d3443d20db7c8de163d2db4057 -> pull/681/merge
+2026-10-09T00:20:17.9010643Z ##[endgroup]
+2026-10-09T00:20:17.9011726Z ##[group]Determining the checkout info
+2026-10-09T00:20:17.9012574Z ##[endgroup]
+2026-10-09T00:20:17.9019254Z [command]/usr/bin/git sparse-checkout disable
+2026-10-09T00:20:17.9076988Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-09T00:20:17.9114393Z ##[group]Checking out the ref
+2026-10-09T00:20:17.9120111Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/681/merge
+2026-10-09T00:20:18.4077738Z Note: switching to 'refs/remotes/pull/681/merge'.
+2026-10-09T00:20:18.4078368Z 
+2026-10-09T00:20:18.4078891Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-09T00:20:18.4079837Z changes and commit them, and you can discard any commits you make in this
+2026-10-09T00:20:18.4080650Z state without impacting any branches by switching back to a branch.
+2026-10-09T00:20:18.4081093Z 
+2026-10-09T00:20:18.4081495Z If you want to create a new branch to retain commits you create, you may
+2026-10-09T00:20:18.4082268Z do so (now or later) by using -c with the switch command. Example:
+2026-10-09T00:20:18.4082683Z 
+2026-10-09T00:20:18.4082949Z   git switch -c <new-branch-name>
+2026-10-09T00:20:18.4083271Z 
+2026-10-09T00:20:18.4083505Z Or undo this operation with:
+2026-10-09T00:20:18.4084103Z 
+2026-10-09T00:20:18.4084337Z   git switch -
+2026-10-09T00:20:18.4084616Z 
+2026-10-09T00:20:18.4085025Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-09T00:20:18.4085498Z 
+2026-10-09T00:20:18.4086037Z HEAD is now at 7cb9204 Merge 4017d29d9adc066e2ab64d2eed3b99f1caa8f63c into bb9aea0cc56fabe6b003bfbee5daee28d38ac7e7
+2026-10-09T00:20:18.4112476Z ##[endgroup]
+2026-10-09T00:20:18.4165277Z [command]/usr/bin/git log -1 --format=%H
+2026-10-09T00:20:18.4197021Z 7cb9204d9f9358d3443d20db7c8de163d2db4057
+2026-10-09T00:20:18.4566462Z Prepare all required actions
+2026-10-09T00:20:18.4567455Z Getting action download info
+2026-10-09T00:20:18.5573982Z ##[group]Run ./.github/actions/setup-kokkos
+2026-10-09T00:20:18.5574473Z with:
+2026-10-09T00:20:18.5574831Z   extra-apt: mold
+2026-10-09T00:20:18.5575220Z   kokkos-version: 4.4.01
+2026-10-09T00:20:18.5575686Z   kokkos-commit: 15dc143e5f39949eece972a798e175c4b463d4b8
+2026-10-09T00:20:18.5576388Z   compiler: gcc
+2026-10-09T00:20:18.5576798Z   exec-space: serial
+2026-10-09T00:20:18.5577176Z env:
+2026-10-09T00:20:18.5577517Z   POPS_NATIVE_DIM: 2
+2026-10-09T00:20:18.5577966Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T00:20:18.5578445Z   CCACHE_MAXSIZE: 2G
+2026-10-09T00:20:18.5578909Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T00:20:18.5579461Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T00:20:18.5579922Z   CCACHE_NOHASHDIR: true
+2026-10-09T00:20:18.5580344Z   CCACHE_SLOPPINESS: locale
+2026-10-09T00:20:18.5580984Z   COMPILE_CACHE_TEST: tests/python/integration/mpi/test_dsl_compile_cache.py
+2026-10-09T00:20:18.5581951Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T00:20:18.5582501Z   COMPILE_CACHE_TMP: /home/runner/work/PoPS/PoPS/.pops-ci/compile-cache-test
+2026-10-09T00:20:18.5583056Z ##[endgroup]
+2026-10-09T00:20:18.5658983Z ##[start-action display=Run echo "prefix=/home/runner/work/PoPS/PoPS/.kokkos-install" >> "$GITHUB_OUTPUT";id=kokkos.paths]
+2026-10-09T00:20:18.5717435Z ##[group]Run echo "prefix=/home/runner/work/PoPS/PoPS/.kokkos-install" >> "$GITHUB_OUTPUT"
+2026-10-09T00:20:18.5718327Z [36;1mecho "prefix=/home/runner/work/PoPS/PoPS/.kokkos-install" >> "$GITHUB_OUTPUT"[0m
+2026-10-09T00:20:18.5966866Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-09T00:20:18.5967470Z env:
+2026-10-09T00:20:18.5967836Z   POPS_NATIVE_DIM: 2
+2026-10-09T00:20:18.5968274Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T00:20:18.5968750Z   CCACHE_MAXSIZE: 2G
+2026-10-09T00:20:18.5969251Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T00:20:18.5969792Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T00:20:18.5970257Z   CCACHE_NOHASHDIR: true
+2026-10-09T00:20:18.5970644Z   CCACHE_SLOPPINESS: locale
+2026-10-09T00:20:18.5971177Z   COMPILE_CACHE_TEST: tests/python/integration/mpi/test_dsl_compile_cache.py
+2026-10-09T00:20:18.5971762Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T00:20:18.5972308Z   COMPILE_CACHE_TMP: /home/runner/work/PoPS/PoPS/.pops-ci/compile-cache-test
+2026-10-09T00:20:18.5972860Z ##[endgroup]
+2026-10-09T00:20:18.6134380Z ##[end-action id=kokkos.paths;outcome=success;conclusion=success;duration_ms=47]
+2026-10-09T00:20:18.6140579Z ##[start-action display=Install deps;id=kokkos.__run]
+2026-10-09T00:20:18.6179457Z ##[group]Run sudo apt-get update
+2026-10-09T00:20:18.6179971Z [36;1msudo apt-get update[0m
+2026-10-09T00:20:18.6180632Z [36;1m# exec-space=openmp : le backend OpenMP clang a besoin de libomp LLVM (libgomp gcc n'est pas[0m
+2026-10-09T00:20:18.6181386Z [36;1m# TSan-aware, cf. job tsan). En serial, rien de plus.[0m
+2026-10-09T00:20:18.6181901Z [36;1mOMP_DEP=""[0m
+2026-10-09T00:20:18.6182383Z [36;1mif [ "serial" = "openmp" ]; then OMP_DEP="libomp-dev"; fi[0m
+2026-10-09T00:20:18.6183119Z [36;1msudo apt-get install -y libeigen3-dev ninja-build ccache $OMP_DEP mold[0m
+2026-10-09T00:20:18.6254914Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-09T00:20:18.6255474Z env:
+2026-10-09T00:20:18.6255830Z   POPS_NATIVE_DIM: 2
+2026-10-09T00:20:18.6256531Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T00:20:18.6257040Z   CCACHE_MAXSIZE: 2G
+2026-10-09T00:20:18.6257504Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T00:20:18.6258053Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T00:20:18.6258519Z   CCACHE_NOHASHDIR: true
+2026-10-09T00:20:18.6258923Z   CCACHE_SLOPPINESS: locale
+2026-10-09T00:20:18.6259467Z   COMPILE_CACHE_TEST: tests/python/integration/mpi/test_dsl_compile_cache.py
+2026-10-09T00:20:18.6260411Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T00:20:18.6260991Z   COMPILE_CACHE_TMP: /home/runner/work/PoPS/PoPS/.pops-ci/compile-cache-test
+2026-10-09T00:20:18.6261575Z ##[endgroup]
+2026-10-09T00:20:18.7154679Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+2026-10-09T00:20:18.8394875Z Hit:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease
+2026-10-09T00:20:18.8407681Z Get:3 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+2026-10-09T00:20:18.8439754Z Get:4 http://azure.archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+2026-10-09T00:20:18.8459010Z Get:5 http://azure.archive.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+2026-10-09T00:20:18.9605371Z Get:6 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [1375 kB]
+2026-10-09T00:20:18.9778667Z Get:7 http://azure.archive.ubuntu.com/ubuntu noble-updates/main Translation-en [306 kB]
+2026-10-09T00:20:18.9819636Z Get:8 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [1702 kB]
+2026-10-09T00:20:18.9882447Z Get:14 https://packages.microsoft.com/ubuntu/24.04/prod noble InRelease [3600 B]
+2026-10-09T00:20:18.9901252Z Get:9 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe Translation-en [342 kB]
+2026-10-09T00:20:18.9938059Z Get:10 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [1761 kB]
+2026-10-09T00:20:19.0035482Z Get:11 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted Translation-en [401 kB]
+2026-10-09T00:20:19.0050333Z Get:12 http://azure.archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Packages [55.0 kB]
+2026-10-09T00:20:19.0063482Z Get:13 http://azure.archive.ubuntu.com/ubuntu noble-updates/multiverse Translation-en [14.3 kB]
+2026-10-09T00:20:19.0918689Z Get:15 http://azure.archive.ubuntu.com/ubuntu noble-security/main amd64 Packages [1115 kB]
+2026-10-09T00:20:19.0984386Z Get:16 http://azure.archive.ubuntu.com/ubuntu noble-security/main Translation-en [227 kB]
+2026-10-09T00:20:19.1470866Z Get:17 http://azure.archive.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1218 kB]
+2026-10-09T00:20:19.1692755Z Get:18 http://azure.archive.ubuntu.com/ubuntu noble-security/universe Translation-en [245 kB]
+2026-10-09T00:20:19.1728131Z Get:19 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [1632 kB]
+2026-10-09T00:20:19.2140524Z Get:20 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted Translation-en [376 kB]
+2026-10-09T00:20:19.2158537Z Get:21 http://azure.archive.ubuntu.com/ubuntu noble-security/multiverse Translation-en [11.6 kB]
+2026-10-09T00:20:19.3241584Z Get:22 https://packages.microsoft.com/ubuntu/24.04/prod noble/main armhf Packages [12.3 kB]
+2026-10-09T00:20:19.3267039Z Get:23 https://packages.microsoft.com/ubuntu/24.04/prod noble/main arm64 Packages [474 kB]
+2026-10-09T00:20:19.3334890Z Get:24 https://packages.microsoft.com/ubuntu/24.04/prod noble/main amd64 Packages [531 kB]
+2026-10-09T00:20:19.3417993Z Get:25 https://packages.microsoft.com/ubuntu/24.04/prod noble/main all Packages [640 B]
+2026-10-09T00:20:22.4783473Z Fetched 12.2 MB in 1s (8998 kB/s)
+2026-10-09T00:20:23.4238896Z Reading package lists...
+2026-10-09T00:20:23.4546114Z Reading package lists...
+2026-10-09T00:20:23.6791268Z Building dependency tree...
+2026-10-09T00:20:23.6798387Z Reading state information...
+2026-10-09T00:20:23.8515344Z The following additional packages will be installed:
+2026-10-09T00:20:23.8519030Z   libhiredis1.1.0
+2026-10-09T00:20:23.8524717Z Suggested packages:
+2026-10-09T00:20:23.8525279Z   distcc | icecc libeigen3-doc libmpfrc++-dev
+2026-10-09T00:20:23.8729904Z The following NEW packages will be installed:
+2026-10-09T00:20:23.8740943Z   ccache libeigen3-dev libhiredis1.1.0 mold ninja-build
+2026-10-09T00:20:23.8934569Z 0 upgraded, 5 newly installed, 0 to remove and 23 not upgraded.
+2026-10-09T00:20:23.8935018Z Need to get 4347 kB of archives.
+2026-10-09T00:20:23.8935413Z After this operation, 30.3 MB of additional disk space will be used.
+2026-10-09T00:20:23.8936441Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+2026-10-09T00:20:23.9916048Z Get:2 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libhiredis1.1.0 amd64 1.2.0-6ubuntu3 [41.4 kB]
+2026-10-09T00:20:24.0738056Z Get:3 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 ccache amd64 4.9.1-1 [592 kB]
+2026-10-09T00:20:24.1702660Z Get:4 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 mold amd64 2.30.0+dfsg-1build1 [2529 kB]
+2026-10-09T00:20:24.3168429Z Get:5 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 ninja-build amd64 1.11.1-2 [129 kB]
+2026-10-09T00:20:24.4480701Z Get:6 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 libeigen3-dev all 3.4.0-4build0.1 [1057 kB]
+2026-10-09T00:20:25.2671498Z Fetched 4347 kB in 1s (6429 kB/s)
+2026-10-09T00:20:25.5649081Z Selecting previously unselected package libhiredis1.1.0:amd64.
+2026-10-09T00:20:25.5899451Z (Reading database ... 
+2026-10-09T00:20:25.5899846Z (Reading database ... 5%
+2026-10-09T00:20:25.5900203Z (Reading database ... 10%
+2026-10-09T00:20:25.5900692Z (Reading database ... 15%
+2026-10-09T00:20:25.5901664Z (Reading database ... 20%
+2026-10-09T00:20:25.5902076Z (Reading database ... 25%
+2026-10-09T00:20:25.5902353Z (Reading database ... 30%
+2026-10-09T00:20:25.5902587Z (Reading database ... 35%
+2026-10-09T00:20:25.5902800Z (Reading database ... 40%
+2026-10-09T00:20:25.5903859Z (Reading database ... 45%
+2026-10-09T00:20:25.5904678Z (Reading database ... 50%
+2026-10-09T00:20:25.5970601Z (Reading database ... 55%
+2026-10-09T00:20:25.7092013Z (Reading database ... 60%
+2026-10-09T00:20:25.9164262Z (Reading database ... 65%
+2026-10-09T00:20:26.0659634Z (Reading database ... 70%
+2026-10-09T00:20:26.2661825Z (Reading database ... 75%
+2026-10-09T00:20:26.3689287Z (Reading database ... 80%
+2026-10-09T00:20:26.5179748Z (Reading database ... 85%
+2026-10-09T00:20:26.6207566Z (Reading database ... 90%
+2026-10-09T00:20:26.7538704Z (Reading database ... 95%
+2026-10-09T00:20:26.7539238Z (Reading database ... 100%
+2026-10-09T00:20:26.7539698Z (Reading database ... 203191 files and directories currently installed.)
+2026-10-09T00:20:26.7582795Z Preparing to unpack .../libhiredis1.1.0_1.2.0-6ubuntu3_amd64.deb ...
+2026-10-09T00:20:26.7630482Z Unpacking libhiredis1.1.0:amd64 (1.2.0-6ubuntu3) ...
+2026-10-09T00:20:26.7851285Z Selecting previously unselected package ccache.
+2026-10-09T00:20:26.7981896Z Preparing to unpack .../ccache_4.9.1-1_amd64.deb ...
+2026-10-09T00:20:26.7992494Z Unpacking ccache (4.9.1-1) ...
+2026-10-09T00:20:26.8327152Z Selecting previously unselected package mold.
+2026-10-09T00:20:26.8455245Z Preparing to unpack .../mold_2.30.0+dfsg-1build1_amd64.deb ...
+2026-10-09T00:20:26.8463730Z Unpacking mold (2.30.0+dfsg-1build1) ...
+2026-10-09T00:20:26.9258088Z Selecting previously unselected package ninja-build.
+2026-10-09T00:20:26.9385159Z Preparing to unpack .../ninja-build_1.11.1-2_amd64.deb ...
+2026-10-09T00:20:26.9402830Z Unpacking ninja-build (1.11.1-2) ...
+2026-10-09T00:20:26.9670118Z Selecting previously unselected package libeigen3-dev.
+2026-10-09T00:20:26.9798695Z Preparing to unpack .../libeigen3-dev_3.4.0-4build0.1_all.deb ...
+2026-10-09T00:20:26.9807213Z Unpacking libeigen3-dev (3.4.0-4build0.1) ...
+2026-10-09T00:20:27.1252816Z Setting up ninja-build (1.11.1-2) ...
+2026-10-09T00:20:27.1275258Z Setting up mold (2.30.0+dfsg-1build1) ...
+2026-10-09T00:20:27.1296733Z Setting up libeigen3-dev (3.4.0-4build0.1) ...
+2026-10-09T00:20:27.1317719Z Setting up libhiredis1.1.0:amd64 (1.2.0-6ubuntu3) ...
+2026-10-09T00:20:27.1336647Z Setting up ccache (4.9.1-1) ...
+2026-10-09T00:20:27.1360114Z Updating symlinks in /usr/lib/ccache ...
+2026-10-09T00:20:27.1477578Z Processing triggers for libc-bin (2.39-0ubuntu8.9) ...
+2026-10-09T00:20:27.1793794Z Processing triggers for man-db (2.12.0-4build2) ...
+2026-10-09T00:20:27.1814670Z Not building database; man-db/auto-update is not 'true'.
+2026-10-09T00:20:27.8084222Z 
+2026-10-09T00:20:27.8084831Z Running kernel seems to be up-to-date.
+2026-10-09T00:20:27.8085312Z 
+2026-10-09T00:20:27.8085933Z No services need to be restarted.
+2026-10-09T00:20:27.8086655Z 
+2026-10-09T00:20:27.8086927Z No containers need to be restarted.
+2026-10-09T00:20:27.8087315Z 
+2026-10-09T00:20:27.8087568Z No user sessions are running outdated binaries.
+2026-10-09T00:20:27.8088026Z 
+2026-10-09T00:20:27.8088444Z No VM guests are running outdated hypervisor (qemu) binaries on this host.
+2026-10-09T00:20:28.8500189Z ##[end-action id=kokkos.__run;outcome=success;conclusion=success;duration_ms=10235]
+2026-10-09T00:20:28.8503027Z ##[start-action display=Resolve runner and compiler cache identity;id=kokkos.cache-platform]
+2026-10-09T00:20:28.8527426Z ##[group]Run case "gcc" in
+2026-10-09T00:20:28.8527721Z [36;1mcase "gcc" in[0m
+2026-10-09T00:20:28.8527945Z [36;1m  gcc)   CXX_BIN=g++ ;;[0m
+2026-10-09T00:20:28.8528206Z [36;1m  clang) CXX_BIN=clang++ ;;[0m
+2026-10-09T00:20:28.8528542Z [36;1m  *) echo "unsupported Kokkos compiler: gcc" >&2; exit 2 ;;[0m
+2026-10-09T00:20:28.8528878Z [36;1mesac[0m
+2026-10-09T00:20:28.8529098Z [36;1mimage="${ImageOS:-}"[0m
+2026-10-09T00:20:28.8529344Z [36;1mif [ -z "$image" ]; then[0m
+2026-10-09T00:20:28.8529797Z [36;1m  . /etc/os-release[0m
+2026-10-09T00:20:28.8530038Z [36;1m  image="${ID}${VERSION_ID}"[0m
+2026-10-09T00:20:28.8530290Z [36;1mfi[0m
+2026-10-09T00:20:28.8530597Z [36;1mversion="$("$CXX_BIN" -dumpfullversion -dumpversion 2>/dev/null \[0m
+2026-10-09T00:20:28.8530982Z [36;1m  || "$CXX_BIN" -dumpversion)"[0m
+2026-10-09T00:20:28.8531333Z [36;1mversion="$(printf '%s' "$version" | tr -c 'A-Za-z0-9._-' '-')"[0m
+2026-10-09T00:20:28.8531812Z [36;1mecho "key=${image}-${RUNNER_ARCH}-gcc-${version}" >> "$GITHUB_OUTPUT"[0m
+2026-10-09T00:20:28.8594677Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-09T00:20:28.8595023Z env:
+2026-10-09T00:20:28.8595220Z   POPS_NATIVE_DIM: 2
+2026-10-09T00:20:28.8595485Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T00:20:28.8595789Z   CCACHE_MAXSIZE: 2G
+2026-10-09T00:20:28.8596085Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T00:20:28.8596752Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T00:20:28.8597053Z   CCACHE_NOHASHDIR: true
+2026-10-09T00:20:28.8597287Z   CCACHE_SLOPPINESS: locale
+2026-10-09T00:20:28.8597637Z   COMPILE_CACHE_TEST: tests/python/integration/mpi/test_dsl_compile_cache.py
+2026-10-09T00:20:28.8598046Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T00:20:28.8598417Z   COMPILE_CACHE_TMP: /home/runner/work/PoPS/PoPS/.pops-ci/compile-cache-test
+2026-10-09T00:20:28.8598801Z ##[endgroup]
+2026-10-09T00:20:28.9224386Z ##[end-action id=kokkos.cache-platform;outcome=success;conclusion=success;duration_ms=72]
+2026-10-09T00:20:28.9230641Z ##[start-action display=Cache Kokkos install (serial 4.4.01, gcc);id=kokkos.kokkos-cache]
+2026-10-09T00:20:28.9283545Z ##[group]Run actions/cache@v6
+2026-10-09T00:20:28.9283796Z with:
+2026-10-09T00:20:28.9284037Z   path: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T00:20:28.9284636Z   key: kokkos-Linux-ubuntu24-X64-gcc-13.3.0-4.4.01-15dc143e5f39949eece972a798e175c4b463d4b8-serial-cxx20-pic
+2026-10-09T00:20:28.9285200Z   enableCrossOsArchive: false
+2026-10-09T00:20:28.9285450Z   fail-on-cache-miss: false
+2026-10-09T00:20:28.9285682Z   lookup-only: false
+2026-10-09T00:20:28.9285890Z   save-always: false
+2026-10-09T00:20:28.9286088Z env:
+2026-10-09T00:20:28.9286568Z   POPS_NATIVE_DIM: 2
+2026-10-09T00:20:28.9286842Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T00:20:28.9287144Z   CCACHE_MAXSIZE: 2G
+2026-10-09T00:20:28.9287420Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T00:20:28.9287771Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T00:20:28.9288054Z   CCACHE_NOHASHDIR: true
+2026-10-09T00:20:28.9288280Z   CCACHE_SLOPPINESS: locale
+2026-10-09T00:20:28.9288620Z   COMPILE_CACHE_TEST: tests/python/integration/mpi/test_dsl_compile_cache.py
+2026-10-09T00:20:28.9289007Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T00:20:28.9289554Z   COMPILE_CACHE_TMP: /home/runner/work/PoPS/PoPS/.pops-ci/compile-cache-test
+2026-10-09T00:20:28.9289931Z ##[endgroup]
+2026-10-09T00:20:29.1150894Z Cache hit for: kokkos-Linux-ubuntu24-X64-gcc-13.3.0-4.4.01-15dc143e5f39949eece972a798e175c4b463d4b8-serial-cxx20-pic
+2026-10-09T00:20:29.2287978Z Received 1029868 of 1029868 (100.0%), 16.4 MBs/sec
+2026-10-09T00:20:29.2288643Z Cache Size: ~1 MB (1029868 B)
+2026-10-09T00:20:29.2320086Z [command]/usr/bin/tar -xf /home/runner/work/_temp/b4ec0ab1-06c9-4702-9915-fb8747c21a72/cache.tzst -P -C /home/runner/work/PoPS/PoPS --use-compress-program unzstd
+2026-10-09T00:20:29.2775501Z Cache restored successfully
+2026-10-09T00:20:29.2853844Z Cache restored from key: kokkos-Linux-ubuntu24-X64-gcc-13.3.0-4.4.01-15dc143e5f39949eece972a798e175c4b463d4b8-serial-cxx20-pic
+2026-10-09T00:20:29.2925886Z ##[end-action id=kokkos.kokkos-cache;outcome=success;conclusion=success;duration_ms=369]
+2026-10-09T00:20:29.2930217Z ##[start-action display=Build + install Kokkos (serial, PIC, gcc);id=kokkos.__run_2]
+2026-10-09T00:20:29.2949536Z ##[end-action id=kokkos.__run_2;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-09T00:20:29.3042320Z ##[group]Run actions/setup-python@v7
+2026-10-09T00:20:29.3042622Z with:
+2026-10-09T00:20:29.3042833Z   python-version: 3.12
+2026-10-09T00:20:29.3043058Z   cache: pip
+2026-10-09T00:20:29.3043260Z   check-latest: false
+2026-10-09T00:20:29.3045654Z   token: ***
+2026-10-09T00:20:29.3045875Z   update-environment: true
+2026-10-09T00:20:29.3046128Z   allow-prereleases: false
+2026-10-09T00:20:29.3046563Z   freethreaded: false
+2026-10-09T00:20:29.3046779Z env:
+2026-10-09T00:20:29.3046964Z   POPS_NATIVE_DIM: 2
+2026-10-09T00:20:29.3047225Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T00:20:29.3047533Z   CCACHE_MAXSIZE: 2G
+2026-10-09T00:20:29.3047825Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T00:20:29.3048186Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T00:20:29.3048473Z   CCACHE_NOHASHDIR: true
+2026-10-09T00:20:29.3048706Z   CCACHE_SLOPPINESS: locale
+2026-10-09T00:20:29.3049089Z   COMPILE_CACHE_TEST: tests/python/integration/mpi/test_dsl_compile_cache.py
+2026-10-09T00:20:29.3049513Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T00:20:29.3049882Z   COMPILE_CACHE_TMP: /home/runner/work/PoPS/PoPS/.pops-ci/compile-cache-test
+2026-10-09T00:20:29.3050263Z ##[endgroup]
+2026-10-09T00:20:29.4227668Z ##[group]Installed versions
+2026-10-09T00:20:29.4311442Z Successfully set up CPython (3.12.15)
+2026-10-09T00:20:29.4312227Z ##[endgroup]
+2026-10-09T00:20:30.6307984Z [command]/opt/hostedtoolcache/Python/3.12.15/x64/bin/pip cache dir
+2026-10-09T00:20:30.9163640Z /home/runner/.cache/pip
+2026-10-09T00:20:31.0188908Z Cache hit for: setup-python-Linux-x64-24.04-Ubuntu-python-3.12.15-pip-7015f4bcc5f2bd795e6383da1db091377db2a52a265b633f77681b0d590a646f
+2026-10-09T00:20:31.3338928Z Received 18973191 of 18973191 (100.0%), 72.4 MBs/sec
+2026-10-09T00:20:31.3339675Z Cache Size: ~18 MB (18973191 B)
+2026-10-09T00:20:31.3458575Z [command]/usr/bin/tar -xf /home/runner/work/_temp/5c291dda-9213-4284-adf6-9751a4c1bdcf/cache.tzst -P -C /home/runner/work/PoPS/PoPS --use-compress-program unzstd
+2026-10-09T00:20:31.3809714Z Cache restored successfully
+2026-10-09T00:20:31.3823151Z Cache restored from key: setup-python-Linux-x64-24.04-Ubuntu-python-3.12.15-pip-7015f4bcc5f2bd795e6383da1db091377db2a52a265b633f77681b0d590a646f
+2026-10-09T00:20:31.4001054Z ##[group]Run actions/download-artifact@v8
+2026-10-09T00:20:31.4001374Z with:
+2026-10-09T00:20:31.4001615Z   name: gate-python-build-kokkos-py-dim2
+2026-10-09T00:20:31.4001919Z   path: build-kokkos-py/python
+2026-10-09T00:20:31.4002206Z   merge-multiple: false
+2026-10-09T00:20:31.4002456Z   repository: wolf75222/PoPS
+2026-10-09T00:20:31.4002701Z   run-id: 37863987670
+2026-10-09T00:20:31.4002926Z   skip-decompress: false
+2026-10-09T00:20:31.4003167Z   digest-mismatch: error
+2026-10-09T00:20:31.4003385Z env:
+2026-10-09T00:20:31.4003583Z   POPS_NATIVE_DIM: 2
+2026-10-09T00:20:31.4003850Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T00:20:31.4004164Z   CCACHE_MAXSIZE: 2G
+2026-10-09T00:20:31.4004453Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T00:20:31.4004835Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T00:20:31.4005140Z   CCACHE_NOHASHDIR: true
+2026-10-09T00:20:31.4005384Z   CCACHE_SLOPPINESS: locale
+2026-10-09T00:20:31.4005776Z   COMPILE_CACHE_TEST: tests/python/integration/mpi/test_dsl_compile_cache.py
+2026-10-09T00:20:31.4006437Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T00:20:31.4006823Z   COMPILE_CACHE_TMP: /home/runner/work/PoPS/PoPS/.pops-ci/compile-cache-test
+2026-10-09T00:20:31.4007281Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T00:20:31.4007726Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib/pkgconfig
+2026-10-09T00:20:31.4008158Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T00:20:31.4008689Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T00:20:31.4009166Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T00:20:31.4009750Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
+2026-10-09T00:20:31.4010369Z ##[endgroup]
+2026-10-09T00:20:31.5415051Z Downloading single artifact
+2026-10-09T00:20:31.6211072Z Preparing to download the following artifacts:
+2026-10-09T00:20:31.6212972Z - gate-python-build-kokkos-py-dim2 (ID: 11587621720, Size: 9536661, Expected Digest: sha256:d7ad61d03ee1859804535e67cb654cdba3cd247f198039503fa7c194c809c469)
+2026-10-09T00:20:31.7647156Z Redirecting to blob download url: https://productionresultssa5.blob.core.windows.net/actions-results/22b8d8cd-fc13-844b-8a8a-986df5b3ae5e/workflow-job-run-64208edd-f561-5492-a138-cebf2caade97/artifacts/ecc096170b94c4124a1647bf71b918acd528399a1674ff9b9a701ca360e13c00.zip
+2026-10-09T00:20:31.7649701Z Starting download of artifact to: /home/runner/work/PoPS/PoPS/build-kokkos-py/python
+2026-10-09T00:20:31.8518431Z (node:2837) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+2026-10-09T00:20:31.8520542Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-09T00:20:32.0055392Z SHA256 digest of downloaded artifact is d7ad61d03ee1859804535e67cb654cdba3cd247f198039503fa7c194c809c469
+2026-10-09T00:20:32.0056596Z Artifact download completed successfully.
+2026-10-09T00:20:32.0056956Z Total of 1 artifact(s) downloaded
+2026-10-09T00:20:32.0061392Z Download artifact has finished successfully
+2026-10-09T00:20:32.0183677Z ##[group]Run test -d build-kokkos-py/python/pops
+2026-10-09T00:20:32.0184112Z [36;1mtest -d build-kokkos-py/python/pops[0m
+2026-10-09T00:20:32.0184536Z [36;1mPYTHONPATH="$PWD/build-kokkos-py/python" PYTHONNOUSERSITE=1 \[0m
+2026-10-09T00:20:32.0184994Z [36;1m  python3 scripts/verify_installed_native.py \[0m
+2026-10-09T00:20:32.0185414Z [36;1m    --expect-dim "$POPS_NATIVE_DIM" --expect-serial[0m
+2026-10-09T00:20:32.0253581Z shell: /usr/bin/bash -e {0}
+2026-10-09T00:20:32.0253859Z env:
+2026-10-09T00:20:32.0254080Z   POPS_NATIVE_DIM: 2
+2026-10-09T00:20:32.0254406Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T00:20:32.0254745Z   CCACHE_MAXSIZE: 2G
+2026-10-09T00:20:32.0255049Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T00:20:32.0255432Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T00:20:32.0255743Z   CCACHE_NOHASHDIR: true
+2026-10-09T00:20:32.0255989Z   CCACHE_SLOPPINESS: locale
+2026-10-09T00:20:32.0256708Z   COMPILE_CACHE_TEST: tests/python/integration/mpi/test_dsl_compile_cache.py
+2026-10-09T00:20:32.0257137Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T00:20:32.0257526Z   COMPILE_CACHE_TMP: /home/runner/work/PoPS/PoPS/.pops-ci/compile-cache-test
+2026-10-09T00:20:32.0258003Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T00:20:32.0258467Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib/pkgconfig
+2026-10-09T00:20:32.0258913Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T00:20:32.0259317Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T00:20:32.0259723Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T00:20:32.0260137Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
+2026-10-09T00:20:32.0260491Z ##[endgroup]
+2026-10-09T00:20:32.0353109Z ##[error]Process completed with exit code 1.
+2026-10-09T00:20:32.0431713Z ##[group]Run actions/upload-artifact@v7
+2026-10-09T00:20:32.0432035Z with:
+2026-10-09T00:20:32.0432266Z   name: codegen-debug-compile-cache
+2026-10-09T00:20:32.0433130Z   path: /home/runner/work/PoPS/PoPS/.pops-ci/compile-cache-test/**/*.cpp
+/home/runner/work/PoPS/PoPS/.pops-ci/compile-cache-test/**/*.cachekey
+/home/runner/work/PoPS/PoPS/.pops-ci/compile-cache-test/**/*.json
+
+2026-10-09T00:20:32.0433971Z   if-no-files-found: ignore
+2026-10-09T00:20:32.0434223Z   retention-days: 7
+2026-10-09T00:20:32.0434450Z   compression-level: 6
+2026-10-09T00:20:32.0434677Z   overwrite: false
+2026-10-09T00:20:32.0434915Z   include-hidden-files: false
+2026-10-09T00:20:32.0435165Z   archive: true
+2026-10-09T00:20:32.0435556Z env:
+2026-10-09T00:20:32.0435755Z   POPS_NATIVE_DIM: 2
+2026-10-09T00:20:32.0436042Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T00:20:32.0436536Z   CCACHE_MAXSIZE: 2G
+2026-10-09T00:20:32.0436839Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T00:20:32.0437249Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T00:20:32.0437562Z   CCACHE_NOHASHDIR: true
+2026-10-09T00:20:32.0437811Z   CCACHE_SLOPPINESS: locale
+2026-10-09T00:20:32.0438179Z   COMPILE_CACHE_TEST: tests/python/integration/mpi/test_dsl_compile_cache.py
+2026-10-09T00:20:32.0438593Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T00:20:32.0438962Z   COMPILE_CACHE_TMP: /home/runner/work/PoPS/PoPS/.pops-ci/compile-cache-test
+2026-10-09T00:20:32.0439423Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T00:20:32.0439865Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib/pkgconfig
+2026-10-09T00:20:32.0440305Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T00:20:32.0440706Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T00:20:32.0441100Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T00:20:32.0441499Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
+2026-10-09T00:20:32.0441840Z ##[endgroup]
+2026-10-09T00:20:32.1880047Z No files were found with the provided path: /home/runner/work/PoPS/PoPS/.pops-ci/compile-cache-test/**/*.cpp
+2026-10-09T00:20:32.1881105Z /home/runner/work/PoPS/PoPS/.pops-ci/compile-cache-test/**/*.cachekey
+2026-10-09T00:20:32.1881977Z /home/runner/work/PoPS/PoPS/.pops-ci/compile-cache-test/**/*.json. No artifacts will be uploaded.
+2026-10-09T00:20:32.2020072Z ##[group]Run ccache -s
+2026-10-09T00:20:32.2020544Z [36;1mccache -s[0m
+2026-10-09T00:20:32.2085725Z shell: /usr/bin/bash -e {0}
+2026-10-09T00:20:32.2086010Z env:
+2026-10-09T00:20:32.2086499Z   POPS_NATIVE_DIM: 2
+2026-10-09T00:20:32.2086802Z   CCACHE_DIR: /home/runner/work/PoPS/PoPS/.ccache-py
+2026-10-09T00:20:32.2087152Z   CCACHE_MAXSIZE: 2G
+2026-10-09T00:20:32.2087456Z   KOKKOS_PREFIX: /home/runner/work/PoPS/PoPS/.kokkos-install
+2026-10-09T00:20:32.2087850Z   CCACHE_BASEDIR: /home/runner/work/PoPS/PoPS
+2026-10-09T00:20:32.2088155Z   CCACHE_NOHASHDIR: true
+2026-10-09T00:20:32.2088410Z   CCACHE_SLOPPINESS: locale
+2026-10-09T00:20:32.2088782Z   COMPILE_CACHE_TEST: tests/python/integration/mpi/test_dsl_compile_cache.py
+2026-10-09T00:20:32.2089202Z   POPS_REQUIRE_NATIVE_TESTS: 1
+2026-10-09T00:20:32.2089575Z   COMPILE_CACHE_TMP: /home/runner/work/PoPS/PoPS/.pops-ci/compile-cache-test
+2026-10-09T00:20:32.2090133Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T00:20:32.2090644Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib/pkgconfig
+2026-10-09T00:20:32.2091082Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T00:20:32.2091482Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T00:20:32.2091887Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-09T00:20:32.2092295Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
+2026-10-09T00:20:32.2092635Z ##[endgroup]
+2026-10-09T00:20:32.2246038Z Local storage:
+2026-10-09T00:20:32.2246940Z   Cache size (GB): 0.0 / 2.0 ( 0.00%)
+2026-10-09T00:20:32.2374067Z Post job cleanup.
+2026-10-09T00:20:32.2378680Z ##[start-action display=Cache Kokkos install (serial 4.4.01, gcc);id=__b51227c4-5505-45d1-b54e-c45154c65ead.kokkos-cache]
+2026-10-09T00:20:32.2380985Z ##[end-action id=__b51227c4-5505-45d1-b54e-c45154c65ead.kokkos-cache;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-09T00:20:32.2464830Z Post job cleanup.
+2026-10-09T00:20:32.3342466Z [command]/usr/bin/git version
+2026-10-09T00:20:32.3386947Z git version 2.55.0
+2026-10-09T00:20:32.3423691Z Temporarily overriding HOME='/home/runner/work/_temp/838b2488-825f-4460-a552-72bf4421e59c' before making global git config changes
+2026-10-09T00:20:32.3425107Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-09T00:20:32.3429299Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/PoPS/PoPS
+2026-10-09T00:20:32.3463656Z Removing SSH command configuration
+2026-10-09T00:20:32.3471241Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-09T00:20:32.3510085Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-09T00:20:32.3774902Z Removing HTTP extra header
+2026-10-09T00:20:32.3782001Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-09T00:20:32.3823603Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-09T00:20:32.4091549Z Removing includeIf entries pointing to credentials config files
+2026-10-09T00:20:32.4099708Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-09T00:20:32.4135587Z includeif.gitdir:/home/runner/work/PoPS/PoPS/.git.path
+2026-10-09T00:20:32.4136957Z includeif.gitdir:/home/runner/work/PoPS/PoPS/.git/worktrees/*.path
+2026-10-09T00:20:32.4138199Z includeif.gitdir:/github/workspace/.git.path
+2026-10-09T00:20:32.4139300Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-09T00:20:32.4145582Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/PoPS/PoPS/.git.path
+2026-10-09T00:20:32.4174193Z /home/runner/work/_temp/git-credentials-8376b020-6842-47d5-b8dd-0dd66e607321.config
+2026-10-09T00:20:32.4187026Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/PoPS/PoPS/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-8376b020\-6842\-47d5\-b8dd\-0dd66e607321\.config
+2026-10-09T00:20:32.4242495Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/PoPS/PoPS/.git/worktrees/*.path
+2026-10-09T00:20:32.4307927Z /home/runner/work/_temp/git-credentials-8376b020-6842-47d5-b8dd-0dd66e607321.config
+2026-10-09T00:20:32.4318997Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/PoPS/PoPS/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-8376b020\-6842\-47d5\-b8dd\-0dd66e607321\.config
+2026-10-09T00:20:32.4384899Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-09T00:20:32.4421059Z /github/runner_temp/git-credentials-8376b020-6842-47d5-b8dd-0dd66e607321.config
+2026-10-09T00:20:32.4435212Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-8376b020\-6842\-47d5\-b8dd\-0dd66e607321\.config
+2026-10-09T00:20:32.4473879Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-09T00:20:32.4505229Z /github/runner_temp/git-credentials-8376b020-6842-47d5-b8dd-0dd66e607321.config
+2026-10-09T00:20:32.4521956Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-8376b020\-6842\-47d5\-b8dd\-0dd66e607321\.config
+2026-10-09T00:20:32.4559008Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-09T00:20:32.4804569Z Removing credentials config '/home/runner/work/_temp/git-credentials-8376b020-6842-47d5-b8dd-0dd66e607321.config'
+2026-10-09T00:20:32.4944957Z Cleaning up orphan processes

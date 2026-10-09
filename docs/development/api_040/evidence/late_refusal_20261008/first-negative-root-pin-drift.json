@@ -1,0 +1,12 @@
+{
+  "live_matches": 12,
+  "historical_preimage_overrides": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py": {
+      "archived_preimage": "/Users/romaindespoulain/dev/tmp/PoPS-public-diffusion-field-late-refusal-fixture-v2-53fd6ec2-20261008/tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py",
+      "sha256": "94f3642d53d5f5e0dc677c76bb9fae81fa9581b8ba77e568486d5322cd957537",
+      "reason": "The live fixture path advanced by the exact str(origin) correction after negative reception; original Source4fbd preimage remains physical in immutable V2."
+    }
+  },
+  "producer_receipt_preserved": true,
+  "status": "Exact recorded negative13pin preimages received; one historical live fixture path is no longer current."
+}

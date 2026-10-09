@@ -15,8 +15,9 @@ its public surface is unchanged.
 
 from __future__ import annotations
 
+from .cpp_strings import cpp_string_expression
+
 from fractions import Fraction
-import json
 from typing import Any
 
 from pops.identity.scalar import scalar_cpp
@@ -38,9 +39,10 @@ from pops.time.values import ProgramValue, _to_affine  # noqa: F401
 # Ops the Phase-4b codegen lowers ONLY when a physical model is supplied (they read the model's
 # symbolic source_term / linear_source coefficients). Without a model they raise NotImplementedError.
 _MODEL_OPS = (
-    "diffusive_rhs", "input_fields", "source",
+    "diffusive_rhs", "principal_rate", "input_fields", "source",
     "apply",
     "local_transform",
+    "affine_moment_update",
     "solve_local_linear",
     "solve_local_nonlinear",
     "solve_spatial_nonlinear",
@@ -48,15 +50,21 @@ _MODEL_OPS = (
 
 _ALLOWED_OPS = frozenset(
     {
+        "solve_spatial_field",
         "state",
+        "geometry_state",
+        "reynolds_update",
         "layout_map_export",
         "layout_map_import",
         "solve_fields",
         "solve_fields_from_blocks",
         "rhs",
+        "principal_rate",
         "implicit_source",
         "solve_implicit_source",
         "linear_combine",
+        "pointwise_expression",
+        "integral_candidate",
         "linear_source",
         "reduce",
         "scalar_op",
@@ -69,6 +77,7 @@ _ALLOWED_OPS = frozenset(
         "subcycle",
         "branch",
         "post_synchronization",
+        "affine_moment_update",
         "synchronize",
         "acceptance_guard",
         "matrix_free_operator",
@@ -77,7 +86,10 @@ _ALLOWED_OPS = frozenset(
         "field_problem_coefficients",
         "field_problem_apply",
         "field_component",
+        "field_state_cell_mean",
+        "field_evolved_state",
         "field_gradient",
+        "field_map_pack",
         "field_publication",
         "vector_field",
         "laplacian",
@@ -93,6 +105,8 @@ _ALLOWED_OPS = frozenset(
         "fill_boundary",
         "project",
         "record_scalar",
+        "requested_dt",
+        "reached_duration",
         "record_balance_term",
         "cell_compare",
         "where",
@@ -122,11 +136,16 @@ class ProgramProviderPlans:
     storage address after all package providers have been registered.
     """
 
-    def __init__(self, *, target: str = "system", provider_halos: Any = None) -> None:
+    def __init__(self, *, target: str = "system", provider_halos: Any = None,
+                 instance_contracts: Any = ()) -> None:
         from pops.codegen._program_kernel_reuse import ProgramSourceKernelHelpers
 
         self._plans: dict[str, tuple[tuple[Any, Any], ...]] = {}
         self._provider_halos = dict(provider_halos or {})
+        self._instance_contracts = tuple(instance_contracts)
+        from .provider_instances import validate_instance_contract
+        for contract in self._instance_contracts:
+            validate_instance_contract(contract)
         if target not in {"system", "amr_system"}:
             raise ValueError("Program provider plan target must be system or amr_system")
         self.target = target
@@ -225,8 +244,7 @@ class ProgramProviderPlans:
         """Emit the registry calls before the Program execution context is installed."""
         if target not in {"system", "amr_system"}:
             raise ValueError("Program provider plan target must be system or amr_system")
-        import json
-
+        
         lines: list[str] = []
         if self._plans:
             lines.extend((
@@ -241,22 +259,20 @@ class ProgramProviderPlans:
         for qid, rows in self._plans.items():
             values = []
             for slot, (key, contract) in enumerate(rows):
-                optional_unit = (
-                    "std::nullopt" if contract.unit is None
-                    else "std::optional<std::string>{%s}" % json.dumps(contract.unit)
-                )
+                from ._native_units import optional_unit_cpp
+                optional_unit = optional_unit_cpp(contract.unit)
                 optional_kind = (
                     "std::nullopt" if contract.value_kind is None
-                    else "std::optional<std::string>{%s}" % json.dumps(contract.value_kind)
+                    else "std::optional<std::string>{%s}" % cpp_string_expression(contract.value_kind)
                 )
                 rendered_key = "Key{%s, %s, %s, %s}" % tuple(
-                    json.dumps(value) for value in (
-                        key.owner_qid, key.space_kind, key.space_name, key.component,
+                    cpp_string_expression(value) for value in (
+                        self._runtime_key(qid, key).owner_qid, key.space_kind, key.space_name, key.component,
                     )
                 )
                 rendered_contract = "Contract{%s, %s, %s, %s, %s}" % (
-                    json.dumps(contract.representation), json.dumps(contract.centering), optional_unit,
-                    json.dumps(contract.layout), optional_kind,
+                    cpp_string_expression(contract.representation), cpp_string_expression(contract.centering), optional_unit,
+                    cpp_string_expression(contract.layout), optional_kind,
                 )
                 from pops.codegen._native_auxiliary_shapes import auxiliary_shape_cpp
                 shape = auxiliary_shape_cpp(self._provider_halos.get(
@@ -267,10 +283,18 @@ class ProgramProviderPlans:
                     )
                 )
             lines.extend((
-                "  sys->install_auxiliary_consumer_plan(ConsumerPlan{%s, " % json.dumps(qid),
+                "  sys->install_auxiliary_consumer_plan(ConsumerPlan{%s, " % cpp_string_expression(qid),
                 "      std::vector<ConsumerValue>{%s}});" % ", ".join(values),
             ))
         return "\n".join(lines)
+
+    def _runtime_key(self, qid: str, key: Any) -> Any:
+        from .provider_instances import runtime_key
+        matches = tuple(c for c in self._instance_contracts
+                        if qid.startswith(c['instance_owner_qid'] + '/program/'))
+        if len(matches) > 1:
+            raise ValueError('Program provider consumer has ambiguous runtime instance authority')
+        return runtime_key(key, None if not matches else matches[0])
 
     def preparation_binding(self, qid: str) -> dict[str, Any]:
         """Return a registered consumer's prerequisite identity, without rebinding its reads."""
@@ -308,7 +332,7 @@ def program_provider_consumer_qid(model: Any, value_id: Any, block: Any = None) 
     return str(canonical()) + "/program/" + str(value_id)
 
 
-def _prepared_native_components(program: Any) -> tuple[Any, ...]:
+def _prepared_native_components(program: Any, *, target: str = "system") -> tuple[Any, ...]:
     """Return used native components in first-use order after authenticating every provider."""
 
     def walk(values: Any) -> Any:
@@ -329,6 +353,14 @@ def _prepared_native_components(program: Any) -> tuple[Any, ...]:
     components: list[Any] = []
     seen: set[str] = set()
     for value in walk(program._values):
+        if target == "amr_system" and value.op == "solve_spatial_field":
+            from pops.fields._program_nonlinear_problem import validate_nonlinear_field_request
+            from pops.codegen.program_emit_amr_original_field import original_amr_native_component
+            validate_nonlinear_field_request(program, value)
+            component = original_amr_native_component()
+            if component.manifest_sha256 not in seen:
+                seen.add(component.manifest_sha256)
+                components.append(component)
         from pops.native_calls import NativeFunction
         for function in value.attrs.get("native_functions", ()):
             if type(function) is not NativeFunction:
@@ -369,7 +401,7 @@ def _prepared_native_components(program: Any) -> tuple[Any, ...]:
     return tuple(components)
 
 
-def _prepared_native_component_includes(program: Any) -> str:
+def _prepared_native_component_includes(program: Any, *, target: str = "system") -> str:
     """Return entry headers from the typed native components used by prepared providers.
 
     Provider selection is fully data-driven: no backend name, include root or arbitrary compiler
@@ -377,7 +409,7 @@ def _prepared_native_component_includes(program: Any) -> str:
     """
     headers: list[str] = []
     seen: set[str] = set()
-    for component in _prepared_native_components(program):
+    for component in _prepared_native_components(program, target=target):
         for header in component.entry_headers:
             if header not in seen:
                 seen.add(header)
@@ -405,8 +437,18 @@ def _block_inverse_include(program: Any) -> str:
     condensed-implicit op (ADC-637): only a Program using condensed_* emits pops::detail::block_inverse.
     (block_inverse.hpp itself includes dense_eig.hpp, already pulled in by the template.)"""
     result = _BLOCK_INVERSE_INCLUDE if any(v.op in _CONDENSED_OPS for v in program._values) else ""
-    if any(v.op == "solve_spatial_nonlinear" for v in program._values):
+    if any(v.op in ("solve_spatial_nonlinear", "solve_spatial_field") for v in program._values):
         result += "#include <pops/runtime/program/prepared_spatial_residual.hpp>\n"
+    if any(v.op == "solve_spatial_field" for v in program._values):
+        result += "#include <pops/numerics/elliptic/nd/general_field_operator.hpp>\n"
+    if any(v.op == "affine_moment_update" for v in program._values):
+        result += "#include <pops/numerics/moments/affine_velocity.hpp>\n"
+    from .program_lowerability import all_ops
+    if any(any(node[0] == "finite_linear_v1" for node in v.attrs.get("expression_nodes", ()))
+           for v in all_ops(program)):
+        result += "#include <pops/numerics/linalg/finite_linear.hpp>\n"
+    if any(v.op == "principal_rate" for v in all_ops(program)):
+        result += "#include <pops/runtime/program/prepared_principal_flux.hpp>\n"
     return result
 
 
@@ -601,7 +643,25 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
     the ``params`` struct is bound by _kernel_open at the fab-loop level (ADC-510), so no per-cell
     binding is emitted here (a runtime param is NOT a per-cell aux/cons local)."""
     from pops._ir.visitors import _children, _dependencies
+    from pops._ir.primitive_expansion import expand_evaluation_boundaries
+    from pops.codegen.module_emit_helpers import _checked_inline_expr
+    from pops.codegen.cpp_symbols import variable_identifier
 
+    from pops._ir.control_expr import has_evaluation_boundary
+    expanded = expand_evaluation_boundaries(exprs, impl.prim_defs)
+    if has_evaluation_boundary(expanded):
+        from pops._ir.expr import Var
+        pending, checked = list(exprs), set()
+        while pending:
+            node = pending.pop()
+            if id(node) in checked:
+                continue
+            checked.add(id(node))
+            if isinstance(node, Var) and node.kind == "prim":
+                raise NotImplementedError(
+                    "this Program kernel must inline primitive recipes before lowering "
+                    "where/rounded evaluation boundaries")
+            pending.extend(_children(node))
     deps = _dependencies(exprs)
     lines = []
     live = impl._live_prims(exprs) if with_prim else set()
@@ -615,11 +675,12 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
     if with_cons:
         for idx, c in enumerate(impl.cons_names):
             if c in cons_needed:
-                lines.append("const pops::Real %s = %sA(index, %d);" % (c, state_var, idx))
+                lines.append("const pops::Real %s = %sA(index, %d);" % (variable_identifier(c,'cons'), state_var, idx))
     if with_prim:
         for p, expr in impl.prim_defs.items():  # declaration order (a prim may use an earlier prim)
             if p in live:
-                lines.append("const pops::Real %s = %s;" % (p, expr.to_cpp()))
+                expression = expand_evaluation_boundaries(expr, impl.prim_defs)
+                lines.append("const pops::Real %s = %s;" % (variable_identifier(p,'prim'), _checked_inline_expr(expression)))
     # The ProviderPack plan, not a model-side named component cache, is the sole
     # authority for auxiliary/field values.  Walk typed leaves to distinguish a
     # provider named ``rho`` from the conservative variable ``rho``.
@@ -650,16 +711,51 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
                 "Program provider plan does not cover its emitted expressions"
             )
         for name in sorted(used_provider_names, key=lambda item: slots[item]):
-            lines.append("const pops::Real %s = providers(index, %d);" % (name, slots[name]))
+            lines.append("const pops::Real %s = providers(index, %d);" % (variable_identifier(name,'aux'), slots[name]))
     return lines
 
 
 def _prepare_provider_values(binding: Any, program_block: Any, state_var: Any) -> list[str]:
-    """Publish Uniform consumer prerequisites once, before any rank-local Fab loop."""
-    if binding is None or not binding["count"] or binding["target"] != "system":
+    """Publish exact consumer prerequisites before any rank-local Fab loop.
+
+    The AMR context authenticates the active hierarchy level and owning SSA stage
+    state, then publishes at its actual logical evaluation point. Generated kernels
+    consume the prepared registry rather than selecting hierarchy storage themselves.
+    """
+    if binding is None or not binding["count"] or binding["target"] not in {"system", "amr_system"}:
         return []
     return ["ctx.prepare_provider_values(%s, %d, %s, %d);" % (
-        json.dumps(binding["qid"]), program_block, state_var, binding["evaluation_id"])]
+        cpp_string_expression(binding["qid"]), program_block, state_var, binding["evaluation_id"])]
+
+
+def prepare_default_rhs_providers(
+    model: Any, value: Any, block: int, state: str, provider_plans: Any,
+    *, target: str, flux: bool, source: bool,
+) -> list[str]:
+    """Prepare exactly the installed flat flux/source closures used by this RHS.
+
+    Native closure callbacks do not pass through ``_kernel_open``. Their provider
+    prerequisites therefore need an explicit publication at the same SSA state
+    and stage as the residual, including grouped and source-only residuals.
+    Named Program kernels keep their separate first-use expression plans.
+    """
+    if target not in {"system", "amr_system"} or model is None or not (flux or source):
+        return []
+    impl = _model_impl(model)
+    required = []
+    if flux:
+        required.extend(impl._component_flux_provider_pack)
+    if source and impl._source is not None:
+        required.extend(impl._component_operator_provider_packs["source_default"])
+    from pops.model.provider_pack import compact_auxiliary_provider_pack
+    pack = compact_auxiliary_provider_pack(impl._component_provider_pack.select(required))
+    if not len(pack):
+        return []
+    if provider_plans is None:
+        raise ValueError("Program RHS requires its exact provider-plan collector")
+    binding = provider_plans.bind_pack(
+        pack, program_provider_consumer_qid(model, value.id, value.block) + "/default_rhs")
+    return _prepare_provider_values(binding, block, state)
 
 
 def _kernel_open(
@@ -706,7 +802,7 @@ def _kernel_open(
             raise ValueError("Program provider plan count must be a non-negative integer")
         lines.append(
             "  const auto providers = ctx.template provider_values_view<%d>(%s, %d, li);"
-            % (count, json.dumps(provider_binding["qid"]), program_block)
+            % (count, cpp_string_expression(provider_binding["qid"]), program_block)
         )
     if params_block is not None:
         # Read the per-block RuntimeParams ONCE per fab (host scope), captured by value into the device

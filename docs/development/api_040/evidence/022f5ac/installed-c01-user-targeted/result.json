@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-m",
+    "pytest",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-c01-user-targeted/pytest.xml",
+    "tests/python/integration/runtime/test_user_reconstruction_adversarial_runtime.py",
+    "tests/python/integration/runtime/test_conditional_consumers_runtime.py",
+    "tests/python/integration/runtime/test_symbolic_path_param_runtime.py",
+    "tests/python/integration/runtime/test_symbolic_path_four_state_runtime.py",
+    "tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py",
+    "tests/python/integration/runtime/test_symbolic_path_runtime.py",
+    "tests/python/integration/runtime/test_symbolic_path_adversarial_runtime.py"
+  ],
+  "returncode": 0,
+  "duration_seconds": 274.3447805410251,
+  "counts": {
+    "tests": 16,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "passed",
+  "identity_sha256": "6a62e92cc7b313c564d26edbafd8c5ae58d47518dc452d05939dfed9d55f0566",
+  "log_sha256": "781a912385667385c5e45470bb752a915df8018ed34f7e800a1da4b9293b4477"
+}

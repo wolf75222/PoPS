@@ -1,0 +1,7 @@
+# Independent Source review of evolved replay epoch consumer
+
+Reviewed author freeze 7a773d11e593e51f85a77d554a3d29ceb39845fc on parent7bcc. Production delta empty; historical compare_checkpoint_replay function source byte-identical. New comparator retains checkpoint integrity/seals, semantic/artifact/bind identities, source-run and last-restart joins, exact State/history/diagnostic arrays, controls and clocks. Live sorted owner graph is captured before restart; restored source is read before replay replaces last_run. Replay continuation is independently reconstructed using checkpoint_restart_epoch@1, not equated to archived run.
+
+47 Source PASS (42 author affected +5 non-author) in5.63s, zero exclusions/skips. Added multi-owner positive with genuine RunManifest metadata and prior lineage, plus dropped owner, wrong ordering, erased lineage and source impostor refusals. Initial own test setup used invalid empty RunManifest controls and produced5 setup failures; retained red XML, corrected only the setup to the normative four controls. No author defect inferred from this run.
+
+SDK24job732306 remains negative: it lacks live pre-restart envelope and cannot be retroqualified. Future Native evidence must persist that envelope and exact restored source plus checkpoint authority metadata. Source metadata examples are not Native stand-ins or scientific evidence; no Native/JIT/ENV execution. Hooke is non-author of this consumer delta (separate production/fixture work is excluded).

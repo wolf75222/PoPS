@@ -7,15 +7,15 @@ explicitly with :class:`ValueExpr` when an expression is required.
 from __future__ import annotations
 
 __all__ = [
-    "sqrt", "minimum", "maximum", "grad", "norm", "div", "laplacian", "dx", "dy", "dz", "ddt", "rate", "unknown",
-    "integral",
+    "sqrt", "exp", "minimum", "maximum", "grad", "norm", "div", "laplacian", "dx", "dy", "dz", "ddt", "rate", "unknown",
+    "integral", "where", "rounded",
     # Public symbolic values and node types.
     "Expr", "Const", "Var", "ValueExpr", "SymbolicTruthValueError",
     "Equation", "Gradient", "GradientMagnitude", "Partial", "Laplacian", "Divergence",
     "TimeDerivative", "Unknown", "OpApply", "Integral", "RateTerm", "RateExpr",
     "Accumulation", "DiscreteAccumulationEquation", "accumulation",
     # elliptic field-operator algebra (Spec 5 sec.9.2)
-    "Reaction", "CoeffGradient", "DivCoeffGrad", "EllipticSum", "elliptic_terms",
+    "SpatialInteraction", "Reaction", "CoeffGradient", "DivCoeffGrad", "EllipticSum", "elliptic_terms",
     "principal_kinds",
 ]
 
@@ -39,7 +39,9 @@ from pops._ir.expr import (  # noqa: F401
 )
 from pops._ir.handle_expr import ValueExpr  # noqa: F401
 from pops._ir.symbolic import SymbolicTruthValueError  # noqa: F401
+from pops._ir.control_expr import where, rounded  # noqa: F401
 from pops._ir.elliptic import (  # noqa: F401  (Spec 5 sec.9.2 elliptic field-operator algebra)
+    SpatialInteraction,
     Reaction,
     CoeffGradient,
     DivCoeffGrad,
@@ -63,7 +65,7 @@ from pops._ir.ops import (  # noqa: F401
     minimum,
     maximum,
 )
-from pops._ir.ops import board_sqrt as sqrt  # noqa: F401
+from pops._ir.ops import board_sqrt as sqrt, exp  # noqa: F401
 
 
 # --- scalar dtypes (Spec 5 sec.5.12: a typed param declares its dtype) -------------------

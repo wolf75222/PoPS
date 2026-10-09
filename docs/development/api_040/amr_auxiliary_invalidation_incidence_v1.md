@@ -1,0 +1,125 @@
+# AMR auxiliary invalidations and cleanup publication
+
+The coherent c0f18 diagnostic exposes a publication bookkeeping defect. During a
+two-level bootstrap, a Field consumer publishes its physical auxiliary closure at
+levels 0 and 1. The old global invalidation queue retains those provider identities.
+Cleanup then evaluates the Analytic provider again at an unqualified topology
+diagnostic point, and its original physical-Clock guard rejects the request.
+The actual diagnostic reception (`/Users/romaindespoulain/dev/tmp/root-amr-aux-clock-coherent-diagnostic-reception-20261007.json`)
+records callback points and the bootstrap failure phase; it does not capture a full
+native call stack or a successful AMR step.
+
+The integrated Source correction is a common publication mechanism, independent of physical
+equations, model names and component positions. It tracks an outstanding invalidation
+for each provider and actual live hierarchy level, with topology/materialization
+identity and a checked revision. A public dirty-provider list is the union of those
+obligations. It cannot prove that a particular level has published a value.
+
+Only complete, accepted native publication can acknowledge the captured obligation.
+Ancestor candidates used for fine sampling are rejected and do not acknowledge the
+ancestor's accepted image. A later invalidation retains its revision. Accepted
+Field outputs and actual coarse/fine transport consequences invalidate their declared
+dependent images. Candidate bookkeeping, carrier storage, registry metadata and
+invalidation incidence participate in the same collective commit and rollback.
+Input and topology invalidation writers refuse a pending Aux publication before
+mutating accepted data; they do not silently overwrite a live candidate's authority.
+
+Cleanup selects explicit invalidation roots and their prerequisite closure through
+`ExactAuxiliaryRegistry::begin_invalidated_publication`. Clean accepted prerequisites
+are reused with their accepted provenance. The diagnostic point does not trigger a
+policy-only reevaluation of an unrelated clean physical provider. Ordinary consumer
+publication retains the authored freshness policy. A truly dirty physical provider
+without physical authority still fails the original guard.
+
+| Contract | Version and meaning |
+|---|---|
+| `pops.amr.auxiliary-invalidation-incidence` | 1: provider/level/topology/materialization/revision obligations |
+| `pops.amr.auxiliary-refresh-selection` | 3: exact publication purpose, roots, suppression mode and incidence |
+| `pops.amr.exact-level-auxiliary-selection` | 3: exact consumer closure and level selection |
+| `pops.amr.program-field-publication` | 2: genuine whole-hierarchy field component publication with source incidence |
+| `pops.amr.program-field-publication-incidence` | 1: complete candidate incidence agreed before acceptance |
+| Registry invalidation drain | 1: explicitly invalidated roots, clean accepted prerequisites |
+| POPSAUX3, Uniform checkpoint9, AMR checkpoint12 | Wire representations retained; AMR capture and restore use each level's actual invalidated providers |
+| Field input2, System package8, NativeABI13 | Existing data layouts and ABI values retained |
+
+POPSAUX3 already represents `invalidated_providers` separately for each level. Capture
+must record the actual incidence; restore validates each level and reconstructs the
+union instead of requiring artificially equal lists. The accepted non-Input and
+never-published guards remain. Historical equal-list images remain representable.
+
+The new registry method changes an SDK header. The signed-header signature
+is `967e6afd549028368716cf484593d8424775d415daacba937e03822565da93e8`,
+over the same 383 signed headers. Old Header4b artifacts are incompatible with that
+signature. Unchanged numeric ABI values do not qualify the old Native or component
+DSOs: official reconstruction, relinking, runtime identity and an actual old-artifact
+refusal remain required.
+
+At this documentation checkpoint the R3 correction is integrated after
+independent Source review (`/Users/romaindespoulain/dev/tmp/PoPS-independent-amr-aux-publication-protocol-review-20261007/candidate-r3-final-source-review.json`),
+SHA `56d99eda5cadf1af45df1236015fd0c55f7340f27e135e3730f37d491d4a3f81`.
+Six independent registry tests are integrated but unexecuted. Their dimension 1/2/3
+instantiations exercise registry selection and accepted metadata, not complete AMR
+or backend qualification. The unchanged 13-case Field tranche, original installed
+nonautonomous PDE and own-checkpoint retry must receive new native results after
+integration. Partial AMR incidence, rejected ancestors, Field re-invalidation,
+coarse/fine transport, asymmetric checkpoint roundtrip, failure rollback, regrid,
+empty MPI ranks and temporary accepted halo restoration require actual runtime
+witnesses. None is closed by a Source hash or a pair of standalone registries.
+
+The immutable R3 admission (`/Users/romaindespoulain/dev/tmp/PoPS-amr-aux-incidence-admission-r3-20261007/admission.json`)
+retains the exact two changed production files and all 383 signed-header pins.
+Earlier author R1/R2 patch and Source-receipt files were overwritten in their working
+directory and are not independently rehashable; this
+preservation limit (`/Users/romaindespoulain/dev/tmp/PoPS-amr-aux-incidence-admission-r3-20261007/preservation-limit.json`)
+is explicit. The runtime negatives, coherent diagnostic and R3 immutable admission
+are retained separately. No original user work is removed.
+
+The first official reconstruction at `79374592ffa3fe1ef1e386ee9bb552821a2b4c2b`
+fails before Native relink, wheel or installation. Four references to the removed
+global queue remain in the included `amr_program_field_publication.inc`. The
+Root compile-negative reception (`/Users/romaindespoulain/dev/tmp/root-native793-compile-negative-reception-20261007.json`)
+retains 42 artifacts and independent reading: 18 successful C++ compilations,
+one failed AMR attempt and two successful binding TUs. The installed 2793 entries
+of Native b471/Header4b remain byte/mode exact. The initial producer count of
+19 successful C++ steps is retained as a corrected metadata claim; the nineteenth
+changed object includes a separate HDF5 configure probe.
+
+The omitted public publisher is now migrated with actual per-level production,
+captured revisions, collective candidate agreement and full rollback. Its
+independent corrective review (`/Users/romaindespoulain/dev/tmp/PoPS-independent-native793-compile-negative-review-20261007/corrective-publisher-source-review.json`),
+SHA `b1ac7feca6252a2585752489d19534b463326b99155ac09bd6036f3472082c08`,
+authenticates 237 literal local include files and four `.inc` fragments with no
+retired AMR member access. The previous Source review is retained with its explicit
+coverage gap. The point construction and guards are unchanged: a positive caller
+label does not mint physical authority. Custom temporal prerequisites of that
+legacy publisher remain a separate preexisting unqualified-point limitation.
+Only the private fragment changes; SDK967e and the existing ABI values are retained.
+This correction still requires official compilation and native execution.
+
+## Bounded native reception after the publisher correction
+
+The corrected official build at9db passes and installs Native
+`d154b257484040c18b4a2a1439240e5ec963954715d6cb340cad0c7b12a8e2a1`
+with SDK967e. Five binding TUs are compiled in this build; two conforming SDK967e
+objects from the earlier793 partial build are reused, making seven authenticated
+bindings. The original installed nonautonomous calculation (`/Users/romaindespoulain/dev/tmp/root-sdk967e-nonautonomous-positive-reception-9db1c37-20261007.json`)
+passes with unchanged references and bounds, exact checkpoint arrays and34 raw
+artifacts. Y is a reference without a direct stage snapshot. MPI world1 is observed;
+effective OpenMP concurrency is not measured in that test.
+
+The C++ world1 cohort (`/Users/romaindespoulain/dev/tmp/root-sdk967e-cpp-cohort-world1-positive-reception-9db1c37-20261007.json`)
+passes13 Field and21 Registry cases with no skip, including the actual named
+multilevel guard path and six registry counter-tests. It retains74 raw artifacts
+and a genuinely rebuilt component DSO with SDK967e. Registry dimension templates
+are distinct from complete Native dimension qualification.
+
+The first world2 run (`/Users/romaindespoulain/dev/tmp/root-sdk967e-cpp-world2-first-negative-reception-9db1c37-20261007.json`)
+executes13 cases on each rank:26 total,23 PASS and3 FAIL, zero skips. The multilevel
+case passes on both ranks. Three failures compare a local maximum of `-inf` with
+zero. The public reducer initializes the empty local range to negative infinity;
+the first run records no independent patch census. A test-only correction now
+keeps exact zero for real cells, checks exact empty identity and records actual
+local Fab/valid-cell counts for the next execution. It adds no collective or clamp
+and changes no physical criterion, reducer, guard or tolerance. Its
+independent Source review (`/Users/romaindespoulain/dev/tmp/PoPS-independent-emptyrank-test-only-review-20261007/review.json`)
+does not receive a corrected MPI run yet. The original negative remains intact.

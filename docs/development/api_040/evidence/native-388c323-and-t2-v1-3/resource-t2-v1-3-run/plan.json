@@ -1,0 +1,39 @@
+{
+  "case": {
+    "N": 48,
+    "atol": 1e-12,
+    "dt": 0.0001,
+    "mass_atol": 1e-10,
+    "rtol": 1e-12,
+    "steps": 12,
+    "width": 5
+  },
+  "case_protocol_sha256": "d8d96c302079da07420c9acc7352d6b59db2fc8fca69de025ea10cb906fd0afd",
+  "identities": {
+    "baseline": {
+      "native_sha256": "4574ed6096650aa708ad040fd6ee056414a3cfa1735a0440bd74220170265beb",
+      "source_commit": "3d06cabee9db4a31c4d07fa4e00dc5a40d164155",
+      "source_files_sha256": "2a76043ebff3bb5405d3408b39867856b9dd635d67a72ca9040d6535794300ce"
+    },
+    "candidate": {
+      "native_sha256": "4b458dabd54357b8aa3a4659cee8363a9a4510e55aaa81706bfe03a445d27037",
+      "source_commit": "cf6daceaa028df1343a303751ec9ae8f9f5ce6b3",
+      "source_files_sha256": "8c2d99c5149aee562ba0eddfcb7395958e77a28cac94af014ea0a2fc4caaeb45"
+    }
+  },
+  "python": "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python3.12",
+  "resource_script_sha256": "c5835968bb1f396bd25ee62ed501d77de3fcacdcccb6a1f8105b2426541865df",
+  "sampling": {
+    "boundary": "run only; bind excluded",
+    "profile_level": "advanced",
+    "profiled_fresh_instances_per_lane": 3,
+    "unprofiled_warmups_per_lane": 2
+  },
+  "schema": "pops.api040.joint-reconstruction-resources.v1.3",
+  "status": "running",
+  "work_directories": {
+    "metadata": "preflight",
+    "profiling": "profiling"
+  },
+  "worker_timeout_s": 720
+}

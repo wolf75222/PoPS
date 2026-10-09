@@ -1,0 +1,81 @@
+{
+  "Native_test_supplement_patch": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/native-capacity-reception-test.patch",
+    "sha256": "d0dc2f0035734127355683437380c2a9b8c9325ab32699b48b54419fd31aab52"
+  },
+  "SDK": "e0b1d301cdad59a5e8874b0fc3a56e1b272810037555291fe13399631c5b717f",
+  "catalog_correction": "Initial Root source test retained 85pass+1fail: total_files879 stale; new entry was omitted from estimated_files. Root fixed metadata only to 880 files/815 estimated, retained all existing weights/caps, then 86PASS. Top-level key count includes _meta and is not file count.",
+  "clock_contract": "pops.program.owned-clock-manifest@1",
+  "files": {
+    "author-source-checks.json": {
+      "bytes": 47015,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/sol61-uniform-aux-capacity-authority-29e9143c-20261008/production-v3-source-checks.json",
+      "sha256": "51fde0adbebfbed287e049ce8f759b239fcf8189874b300f633307686c55a43a"
+    },
+    "author-v3.json": {
+      "bytes": 9846,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/sol61-uniform-aux-capacity-authority-29e9143c-20261008/production-review-ready-v3.json",
+      "sha256": "0a2a115140778afe23a77ada31c869ccae82873a4972580ddec21f7fb4e26c3b"
+    },
+    "fixture-inventory.json": {
+      "bytes": 2256,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/sol61-uniform-aux-capacity-authority-29e9143c-20261008/production-v3-fixture-inventory.json",
+      "sha256": "e25681b6fcd1ee933236fbec9dccfa18e0e5470d9f440ee06a10264ca058d150"
+    },
+    "independent-physical-pins.json": {
+      "bytes": 3659,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/physical-manifest-v3.json",
+      "sha256": "97eb8d8b67e066c62b68ed68075501f2fd4edce62ae0465c7cd68c7a8331dfc7"
+    },
+    "independent-v2-negative.json": {
+      "bytes": 10862,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/review.json",
+      "sha256": "f5751ca3f4b9d21248b83f9aa0ce44224b53daa56c2f19acfd07bcf9145b6f92"
+    },
+    "independent-v3.json": {
+      "bytes": 9386,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/supplemental-review-v3.json",
+      "sha256": "e7d53562992c9686d03ab4e641ab0abb625aeaf9f2bf8d1bdb215558a9535f6b"
+    },
+    "native-test-preparation.json": {
+      "bytes": 3772,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/sol61-capacity-independent-review-20261008/native-qualification-preparation.json",
+      "sha256": "ec25444242eca15f9e321e83f5a1e6ba87205fa98107a8d1790014ebcd84ae12"
+    },
+    "root-first-source-negative.json": {
+      "bytes": 1113,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-root-integrated-owned-clock-source-20261008/result.json",
+      "sha256": "d018ecee6f9d7036d511c7a6055d5a7fd7f268a46d105a2a95c706993ccccf98"
+    },
+    "root-first-source-negative.xml": {
+      "bytes": 17065,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-root-integrated-owned-clock-source-20261008/pytest.xml",
+      "sha256": "ce92e6aefc79c0db2f11b79ee83c2d7a94b86b279c1b0240ddbb60b98ad82e28"
+    },
+    "root-host-rerun.json": {
+      "bytes": 11653,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/sol61-uniform-aux-capacity-authority-29e9143c-20261008/rerun-v3-source-host.json",
+      "sha256": "8a7bf1ce9caf5bad60008b9e4c38b1c22a76647c77d894592db2ed6f127ca3e5"
+    },
+    "root-integrated-source.json": {
+      "bytes": 1127,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-root-integrated-owned-clock-source-retry2-20261008/result.json",
+      "sha256": "c69537eacedc8586a944874b0f876d6d10d189607562f948de6979ed72c3a43c"
+    },
+    "root-integrated-source.xml": {
+      "bytes": 15465,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-root-integrated-owned-clock-source-retry2-20261008/pytest.xml",
+      "sha256": "fb8cec1004bcb3f9fe8a4eebdb0b94755749497e6da4c7e879a90397da00b4c4"
+    }
+  },
+  "installed_header_count": 384,
+  "native_qualification": "not_executed",
+  "root_host_checks": "26 registry/capacity tests plus eight rejected real isolated DSO contracts; compile/link/run all zero. No production Native import.",
+  "scope": "Integrated Source/Host only; installed prior Native ed2/af8 not qualified. Official full consumers build and public Native cold bind/checkpoint reception pending.",
+  "source_counts": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 86
+  }
+}

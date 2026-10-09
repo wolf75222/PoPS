@@ -61,6 +61,13 @@ def rebind_state_symbols(value: Any, state: Any, spaces: Any, *, module: Any = N
     memo: dict[int, Any] = {}
 
     def _clone(item: Any) -> Any:
+        from pops.model.global_quantity import GlobalQuantityRef
+        if isinstance(item, GlobalQuantityRef):
+            if module is None:
+                raise TypeError("physical global source requires its Module authority")
+            registered = module._global_quantities.get(item.handle.local_id)
+            if (registered is None or registered != item.handle or registered.units != item.units):
+                raise ValueError("physical global quantity declaration owner/units are not authenticated")
         from pops._ir.application import ApplicationProjection
         if isinstance(item, ApplicationProjection):
             if item.application.effects:
@@ -161,6 +168,25 @@ def _native_formula_model_view(model: Any, module: Any, *, quantity_handles: Any
                                   quantity_handles=quantity_handles)
         for name, value in unbound_emitter_attributes(model).items()
     })
+    # A caller may add typed AuxSpace producers to the public Module after the
+    # blackboard formulas have been authored. Their authenticated declarations
+    # belong to this private emission view, without mutating the original model
+    # or inventing a second FieldSpace for the same component.
+    declared = {}
+    for space in module.field_spaces().values():
+        for component in space.components:
+            key = ("field", space.name, component)
+            if component in declared and declared[component] != key:
+                raise ValueError("distinct typed fields share native auxiliary name %r" % component)
+            declared[component] = key
+    for space in module.aux().values():
+        key = ("aux", space.name, space.name)
+        if space.name in declared and declared[space.name] != key:
+            raise ValueError("distinct typed fields share native auxiliary name %r" % space.name)
+        declared[space.name] = key
+    components = list(emitter._provider_components)
+    components.extend(name for name in declared if name not in components)
+    object.__setattr__(emitter, "_provider_components", components)
     object.__setattr__(emitter, "_formula_native_bound", True)
     return emitter
 

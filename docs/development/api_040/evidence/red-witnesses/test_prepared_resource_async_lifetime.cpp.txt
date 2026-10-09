@@ -1,0 +1,88 @@
+// C36 candidate acceptance witness. Deliberately not registered in CMake yet.
+// This uses the actual native cache, stream executor, workspace and CUDA event.
+// It is not a proof for the presently synchronous generated diffusion path.
+#include <gtest/gtest.h>
+
+#include <Kokkos_Core.hpp>
+#include <pops/core/foundation/kokkos_env.hpp>
+#include <pops/parallel/comm.hpp>
+#include <pops/runtime/accelerator/prepared_stream_executor.hpp>
+#include <pops/runtime/program/prepared_resource_cache.hpp>
+
+#include <cstdint>
+#include <stdexcept>
+#include <type_traits>
+
+namespace {
+
+using Executor = pops::runtime::accelerator::PreparedAcceleratorStreamExecutor<double>;
+
+#if defined(KOKKOS_ENABLE_CUDA)
+class CompletionEvent {
+ public:
+  cudaEvent_t value = nullptr;
+  CompletionEvent() {
+    if (cudaEventCreateWithFlags(&value, cudaEventDisableTiming) != cudaSuccess)
+      throw std::runtime_error("C36 cannot create the physical completion event");
+  }
+  ~CompletionEvent() {
+    if (value != nullptr)
+      (void)cudaEventDestroy(value);
+  }
+};
+
+template <class StreamExecutor>
+void check_abandoned_cached_stream() {
+  if constexpr (!std::is_same_v<typename StreamExecutor::execution_space, Kokkos::Cuda>) {
+    GTEST_SKIP() << "C36 witness requires the actual CUDA execution space";
+  } else {
+    pops::comm_init();
+    pops::detail::ensure_kokkos_initialized();
+    auto lane = pops::ExecutionLane::world("c36-cached-stream-lifetime");
+    CompletionEvent completion;
+    pops::runtime::program::PreparedResourceCache cache;
+    auto& executor = cache.template acquire<StreamExecutor>(
+        1, 0, 0, lane, [](const StreamExecutor&) { return true; },
+        StreamExecutor::prepare(2, 4096));
+
+    // Same raw-workspace submission form as test_prepared_stream_executor.cpp.
+    // No copied owning View is retained by this test to mask premature release.
+    double* workspace = executor.workspace_data(0);
+    executor.launch_for(0, "c36-physical-work-after-logical-abandonment", 4096,
+        KOKKOS_LAMBDA(std::int64_t index) {
+          volatile double value = static_cast<double>(index);
+          for (int iteration = 0; iteration < 65536; ++iteration)
+            value = value * 1.00000001 + .125;
+          workspace[index] = value;
+        });
+    ASSERT_EQ(cudaEventRecord(completion.value, executor.instance(0).cuda_stream()), cudaSuccess);
+    const cudaError_t initial = cudaEventQuery(completion.value);
+    if (initial == cudaSuccess) {
+      executor.fence_all();
+      GTEST_SKIP() << "physical work already completed; no pending-lifetime interleaving observed";
+    }
+    ASSERT_EQ(initial, cudaErrorNotReady);
+
+    // A context/generation abandoning its only resource owner must either retain
+    // a physical lease or wait before actually freeing the pending raw workspace.
+    // The current cache has no retained-lease API, so immediate clear can only be
+    // safe if destruction itself establishes physical completion.
+    cache.clear();
+    const cudaError_t after_release = cudaEventQuery(completion.value);
+    EXPECT_EQ(after_release, cudaSuccess)
+        << "resource owner disappeared while its real CUDA work was still pending";
+    // Drain even on failure; this test never interprets a CUDA request as an ACK.
+    EXPECT_EQ(cudaEventSynchronize(completion.value), cudaSuccess);
+  }
+}
+#endif
+
+TEST(PreparedResourceAsyncLifetime, CacheClearAfterAbandonmentRequiresPhysicalCompletion) {
+#if defined(KOKKOS_ENABLE_CUDA)
+  check_abandoned_cached_stream<Executor>();
+#else
+  GTEST_SKIP() << "C36 asynchronous device lifetime is unqualified without a CUDA backend";
+#endif
+}
+
+}  // namespace

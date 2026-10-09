@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="3" time="122.454" timestamp="2026-09-30T10:18:25.200701+02:00" hostname="macbookpro.home"><testcase classname="tests.python.integration.runtime.test_api040_m26_finite_interaction_runtime" name="test_finite_interaction_two_densities_rebind_permutation_and_adjoint" time="66.571" /><testcase classname="tests.python.integration.runtime.test_api040_m27_mixed_linear_runtime" name="test_mixed_linear_three_grids_and_permutation_from_saved_c_and_mu" time="41.117"><failure message="RuntimeError: accepted step 5: RuntimeError: solve_linear failed: iteration_limit action=fail_run reason=iteration_limit">tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py:28: in test_mixed_linear_three_grids_and_permutation_from_saved_c_and_mu
+    records = witness.run_and_archive(tmp_path)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+examples/migration/scientific/api040_m27_mixed_linear.py:244: in run_and_archive
+    report = _collective_call(
+examples/migration/scientific/api040_m27_mixed_linear.py:110: in _collective_call
+    raise RuntimeError("; ".join(row.decode() for row in failures if row))
+E   RuntimeError: accepted step 5: RuntimeError: solve_linear failed: iteration_limit action=fail_run reason=iteration_limit</failure></testcase><testcase classname="tests.python.integration.runtime.test_api040_m27_mixed_linear_runtime" name="test_one_iteration_gmres_collectively_refuses_without_accepted_publication" time="14.431" /></testsuite></testsuites>

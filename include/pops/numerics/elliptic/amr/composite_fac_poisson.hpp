@@ -241,6 +241,17 @@ struct SetScalarKernel {
 };
 
 template <int Dim>
+struct CopyVectorValidKernel {
+  FieldView<const Real, Dim> source{};
+  FieldView<Real, Dim> destination{};
+  int components = 0;
+  POPS_HD void operator()(const Index<Dim>& cell) const {
+    for (int component = 0; component < components; ++component)
+      destination(cell, component) = source(cell, component);
+  }
+};
+
+template <int Dim>
 struct ScaleKernel {
   FieldView<Real, Dim> values{};
   Real factor = Real(1);
@@ -551,8 +562,18 @@ class CompositeFacPoisson {
 
   CompositeFacPoisson(request_type request, CompositeFacOptions options = {},
                       Real reaction = Real(0), const ExecutionLane* prepared_lane = nullptr,
-                      bool operator_only = false)
+                      bool operator_only = false, bool guard_local_setup = false)
       : options_(options), reaction_(reaction), operator_only_(operator_only) {
+    if (guard_local_setup) {
+      if (!prepared_lane) throw std::invalid_argument("guarded FAC setup requires its prepared lane");
+      lane_ = prepared_lane;
+      std::exception_ptr error;
+      try {
+        lane_identity_ = "pops.elliptic.amr.composite-fac.nd" + std::to_string(Dim);
+        lane_borrow_.emplace(prepared_lane->borrow_immutably());
+      } catch (...) { error = std::current_exception(); }
+      collectively_rethrow_exception(error, *lane_, "candidate FAC local setup");
+    } else {
     lane_identity_ = "pops.elliptic.amr.composite-fac.nd" + std::to_string(Dim);
     if (prepared_lane != nullptr) {
       lane_ = prepared_lane;
@@ -560,6 +581,7 @@ class CompositeFacPoisson {
     } else {
       owned_lane_.emplace(ExecutionLane::duplicate_world_collectively(lane_identity_));
       lane_ = &*owned_lane_;
+    }
     }
     std::exception_ptr local_error;
     try {
@@ -583,27 +605,30 @@ class CompositeFacPoisson {
     } catch (...) {
       local_error = std::current_exception();
     }
+    if (guard_local_setup) {
+      try { Kokkos::fence(); } catch (...) { if (!local_error) local_error = std::current_exception(); }
+    }
     if (all_reduce_max(local_error ? 1L : 0L, *lane_) != 0) {
       if (lane_->size() == 1 && local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error(
           "partitioned FAC metadata, budget, or reusable allocation failed collectively");
     }
-    if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("pops-partitioned-composite-fac"),
-              std::string_view(exact_contract_)}},
-            *lane_))
+    const std::array<ExactOrderedBytePair, 1> hierarchy_contracts{{
+        {std::string_view("pops-partitioned-composite-fac"),
+         std::string_view(exact_contract_)}}};
+    if (!all_ranks_agree_exact_ordered_byte_pairs(hierarchy_contracts, *lane_))
       throw std::invalid_argument(
           "partitioned FAC exact hierarchy contract differs between MPI ranks");
     for (std::size_t connection = 0; connection < connections_.size(); ++connection) {
-      if (!all_ranks_agree_exact_ordered_byte_pairs(
-              {{std::string_view("pops-fac-parent-gather"),
-                std::string_view(connections_[connection]->gather_contract)},
-               {std::string_view("pops-fac-fine-restriction"),
-                std::string_view(connections_[connection]->restriction_contract)},
-               {std::string_view("pops-fac-flux-mismatch"),
-                std::string_view(connections_[connection]->flux_contract)}},
-              *lane_))
+      const std::array<ExactOrderedBytePair, 3> connection_contracts{{
+          {std::string_view("pops-fac-parent-gather"),
+           std::string_view(connections_[connection]->gather_contract)},
+          {std::string_view("pops-fac-fine-restriction"),
+           std::string_view(connections_[connection]->restriction_contract)},
+          {std::string_view("pops-fac-flux-mismatch"),
+           std::string_view(connections_[connection]->flux_contract)}}};
+      if (!all_ranks_agree_exact_ordered_byte_pairs(connection_contracts, *lane_))
         throw std::invalid_argument(
             "partitioned FAC coarse/fine transfer plan differs between MPI ranks");
     }
@@ -781,68 +806,85 @@ class CompositeFacPoisson {
   const field_type& linear_image_level(int level) const {
     return levels_.at(static_cast<std::size_t>(level))->residual;
   }
-  void prepare_linear_coefficients() {
+  void prepare_linear_coefficients(const ExecutionLane* local_phase_lane = nullptr,
+                                   bool restrict_covered = false) {
     if (!operator_only_)
       throw std::logic_error("matrix-entry preparation requires operator-only resources");
+    // Explicit candidate realization only: restrict constitutive values evaluated
+    // on fine q before preparing coarse/fine coefficient ghosts and face fluxes.
+    if (restrict_covered)
+      for (std::size_t child = levels_.size(); child-- > 1;)
+        connections_[child - 1]->restrict_into(*levels_[child]->coefficient,
+                                               *levels_[child - 1]->coefficient,
+                                               local_phase_lane);
     for (auto& storage : levels_) {
       auto& level = *storage;
       // Extrapolate before peer exchange: owned same-level/periodic ghosts must win.
-      for (std::size_t local = 0; local < level.coefficient->local_size(); ++local)
-        for_each_cell(level.coefficient->fab(local).grown_box(),
-                      ::pops::elliptic::mg::fac_detail::ExtrudeScalarValidToGhosts<Dim>{
-                          level.coefficient->fab(local).view(), level.coefficient->box(local)});
+      local_operator_phase_(local_phase_lane, [&] {
+        for (std::size_t local = 0; local < level.coefficient->local_size(); ++local)
+          for_each_cell(level.coefficient->fab(local).grown_box(),
+                        ::pops::elliptic::mg::fac_detail::ExtrudeScalarValidToGhosts<Dim>{
+                            level.coefficient->fab(local).view(), level.coefficient->box(local)});
+      });
       same_level_fill_(level, *level.coefficient);
-      fill_physical_boundary(*level.coefficient, level.coefficient_boundary);
+      local_operator_phase_(local_phase_lane, [&] {
+        fill_physical_boundary(*level.coefficient, level.coefficient_boundary);
+      });
     }
-    Kokkos::fence();
+    local_operator_phase_(local_phase_lane, [] { Kokkos::fence(); });
   }
-  void synchronize_linear_solution() {
+  void synchronize_linear_solution(const ExecutionLane* local_phase_lane = nullptr) {
     if (!operator_only_)
       throw std::logic_error("matrix-entry synchronization requires operator-only resources");
-    average_solution_down_();
-    fill_all_solution_ghosts_();
+    for (std::size_t child = levels_.size(); child-- > 1;)
+      connections_[child - 1]->restrict_into(levels_[child]->phi, levels_[child - 1]->phi,
+                                             local_phase_lane);
+    for (std::size_t level = 0; level < levels_.size(); ++level)
+      fill_ghosts_(level, levels_[level]->phi, false, nullptr, local_phase_lane);
   }
-  void apply_linear_composite(bool arithmetic) {
-    synchronize_linear_solution();
-    for (auto& storage : levels_) {
-      auto& level = *storage;
-      const auto geometry = level.geometry;
-      for (std::size_t local = 0; local < level.phi.local_size(); ++local) {
-        const auto value = std::as_const(level.phi).fab(local).view();
-        const auto coefficient = std::as_const(*level.coefficient).fab(local).view();
-        const auto active = std::as_const(level.active).fab(local).view();
-        const auto result = level.residual.fab(local).view();
-        for_each_cell(level.phi.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-          Real image = Real(0);
-          if (active(cell, 0) >= Real(0.5))
-            for (int axis = 0; axis < Dim; ++axis) {
-              auto lower = cell, upper = cell;
-              --lower[axis];
-              ++upper[axis];
-              const Real center = coefficient(cell, 0);
-              const Real lo = coefficient(lower, 0), hi = coefficient(upper, 0);
-              const Real low =
-                  arithmetic
-                      ? Real(0.5) * lo + Real(0.5) * center
-                      : (lo + center != Real(0) ? Real(2) * lo * center / (lo + center) : Real(0));
-              const Real high =
-                  arithmetic
-                      ? Real(0.5) * hi + Real(0.5) * center
-                      : (hi + center != Real(0) ? Real(2) * hi * center / (hi + center) : Real(0));
-              const Real dx = geometry.spacing(axis);
-              image -= (high * (value(upper, 0) - value(cell, 0)) -
-                        low * (value(cell, 0) - value(lower, 0))) /
-                       (dx * dx);
-            }
-          result(cell, 0) = image;
-        });
+  void apply_linear_composite(bool arithmetic, const ExecutionLane* local_phase_lane = nullptr) {
+    synchronize_linear_solution(local_phase_lane);
+    local_operator_phase_(local_phase_lane, [&] {
+      for (auto& storage : levels_) {
+        auto& level = *storage;
+        const auto geometry = level.geometry;
+        for (std::size_t local = 0; local < level.phi.local_size(); ++local) {
+          const auto value = std::as_const(level.phi).fab(local).view();
+          const auto coefficient = std::as_const(*level.coefficient).fab(local).view();
+          const auto active = std::as_const(level.active).fab(local).view();
+          const auto result = level.residual.fab(local).view();
+          for_each_cell(level.phi.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+            Real image = Real(0);
+            if (active(cell, 0) >= Real(0.5))
+              for (int axis = 0; axis < Dim; ++axis) {
+                auto lower = cell, upper = cell;
+                --lower[axis];
+                ++upper[axis];
+                const Real center = coefficient(cell, 0);
+                const Real lo = coefficient(lower, 0), hi = coefficient(upper, 0);
+                const Real low =
+                    arithmetic ? Real(0.5) * lo + Real(0.5) * center
+                               : (lo + center != Real(0) ? Real(2) * lo * center / (lo + center)
+                                                         : Real(0));
+                const Real high =
+                    arithmetic ? Real(0.5) * hi + Real(0.5) * center
+                               : (hi + center != Real(0) ? Real(2) * hi * center / (hi + center)
+                                                         : Real(0));
+                const Real dx = geometry.spacing(axis);
+                image -= (high * (value(upper, 0) - value(cell, 0)) -
+                          low * (value(cell, 0) - value(lower, 0))) /
+                         (dx * dx);
+              }
+            result(cell, 0) = image;
+          });
+        }
       }
-    }
+    });
     for (std::size_t edge = 0; edge < connections_.size(); ++edge)
       connections_[edge]->apply_flux_mismatch(levels_[edge]->phi, levels_[edge + 1]->phi,
                                               levels_[edge]->residual, levels_[edge]->scratch, true,
-                                              arithmetic);
-    Kokkos::fence();
+                                              arithmetic, local_phase_lane);
+    local_operator_phase_(local_phase_lane, [] { Kokkos::fence(); });
   }
 
   void install_embedded_boundary(int level, const field_type& active,
@@ -1396,7 +1438,7 @@ class CompositeFacPoisson {
       return scratch.at(local);
     }
 
-    void gather_parent(const field_type& source) {
+    void gather_parent(const field_type& source, const ExecutionLane* local_phase_lane = nullptr) {
       auto source_view = [&source](const transfer_job& job) -> FieldView<const Real, Dim> {
         return source.fab_global(job.source_patch).view();
       };
@@ -1404,7 +1446,7 @@ class CompositeFacPoisson {
         return scratch_for(job.destination_patch).parent_staging.view();
       };
       gather->execute(source_view, destination_view);
-      Kokkos::fence();
+      local_operator_phase_(local_phase_lane, [] { Kokkos::fence(); });
     }
 
     void interpolate_ghosts(field_type& destination) {
@@ -1437,8 +1479,9 @@ class CompositeFacPoisson {
 
     void apply_flux_mismatch(const field_type& parent_phi, const field_type& child_phi,
                              field_type& parent_residual, field_type& parent_scratch,
-                             bool matrix_entry = false, bool arithmetic = false) {
-      gather_parent(parent_phi);
+                             bool matrix_entry = false, bool arithmetic = false,
+                             const ExecutionLane* local_phase_lane = nullptr) {
+      gather_parent(parent_phi, local_phase_lane);
       if (matrix_entry) {
         auto source = [this](const transfer_job& job) -> FieldView<const Real, Dim> {
           return std::as_const(*parent->coefficient).fab_global(job.source_patch).view();
@@ -1448,69 +1491,71 @@ class CompositeFacPoisson {
         };
         gather->execute(source, destination);
       }
-      for (ScratchPatch& patch : scratch) {
-        patch.flux_increment.set_val(Real(0));
-        const Box<Dim> footprint = patch.restricted.box();
-        const auto parent_view = std::as_const(patch.parent_staging).view();
-        const auto fine_view = std::as_const(child_phi).fab_global(patch.fine_patch).view();
-        const auto covered = std::as_const(patch.covered_staging).view();
-        auto increment = patch.flux_increment.view();
-        for (int axis = 0; axis < Dim; ++axis) {
-          Real transverse = Real(1);
-          for (int transverse_axis = 0; transverse_axis < Dim; ++transverse_axis)
-            if (transverse_axis != axis)
-              transverse *= static_cast<Real>(ratio[transverse_axis]);
-          const Real fine_face_weight = static_cast<Real>(ratio[axis]) / transverse;
-          const Real inverse_spacing = Real(1) / parent->geometry.spacing(axis);
-          const Real inverse_spacing_squared = inverse_spacing * inverse_spacing;
-          for (const int child_side : {-1, 1}) {
-            Box<Dim> interface = footprint;
-            Index<Dim> geometry_shift{};
-            if (child_side < 0) {
-              --interface.lo[axis];
-              interface.hi[axis] = interface.lo[axis];
-            } else {
-              ++interface.hi[axis];
-              interface.lo[axis] = interface.hi[axis];
+      local_operator_phase_(local_phase_lane, [&] {
+        for (ScratchPatch& patch : scratch) {
+          patch.flux_increment.set_val(Real(0));
+          const Box<Dim> footprint = patch.restricted.box();
+          const auto parent_view = std::as_const(patch.parent_staging).view();
+          const auto fine_view = std::as_const(child_phi).fab_global(patch.fine_patch).view();
+          const auto covered = std::as_const(patch.covered_staging).view();
+          auto increment = patch.flux_increment.view();
+          for (int axis = 0; axis < Dim; ++axis) {
+            Real transverse = Real(1);
+            for (int transverse_axis = 0; transverse_axis < Dim; ++transverse_axis)
+              if (transverse_axis != axis)
+                transverse *= static_cast<Real>(ratio[transverse_axis]);
+            const Real fine_face_weight = static_cast<Real>(ratio[axis]) / transverse;
+            const Real inverse_spacing = Real(1) / parent->geometry.spacing(axis);
+            const Real inverse_spacing_squared = inverse_spacing * inverse_spacing;
+            for (const int child_side : {-1, 1}) {
+              Box<Dim> interface = footprint;
+              Index<Dim> geometry_shift{};
+              if (child_side < 0) {
+                --interface.lo[axis];
+                interface.hi[axis] = interface.lo[axis];
+              } else {
+                ++interface.hi[axis];
+                interface.lo[axis] = interface.hi[axis];
+              }
+              const Box<Dim> destination = interface.intersect(patch.flux_increment.box());
+              if (destination.empty())
+                continue;
+              ::pops::elliptic::mg::fac_detail::FluxMismatchTransfer<Dim> transfer{
+                  parent_view,
+                  fine_view,
+                  increment,
+                  covered,
+                  destination,
+                  ratio,
+                  axis,
+                  child_side,
+                  inverse_spacing_squared,
+                  fine_face_weight,
+                  Real(1),
+                  geometry_shift};
+              if (matrix_entry) {
+                transfer.parent_coefficient = std::as_const(*patch.coefficient_staging).view();
+                transfer.arithmetic_average = arithmetic;
+                transfer.sign = Real(-1);
+              }
+              if (child->coefficient)
+                transfer.fine_coefficient =
+                    std::as_const(*child->coefficient).fab_global(patch.fine_patch).view();
+              if (child->aperture_lower)
+                transfer.fine_aperture_lower =
+                    std::as_const(*child->aperture_lower).fab_global(patch.fine_patch).view();
+              if (child->aperture_upper)
+                transfer.fine_aperture_upper =
+                    std::as_const(*child->aperture_upper).fab_global(patch.fine_patch).view();
+              for_each_cell(destination, transfer);
             }
-            const Box<Dim> destination = interface.intersect(patch.flux_increment.box());
-            if (destination.empty())
-              continue;
-            ::pops::elliptic::mg::fac_detail::FluxMismatchTransfer<Dim> transfer{
-                parent_view,
-                fine_view,
-                increment,
-                covered,
-                destination,
-                ratio,
-                axis,
-                child_side,
-                inverse_spacing_squared,
-                fine_face_weight,
-                Real(1),
-                geometry_shift};
-            if (matrix_entry) {
-              transfer.parent_coefficient = std::as_const(*patch.coefficient_staging).view();
-              transfer.arithmetic_average = arithmetic;
-              transfer.sign = Real(-1);
-            }
-            if (child->coefficient)
-              transfer.fine_coefficient =
-                  std::as_const(*child->coefficient).fab_global(patch.fine_patch).view();
-            if (child->aperture_lower)
-              transfer.fine_aperture_lower =
-                  std::as_const(*child->aperture_lower).fab_global(patch.fine_patch).view();
-            if (child->aperture_upper)
-              transfer.fine_aperture_upper =
-                  std::as_const(*child->aperture_upper).fab_global(patch.fine_patch).view();
-            for_each_cell(destination, transfer);
           }
         }
-      }
-      Kokkos::fence();
-      parent_scratch.set_val(Real(0));
-      for (auto& [key, destination] : flux_destinations)
-        destination.set_val(Real(0));
+        Kokkos::fence();
+        parent_scratch.set_val(Real(0));
+        for (auto& [key, destination] : flux_destinations)
+          destination.set_val(Real(0));
+      });
       auto source_view = [this](const transfer_job& job) -> FieldView<const Real, Dim> {
         return std::as_const(scratch_for(job.source_patch / (2 * Dim)).flux_increment).view();
       };
@@ -1518,33 +1563,39 @@ class CompositeFacPoisson {
         return flux_destinations.at({job.source_patch, job.destination_patch}).view();
       };
       flux->execute(source_view, destination_view);
-      for (const auto& [key, increment] : flux_destinations)
-        for_each_cell(increment.box(),
-                      fac_detail::AddKernel<Dim>{parent_scratch.fab_global(key.second).view(),
-                                                 increment.view()});
-      for (std::size_t local = 0; local < parent_residual.local_size(); ++local) {
-        for_each_cell(parent_residual.box(local),
-                      fac_detail::AddKernel<Dim>{parent_residual.fab(local).view(),
-                                                 std::as_const(parent_scratch).fab(local).view()});
-        for_each_cell(
-            parent_residual.box(local),
-            fac_detail::MaskResidualKernel<Dim>{parent_residual.fab(local).view(),
-                                                std::as_const(parent->covered).fab(local).view()});
-      }
-      Kokkos::fence();
+      local_operator_phase_(local_phase_lane, [&] {
+        for (const auto& [key, increment] : flux_destinations)
+          for_each_cell(increment.box(),
+                        fac_detail::AddKernel<Dim>{parent_scratch.fab_global(key.second).view(),
+                                                   increment.view()});
+        for (std::size_t local = 0; local < parent_residual.local_size(); ++local) {
+          for_each_cell(
+              parent_residual.box(local),
+              fac_detail::AddKernel<Dim>{parent_residual.fab(local).view(),
+                                         std::as_const(parent_scratch).fab(local).view()});
+          for_each_cell(parent_residual.box(local),
+                        fac_detail::MaskResidualKernel<Dim>{
+                            parent_residual.fab(local).view(),
+                            std::as_const(parent->covered).fab(local).view()});
+        }
+        Kokkos::fence();
+      });
     }
 
-    void restrict_into(const field_type& source, field_type& destination) {
+    void restrict_into(const field_type& source, field_type& destination,
+                       const ExecutionLane* local_phase_lane = nullptr) {
       const Real inverse_children = Real(1) / static_cast<Real>(ratio.child_count());
-      for (ScratchPatch& patch : scratch) {
-        const auto fine = source.fab_global(patch.fine_patch).view();
-        auto coarse = patch.restricted.view();
-        for_each_cell(
-            patch.restricted.box(),
-            fac_detail::RestrictionKernel<Dim>{fine, coarse, parent->geometry.domain(),
-                                               child->geometry.domain(), ratio, inverse_children});
-      }
-      Kokkos::fence();
+      local_operator_phase_(local_phase_lane, [&] {
+        for (ScratchPatch& patch : scratch) {
+          const auto fine = source.fab_global(patch.fine_patch).view();
+          auto coarse = patch.restricted.view();
+          for_each_cell(patch.restricted.box(),
+                        fac_detail::RestrictionKernel<Dim>{fine, coarse, parent->geometry.domain(),
+                                                           child->geometry.domain(), ratio,
+                                                           inverse_children});
+        }
+        Kokkos::fence();
+      });
       auto source_view = [this](const transfer_job& job) -> FieldView<const Real, Dim> {
         return std::as_const(scratch_for(job.source_patch).restricted).view();
       };
@@ -1647,7 +1698,8 @@ class CompositeFacPoisson {
   }
 
   void fill_ghosts_(std::size_t level_index, field_type& field, bool homogeneous,
-                    const field_type* parent_override = nullptr) {
+                    const field_type* parent_override = nullptr,
+                    const ExecutionLane* local_phase_lane = nullptr) {
     Level& level = *levels_[level_index];
     if (level_index > 0) {
       Connection& connection = *connections_[level_index - 1];
@@ -1657,15 +1709,37 @@ class CompositeFacPoisson {
       // Smoothing changes parent valid values after its last halo fill. Rebuild its
       // actual boundary extension before a child reads that quadratic stencil.
       if (parent_override == nullptr)
-        fill_ghosts_(level_index - 1, current_parent, homogeneous);
+        fill_ghosts_(level_index - 1, current_parent, homogeneous, nullptr, local_phase_lane);
       const field_type& parent_field =
           parent_override != nullptr ? *parent_override : current_parent;
-      connection.gather_parent(parent_field);
-      connection.interpolate_ghosts(field);
+      connection.gather_parent(parent_field, local_phase_lane);
+      local_operator_phase_(local_phase_lane, [&] { connection.interpolate_ghosts(field); });
     }
     same_level_fill_(level, field);
-    fill_physical_boundary(
-        field, homogeneous ? level.homogeneous_physical_boundary : level.physical_boundary);
+    local_operator_phase_(local_phase_lane, [&] {
+      fill_physical_boundary(
+          field, homogeneous ? level.homogeneous_physical_boundary : level.physical_boundary);
+    });
+  }
+
+  template <class Operation>
+  static void local_operator_phase_(const ExecutionLane* lane, Operation&& operation) {
+    if (!lane) {
+      operation();
+      return;
+    }
+    std::exception_ptr error;
+    try {
+      operation();
+    } catch (...) {
+      error = std::current_exception();
+    }
+    try {
+      Kokkos::fence();
+    } catch (...) {
+      if (!error) error = std::current_exception();
+    }
+    collectively_rethrow_exception(error, *lane, "composite FAC original field local phase");
   }
 
   void fill_all_solution_ghosts_() {
@@ -1717,10 +1791,8 @@ class CompositeFacPoisson {
       const auto in = source.fab(local).view();
       const auto out = destination.fab(local).view();
       const int components = source.ncomp();
-      for_each_cell(source.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-        for (int component = 0; component < components; ++component)
-          out(cell, component) = in(cell, component);
-      });
+      for_each_cell(source.box(local),
+                    fac_detail::CopyVectorValidKernel<Dim>{in, out, components});
     }
     Kokkos::fence();
   }

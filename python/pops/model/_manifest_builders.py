@@ -185,6 +185,11 @@ def build_module_manifest(module: Any) -> ModuleManifest:
     has_eigenvalues = {
         axis: bool(values) for axis, values in (eigenvalues or {}).items()
     }
+    from .flux_waves import flux_waves
+    for operator in module.operator_registry():
+        if operator.kind == "grid_operator":
+            for axis, values in (flux_waves(module, operator) or {}).items():
+                has_eigenvalues[axis] = has_eigenvalues.get(axis, False) or bool(values)
     wave_speed_provider = getattr(module, "wave_speed_provider_kind", None)
     capabilities_provider = getattr(module, "capabilities", None)
     raw_capabilities = capabilities_provider() if callable(capabilities_provider) else {}
@@ -210,8 +215,10 @@ def build_module_manifest(module: Any) -> ModuleManifest:
     expressions = {
         "operators": {operator.name: body_identity(expression_data(operator.body)) for operator in registry},
         "primitives": canonical_hash_data(expression_data(module.primitive_recipes())),
+        "primitive_coordinates": {str(i): row.to_data() for i,row in enumerate(module.primitive_coordinates())},
     }
     return ModuleManifest(
+        physical_frame=None if getattr(module, "frame", None) is None else module.frame.to_dict(),
         name=module.name,
         owner_path=canonical_owner,
         state_spaces=state_spaces,
@@ -229,6 +236,9 @@ def build_module_manifest(module: Any) -> ModuleManifest:
         abi_requirements={"route_registry_signature": routes["signature"], "abi_key": None},
         params_utilization=_params_utilization(params),
         expressions=expressions,
+        global_quantities={name: {**handle.declaration_data(),
+            "handle": index.authenticate(handle)._resolved(canonical_owner).canonical_identity()}
+            for name, handle in sorted(module._global_quantities.items())},
     )
 
 

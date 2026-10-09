@@ -11,6 +11,9 @@ from pops.fields._observation_contract import validate_field_gradient, validate_
 
 
 def _source(value: Any) -> tuple[int, Any]:
+    if getattr(value, "op", None) == "layout_map_import" and value.attrs.get("contract") == "mapped-consumed-output@1":
+        from ._mapped_publication import validate_candidate
+        return 1, validate_candidate(value)
     if getattr(value, "op", None) == "field_component":
         return 1, validate_field_observation(value)[2]
     if getattr(value, "op", None) == "field_gradient":
@@ -24,10 +27,7 @@ def _target_space(target: Handle) -> Any:
     block_owner = getattr(target.block_ref, "model_owner_path", None)
     if registry is None or block_owner is None:
         raise ValueError("field publication target requires its authoritative Case registry")
-    instances = tuple(block for block in registry.handles().values()
-                      if block.model_owner_path.canonical() == block_owner.canonical())
-    if len(instances) != 1:
-        raise ValueError("consumed field publication cannot share a model-definition provider key across block instances")
+    registry.canonical_block(target.block_ref)
     model = registry.spec(target.block_ref.local_id)["model"]
     module = model if isinstance(model, Module) else model.module
     module.declaration_index().authenticate(target.declaration_ref)
@@ -35,15 +35,39 @@ def _target_space(target: Handle) -> Any:
 
 
 def _states(solve: Any, program: Any) -> dict[Any, Any]:
-    from pops.codegen.program_field_plan import _nodes, _reachable
+    from pops.codegen.program_field_plan import _nodes
 
+    by_id = {node.id: node for node in _nodes(program)}
     states = {}
-    for node in _reachable(solve, _nodes(program)):
+    visited = set()
+
+    def visit(value: Any) -> None:
+        node = by_id.get(value.id, value)
+        if node.id in visited:
+            return
+        visited.add(node.id)
+        # A current stage State can itself have been assembled from an earlier
+        # field solve.  Its ancestors are provenance of that State, not inputs
+        # of this field equation.  Crossing this boundary would report two
+        # sequential solves as contradictory simultaneous state bindings.
+        if node.vtype == "state":
+            return
+        if node.id != solve.id and node.op == "solve_linear":
+            return
         if node.op in ("field_problem_load", "field_problem_coefficients"):
             for value in node.inputs:
+                if value.vtype != "state":
+                    raise ValueError("field publication equation input is not a State")
                 if value.block in states and states[value.block] is not value:
                     raise ValueError("field publication has ambiguous current state provenance")
                 states[value.block] = value
+        for source in node.inputs:
+            visit(source)
+        for key in ("apply_block", "residual_block", "body_block"):
+            for child in node.attrs.get(key, ()):
+                visit(child)
+
+    visit(solve)
     return states
 
 
@@ -126,15 +150,23 @@ def validate_field_publication(value: Any, *, target_space: Any = None) -> tuple
         if not isinstance(target, Handle) or target.kind != "field" or target.block_ref is None:
             raise ValueError("field publication lost its qualified field destination")
         space = (_target_space if target_space is None else target_space)(target)
+        if source.attrs.get("contract") == "mapped-consumed-output@1":
+            from ._mapped_publication import _canonical
+            if _canonical(source.attrs["target_port"]["declared_space"]) != _canonical(space.to_data()):
+                raise ValueError("mapped Field publication changed its Module-owned destination declaration")
         component = row.get("component")
         key = (target.qualified_id, component)
         if component not in space.components or space != value.space or key in destinations:
             raise ValueError("field publication lost its exact destination component or field space")
         destinations.add(key)
-        observed = source if source.op == "field_component" else source.inputs[0]
+        observed = publication_observation(source)
         if observed.attrs.get("field_problem_identity") != value.attrs.get("field_problem_identity"):
             raise ValueError("field publication belongs to another physical field problem")
-    if len(solves) != 1:
+    if value.attrs.get("mapped_output_contract") == "mapped-consumed-output@1":
+        if any(source.op != "layout_map_import" or source.attrs.get("contract") != "mapped-consumed-output@1"
+               for source in value.inputs[:len(rows)]):
+            raise ValueError("mapped Field publication requires only private mapped candidates")
+    elif len(solves) != 1:
         raise ValueError("field publication must consume one exact joint solve")
     target_blocks = {row["target"].block_ref for row in rows}
     if any(getattr(key, "block_ref", None) not in target_blocks for key in supplemental):
@@ -180,3 +212,10 @@ def publication_states(value: Any, *, target_space: Any = None) -> dict[Any, Any
     rows = validate_field_publication(value, target_space=target_space)
     return _consumer_states(value.prog, value.point, _states(_source(value.inputs[0])[1], value.prog),
                             value.attrs.get("consumer_states", ()), value.inputs[len(rows):])
+
+
+def publication_observation(source):
+    if source.op == "layout_map_import" and source.attrs.get("contract") == "mapped-consumed-output@1":
+        from ._mapped_publication import validate_candidate
+        return validate_candidate(source)
+    return source if source.op == "field_component" else source.inputs[0]

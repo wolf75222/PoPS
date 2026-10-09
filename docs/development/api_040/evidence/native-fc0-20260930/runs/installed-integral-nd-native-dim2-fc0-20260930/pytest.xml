@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="6" skipped="0" tests="8" time="246.615" timestamp="2026-09-30T10:24:56.009731+02:00" hostname="macbookpro.home"><testcase classname="tests.python.integration.runtime.test_integral_state_trace_runtime" name="test_native_accepted_face_amount_and_initial_read[uniform]" time="33.375"><failure message="AssertionError: (('RuntimeError', 'collective checkpoint native capture failed: rank 0: builtins.RuntimeError: collective checkpoint Uniform accepted-state capture preflight failed: rank 0: builtins.RuntimeError: checkpoint requires a declared step strategy', True),)">tests/python/integration/runtime/test_integral_state_trace_runtime.py:144: in test_native_accepted_face_amount_and_initial_read
+    save_public_snapshot(world, runtime, artifact, quantity, directory, "initial", amr=kind != "uniform")
+tests/python/support/integral_state_receipts.py:121: in save_public_snapshot
+    checkpoint = collective_call(world, lambda: runtime.checkpoint(directory / phase))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/support/collective_checks.py:31: in collective_call
+    assert not any(failures), failures
+           ^^^^^^^^^^^^^^^^^
+E   AssertionError: (('RuntimeError', 'collective checkpoint native capture failed: rank 0: builtins.RuntimeError: collective checkpoint Uniform accepted-state capture preflight failed: rank 0: builtins.RuntimeError: checkpoint requires a declared step strategy', True),)</failure></testcase><testcase classname="tests.python.integration.runtime.test_integral_state_trace_runtime" name="test_native_accepted_face_amount_and_initial_read[amr1]" time="41.562"><failure message="AssertionError: (('RuntimeError', 'collective checkpoint native capture failed: rank 0: builtins.RuntimeError: collective checkpoint AMR accepted-state capture preflight failed: rank 0: builtins.RuntimeError: checkpoint requires a declared step strategy', True),)">tests/python/integration/runtime/test_integral_state_trace_runtime.py:144: in test_native_accepted_face_amount_and_initial_read
+    save_public_snapshot(world, runtime, artifact, quantity, directory, "initial", amr=kind != "uniform")
+tests/python/support/integral_state_receipts.py:121: in save_public_snapshot
+    checkpoint = collective_call(world, lambda: runtime.checkpoint(directory / phase))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/support/collective_checks.py:31: in collective_call
+    assert not any(failures), failures
+           ^^^^^^^^^^^^^^^^^
+E   AssertionError: (('RuntimeError', 'collective checkpoint native capture failed: rank 0: builtins.RuntimeError: collective checkpoint AMR accepted-state capture preflight failed: rank 0: builtins.RuntimeError: checkpoint requires a declared step strategy', True),)</failure></testcase><testcase classname="tests.python.integration.runtime.test_integral_state_trace_runtime" name="test_native_accepted_face_amount_and_initial_read[amr2]" time="42.170"><failure message="AssertionError: (('RuntimeError', 'collective checkpoint native capture failed: rank 0: builtins.RuntimeError: collective checkpoint AMR accepted-state capture preflight failed: rank 0: builtins.RuntimeError: checkpoint requires a declared step strategy', True),)">tests/python/integration/runtime/test_integral_state_trace_runtime.py:144: in test_native_accepted_face_amount_and_initial_read
+    save_public_snapshot(world, runtime, artifact, quantity, directory, "initial", amr=kind != "uniform")
+tests/python/support/integral_state_receipts.py:121: in save_public_snapshot
+    checkpoint = collective_call(world, lambda: runtime.checkpoint(directory / phase))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/support/collective_checks.py:31: in collective_call
+    assert not any(failures), failures
+           ^^^^^^^^^^^^^^^^^
+E   AssertionError: (('RuntimeError', 'collective checkpoint native capture failed: rank 0: builtins.RuntimeError: collective checkpoint AMR accepted-state capture preflight failed: rank 0: builtins.RuntimeError: checkpoint requires a declared step strategy', True),)</failure></testcase><testcase classname="tests.python.integration.runtime.test_integral_state_public_restart" name="test_public_ssprk_integral_restart_in_fresh_instance" time="33.931"><failure message="AssertionError: (('RuntimeError', 'collective checkpoint native capture failed: rank 0: builtins.RuntimeError: collective checkpoint Uniform accepted-state capture preflight failed: rank 0: builtins.RuntimeError: checkpoint requires a declared step strategy', True),)">tests/python/integration/runtime/test_integral_state_public_restart.py:142: in test_public_ssprk_integral_restart_in_fresh_instance
+    _save(world, runtime, artifact, quantity, directory, "initial")
+tests/python/support/integral_state_receipts.py:121: in save_public_snapshot
+    checkpoint = collective_call(world, lambda: runtime.checkpoint(directory / phase))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/support/collective_checks.py:31: in collective_call
+    assert not any(failures), failures
+           ^^^^^^^^^^^^^^^^^
+E   AssertionError: (('RuntimeError', 'collective checkpoint native capture failed: rank 0: builtins.RuntimeError: collective checkpoint Uniform accepted-state capture preflight failed: rank 0: builtins.RuntimeError: checkpoint requires a declared step strategy', True),)</failure></testcase><testcase classname="tests.python.integration.runtime.test_integral_state_public_restart" name="test_public_integral_refusal_restores_envelope_and_safe_retry[absent_periodic_trace]" time="33.420"><failure message="AssertionError: (('RuntimeError', 'collective checkpoint native capture failed: rank 0: builtins.RuntimeError: collective checkpoint Uniform accepted-state capture preflight failed: rank 0: builtins.RuntimeError: checkpoint requires a declared step strategy', True),)">tests/python/integration/runtime/test_integral_state_public_restart.py:188: in test_public_integral_refusal_restores_envelope_and_safe_retry
+    _, before = _save(world, runtime, artifact, quantity, directory, "before")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/support/integral_state_receipts.py:121: in save_public_snapshot
+    checkpoint = collective_call(world, lambda: runtime.checkpoint(directory / phase))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/support/collective_checks.py:31: in collective_call
+    assert not any(failures), failures
+           ^^^^^^^^^^^^^^^^^
+E   AssertionError: (('RuntimeError', 'collective checkpoint native capture failed: rank 0: builtins.RuntimeError: collective checkpoint Uniform accepted-state capture preflight failed: rank 0: builtins.RuntimeError: checkpoint requires a declared step strategy', True),)</failure></testcase><testcase classname="tests.python.integration.runtime.test_integral_state_public_restart" name="test_public_integral_refusal_restores_envelope_and_safe_retry[unsafe_dt]" time="32.941"><failure message="AssertionError: (('RuntimeError', 'collective checkpoint native capture failed: rank 0: builtins.RuntimeError: collective checkpoint Uniform accepted-state capture preflight failed: rank 0: builtins.RuntimeError: checkpoint requires a declared step strategy', True),)">tests/python/integration/runtime/test_integral_state_public_restart.py:188: in test_public_integral_refusal_restores_envelope_and_safe_retry
+    _, before = _save(world, runtime, artifact, quantity, directory, "before")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/support/integral_state_receipts.py:121: in save_public_snapshot
+    checkpoint = collective_call(world, lambda: runtime.checkpoint(directory / phase))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/support/collective_checks.py:31: in collective_call
+    assert not any(failures), failures
+           ^^^^^^^^^^^^^^^^^
+E   AssertionError: (('RuntimeError', 'collective checkpoint native capture failed: rank 0: builtins.RuntimeError: collective checkpoint Uniform accepted-state capture preflight failed: rank 0: builtins.RuntimeError: checkpoint requires a declared step strategy', True),)</failure></testcase><testcase classname="tests.python.integration.runtime.test_coupled_gradient_dim2_fourier_runtime" name="test_dim2_fourier_faces_and_component_permutation[order0]" time="14.422" /><testcase classname="tests.python.integration.runtime.test_coupled_gradient_dim2_fourier_runtime" name="test_dim2_fourier_faces_and_component_permutation[order1]" time="14.200" /></testsuite></testsuites>

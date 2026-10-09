@@ -1,0 +1,203 @@
+{
+  "Native": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "SDK": "af8d3a678a42f9d28abedc386bad5af8d987eb694a9042439414de1ac9c278e1",
+  "Source_at_execution": "e01eb5b8b39b20762639be1e7dde45d12542b770",
+  "XML_exact_selected_cases": [
+    "tests/python/integration/runtime/test_imex_checkpoint_sealed_retry.py::test_original_imex_checkpoint_retry_replays_one_completed_seal",
+    "tests/python/integration/runtime/test_final_imex_original_reception.py::test_original_manual_state_field_restart",
+    "tests/python/integration/runtime/test_final_imex_original_reception.py::test_original_preset_parity_and_rejected_rollback",
+    "tests/python/integration/runtime/test_imex_checkpoint_publication_rollback.py::test_original_imex_final_checkpoint_failure_restores_science_and_outputs",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_system_direct_step_requires_the_installed_python_program_strategy",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_native_linear_history_uses_bracketing_slots_and_restarts_exactly",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_restart_restores_default_field_onto_fresh_unmaterialized_target"
+  ],
+  "context": {
+    "allocator_lifetime": "process-lifetime ManagedArena; blocks are released by a Kokkos finalize hook, the arena tables are intentionally never destroyed",
+    "allocator_mode": "kokkos_shared_space_managed_arena",
+    "amr_refinement_ratio": null,
+    "amr_refinement_ratio_rank": 2,
+    "amr_refinement_ratio_selection": "hierarchy_exact_rank",
+    "comm_allocator_mode": "kokkos_shared_host_pinned_space",
+    "communicator": "MPI_COMM_WORLD",
+    "dimension": 2,
+    "field_memory_space": "host",
+    "has_kokkos": true,
+    "kokkos_atexit_finalize_registered": true,
+    "kokkos_backend": "OpenMP",
+    "kokkos_concurrency": 2,
+    "kokkos_device": "cpu",
+    "kokkos_finalized": false,
+    "kokkos_initialized": true,
+    "kokkos_initialized_by_pops": true,
+    "kokkos_lifecycle": "PoPS lazily initialized Kokkos and registered an atexit finalize hook",
+    "kokkos_ownership": "pops-owned-lazy",
+    "kokkos_shared_space": "Host",
+    "kokkos_stream": "Kokkos::OpenMP::synchronous",
+    "kokkos_stream_synchronous": true,
+    "mpi_active": true,
+    "mpi_atexit_finalize_registered": true,
+    "mpi_compiled": true,
+    "mpi_initialized_by_pops": true,
+    "mpi_ownership": "pops-owned",
+    "mpi_rank": 0,
+    "mpi_ranks": 1,
+    "mpi_thread_level": 3,
+    "precision": "double",
+    "real_bytes": 8,
+    "supports_custom_communicator": false,
+    "supports_mixed_precision": false,
+    "supports_single_precision": false
+  },
+  "core1198_live_rehashed": true,
+  "core_fingerprint": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "exact_scientific_pairs": [
+    {
+      "array_payloads": 4,
+      "full_JSON_and_Program_equal": true,
+      "pair": [
+        "reference-rank0",
+        "accepted-rank0"
+      ],
+      "stats_projection_only": false,
+      "values_compared": 10240
+    },
+    {
+      "array_payloads": 4,
+      "full_JSON_and_Program_equal": true,
+      "pair": [
+        "accepted-rank0",
+        "restored-rank0"
+      ],
+      "stats_projection_only": false,
+      "values_compared": 10240
+    },
+    {
+      "array_payloads": 4,
+      "full_JSON_and_Program_equal": true,
+      "pair": [
+        "continuous-rank0",
+        "restarted-rank0"
+      ],
+      "stats_projection_only": false,
+      "values_compared": 10240
+    }
+  ],
+  "fail_first_scope": "Root dispatch explicitly set PYTEST_ADDOPTS=-x in recorded tool call. Physical result.command and identity.execution_environment omit it; dispatch-declared, not independently instrumented filesystem proof. Allnine nevertheless executed and passed.",
+  "group_counts": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 9
+  },
+  "group_seconds": 627.927761125,
+  "limits": [
+    "Only actual world1 Dim2 CPU/OpenMP recorded; no MPI2/GPU/3D transfer",
+    "2levels actual original AMR scope; regrid/topology counters2\u21923 are events, not level count",
+    "Original Native scientific assertions executed, Source unchanged; offline receiver independently validates finite physical arrays and exact parity/rollback/restart, not a new analytic closed-form oracle for coupled AMR example",
+    "Positive CP IDs/rawbytes verified independently; no independent native semantic decoder/restart run",
+    "Bad/resealed-invalid archives excluded from positive checkpoint admission; hash-pinned as negative test evidence",
+    "Private fault/capture instrumentation; no general public parameter-update/rank0-only/retained-ticket/full94 proof",
+    "Transient shell NoSpace observed during receiver; subsequent df421MiB/read-only worked. No producer test failure or proof deletion inferred."
+  ],
+  "physical_files_count": 300,
+  "physical_inventory_sha256": "8817bf68dde9a302bfb51d36e2c059fb70a46d819499ce0d12cd9ebaaf6a707b",
+  "positive_checkpoint_files": [
+    {
+      "history_names": [],
+      "macro_step": 2,
+      "nlevels": 2,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/continuous/restart.npz",
+      "payloads": 52,
+      "restart_identity": "32326d27117cfad6d458b2ebcc6ad40cd71cbc0af7c1267c1181009d6cc8c77e",
+      "runtime_kind": "amr",
+      "time": 0.0002
+    },
+    {
+      "history_names": [],
+      "macro_step": 1,
+      "nlevels": 2,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/published-attempt1.npz",
+      "payloads": 52,
+      "restart_identity": "a06ce14b957d6dc80133ec514d9c378c153c9e3c8bba3de3e26e97f2dbfd8693",
+      "runtime_kind": "amr",
+      "time": 0.0001
+    },
+    {
+      "history_names": [],
+      "macro_step": 1,
+      "nlevels": 2,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/published-attempt2.npz",
+      "payloads": 52,
+      "restart_identity": "a06ce14b957d6dc80133ec514d9c378c153c9e3c8bba3de3e26e97f2dbfd8693",
+      "runtime_kind": "amr",
+      "time": 0.0001
+    },
+    {
+      "history_names": [],
+      "macro_step": 1,
+      "nlevels": 2,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/reference-output/restart.npz",
+      "payloads": 52,
+      "restart_identity": "a06ce14b957d6dc80133ec514d9c378c153c9e3c8bba3de3e26e97f2dbfd8693",
+      "runtime_kind": "amr",
+      "time": 0.0001
+    },
+    {
+      "history_names": [],
+      "macro_step": 2,
+      "nlevels": 2,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/restarted/restart.npz",
+      "payloads": 52,
+      "restart_identity": "ff4bc03efcbe574fdd2d9c0eadccdf7039b8d508b87c00de504185a494ff3efb",
+      "runtime_kind": "amr",
+      "time": 0.0002
+    },
+    {
+      "history_names": [],
+      "macro_step": 1,
+      "nlevels": 2,
+      "path": "pytest-tmp/test_original_imex_checkpoint_0/imex-sealed-retry/retry-output/restart.npz",
+      "payloads": 52,
+      "restart_identity": "a06ce14b957d6dc80133ec514d9c378c153c9e3c8bba3de3e26e97f2dbfd8693",
+      "runtime_kind": "amr",
+      "time": 0.0001
+    }
+  ],
+  "seal": {
+    "bytes": 178816,
+    "captures": 1,
+    "factories": 1,
+    "publications": 2,
+    "retained_attempts_and_final_target_byte_equal": true,
+    "sha256": "b8334cd6eef1dcf02d7c531adff3d6572d68d025cea5258c686fb99de9c047ed",
+    "source_target_inode": [
+      16777229,
+      339941384
+    ]
+  },
+  "selected_test_and_original_example_Source_equal_6d": {
+    "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py": {
+      "current_sha256": "c29a64e96300d2c9ce3bf07d7cafc771a707f0e7e9d0c54127d44daea6a95098",
+      "exact_bytes_equal_historical_6d": true
+    },
+    "tests/python/integration/runtime/test_final_imex_original_reception.py": {
+      "current_sha256": "a2fef33e7daec55a4d730b66fa674ccaa2d93628426730f1307d18c767205146",
+      "exact_bytes_equal_historical_6d": true
+    },
+    "tests/python/integration/runtime/test_imex_checkpoint_publication_rollback.py": {
+      "current_sha256": "66bac795f92f84f2539f47492d0fe9200dc1c0adad5557efdb0cf0ea4c16fd14",
+      "exact_bytes_equal_historical_6d": true
+    },
+    "tests/python/integration/runtime/test_imex_checkpoint_sealed_retry.py": {
+      "current_sha256": "dfb3d8329ad90c5dd04de7c093016814861e9427a6330c0ff457113e4a61762b",
+      "exact_bytes_equal_historical_6d": true
+    },
+    "tests/python/unit/runtime/test_temporal_restart_state.py": {
+      "current_sha256": "bf1ec40c6b316fa2b7e9aaef065960e86b9af8d4e8d69db9fe8baff0394f18c0",
+      "exact_bytes_equal_historical_6d": true
+    }
+  },
+  "status": "PASS_CURRENT_CORE_OWN_RETRY_SCOPE"
+}

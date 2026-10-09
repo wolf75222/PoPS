@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "case": "m03-stiffened",
+  "status": "passed",
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/examples/migration/scientific/api040_m03_euler_eos.py"
+  ],
+  "returncode": 0,
+  "seconds": 272.34056987497024,
+  "ranks": 1,
+  "threads": 1,
+  "authentication_before": 0,
+  "authentication_after": 0,
+  "example_sources_unchanged": true,
+  "same_native": true,
+  "same_shipped_sources": true,
+  "correct_backend": true,
+  "native_sha256": "e1070cb63a8e733b0a6032ac4d2b8ad003756668c100e057e5f8edd5b9c01280",
+  "scientific_receipt": "states/stiffened/receipt.json",
+  "scientific_receipt_sha256": "b887b69639bacf6c469ba6339192b9827fde84722ecb05c73a31fece5c1b8944",
+  "settings": {
+    "POPS_API040_M03_COMPONENT_NAMES": "a,b,c,d",
+    "POPS_API040_M03_PARAMETER_NAMES": "ratio_of_heats,pressure_shift",
+    "POPS_API040_M03_STATE_NAME": "renamed_conservative_values",
+    "POPS_API040_M03_BLOCK_NAME": "renamed_material",
+    "OMP_NUM_THREADS": "1",
+    "POPS_THREADS": "1",
+    "POPS_API040_OUTPUT": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/m03-stiffened-boundary-budget/states",
+    "POPS_API040_M03_CASE": "stiffened"
+  }
+}

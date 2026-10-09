@@ -1,0 +1,379 @@
+{
+  "scope": "offline observations; no science seal",
+  "cases": [
+    {
+      "case": "test_public_evolved_stage_amr_checkpoint_and_composite_Q[1-8]",
+      "receipt": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-mpi2-dim2/rank0-tmp/test_public_evolved_stage_amr_0/evolved-stage-amr/receipt.json",
+      "receipt_sha256": "88c6f623560c9042f515f1fa01d35fe5b233a56ce0eb23174854a66ce4de4bb7",
+      "pins": 23,
+      "phases": [
+        {
+          "phase": "accepted",
+          "active_counts": [
+            48,
+            64
+          ],
+          "volume": 1.0,
+          "T_oracle_linf": 2.2676305277968822e-14,
+          "constraint_linf": 0.0,
+          "Q_amounts": [
+            0.1856000000000298
+          ],
+          "Q_oracle_linf": 2.9781732635569824e-14,
+          "recorded_checks": {
+            "Q_amounts": [
+              0.18560000000002994
+            ],
+            "Q_balance": [
+              2.992051051364797e-14
+            ],
+            "Q_projection_linf": 2.7755575615628914e-17,
+            "composite_volume": 1.0,
+            "constraint_linf": 0.0,
+            "homogeneous_Q_equation_linf": 2.995347025969153e-14,
+            "native_original_F_composite_relative": 1.6115956861858127e-13
+          }
+        },
+        {
+          "phase": "continuous",
+          "active_counts": [
+            48,
+            64
+          ],
+          "volume": 1.0,
+          "T_oracle_linf": 7.460698725481052e-14,
+          "constraint_linf": 0.0,
+          "Q_amounts": [
+            0.19870000000010044
+          ],
+          "Q_oracle_linf": 1.0039191700172978e-13,
+          "recorded_checks": {
+            "Q_amounts": [
+              0.19870000000009994
+            ],
+            "Q_balance": [
+              9.989231664064846e-14
+            ],
+            "Q_projection_linf": 2.7755575615628914e-17,
+            "composite_volume": 1.0,
+            "constraint_linf": 0.0,
+            "homogeneous_Q_equation_linf": 7.003252144865968e-14,
+            "native_original_F_composite_relative": 3.521218301156558e-13
+          }
+        },
+        {
+          "phase": "replay",
+          "active_counts": [
+            48,
+            64
+          ],
+          "volume": 1.0,
+          "T_oracle_linf": 7.460698725481052e-14,
+          "constraint_linf": 0.0,
+          "Q_amounts": [
+            0.19870000000010044
+          ],
+          "Q_oracle_linf": 1.0039191700172978e-13,
+          "recorded_checks": {
+            "Q_amounts": [
+              0.19870000000009994
+            ],
+            "Q_balance": [
+              9.989231664064846e-14
+            ],
+            "Q_projection_linf": 2.7755575615628914e-17,
+            "composite_volume": 1.0,
+            "constraint_linf": 0.0,
+            "homogeneous_Q_equation_linf": 7.003252144865968e-14,
+            "native_original_F_composite_relative": 3.521218301156558e-13
+          }
+        }
+      ]
+    },
+    {
+      "case": "test_public_evolved_stage_amr_checkpoint_and_composite_Q[1-16]",
+      "receipt": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-mpi2-dim2/rank0-tmp/test_public_evolved_stage_amr_1/evolved-stage-amr/receipt.json",
+      "receipt_sha256": "cee5cb54668967fd3ab6145a5010af1b9cb92bee4e327fecd0816ee4e515f612",
+      "pins": 23,
+      "phases": [
+        {
+          "phase": "accepted",
+          "active_counts": [
+            192,
+            256
+          ],
+          "volume": 1.0,
+          "T_oracle_linf": 2.2676305277968822e-14,
+          "constraint_linf": 0.0,
+          "Q_amounts": [
+            0.18560000000002766
+          ],
+          "Q_oracle_linf": 2.7644553313166398e-14,
+          "recorded_checks": {
+            "Q_amounts": [
+              0.18560000000002996
+            ],
+            "Q_balance": [
+              2.99482660892636e-14
+            ],
+            "Q_projection_linf": 2.7755575615628914e-17,
+            "composite_volume": 1.0,
+            "constraint_linf": 0.0,
+            "homogeneous_Q_equation_linf": 2.995347025969153e-14,
+            "native_original_F_composite_relative": 1.6123753435845012e-13
+          }
+        },
+        {
+          "phase": "continuous",
+          "active_counts": [
+            192,
+            256
+          ],
+          "volume": 1.0,
+          "T_oracle_linf": 7.460698725481052e-14,
+          "constraint_linf": 0.0,
+          "Q_amounts": [
+            0.19870000000009655
+          ],
+          "Q_oracle_linf": 9.650613641554173e-14,
+          "recorded_checks": {
+            "Q_amounts": [
+              0.19870000000009996
+            ],
+            "Q_balance": [
+              9.992007221626409e-14
+            ],
+            "Q_projection_linf": 2.7755575615628914e-17,
+            "composite_volume": 1.0,
+            "constraint_linf": 0.0,
+            "homogeneous_Q_equation_linf": 7.003252144865968e-14,
+            "native_original_F_composite_relative": 3.520705274785667e-13
+          }
+        },
+        {
+          "phase": "replay",
+          "active_counts": [
+            192,
+            256
+          ],
+          "volume": 1.0,
+          "T_oracle_linf": 7.460698725481052e-14,
+          "constraint_linf": 0.0,
+          "Q_amounts": [
+            0.19870000000009655
+          ],
+          "Q_oracle_linf": 9.650613641554173e-14,
+          "recorded_checks": {
+            "Q_amounts": [
+              0.19870000000009996
+            ],
+            "Q_balance": [
+              9.992007221626409e-14
+            ],
+            "Q_projection_linf": 2.7755575615628914e-17,
+            "composite_volume": 1.0,
+            "constraint_linf": 0.0,
+            "homogeneous_Q_equation_linf": 7.003252144865968e-14,
+            "native_original_F_composite_relative": 3.520705274785667e-13
+          }
+        }
+      ]
+    },
+    {
+      "case": "test_public_evolved_stage_amr_checkpoint_and_composite_Q[2-8]",
+      "receipt": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-mpi2-dim2/rank0-tmp/test_public_evolved_stage_amr_2/evolved-stage-amr/receipt.json",
+      "receipt_sha256": "5429f3c346232c80ec3fdb84a2cf0a913085ac6cf1dcf76f2c9183bafb522f5b",
+      "pins": 25,
+      "phases": [
+        {
+          "phase": "accepted",
+          "active_counts": [
+            48,
+            64
+          ],
+          "volume": 1.0,
+          "T_oracle_linf": 2.1753210344144236e-11,
+          "constraint_linf": 2.7755575615628914e-17,
+          "Q_amounts": [
+            0.1914250438746664,
+            0.3073249561626339
+          ],
+          "Q_oracle_linf": 3.306538376435242e-11,
+          "recorded_checks": {
+            "Q_amounts": [
+              0.1914250438746664,
+              0.3073249561626347
+            ],
+            "Q_balance": [
+              4.235001238583891e-12,
+              3.306613316489404e-11
+            ],
+            "Q_projection_linf": 2.7755575615628914e-17,
+            "composite_volume": 1.0,
+            "constraint_linf": 2.7755575615628914e-17,
+            "homogeneous_Q_equation_linf": 3.306618867604527e-11,
+            "native_original_F_composite_relative": 9.207210384359551e-11
+          }
+        },
+        {
+          "phase": "continuous",
+          "active_counts": [
+            48,
+            64
+          ],
+          "volume": 1.0,
+          "T_oracle_linf": 3.763361844377755e-11,
+          "constraint_linf": 2.7755575615628914e-17,
+          "Q_amounts": [
+            0.20410008774850624,
+            0.2946499123157632
+          ],
+          "Q_oracle_linf": 5.66262037260401e-11,
+          "recorded_checks": {
+            "Q_amounts": [
+              0.2041000877485058,
+              0.2946499123157635
+            ],
+            "Q_balance": [
+              7.642969590548887e-12,
+              5.6626314748342566e-11
+            ],
+            "Q_projection_linf": 5.551115123125783e-17,
+            "composite_volume": 1.0,
+            "constraint_linf": 2.7755575615628914e-17,
+            "homogeneous_Q_equation_linf": 2.3560070561146063e-11,
+            "native_original_F_composite_relative": 6.641439686625803e-11
+          }
+        },
+        {
+          "phase": "replay",
+          "active_counts": [
+            48,
+            64
+          ],
+          "volume": 1.0,
+          "T_oracle_linf": 3.763361844377755e-11,
+          "constraint_linf": 2.7755575615628914e-17,
+          "Q_amounts": [
+            0.20410008774850624,
+            0.2946499123157632
+          ],
+          "Q_oracle_linf": 5.66262037260401e-11,
+          "recorded_checks": {
+            "Q_amounts": [
+              0.2041000877485058,
+              0.2946499123157635
+            ],
+            "Q_balance": [
+              7.642969590548887e-12,
+              5.6626314748342566e-11
+            ],
+            "Q_projection_linf": 5.551115123125783e-17,
+            "composite_volume": 1.0,
+            "constraint_linf": 2.7755575615628914e-17,
+            "homogeneous_Q_equation_linf": 2.3560070561146063e-11,
+            "native_original_F_composite_relative": 6.641439686625803e-11
+          }
+        }
+      ]
+    },
+    {
+      "case": "test_public_evolved_stage_amr_checkpoint_and_composite_Q[2-16]",
+      "receipt": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-mpi2-dim2/rank0-tmp/test_public_evolved_stage_amr_3/evolved-stage-amr/receipt.json",
+      "receipt_sha256": "e25d3acd9b515913995a20b1464a922ddf0c7710a474aeb7e8b1748d2c9780be",
+      "pins": 25,
+      "phases": [
+        {
+          "phase": "accepted",
+          "active_counts": [
+            192,
+            256
+          ],
+          "volume": 1.0,
+          "T_oracle_linf": 2.175318258856862e-11,
+          "constraint_linf": 2.7755575615628914e-17,
+          "Q_amounts": [
+            0.19142504387466455,
+            0.30732495616263267
+          ],
+          "Q_oracle_linf": 3.306416251902533e-11,
+          "recorded_checks": {
+            "Q_amounts": [
+              0.19142504387466633,
+              0.307324956162633
+            ],
+            "Q_balance": [
+              4.234917971857044e-12,
+              3.306441231920587e-11
+            ],
+            "Q_projection_linf": 2.7755575615628914e-17,
+            "composite_volume": 1.0,
+            "constraint_linf": 2.7755575615628914e-17,
+            "homogeneous_Q_equation_linf": 3.306613316489404e-11,
+            "native_original_F_composite_relative": 9.20720800795187e-11
+          }
+        },
+        {
+          "phase": "continuous",
+          "active_counts": [
+            192,
+            256
+          ],
+          "volume": 1.0,
+          "T_oracle_linf": 3.763361844377755e-11,
+          "constraint_linf": 2.7755575615628914e-17,
+          "Q_amounts": [
+            0.20410008774850877,
+            0.29464991231576604
+          ],
+          "Q_oracle_linf": 5.66290347947529e-11,
+          "recorded_checks": {
+            "Q_amounts": [
+              0.20410008774850685,
+              0.2946499123157626
+            ],
+            "Q_balance": [
+              7.644024302422281e-12,
+              5.6625426569922865e-11
+            ],
+            "Q_projection_linf": 5.551115123125783e-17,
+            "composite_volume": 1.0,
+            "constraint_linf": 2.7755575615628914e-17,
+            "homogeneous_Q_equation_linf": 2.3560070561146063e-11,
+            "native_original_F_composite_relative": 6.641432818015541e-11
+          }
+        },
+        {
+          "phase": "replay",
+          "active_counts": [
+            192,
+            256
+          ],
+          "volume": 1.0,
+          "T_oracle_linf": 3.763361844377755e-11,
+          "constraint_linf": 2.7755575615628914e-17,
+          "Q_amounts": [
+            0.20410008774850877,
+            0.29464991231576604
+          ],
+          "Q_oracle_linf": 5.66290347947529e-11,
+          "recorded_checks": {
+            "Q_amounts": [
+              0.20410008774850685,
+              0.2946499123157626
+            ],
+            "Q_balance": [
+              7.644024302422281e-12,
+              5.6625426569922865e-11
+            ],
+            "Q_projection_linf": 5.551115123125783e-17,
+            "composite_volume": 1.0,
+            "constraint_linf": 2.7755575615628914e-17,
+            "homogeneous_Q_equation_linf": 2.3560070561146063e-11,
+            "native_original_F_composite_relative": 6.641432818015541e-11
+          }
+        }
+      ]
+    }
+  ]
+}

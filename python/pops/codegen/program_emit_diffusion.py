@@ -24,7 +24,8 @@ def _diffusive_flux_families(v):
     """Stable spatial occurrences; physical coefficients remain in the emitted face payload."""
     operation = _resolved_diffusive_operation(v)
     rows = v.attrs["physical_balance"].occurrences
-    diffusion = tuple(row.ordinal for row in rows if row.kind in {"diffusion", "drift"})
+    diffusion = tuple(row.ordinal for row in rows
+                      if row.kind in {"diffusion", "coupled_gradient", "drift"})
     transport = tuple(row.ordinal for row in rows if row.kind == "flux")
     constitutive = make_identity("program-flux-family", {
         "operation": operation, "route": "constitutive", "occurrences": diffusion
@@ -35,9 +36,32 @@ def _diffusive_flux_families(v):
     return constitutive, transport_family
 
 
+def _resolved_diffusive_trace_selection(value):
+    """A Rate selector names one actual conservative face producer, never its sources.
+
+    The current public selector carries no authored occurrence discriminator. Refuse
+    a mixed transport/constitutive rate instead of silently choosing either current.
+    Fitted drift/diffusion is one inseparable evaluated face carrier.
+    """
+    operation = _resolved_diffusive_operation(value)
+    rows = value.attrs["physical_balance"].occurrences
+    if value.attrs.get("fitted", False):
+        ordinals = tuple(row.ordinal for row in rows if row.kind in {"drift", "diffusion"})
+        occurrences = [operation + "/joint-occurrences:" + ",".join(map(str, ordinals))]
+        occurrences.extend(operation + "/occurrence:" + str(row.identity[1])
+                           for row in rows if row.kind == "flux")
+    else:
+        occurrences = [operation + "/occurrence:" + str(row.identity[1]) for row in rows
+                       if row.kind in {"diffusion", "coupled_gradient", "flux"}]
+    if len(occurrences) != 1:
+        raise ValueError("integral transfer requires one exact conservative diffusive occurrence")
+    return operation, occurrences[0]
+
+
 def _selected(v, node_model, *, require_realization=True):
     view=v.attrs["physical_balance"]
-    rows=tuple(row for row in view.occurrences if row.kind=="diffusion")
+    rows=tuple(row for row in view.occurrences
+               if row.kind in {"diffusion", "coupled_gradient"})
     if not rows or any(row.payload != rows[0].payload or row.coefficient<=0 for row in rows):
         raise ValueError("diffusive Program evaluation requires positive occurrences of one exact flux")
     impl=_model_impl(node_model)
@@ -67,6 +91,12 @@ def _selected(v, node_model, *, require_realization=True):
             raise ValueError("diffusive Program operator has conflicting resolved numerical methods")
         if kinds == {"tensor_diffusion"}:
             selected = {**selected, "tensor": True}
+        if kinds == {"coupled_gradient"}:
+            if any(row.kind != "coupled_gradient" for row in rows):
+                raise ValueError("coupled gradient route cannot consume a dissipative occurrence")
+            selected = {**selected, "tensor": True, "coupled": True}
+    if require_realization and any(row.kind == "coupled_gradient" for row in rows) and not selected.get("coupled"):
+        raise ValueError("coupled gradient has no exact resolved numerical method")
     if require_realization and not selected.get("tensor"):
         # A bare emitter may use the ordinary monotone construction, but must
         # never discard physical off-diagonal entries or cross-gradient reads.
@@ -95,7 +125,8 @@ def diffusive_flux_basis_count(v):
         return 0
     view = v.attrs.get("physical_balance")
     occurrences = tuple(getattr(view, "occurrences", ()))
-    diffusion = tuple(row for row in occurrences if row.kind == "diffusion")
+    diffusion = tuple(row for row in occurrences
+                      if row.kind in {"diffusion", "coupled_gradient"})
     if not diffusion:
         raise ValueError("diffusive Program evaluation has no constitutive face occurrence")
     transport = tuple(row for row in occurrences if row.kind == "flux")
@@ -129,6 +160,9 @@ def _boundary_cpp(law):
 
 
 def _prepared_diffusion_type(selected):
+    if selected.get("coupled"):
+        return ("pops::runtime::program::PreparedCoupledGradient<"
+                "pops::kNativeDimension, %d>" % len(selected["variables"]))
     specialization = "pops::kNativeDimension" + (
         ", %d" % len(selected["variables"]) if len(selected["variables"]) > 1 else "")
     if selected.get("tensor"):
@@ -140,7 +174,17 @@ def _emit_diffusive_preparation(v, state_var, prepared_var, node_model,
                                 provider_plans=None, bidx=0, target="system"):
     if target not in {"system", "amr_system"}:
         raise ValueError("diffusion execution requires a Uniform or AMR native install scope")
+    if target == "amr_system":
+        from pops.codegen.program_rhs_input_trace import requires_rhs_input_trace
+        if requires_rhs_input_trace(v):
+            raise NotImplementedError(
+                "AMR source-transformed diffusion inputs require a qualified composite "
+                "diffusion trace; same-stage RHS traces currently cover finite-volume transport")
     _,selected,_=_selected(v,node_model)
+    if selected.get("coupled") and target != "system":
+        raise NotImplementedError(
+            "coupled gradient requires a periodic Uniform route; "
+            "AMR composite face transfer remains an implementation obligation")
     preparation = "%s, %s, %s" % (
         state_var, _boundary_cpp(selected["physical"]),
         "true" if target == "amr_system" else "false")
@@ -159,14 +203,25 @@ def _emit_diffusive_preparation(v, state_var, prepared_var, node_model,
 
 
 def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
-                        prepared_var=None, *, defer_explicit_bound=False):
+                        prepared_var=None, *, defer_explicit_bound=False,
+                        output_publication=None):
     if target not in {"system", "amr_system"}:
         raise ValueError("diffusion execution requires a Uniform or AMR native install scope")
+    setup_start = len(lines)
+    stage_prelude = []
     if "evaluation_partition" in v.attrs:
         from pops.time._evaluation_point import evaluation_stage_fraction
         stage = evaluation_stage_fraction(v)
-        lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+        stage_prelude.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+    if output_publication is None:
+        lines.extend(stage_prelude)
+    elif not callable(output_publication):
+        raise TypeError("delegated output publication requires a boundary receiver")
     impl,selected,rows=_selected(v,node_model)
+    if selected.get("coupled") and target != "system":
+        raise NotImplementedError("coupled gradient has no AMR composite face route")
+    if selected.get("coupled") and prepared_var is not None:
+        raise NotImplementedError("coupled gradient has no implicit spatial solver certificate")
     state_var=var[v.inputs[0].id]
     out="diffusive_rhs_%d" % v.id
     var[v.id]=out
@@ -185,13 +240,24 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
                 raise ValueError("explicit TensorDiffusion requires affine gradient variables and state-independent tensors; use an implicit spatial stage for nonlinear laws")
             pending.extend(_children(node))
     constitutive_family, transport_family = _diffusive_flux_families(v)
+    allocation = "pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);" % (
+        out,v.id,state_var)
+    if output_publication is not None:
+        # Only the actual output allocation is shared with off-cadence branches.
+        # Stage selection and physical preparation remain in the guarded body.
+        lines.append(allocation)
+        setup_end = len(lines)
+        lines.extend(stage_prelude)
+        before_write = len(lines)
     if prepared_var is None:
         prepared_var="diffusion_prepared_%d" % v.id
         lines.extend(_emit_diffusive_preparation(v,state_var,prepared_var,node_model,
                                                  provider_plans,bidx,target))
-    lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);" % (
-        out,v.id,state_var))
-    exprs=_law_expressions(selected)
+    if output_publication is None:
+        # Residual/implicit callers retain the original return API and ordering.
+        lines.append(allocation)
+    from pops._ir.primitive_expansion import expand_evaluation_boundaries
+    exprs=tuple(expand_evaluation_boundaries(_law_expressions(selected), impl.prim_defs))
     sources=tuple(row for row in v.attrs["physical_balance"].occurrences if row.kind=="source")
     roots=list(exprs)
     for row in sources:
@@ -262,14 +328,16 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
         transport_binding = provider_plans.bind_pack(transport_pack, qid+"/transport")
         lines.extend(_prepare_provider_values(transport_binding, bidx, state_var))
         suffix = "," + json.dumps(transport_family) if target == "amr_system" else ""
-        lines.append("ctx.neg_div_flux_default_with_faces_into(%d,%s,%s,%d,%s_transport_faces%s);" % (
-            bidx,state_var,temporary,v.id,prepared_var,suffix))
+        transport_frequency = "diffusive_transport_frequency_%d" % v.id
+        lines.append("pops::Real %s=0;" % transport_frequency)
+        frequency_output = (",nullptr,&" if target == "amr_system" else ",&") + transport_frequency
+        lines.append("ctx.neg_div_flux_default_with_faces_into(%d,%s,%s,%d,%s_transport_faces%s%s);" % (
+            bidx,state_var,temporary,v.id,prepared_var,suffix,frequency_output))
         # This combines spatial rates. Its unit coefficient has dt power zero; the
         # authored time update supplies the sole dt factor, including in AMR subcycles.
         lines.append("ctx.axpy(%s,1,%s,dt,{{0, 1, 1}});" % (out,temporary))
-        inverse_spacing=" + ".join("1/ctx.geometry().spacing(%d)" % axis for axis in range(selected["physical"].dimension))
-        frequency+=" + ctx.max_wave_speed(%d,%s)*(%s)" % (bidx,state_var,inverse_spacing)
-    if explicit:
+        frequency += " + " + transport_frequency
+    if explicit and not selected.get("coupled"):
         lines.append("const pops::Real diffusion_frequency_%d=%s;" % (v.id,frequency))
         if not defer_explicit_bound:
             lines.append("if (!(std::isfinite(dt) && dt>=0 && dt*diffusion_frequency_%d<=1+32*std::numeric_limits<pops::Real>::epsilon()))" % v.id)
@@ -280,6 +348,11 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
         lines.extend(_emit_source_kernel(node_model,row.payload.reg_name,state_var,temporary,bidx,
             provider_plans=provider_plans,consumer_qid=qid,plan_exprs=roots))
         lines.append("ctx.axpy(%s,%s,%s);" % (out,scalar_cpp(row.coefficient),temporary))
+    if output_publication is not None:
+        from .program_value_authority import DelegatedOutputPublication
+        output_publication(DelegatedOutputPublication(
+            v.id, bidx, "RhsScratch", v.id, 0, out,
+            setup_start, setup_end, before_write, len(lines)))
     return prepared_var
 
 
@@ -303,7 +376,7 @@ def _emit_diffusive_accepted(v, prepared_var, lines, temporal_weight_cpp, evalua
             prepared_var,program_block,json.dumps(operation),json.dumps(occurrence),json.dumps(evaluation_context),temporal_weight_cpp))
         return
     for row in view.occurrences:
-        if row.kind != "diffusion":
+        if row.kind not in {"diffusion", "coupled_gradient"}:
             continue
         occurrence = operation+"/occurrence:"+str(row.identity[1])
         lines.append("%s.stage_accepted_exchanges(ctx,%d,%s,%s,%s,(%s)*%s);" % (

@@ -1,0 +1,77 @@
+{
+  "checkout": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-sol61-amr-gmres-breakdown",
+  "jit": false,
+  "kind": "original-field-captured-diffusion-source-reception",
+  "legacy_parity": {
+    "byte_exact": true,
+    "current": {
+      "cpp": "e3e9d0ce0ae356493526dd98bcb8888de2b17e12be21181c6c882f907890faa5",
+      "ir": "59ab71d259f6c2be65cfefab4b694dd3d92890b0a8ccc87f7e3ceef7db6db7df",
+      "modules": [
+        "2ba749901077cf26c180c3669ca0f4aab04cf4779128a805c88bfc860344a445",
+        "f81418724a3ae45b3ed7cc03cd9016a3f4f1f4a36e11b6127285ca62a7fd3fe0",
+        "866eb454ff1f9f173099f6824119545dd00aa41a64e05a72ddb353e231c442cf"
+      ]
+    },
+    "reference": {
+      "cpp": "e3e9d0ce0ae356493526dd98bcb8888de2b17e12be21181c6c882f907890faa5",
+      "ir": "59ab71d259f6c2be65cfefab4b694dd3d92890b0a8ccc87f7e3ceef7db6db7df",
+      "modules": [
+        "2ba749901077cf26c180c3669ca0f4aab04cf4779128a805c88bfc860344a445",
+        "f81418724a3ae45b3ed7cc03cd9016a3f4f1f4a36e11b6127285ca62a7fd3fe0",
+        "866eb454ff1f9f173099f6824119545dd00aa41a64e05a72ddb353e231c442cf"
+      ]
+    },
+    "reference_commit": "c7cdd2c38cc7145abb5981b90f38e9b6035b6e5e"
+  },
+  "limits": [
+    "Installed native execution and MPI are pending ROOT reception.",
+    "No convergence or scientific campaign is qualified by source/math/syntax checks.",
+    "Unknown-dependent diffusion is refused; State captures are frozen per prepared original residual."
+  ],
+  "mpi_execution": false,
+  "native_execution": false,
+  "native_syntax": {
+    "command": "/usr/bin/clang++ -std=c++20 -fsyntax-only -DPOPS_NATIVE_DIM=1 -DPOPS_RUNTIME_SHARED_EXCEPTION_ABI -DPOPS_HAS_KOKKOS -DKOKKOS_DEPENDENCE -DPOPS_HAS_MPI -DPOPS_HAS_PARALLEL_HDF5 -Iinclude -I/Users/romaindespoulain/miniforge3/envs/pops-api040/include -Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include tests/review/sol61_captured_diffusion_syntax.cpp",
+    "dimensions_instantiated": [
+      1,
+      2,
+      3
+    ],
+    "exit_code": 0,
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "translation_unit": "tests/review/sol61_captured_diffusion_syntax.cpp"
+  },
+  "parent_commit": "52f4413806fffdad57f7b791c9eb6211e08d1a51",
+  "production_commit": "4ae5c4de2c73b88e1ed1644293df1c3ad0c66b9a",
+  "production_sha256": {
+    "include/pops/numerics/elliptic/nd/general_field_operator.hpp": "e74905b86948385112a95f6a85230906e01493c49fe036d6276328025b013499",
+    "python/pops/codegen/program_emit_nonlinear_field.py": "496f4c83628f06d8f32ebdda23541c14143affaccd23f46c7bd02ab983e7b696",
+    "python/pops/codegen/program_field_plan.py": "c15845728acf877cd732bb1e7f8f31665ed46c7df1c0495bedbe196782cbabaf",
+    "python/pops/fields/_program_nonlinear_problem.py": "4a8d45b30c00e1eafd465941825f14d5937e9b4720758c529171d0a7513c84d9",
+    "python/pops/fields/methods.py": "56cf4cbdabb7ed13e47d0bad230b0704cd2282bf7fc8eddc7140b348eac47d57",
+    "python/pops/time/_program/serialization.py": "579c99ffde138469f1fa3cebd214682fd67fd472643ea4686c4b6bc4928f631f"
+  },
+  "python_package": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-sol61-amr-gmres-breakdown/python/pops/__init__.py",
+  "python_runtime": "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+  "source_checks": {
+    "captured_diffusion_23": {
+      "execution": "source-only, no native/JIT",
+      "log_sha256": "fb104e458ad85e6167cd1b774b2188321ba19ca923c77a8f142bc7419839e7c7",
+      "passed": 23,
+      "seconds": 169.85
+    },
+    "combined_jacobi_1": {
+      "execution": "source-only, no native/JIT",
+      "log_sha256": "46a61e5677d328b121e8764d20db623328d085c63e791802acfbaa6b1037a379",
+      "passed": 1,
+      "seconds": 19.58
+    },
+    "legacy_units_22": {
+      "execution": "source-only, no native/JIT",
+      "log_sha256": "020312d207cd6643ba5501a8481d401f6e5346e09d58f2ca18e2305a58d1a23f",
+      "passed": 22,
+      "seconds": 14.19
+    }
+  }
+}

@@ -1,0 +1,227 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "threshold": 1e-11,
+  "source_sha256": "37b0bbf4aa530949fb54c4f17f79880e581e957fd4433db0d5788ea9c953f6c0",
+  "seed": 20260928,
+  "numpy_version": "2.5.1",
+  "scope": "Finite 8+4 DOF M09 witness; not a meshed PDE or global distributed solve.",
+  "serial": {
+    "directory": "outputs/installed-finite-amr-repaired-serial/pytest-tmp",
+    "state_count": 16,
+    "max_original_residual": 3.552713678800501e-15,
+    "max_monolithic_error": 7.771561172376096e-16,
+    "max_cn_energy_error": 1.0658141036401503e-14,
+    "records": [
+      {
+        "state": "test_finite_maps_rebind_operan0/first_capture.npz",
+        "sha256": "074c5cf5bf1f9ee83a425a5bd9ca7f653046a9e8d7d2caf1bfaac1fc57bb3731",
+        "original_residual": 1.3322676295501878e-15,
+        "monolithic_error": 4.440892098500626e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan0/new_bind_after_two_refusals.npz",
+        "sha256": "93a170017e55451d4c76aec3a9eda16825f427cfb2d3cd594dad6d048671afa6",
+        "original_residual": 8.881784197001252e-16,
+        "monolithic_error": 3.3306690738754696e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan0/second_capture_same_artifact.npz",
+        "sha256": "c89bee4a5f4a1d6aa66d148037c5b584d3a8c404b4e20dbb644a8f21d869abc9",
+        "original_residual": 8.881784197001252e-16,
+        "monolithic_error": 4.440892098500626e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan1/first_capture.npz",
+        "sha256": "b4e9aa2381ef9188b1dfce30fdbceceaf9cd5da92cfa15df220c9bb131e37596",
+        "original_residual": 2.6645352591003757e-15,
+        "monolithic_error": 6.661338147750939e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan1/new_bind_after_two_refusals.npz",
+        "sha256": "ec6dcbcbd94eeeb68e8c362b58214372292d033e84c7c4f6cfc49352b8b28aa8",
+        "original_residual": 1.3322676295501878e-15,
+        "monolithic_error": 3.3306690738754696e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan1/second_capture_same_artifact.npz",
+        "sha256": "83d9d3ce3c93c0d7a23aad3f02f2d0a37c1fb78aebdc174b3d8fd8c0ac6fd2d3",
+        "original_residual": 2.220446049250313e-16,
+        "monolithic_error": 4.440892098500626e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan2/first_capture.npz",
+        "sha256": "07a4b6d813bc851af1bcf57aa4e379d6b45a4f51b86a69d51a18657dd32b7ead",
+        "original_residual": 8.881784197001252e-16,
+        "monolithic_error": 6.661338147750939e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan2/new_bind_after_two_refusals.npz",
+        "sha256": "ba0d69de60a137ec72d263ee0558ea0c2c0a7e326c081757dcb4276ea26798dc",
+        "original_residual": 2.220446049250313e-16,
+        "monolithic_error": 2.220446049250313e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan2/second_capture_same_artifact.npz",
+        "sha256": "5f9ade43ce6d5806166aad3309b7f677b4eb1655c132eaf0ea1f1eea55d8684e",
+        "original_residual": 8.881784197001252e-16,
+        "monolithic_error": 3.3306690738754696e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan3/first_capture.npz",
+        "sha256": "1f426e475d43d95fabb4f48c789644b4c85829167e5728f252aa737983c15912",
+        "original_residual": 2.6645352591003757e-15,
+        "monolithic_error": 7.771561172376096e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan3/new_bind_after_two_refusals.npz",
+        "sha256": "9c35478fe503d4586f1d460d58e16b5cc84a07ac6c882aecea4d1840162c2bc9",
+        "original_residual": 8.881784197001252e-16,
+        "monolithic_error": 4.440892098500626e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan3/second_capture_same_artifact.npz",
+        "sha256": "046d2c6ff15900a5e3c557d40d3a96d6bfdfa4689c9918e956cd705f0d355e4d",
+        "original_residual": 8.881784197001252e-16,
+        "monolithic_error": 3.3306690738754696e-16
+      },
+      {
+        "state": "test_finite_w06_original_equat0/finite-w06-0-0.npz",
+        "sha256": "885e41915853b4852a8ff65a2ddfb1550537b134f2c3a568136529647748c2af",
+        "original_residual": 3.552713678800501e-15,
+        "monolithic_error": 6.661338147750939e-16,
+        "cn_energy_error": 7.105427357601002e-15
+      },
+      {
+        "state": "test_finite_w06_original_equat1/finite-w06-1-0.npz",
+        "sha256": "84a3ce40889e4aeb387652fc8e99c7d59485ca7766c180b54a93a03f4859158e",
+        "original_residual": 1.7763568394002505e-15,
+        "monolithic_error": 6.661338147750939e-16,
+        "cn_energy_error": 0.0
+      },
+      {
+        "state": "test_finite_w06_original_equat2/finite-w06-0-1.npz",
+        "sha256": "34bb25a28c2f6ea8e355cfe5d762423999693a1530d339a75495da7325432120",
+        "original_residual": 1.3322676295501878e-15,
+        "monolithic_error": 4.440892098500626e-16,
+        "cn_energy_error": 3.552713678800501e-15
+      },
+      {
+        "state": "test_finite_w06_original_equat3/finite-w06-1-1.npz",
+        "sha256": "e14b9289eb91a176be853eaf8df57ddc5d87460016f8f8cb74a5c7e206e0b8d3",
+        "original_residual": 2.6645352591003757e-15,
+        "monolithic_error": 6.661338147750939e-16,
+        "cn_energy_error": 1.0658141036401503e-14
+      }
+    ]
+  },
+  "mpi2_rank0": {
+    "directory": "outputs/installed-finite-m09-mpi2/rank0-tmp",
+    "state_count": 16,
+    "max_original_residual": 3.552713678800501e-15,
+    "max_monolithic_error": 7.771561172376096e-16,
+    "max_cn_energy_error": 1.0658141036401503e-14,
+    "records": [
+      {
+        "state": "test_finite_maps_rebind_operan0/first_capture.npz",
+        "sha256": "074c5cf5bf1f9ee83a425a5bd9ca7f653046a9e8d7d2caf1bfaac1fc57bb3731",
+        "original_residual": 1.3322676295501878e-15,
+        "monolithic_error": 4.440892098500626e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan0/new_bind_after_two_refusals.npz",
+        "sha256": "93a170017e55451d4c76aec3a9eda16825f427cfb2d3cd594dad6d048671afa6",
+        "original_residual": 8.881784197001252e-16,
+        "monolithic_error": 3.3306690738754696e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan0/second_capture_same_artifact.npz",
+        "sha256": "c89bee4a5f4a1d6aa66d148037c5b584d3a8c404b4e20dbb644a8f21d869abc9",
+        "original_residual": 8.881784197001252e-16,
+        "monolithic_error": 4.440892098500626e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan1/first_capture.npz",
+        "sha256": "b4e9aa2381ef9188b1dfce30fdbceceaf9cd5da92cfa15df220c9bb131e37596",
+        "original_residual": 2.6645352591003757e-15,
+        "monolithic_error": 6.661338147750939e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan1/new_bind_after_two_refusals.npz",
+        "sha256": "ec6dcbcbd94eeeb68e8c362b58214372292d033e84c7c4f6cfc49352b8b28aa8",
+        "original_residual": 1.3322676295501878e-15,
+        "monolithic_error": 3.3306690738754696e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan1/second_capture_same_artifact.npz",
+        "sha256": "83d9d3ce3c93c0d7a23aad3f02f2d0a37c1fb78aebdc174b3d8fd8c0ac6fd2d3",
+        "original_residual": 2.220446049250313e-16,
+        "monolithic_error": 4.440892098500626e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan2/first_capture.npz",
+        "sha256": "07a4b6d813bc851af1bcf57aa4e379d6b45a4f51b86a69d51a18657dd32b7ead",
+        "original_residual": 8.881784197001252e-16,
+        "monolithic_error": 6.661338147750939e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan2/new_bind_after_two_refusals.npz",
+        "sha256": "ba0d69de60a137ec72d263ee0558ea0c2c0a7e326c081757dcb4276ea26798dc",
+        "original_residual": 2.220446049250313e-16,
+        "monolithic_error": 2.220446049250313e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan2/second_capture_same_artifact.npz",
+        "sha256": "5f9ade43ce6d5806166aad3309b7f677b4eb1655c132eaf0ea1f1eea55d8684e",
+        "original_residual": 8.881784197001252e-16,
+        "monolithic_error": 3.3306690738754696e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan3/first_capture.npz",
+        "sha256": "1f426e475d43d95fabb4f48c789644b4c85829167e5728f252aa737983c15912",
+        "original_residual": 2.6645352591003757e-15,
+        "monolithic_error": 7.771561172376096e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan3/new_bind_after_two_refusals.npz",
+        "sha256": "9c35478fe503d4586f1d460d58e16b5cc84a07ac6c882aecea4d1840162c2bc9",
+        "original_residual": 8.881784197001252e-16,
+        "monolithic_error": 4.440892098500626e-16
+      },
+      {
+        "state": "test_finite_maps_rebind_operan3/second_capture_same_artifact.npz",
+        "sha256": "046d2c6ff15900a5e3c557d40d3a96d6bfdfa4689c9918e956cd705f0d355e4d",
+        "original_residual": 8.881784197001252e-16,
+        "monolithic_error": 3.3306690738754696e-16
+      },
+      {
+        "state": "test_finite_w06_original_equat0/finite-w06-0-0.npz",
+        "sha256": "885e41915853b4852a8ff65a2ddfb1550537b134f2c3a568136529647748c2af",
+        "original_residual": 3.552713678800501e-15,
+        "monolithic_error": 6.661338147750939e-16,
+        "cn_energy_error": 7.105427357601002e-15
+      },
+      {
+        "state": "test_finite_w06_original_equat1/finite-w06-1-0.npz",
+        "sha256": "84a3ce40889e4aeb387652fc8e99c7d59485ca7766c180b54a93a03f4859158e",
+        "original_residual": 1.7763568394002505e-15,
+        "monolithic_error": 6.661338147750939e-16,
+        "cn_energy_error": 0.0
+      },
+      {
+        "state": "test_finite_w06_original_equat2/finite-w06-0-1.npz",
+        "sha256": "34bb25a28c2f6ea8e355cfe5d762423999693a1530d339a75495da7325432120",
+        "original_residual": 1.3322676295501878e-15,
+        "monolithic_error": 4.440892098500626e-16,
+        "cn_energy_error": 3.552713678800501e-15
+      },
+      {
+        "state": "test_finite_w06_original_equat3/finite-w06-1-1.npz",
+        "sha256": "e14b9289eb91a176be853eaf8df57ddc5d87460016f8f8cb74a5c7e206e0b8d3",
+        "original_residual": 2.6645352591003757e-15,
+        "monolithic_error": 6.661338147750939e-16,
+        "cn_energy_error": 1.0658141036401503e-14
+      }
+    ]
+  }
+}

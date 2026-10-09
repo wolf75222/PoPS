@@ -1,0 +1,12 @@
+{
+  "exit": 0,
+  "counts": {
+    "tests": 64,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "scope": "IntegratedSource SSP3 resolved/detached modelauthority, not Native execution",
+  "native_modules_loaded": [],
+  "xml_sha256": "0bdfac87efffd0ecc759659cbd338834842c651644544e5df074ca83fbe018db"
+}

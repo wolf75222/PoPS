@@ -36,6 +36,14 @@ dependencies = [
   "numpy>=1.24",  # host expression evaluation and field data access; package import is lazy
 ]
 
+[project.optional-dependencies]
+test = [
+  "pytest",
+  "h5py",  # serial output/checkpoint test capability
+  "scipy",  # independent DOP853 scientific reference calculations
+  "mpmath>=1.3.0",  # independent high-precision numerical reference calculations
+]
+
 [tool.scikit-build]
 minimum-version = "0.10"
 cmake.version = ">=3.21"

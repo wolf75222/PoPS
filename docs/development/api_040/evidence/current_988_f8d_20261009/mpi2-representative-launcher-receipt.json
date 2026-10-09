@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "utc": "2026-10-08T23:00:29.781544+00:00",
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/docs/development/api_040/run_installed_mpi_checks.py",
+    "--output",
+    "/Users/romaindespoulain/dev/tmp/PoPS-typed-provider-support-native-build-20261009/mpi2-representative",
+    "--ranks",
+    "2",
+    "--dimension",
+    "2",
+    "--threads",
+    "2",
+    "--test",
+    "tests/python/integration/runtime/test_imex_nonautonomous_field.py::test_public_nonautonomous_imex_field_reads_explicit_time",
+    "--test",
+    "tests/python/integration/runtime/test_public_diffusion_field_predictor.py::test_public_diffusion_predictor_is_field_rhs[euler]"
+  ],
+  "returncode": 0,
+  "seconds": 72.52044724999723,
+  "before": {
+    "Source": "98804c6849c9966e05b5397126bab983a5fa0227",
+    "Native": "f8d9281232039f3ed3f92b7a14ae6530aa18baf41257a3c99a9629a50af61f64",
+    "SDK": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+    "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "after": {
+    "Source": "98804c6849c9966e05b5397126bab983a5fa0227",
+    "Native": "f8d9281232039f3ed3f92b7a14ae6530aa18baf41257a3c99a9629a50af61f64",
+    "SDK": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+    "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "environment": {
+    "PYTHONPATH": null,
+    "PYTHONOPTIMIZE": null,
+    "PYTEST_ADDOPTS": null,
+    "FI_PROVIDER": "tcp",
+    "POPS_INCLUDE": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/include",
+    "Kokkos_ROOT": "/Users/romaindespoulain/miniforge3/envs/pops",
+    "POPS_GUARDED_FIELD_SOURCE_SHA": "98804c6849c9966e05b5397126bab983a5fa0227",
+    "POPS_GUARDED_FIELD_NATIVE_SHA": "f8d9281232039f3ed3f92b7a14ae6530aa18baf41257a3c99a9629a50af61f64",
+    "POPS_DIFFUSION_FIELD_SOURCE_SHA": "98804c6849c9966e05b5397126bab983a5fa0227",
+    "POPS_DIFFUSION_FIELD_NATIVE_SHA": "f8d9281232039f3ed3f92b7a14ae6530aa18baf41257a3c99a9629a50af61f64"
+  },
+  "scope": "Actual MPI2 run; numerical reception is separate."
+}

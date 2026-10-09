@@ -1,0 +1,823 @@
+{
+  "case": "structural_Maxwell_Cattaneo",
+  "status": "passed",
+  "dimension": 2,
+  "threads_requested": "1",
+  "criteria": {
+    "scheme_max_error": 2e-10,
+    "temperature_inventory": 2e-12,
+    "temporal_order_min": 0.8,
+    "temporal_order_max": 1.2,
+    "permutation_max_error": 2e-10,
+    "initial_max_error": 2e-14,
+    "rebind_min_difference": 0.001
+  },
+  "cells": [
+    16,
+    16
+  ],
+  "mode": [
+    1,
+    2
+  ],
+  "records": [
+    {
+      "variant": "canonical",
+      "tau": 0.1,
+      "kappa": 0.025,
+      "dt": 0.004,
+      "mpi_ranks": 1,
+      "steps": 10,
+      "scheme_max_error": 1.410122019152027e-13,
+      "temporal_max_error": 0.00036270002128890866,
+      "semidiscrete_to_continuum_error": 0.012616475798297389,
+      "temperature_inventory_defect": 0.0,
+      "state_file": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/cattaneo-eac92bb-openmp1-named-grid/states/canonical/params0_dt0.004/state.npz",
+      "state_sha256": "d4f0aaf599611457a27849283cfe3c182a83323f424d0a487bc2df5650e12bcf",
+      "run_report": {
+        "accepted_steps": 10,
+        "rejected_steps": 0,
+        "final_time": 0.04,
+        "final_macro_step": 10,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "f24edccf87b61fc5cca8cbac997d8e6b0d22532c12e2070a2d2afa2b763f115a"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "908fddd3c4d3eafcc9705a6ee3ca0d8cc375c778068c6711b50137de9b3a7f09"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "b6a9219d851a03137ffd8a01ec134d5e44d341ce1adba4892b6a2b9149fefa19"
+          }
+        },
+        "field_providers": []
+      }
+    },
+    {
+      "variant": "canonical",
+      "tau": 0.1,
+      "kappa": 0.025,
+      "dt": 0.002,
+      "mpi_ranks": 1,
+      "steps": 20,
+      "scheme_max_error": 3.5514646778977976e-13,
+      "temporal_max_error": 0.0001804173730077796,
+      "semidiscrete_to_continuum_error": 0.012616475798297389,
+      "temperature_inventory_defect": 0.0,
+      "state_file": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/cattaneo-eac92bb-openmp1-named-grid/states/canonical/params0_dt0.002/state.npz",
+      "state_sha256": "014130d16074ad05c340961f492223699dc5c56af581678f3b85e836b34046c3",
+      "run_report": {
+        "accepted_steps": 20,
+        "rejected_steps": 0,
+        "final_time": 0.04,
+        "final_macro_step": 20,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "093acc1799116071e0adbfd14c441b25e1472e57718370135b2c4fa65b4b8c7b"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "908fddd3c4d3eafcc9705a6ee3ca0d8cc375c778068c6711b50137de9b3a7f09"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "b6a9219d851a03137ffd8a01ec134d5e44d341ce1adba4892b6a2b9149fefa19"
+          }
+        },
+        "field_providers": []
+      }
+    },
+    {
+      "variant": "canonical",
+      "tau": 0.1,
+      "kappa": 0.025,
+      "dt": 0.001,
+      "mpi_ranks": 1,
+      "steps": 40,
+      "scheme_max_error": 7.353007092092412e-13,
+      "temporal_max_error": 8.9976729260699e-05,
+      "semidiscrete_to_continuum_error": 0.012616475798297389,
+      "temperature_inventory_defect": 0.0,
+      "state_file": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/cattaneo-eac92bb-openmp1-named-grid/states/canonical/params0_dt0.001/state.npz",
+      "state_sha256": "01d2ba7f227f89f88ef7359259886d404fffec1685015b21854ff6c773d0be3a",
+      "run_report": {
+        "accepted_steps": 40,
+        "rejected_steps": 0,
+        "final_time": 0.04,
+        "final_macro_step": 40,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "a4e03c6209849f2ff43b49a6316210ff0a41939582a744b4875f0b0d02d181f8"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "908fddd3c4d3eafcc9705a6ee3ca0d8cc375c778068c6711b50137de9b3a7f09"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "b6a9219d851a03137ffd8a01ec134d5e44d341ce1adba4892b6a2b9149fefa19"
+          }
+        },
+        "field_providers": []
+      }
+    },
+    {
+      "variant": "canonical",
+      "tau": 0.12,
+      "kappa": 0.048,
+      "dt": 0.004,
+      "mpi_ranks": 1,
+      "steps": 10,
+      "scheme_max_error": 1.4753129273792354e-13,
+      "temporal_max_error": 0.00043289255595235776,
+      "semidiscrete_to_continuum_error": 0.015128516313670515,
+      "temperature_inventory_defect": 0.0,
+      "state_file": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/cattaneo-eac92bb-openmp1-named-grid/states/canonical/params1_dt0.004/state.npz",
+      "state_sha256": "0365199bcd87bf291c813b4d35c9cf764903eb0eec09ec8b620cc5685ed166d6",
+      "run_report": {
+        "accepted_steps": 10,
+        "rejected_steps": 0,
+        "final_time": 0.04,
+        "final_macro_step": 10,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "225eb00549633fb46ed4d21cef1cb32fcfa81f8a13e5255a1bc98cbf5bc8cc13"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "bb176505a11d4156b908d1e5259a12a2d48098b2f5ea4f26d0865a3993b46648"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "b6a9219d851a03137ffd8a01ec134d5e44d341ce1adba4892b6a2b9149fefa19"
+          }
+        },
+        "field_providers": []
+      }
+    },
+    {
+      "variant": "canonical",
+      "tau": 0.12,
+      "kappa": 0.048,
+      "dt": 0.002,
+      "mpi_ranks": 1,
+      "steps": 20,
+      "scheme_max_error": 2.8983759836620493e-13,
+      "temporal_max_error": 0.00021391967848594096,
+      "semidiscrete_to_continuum_error": 0.015128516313670515,
+      "temperature_inventory_defect": 0.0,
+      "state_file": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/cattaneo-eac92bb-openmp1-named-grid/states/canonical/params1_dt0.002/state.npz",
+      "state_sha256": "7e20006b7ca3afe4f6818522aff22e26efe40069ae8aac9a0595b15c5c89d7dc",
+      "run_report": {
+        "accepted_steps": 20,
+        "rejected_steps": 0,
+        "final_time": 0.04,
+        "final_macro_step": 20,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "cd59d7c9eb851572cc0f48aac4e7e71b0d7fc1776d81176e473d0bec9c850ece"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "bb176505a11d4156b908d1e5259a12a2d48098b2f5ea4f26d0865a3993b46648"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "b6a9219d851a03137ffd8a01ec134d5e44d341ce1adba4892b6a2b9149fefa19"
+          }
+        },
+        "field_providers": []
+      }
+    },
+    {
+      "variant": "canonical",
+      "tau": 0.12,
+      "kappa": 0.048,
+      "dt": 0.001,
+      "mpi_ranks": 1,
+      "steps": 40,
+      "scheme_max_error": 7.042873229057278e-13,
+      "temporal_max_error": 0.00010633207641264075,
+      "semidiscrete_to_continuum_error": 0.015128516313670515,
+      "temperature_inventory_defect": 1.1102230246251565e-16,
+      "state_file": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/cattaneo-eac92bb-openmp1-named-grid/states/canonical/params1_dt0.001/state.npz",
+      "state_sha256": "02937b4e4f36f508a34dbdc5be2d2caec90679018aaa1f283d07d50436fa554f",
+      "run_report": {
+        "accepted_steps": 40,
+        "rejected_steps": 0,
+        "final_time": 0.04,
+        "final_macro_step": 40,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "aadd3cb57ba7e79d828d0fbe0aa0782ccd069c9093e3869bf165149cd01dc155"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "bb176505a11d4156b908d1e5259a12a2d48098b2f5ea4f26d0865a3993b46648"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "b6a9219d851a03137ffd8a01ec134d5e44d341ce1adba4892b6a2b9149fefa19"
+          }
+        },
+        "field_providers": []
+      }
+    },
+    {
+      "variant": "permuted",
+      "tau": 0.1,
+      "kappa": 0.025,
+      "dt": 0.004,
+      "mpi_ranks": 1,
+      "steps": 10,
+      "scheme_max_error": 1.410122019152027e-13,
+      "temporal_max_error": 0.00036270002128890866,
+      "semidiscrete_to_continuum_error": 0.012616475798297389,
+      "temperature_inventory_defect": 0.0,
+      "state_file": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/cattaneo-eac92bb-openmp1-named-grid/states/permuted/params0_dt0.004/state.npz",
+      "state_sha256": "57eba206f02d4d0c3675cf6b9e7a198fa5cacfcb6511536a48f70af695d37426",
+      "run_report": {
+        "accepted_steps": 10,
+        "rejected_steps": 0,
+        "final_time": 0.04,
+        "final_macro_step": 10,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "66a0dc39fc0f7f837e956f5cef6771157503d37d4ae97a3c4e8c5e209a0ba6eb"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "a14adaf9cc91b3763a519e81ae6083a1a718c39cd59c3186c14eb083589d5713"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "1e5e7f4c2e60eeeda6f13033d2b2d53402a198dd906de3ddb352126f135019f4"
+          }
+        },
+        "field_providers": []
+      }
+    },
+    {
+      "variant": "permuted",
+      "tau": 0.1,
+      "kappa": 0.025,
+      "dt": 0.002,
+      "mpi_ranks": 1,
+      "steps": 20,
+      "scheme_max_error": 3.5514646778977976e-13,
+      "temporal_max_error": 0.0001804173730077796,
+      "semidiscrete_to_continuum_error": 0.012616475798297389,
+      "temperature_inventory_defect": 0.0,
+      "state_file": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/cattaneo-eac92bb-openmp1-named-grid/states/permuted/params0_dt0.002/state.npz",
+      "state_sha256": "4db6271827a45f63aefe894899db3416b8194ebb574b7cc6cde6e24770865a05",
+      "run_report": {
+        "accepted_steps": 20,
+        "rejected_steps": 0,
+        "final_time": 0.04,
+        "final_macro_step": 20,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "7f436f05c86294e3b8ec3742e216ba34504644d513244bfe47ab4ecdd5a9c21b"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "a14adaf9cc91b3763a519e81ae6083a1a718c39cd59c3186c14eb083589d5713"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "1e5e7f4c2e60eeeda6f13033d2b2d53402a198dd906de3ddb352126f135019f4"
+          }
+        },
+        "field_providers": []
+      }
+    },
+    {
+      "variant": "permuted",
+      "tau": 0.1,
+      "kappa": 0.025,
+      "dt": 0.001,
+      "mpi_ranks": 1,
+      "steps": 40,
+      "scheme_max_error": 7.353007092092412e-13,
+      "temporal_max_error": 8.9976729260699e-05,
+      "semidiscrete_to_continuum_error": 0.012616475798297389,
+      "temperature_inventory_defect": 0.0,
+      "state_file": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/cattaneo-eac92bb-openmp1-named-grid/states/permuted/params0_dt0.001/state.npz",
+      "state_sha256": "3a45458a552ecaae5d77a069e781924bcaf66be0030ac92c3ce860ae6ec7d4fb",
+      "run_report": {
+        "accepted_steps": 40,
+        "rejected_steps": 0,
+        "final_time": 0.04,
+        "final_macro_step": 40,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "d154f852eaf801377272022013a1af058c5d52363ab98cf8a7a89ec672bc9fc0"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "a14adaf9cc91b3763a519e81ae6083a1a718c39cd59c3186c14eb083589d5713"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "1e5e7f4c2e60eeeda6f13033d2b2d53402a198dd906de3ddb352126f135019f4"
+          }
+        },
+        "field_providers": []
+      }
+    },
+    {
+      "variant": "permuted",
+      "tau": 0.12,
+      "kappa": 0.048,
+      "dt": 0.004,
+      "mpi_ranks": 1,
+      "steps": 10,
+      "scheme_max_error": 1.4753129273792354e-13,
+      "temporal_max_error": 0.00043289255595235776,
+      "semidiscrete_to_continuum_error": 0.015128516313670515,
+      "temperature_inventory_defect": 0.0,
+      "state_file": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/cattaneo-eac92bb-openmp1-named-grid/states/permuted/params1_dt0.004/state.npz",
+      "state_sha256": "134e0865ec0159e5c09074c01bae66d1a2a5fff077ed4d2776bbaa1604b17aa9",
+      "run_report": {
+        "accepted_steps": 10,
+        "rejected_steps": 0,
+        "final_time": 0.04,
+        "final_macro_step": 10,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "789fdc3ff2f73fa5fbd7b444d1b901162c396463c6239ef074a1210428ff6685"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "2d50b204e716169e678b4e734f54d2849237a1b7b7d7a714cbc58bfafc957146"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "1e5e7f4c2e60eeeda6f13033d2b2d53402a198dd906de3ddb352126f135019f4"
+          }
+        },
+        "field_providers": []
+      }
+    },
+    {
+      "variant": "permuted",
+      "tau": 0.12,
+      "kappa": 0.048,
+      "dt": 0.002,
+      "mpi_ranks": 1,
+      "steps": 20,
+      "scheme_max_error": 2.8983759836620493e-13,
+      "temporal_max_error": 0.00021391967848594096,
+      "semidiscrete_to_continuum_error": 0.015128516313670515,
+      "temperature_inventory_defect": 0.0,
+      "state_file": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/cattaneo-eac92bb-openmp1-named-grid/states/permuted/params1_dt0.002/state.npz",
+      "state_sha256": "552488739fee67b298ead47f63d4655f6428120fea38a3c0040214b4c7ffd6d6",
+      "run_report": {
+        "accepted_steps": 20,
+        "rejected_steps": 0,
+        "final_time": 0.04,
+        "final_macro_step": 20,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "b55daa5541c54e2b5a2d9ab99a66290a97711ea1f184948a8295d9078117b106"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "2d50b204e716169e678b4e734f54d2849237a1b7b7d7a714cbc58bfafc957146"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "1e5e7f4c2e60eeeda6f13033d2b2d53402a198dd906de3ddb352126f135019f4"
+          }
+        },
+        "field_providers": []
+      }
+    },
+    {
+      "variant": "permuted",
+      "tau": 0.12,
+      "kappa": 0.048,
+      "dt": 0.001,
+      "mpi_ranks": 1,
+      "steps": 40,
+      "scheme_max_error": 7.042873229057278e-13,
+      "temporal_max_error": 0.00010633207641264075,
+      "semidiscrete_to_continuum_error": 0.015128516313670515,
+      "temperature_inventory_defect": 1.1102230246251565e-16,
+      "state_file": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/cattaneo-eac92bb-openmp1-named-grid/states/permuted/params1_dt0.001/state.npz",
+      "state_sha256": "46ff0b6ec9bcbfffbcd26c78abf852232720dca19315a1bb3b83258b0b3d9429",
+      "run_report": {
+        "accepted_steps": 40,
+        "rejected_steps": 0,
+        "final_time": 0.04,
+        "final_macro_step": 40,
+        "stop_reason": "target_time_reached",
+        "run_identity": {
+          "domain": "run",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "0b2513a9e5efe498af76b00b084989fd6b058e25466b5a9c54bfafc993b7b929"
+          }
+        },
+        "bind_identity": {
+          "domain": "bind",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "2d50b204e716169e678b4e734f54d2849237a1b7b7d7a714cbc58bfafc957146"
+          }
+        },
+        "execution_identity": {
+          "domain": "execution-context",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "9a162efa0403e2a659be534976dab86d9c16dab2d8ed283ce341a45ccd4a94f8"
+          }
+        },
+        "artifact_identity": {
+          "domain": "artifact",
+          "schema_version": 1,
+          "algorithm": "sha256",
+          "digest": {
+            "encoding": "hex",
+            "bytes": "1e5e7f4c2e60eeeda6f13033d2b2d53402a198dd906de3ddb352126f135019f4"
+          }
+        },
+        "field_providers": []
+      }
+    }
+  ],
+  "permutation_errors": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "temporal_convergence": [
+    {
+      "variant": "canonical",
+      "tau": 0.1,
+      "kappa": 0.025,
+      "errors": [
+        0.00036270002128890866,
+        0.0001804173730077796,
+        8.9976729260699e-05
+      ],
+      "orders": [
+        1.0074385626509956,
+        1.0037144376850662
+      ]
+    },
+    {
+      "variant": "canonical",
+      "tau": 0.12,
+      "kappa": 0.048,
+      "errors": [
+        0.00043289255595235776,
+        0.00021391967848594096,
+        0.00010633207641264075
+      ],
+      "orders": [
+        1.016939789865268,
+        1.0084923325342063
+      ]
+    },
+    {
+      "variant": "permuted",
+      "tau": 0.1,
+      "kappa": 0.025,
+      "errors": [
+        0.00036270002128890866,
+        0.0001804173730077796,
+        8.9976729260699e-05
+      ],
+      "orders": [
+        1.0074385626509956,
+        1.0037144376850662
+      ]
+    },
+    {
+      "variant": "permuted",
+      "tau": 0.12,
+      "kappa": 0.048,
+      "errors": [
+        0.00043289255595235776,
+        0.00021391967848594096,
+        0.00010633207641264075
+      ],
+      "orders": [
+        1.016939789865268,
+        1.0084923325342063
+      ]
+    }
+  ],
+  "invalid_tau_refused": [
+    0.0,
+    -0.1
+  ],
+  "package_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py",
+  "package_version": "1.1.0",
+  "native_file": "/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+  "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+  "script_sha256": "4efd6d5b96071fa5e2da1e396cb223867cda92e6d119bdafc58176501dbf5485",
+  "oracle_sha256": "2c5f0c4513a6fae08449cf0e03c1e87093049f724ae4159c07950f59627b9f5f",
+  "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=dfcd85eba73c963aaceeaf85738296e5a46272e3f76aff1890a2f7850c4b94d8;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=f7d12ae87f8a0b401f7e2330986eddea52855a5fd643fb650d8bf8c5fc2ff8a5;dim=2",
+  "execution_context": {
+    "schema_version": 1,
+    "backend_identity": {
+      "domain": "runtime-backend-manifest",
+      "schema_version": 1,
+      "algorithm": "sha256",
+      "digest": {
+        "encoding": "hex",
+        "bytes": "6dcd17d08c5fae490ec40c8638b2d18495f32165d31f75ad0b72eadf5ae9728d"
+      }
+    },
+    "communicator": {
+      "kind": "communicator",
+      "identity": "MPI_COMM_WORLD"
+    },
+    "datatype": {
+      "kind": "datatype",
+      "identity": "float64"
+    },
+    "device": {
+      "kind": "device",
+      "identity": "cpu"
+    }
+  },
+  "scope": "Uniform Dim2 periodic oblique Fourier; first-order FV and IMEX Euler; no AMR/GPU claim"
+}

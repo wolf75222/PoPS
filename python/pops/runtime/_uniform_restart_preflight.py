@@ -111,6 +111,9 @@ def preflight_uniform_restart(payload: Any) -> None:
     )
 
     files = _files(payload)
+    version = _integer_scalar(payload, "pops_checkpoint_version", minimum=8)
+    if version not in (8, 9):
+        raise ValueError("restart : unsupported strict Uniform checkpoint version")
     required = {
         "t",
         "macro_step",
@@ -122,6 +125,9 @@ def preflight_uniform_restart(payload: Any) -> None:
         "cache_names",
         "temporal_restart_state",
     } | PROGRAM_CADENCE_CHECKPOINT_KEYS | CONTINUATION_CHECKPOINT_KEYS
+    if version == 9:
+        from pops.runtime._checkpoint_state_carriers import STATE_CARRIERS_KEY
+        required.add(STATE_CARRIERS_KEY)
     missing = sorted(required - files)
     if missing:
         raise ValueError("restart : strict Uniform checkpoint is missing %s" % ", ".join(missing))
@@ -163,11 +169,17 @@ def preflight_uniform_restart(payload: Any) -> None:
         "runtime_consumer_graph",
         "runtime_consumer_cursors",
         "runtime_consumer_diagnostics",
+        "program_diagnostics_state",
+        "program_diagnostics_offsets",
         MANIFEST_KEY,
         IDENTITY_KEY,
         *PROGRAM_CADENCE_CHECKPOINT_KEYS,
         *CONTINUATION_CHECKPOINT_KEYS,
     }
+    if version == 9:
+        allowed.add(STATE_CARRIERS_KEY)
+    from pops.runtime._checkpoint_program_diagnostics import validate_checkpoint_program_diagnostic_arrays
+    validate_checkpoint_program_diagnostic_arrays(payload)
     if "blocks" in files:
         blocks = _text_vector(payload, "blocks", unique=True)
         for block in blocks:

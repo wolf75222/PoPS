@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "case": "cattaneo",
+  "status": "failed",
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/examples/migration/scientific/structural_cattaneo.py"
+  ],
+  "returncode": 1,
+  "seconds": 22.184843207942322,
+  "ranks": 1,
+  "dimension": 2,
+  "phases": [
+    {
+      "settings": {},
+      "returncode": 1,
+      "timeout": false,
+      "seconds": 22.1845275410451
+    }
+  ],
+  "threads": 1,
+  "authentication_before": 0,
+  "authentication_after": 0,
+  "example_sources_unchanged": true,
+  "same_native": true,
+  "same_shipped_sources": true,
+  "correct_backend": false,
+  "native_sha256": "6b5f452e432976a94b69635b96aad1a04c42c8d5e933cad5cf785301089488fb",
+  "scientific_receipt": "states/result.json",
+  "scientific_receipt_sha256": null,
+  "settings": {
+    "OMP_NUM_THREADS": "1",
+    "POPS_THREADS": "1",
+    "POPS_API040_OUTPUT": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/cattaneo-eac92bb-openmp1/states"
+  }
+}

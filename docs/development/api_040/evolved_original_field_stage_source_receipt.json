@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "contract": "pops.evolved-original-field-stage.source-receipt@1",
+  "base_source": "2b4d01d4f2eaeb69bc7f32c7dc063ebde5ca2e81",
+  "scope": "author-source-admission-emission-and-parent-parity",
+  "native_executed": false,
+  "cpp_compiled": false,
+  "scientific_native_qualification": false,
+  "python": "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+  "source_import": "PYTHONPATH=python",
+  "native_dimension_selection": null,
+  "coherent_checks": {
+    "pytest_passed": 59,
+    "pytest_failed": 0,
+    "elapsed_seconds": 158.21,
+    "ruff": "passed",
+    "git_diff_check": "passed"
+  },
+  "legacy_comparison": {
+    "reference": "exact Git archive of base_source",
+    "complete_ir_and_cpp_equal": true,
+    "controls": {
+      "implicit-stage": {
+        "cpp_sha256": "a85a6229731a97d5d38a41a48ca64cff31093ec7e21d9b23423dc021fe1301b4",
+        "ir_sha256": "46bc2b8a4015801f7bfb9382decd793720370ffcc7c7967af974ab7e2d2b965f"
+      },
+      "implicit-stage-nonlinear-map": {
+        "cpp_sha256": "f375c2be1e389f3300d185b70a7bc2d1c9d592c131f13aa7d31b1df0931587d2",
+        "ir_sha256": "fbdbe9184a82270a0ce9081b00bae6579f9b0f53da082befa707eeb5f7f4748c"
+      },
+      "mixed-linear": {
+        "cpp_sha256": "e868f14782300a0c6dc14aadac8991603832218ac0cae9ce94a497b0701df780",
+        "ir_sha256": "71d46dd85de78e5aa8ca329a19374fb8baea3fc1693bff5b1dcd03da835e5a1d"
+      },
+      "mixed-linear-permuted": {
+        "cpp_sha256": "9a29dfffe91349f4ae35d3a24f8fc946b0d35cbea30e909fe318eaeb2baae928",
+        "ir_sha256": "5eca82535cea7bdc1dcc27487706f85aec4456d3f82bbf5929a9f0db544aca73"
+      }
+    }
+  },
+  "pending": [
+    "independent source counter-review",
+    "native generated Uniform and AMR compile/relink",
+    "saved-state original residual and exact Q projection",
+    "serial and MPI transaction, ownership, rollback, retry, checkpoint and history"
+  ]
+}

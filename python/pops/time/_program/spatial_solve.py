@@ -16,12 +16,24 @@ from pops.time.values import ProgramValue
 class PreparedSpatialNewton:
     controls: CanonicalData
     identity: Any
+    right_preconditioner: str | None = None
+    max_dense_bytes: int | None = None
+    convergence: CanonicalData | None = None
+
+    def __post_init__(self) -> None:
+        expected = spatial_solver_identity(self.controls.to_data(), self.right_preconditioner, self.max_dense_bytes, None if self.convergence is None else self.convergence.to_data())
+        if self.identity != expected:
+            raise SolveRequestError("solver_identity_drift", "prepared spatial solver realization changed")
 
     def build_program_solve(self, *, program: Any, problem: Any, name: Any = None) -> Any:
         from pops.time.solve_request import SolveRequest
 
         if type(problem) is not SolveRequest:
             raise SolveRequestError("unsupported_lowering", "spatial Newton requires a SolveRequest")
+        self.__post_init__()
+        from pops.time.solve_problem import _SpatialFieldResidual
+        if self.right_preconditioner is not None and type(problem.problem) is not _SpatialFieldResidual:
+            raise SolveRequestError("unsupported_realization", "selected right-preconditioner implements only original AMR FieldProblem residuals")
         return problem.build_program_solve(program=program, prepared_solver=self, name=name)
 
 
@@ -32,9 +44,65 @@ def prepare_spatial_newton(solver: Any) -> PreparedSpatialNewton:
     if type(solver) is not Newton:
         raise SolveRequestError("unsupported_solver", "spatial adapter requires the declared Newton")
     controls = {key: value if type(value) is int else scalar_data(value)
-                for key, value in solver.options().items()}
+                for key, value in solver.numerical_options().items()}
     frozen = CanonicalData(controls, where="spatial Newton controls")
-    return PreparedSpatialNewton(frozen, make_identity("prepared-spatial-newton", frozen.to_data()))
+    policies = {None: None, "SpatialBasisJacobi@1": SPATIAL_BASIS_JACOBI,
+                "FullResidualBasisLU@1": FULL_RESIDUAL_BASIS_LU}
+    if solver.right_preconditioner is not None and type(solver.right_preconditioner) is not str:
+        raise SolveRequestError("unsupported_realization", "unknown Newton right-preconditioner")
+    if solver.right_preconditioner not in policies:
+        raise SolveRequestError("unsupported_realization", "unknown Newton right-preconditioner")
+    policy = policies[solver.right_preconditioner]
+    return PreparedSpatialNewton(frozen, spatial_solver_identity(frozen.to_data(), policy, solver.max_dense_bytes, solver.convergence),
+                                 policy, solver.max_dense_bytes, None if solver.convergence is None else CanonicalData(solver.convergence, where="Newton convergence"))
+
+
+SPATIAL_BASIS_JACOBI = "pops.amr.original-spatial-jacobi.basis-response@1"
+FULL_RESIDUAL_BASIS_LU = "pops.amr.full-residual-basis-lu@1"
+
+
+def dense_resource_contract(max_dense_bytes: Any) -> dict[str, Any]:
+    if type(max_dense_bytes) is not int or not 0 < max_dense_bytes < 2**64:
+        raise SolveRequestError("invalid_resource_budget", "FullResidualBasisLU@1 requires exact positive uint64 max_dense_bytes")
+    from pops.solvers.nonlinear import _dense_bytes_identity_data
+    return {"version": 1, "max_dense_bytes": _dense_bytes_identity_data(max_dense_bytes),
+            "scope": "per_rank_dense_arrays_active_map_and_numeric_towers"}
+
+
+def validate_dense_resource_contract(resources: Any) -> int:
+    if not isinstance(resources, Mapping) or set(resources) != {"version", "max_dense_bytes", "scope"} or type(resources["version"]) is not int or resources["version"] != 1:
+        raise SolveRequestError("invalid_resource_budget", "unknown FullResidualBasisLU@1 resource contract")
+    encoded = resources["max_dense_bytes"]
+    if not isinstance(encoded, Mapping) or set(encoded) != {"uint64_hex"} or type(encoded["uint64_hex"]) is not str or len(encoded["uint64_hex"]) != 16 or any(c not in "0123456789abcdef" for c in encoded["uint64_hex"]):
+        raise SolveRequestError("invalid_resource_budget", "dense budget requires canonical uint64 hexadecimal data")
+    budget = int(encoded["uint64_hex"], 16)
+    expected = dense_resource_contract(budget)
+    if dict(resources) != expected:
+        raise SolveRequestError("invalid_resource_budget", "FullResidualBasisLU@1 resource scope changed")
+    return budget
+
+
+def spatial_solver_identity(controls: Any, policy: Any = None, max_dense_bytes: Any = None, convergence: Any = None) -> Any:
+    spatial_newton_options(controls)
+    if convergence is not None:
+        from pops.solvers.nonlinear.convergence import validate_convergence
+        validate_convergence(convergence)
+        from pops.time._program.serialization import _json_ready
+        convergence = _json_ready(convergence)
+        return make_identity("prepared-spatial-newton-v4", {"legacy": spatial_solver_identity(controls, policy, max_dense_bytes).token, "convergence": convergence})
+    controls = CanonicalData(controls, where="spatial Newton controls").to_data()
+    if type(policy) is str and policy == FULL_RESIDUAL_BASIS_LU:
+        return make_identity("prepared-spatial-newton-v3", {"controls": controls,
+                            "right_preconditioner": policy,
+                            "resources": dense_resource_contract(max_dense_bytes)})
+    if max_dense_bytes is not None:
+        raise SolveRequestError("invalid_resource_budget", "dense budget belongs only to FullResidualBasisLU@1")
+    if policy is None:
+        return make_identity("prepared-spatial-newton", controls)
+    if type(policy) is not str or policy != SPATIAL_BASIS_JACOBI:
+        raise SolveRequestError("unsupported_realization", "unknown original AMR right-preconditioner contract")
+    return make_identity("prepared-spatial-newton-v2", {"controls": controls,
+                         "right_preconditioner": policy})
 
 
 def spatial_scalar(value: Any) -> int | float:
@@ -173,6 +241,11 @@ def build_spatial_request(program: Any, request: Any, prepared: Any, *, name: An
     stage = request.problem
     if type(stage) is not ImplicitStage or type(prepared) is not PreparedSpatialNewton:
         raise SolveRequestError("unsupported_lowering", "implicit stage requires spatial Newton")
+    prepared.__post_init__()
+    if prepared.convergence is not None:
+        raise SolveRequestError("unsupported_realization", "typed convergence requires a complete Original FieldProblem")
+    if prepared.right_preconditioner is not None:
+        raise SolveRequestError("unsupported_realization", "selected right-preconditioner implements only original AMR FieldProblem residuals")
     if len(request.unknowns) != 1:
         raise SolveRequestError("unsupported_unknown_product", "spatial adapter requires one vector unknown from one block")
     if request.derivative.route != "finite_difference":

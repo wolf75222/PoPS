@@ -252,6 +252,15 @@ class _AmrSystemInstall(_AmrSystem):
                 _bind_params=per_block_params.get(name, []),
             )
 
+        if install_plan is not None:
+            # The executor has already staged the exact InstallPlan execution lane. Native EB
+            # authoring also requires generated block providers, but refuses a built hierarchy;
+            # install the authenticated geometry at this unique pre-materialization boundary.
+            from pops.runtime._runtime_mesh_lowering import install_embedded_boundary
+
+            normalized_layout, = install_plan.artifact.layout_plan.layouts
+            install_embedded_boundary(self, normalized_layout)
+
         for field_plan in field_plans.values():
             self._install_field_method_runtime(field_plan, resolved_models, params)
 

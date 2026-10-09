@@ -1,0 +1,27 @@
+{
+  "Source": "7daee302e5af72d4c9b43c77167e349ddb21da5b",
+  "failure": "test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout",
+  "expectedConditionalCount": 15,
+  "observedConditionalCount": 19,
+  "newlyPresentUnlistedDeclarations": [
+    [
+      "tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp",
+      "AmrProgramNorm2Ownership.DistributedPhysicalCellsParticipateOnce"
+    ],
+    [
+      "tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp",
+      "AmrProgramNorm2Ownership.ReplicatedCoarsePhysicalCellsParticipateOnce"
+    ],
+    [
+      "tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp",
+      "AmrProgramNorm2Ownership.MultipleOwnersAndEmptyRanksRetainExactPhysicalScope"
+    ],
+    [
+      "tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp",
+      "AmrProgramNorm2Ownership.MixedReplicatedCoarsePartitionedFineUsesPerLevelOwnership"
+    ]
+  ],
+  "missingExpectedDeclarations": [],
+  "diagnosis": "Exact conditional declaration inventory missing four newly added guarded Norm2 cases; initial seven runtime-discovery registrations and parameterized inventory assertions passed. MPI suites retain rank-launch registration.",
+  "scope": "Source inventory diagnosis only; no CXX runtime qualification"
+}

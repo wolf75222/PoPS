@@ -104,6 +104,12 @@ def test_python_watchdog_rejects_oversubscribed_multi_file_shards():
     assert timing.selected_budget(["long"], {"long": 5400.}) == 100
 
 
+def test_python_watchdog_reports_every_missing_duration_without_fallback():
+    timing = _load("ci_pytest_timings")
+    with pytest.raises(ValueError, match="missing selected files: a, z"):
+        timing.selected_budget(["z", "known", "a", "z"], {"known": 1.})
+
+
 @pytest.mark.parametrize("interrupted", [False, True])
 def test_pytest_timing_receipts_survive_failure_and_interruption(tmp_path, interrupted):
     """Run tiny independent pytest sessions, never the native test matrix."""

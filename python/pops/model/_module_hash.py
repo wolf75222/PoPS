@@ -54,6 +54,7 @@ def _aux_expr_hash_data(expression: Any) -> Any:
 
 
 def _aux_producer_hash_data(producer: Any) -> Any:
+    from pops.fields.aux import AnalyticAux
     result = {
         "type": type(producer).__name__,
         "target": {"kind": producer.target.kind, "local_id": producer.target.local_id},
@@ -62,7 +63,11 @@ def _aux_producer_hash_data(producer: Any) -> Any:
     }
     expression = getattr(producer, "expression", None)
     if expression is not None:
-        result["expression"] = _aux_expr_hash_data(expression)
+        if isinstance(producer, AnalyticAux):
+            result["expression"] = expression.to_data()
+            result["frame"] = producer.frame.to_dict()
+        else:
+            result["expression"] = _aux_expr_hash_data(expression)
     return result
 
 
@@ -93,6 +98,7 @@ def module_content_hash(module: Any) -> str:
         },
         "wave_speed_provider": module._wave_speed_provider,
         "constitutive": module._constitutive,
+        "primitive_coordinates": [row.to_data() for row in module.primitive_coordinates()],
         "primitive_recipes": {
             name: body_identity(recipe)
             for name, recipe in sorted(module._primitive_recipes.items())
@@ -139,6 +145,10 @@ def module_content_hash(module: Any) -> str:
             )
         ],
     }
+    if module._global_quantities:
+        payload["global_quantities_v1"] = {
+            name: handle.declaration_data() for name, handle in sorted(module._global_quantities.items())
+        }
     canonical = json.dumps(
         canonical_hash_data(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

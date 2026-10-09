@@ -1,0 +1,122 @@
+{
+  "ci_qualified": false,
+  "dimensions": {
+    "1": {
+      "CXX_objects_observed": 24,
+      "abi": {
+        "compiler": "15.3.0",
+        "dim": "1",
+        "headers": "8ee6d09b428cfe172d08008253c2ea490eb733f9b1458f6f2ed8da1584effbf5",
+        "kokkos": "1",
+        "mpi": "1",
+        "mpi_abi": "26269d98b633d726bdb802586a8ee63f101464eedafb2dccbf4b46040d9ae5b4",
+        "std": "202002L",
+        "stdlib": "libstdc++_20260612"
+      },
+      "installed_after": 1158,
+      "installed_before": 1157,
+      "job": "732365",
+      "native_sha256": "2d3fa405796dfed0fdf706a579281b15692be317996ae166e63c89a15be23e89",
+      "production_blobs": 1192,
+      "record_verified": 1153,
+      "report_sha256": "717502715ab82d5f647fd0d0cb2fa10ce2d85bfcbb88155cd0ef7578f281df93"
+    },
+    "3": {
+      "CXX_objects_observed": 24,
+      "abi": {
+        "compiler": "15.3.0",
+        "dim": "3",
+        "headers": "8ee6d09b428cfe172d08008253c2ea490eb733f9b1458f6f2ed8da1584effbf5",
+        "kokkos": "1",
+        "mpi": "1",
+        "mpi_abi": "ceab4c13b52427a583e778f029b1a24a65b623df28aa794d41597082975bcb27",
+        "std": "202002L",
+        "stdlib": "libstdc++_20260612"
+      },
+      "installed_after": 1158,
+      "installed_before": 1157,
+      "job": "732370",
+      "native_sha256": "06fbfad4560ea22172f4ec7c561fc45c752d0cc6c9b8238e1e4c1f553634a03e",
+      "production_blobs": 1192,
+      "record_verified": 1153,
+      "report_sha256": "95fd97f6d362e3b146880c733c119de9266b0497b9d96090db3c6bcb6f1a1f47"
+    }
+  },
+  "native_execution_qualified": false,
+  "native_scientific_qualified": false,
+  "rehash_pins": {
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1-received-732365/build.log": "ebcf2e1e25573d0a04710968f5e7cfffbb4ed307a2f2aba978cb931210202ddc",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1-received-732365/build/cp312-cp312-linux_x86_64-dim1/CMakeCache.txt": "35edc419e81e217e6a0a8c9069472e62787e7607db814ed870641b7fd10ede02",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1-received-732365/clone-after.json": "f74589eca58316acef2398a77e79f64ab6a3262f631aa804dd466aa1f590dc61",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1-received-732365/clone-before.json": "ffb4948cdd7e2b253dd80a98eddd4fd89b9ea076339232885a626cb94dcc9ce1",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1-received-732365/environment-explicit.txt": "8f404991fd96e33442d23b923d0cc5ca7f3050ce228cd5a47d7ca7e04614d3a0",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1-received-732365/identity/identity.json": "9b6312278c1c27d9b357452514264800592d120fc000669002ecdbdb95048888",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1-received-732365/identity/source-files.json": "190db0db934844f7473f6741f1a3450a645630dddadef8c931fc71d55dd5995a",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1-received-732365/pip-list.json": "ad6d335dc37485cc72d57edd9763b3d17f7daeb2f18796519652c36a746eac34",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1-received-732365/preserved-after.json": "ac88be16e6521f1d800f9c5ddf94fc950be7c874560c6073f03eabf31f7cd262",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1-received-732365/preserved-before.json": "ac88be16e6521f1d800f9c5ddf94fc950be7c874560c6073f03eabf31f7cd262",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1-received-732365/result.json": "3a6036c3d62204b2eb18de509fe80e3b3aeb89e8f98a7742f9f10c94a0c2a1d2",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1-received-732365/scope.txt": "d7d3a970854e4af1197cbfb2818f5c522c9a51cdf598d3ffe7f80b6c004e06c1",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1-received-732365/sdk25-original-after.json": "d1a8ba67113001e6b90a02513a0139927fea79b6f2d508156d5eb07260570c2b",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1-received-732365/sdk25-original-before.json": "d1a8ba67113001e6b90a02513a0139927fea79b6f2d508156d5eb07260570c2b",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1-received-732365/source-after.json": "90c1412c57e29475710055cabb00d118a48637700979284e577b113173b70adf",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1-received-732365/source-before.json": "90c1412c57e29475710055cabb00d118a48637700979284e577b113173b70adf",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1-received-732365/wheel-sha256.txt": "24d3a2f3d5360bfa677f39559be6fba839d41b8bbd907159b4aeeb9452c34afe",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1-received-732365/wheels/pops-1.1.0-cp312-cp312-linux_x86_64.whl": "9b5b571b863bcab4df3fd9b5da63da7eb7561b850d253abaec48ab08aa6baeb2",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim1.sbatch": "70b1e928fba35af6b0fe21ddeff05b3cd7d3f8c8d04bf2b4e9ef398b5f346ba5",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3-received-732370/build.log": "d6501e8441b80647e3239a1abb2e4941f4aab492073be2642a1a5ca9f3b4912f",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3-received-732370/build/cp312-cp312-linux_x86_64-dim3/CMakeCache.txt": "3871ad1ee29cb1b99ad7bca6339e3a2ecce0264a26304fed2c4661ce962063b0",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3-received-732370/clone-after.json": "019da8804a502cb79d4445cce99c8accbd6828be8b2094954310f897a2cbcc2e",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3-received-732370/clone-before.json": "b8fc2bb48617ffa249a560e9988f2a88ba71cbff7ddeca1ad0c1a1d449aeb1fd",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3-received-732370/environment-explicit.txt": "8f404991fd96e33442d23b923d0cc5ca7f3050ce228cd5a47d7ca7e04614d3a0",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3-received-732370/identity/identity.json": "653e402412c4ebe9d0f3b12475b1f4ebb74fe9ddc48ef6943b1a0bd137acb6db",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3-received-732370/identity/source-files.json": "190db0db934844f7473f6741f1a3450a645630dddadef8c931fc71d55dd5995a",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3-received-732370/pip-list.json": "ad6d335dc37485cc72d57edd9763b3d17f7daeb2f18796519652c36a746eac34",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3-received-732370/preserved-after.json": "ac88be16e6521f1d800f9c5ddf94fc950be7c874560c6073f03eabf31f7cd262",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3-received-732370/preserved-before.json": "ac88be16e6521f1d800f9c5ddf94fc950be7c874560c6073f03eabf31f7cd262",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3-received-732370/result.json": "10d60009ebcb1ea34a85be728728e576d75af0159481ab230629660c339a06bd",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3-received-732370/scope.txt": "d7d3a970854e4af1197cbfb2818f5c522c9a51cdf598d3ffe7f80b6c004e06c1",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3-received-732370/sdk25-original-after.json": "d1a8ba67113001e6b90a02513a0139927fea79b6f2d508156d5eb07260570c2b",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3-received-732370/sdk25-original-before.json": "d1a8ba67113001e6b90a02513a0139927fea79b6f2d508156d5eb07260570c2b",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3-received-732370/source-after.json": "90c1412c57e29475710055cabb00d118a48637700979284e577b113173b70adf",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3-received-732370/source-before.json": "90c1412c57e29475710055cabb00d118a48637700979284e577b113173b70adf",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3-received-732370/wheel-sha256.txt": "bf5e96a0c75f9efcba137dfc5b4650bc9b6493d6300e40a079f0f42c361876cd",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3-received-732370/wheels/pops-1.1.0-cp312-cp312-linux_x86_64.whl": "8f151e40a0d78d5301b14391f107a33b59e7dd583c3afabafbcd30f2dc7deb5e",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/build-dim3.sbatch": "ae0cc112ab2891743f61658ac7861632347f44b08a9443370497719e982d1020",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/dim1-merged-variants-readonly-20261003.json": "47722ec43f278f01aeb16a6ab623be4229a3a455dea29e7c2961609f4743b1d0",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/dim3-merged-variants-readonly-20261003.json": "4ea63c1fe3b5b4ed9649be368710d4c16b282e81758b695c12de13eff86618d3",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/root-sdk25-dim1-build-transfer-reception-732365.json": "529928e78e8f71e1fb33a2e1baf81d60c0aea94d33dc610a3b95371906f5f571",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/root-sdk25-dim3-build-transfer-reception-732370.json": "3256b347c9f29ee866df5a84fc5534245a918ffc40384129a9035b23aef080d3",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dim13-preparation-20261003/root-sdk25-dimensional-variants-export-20261003.json": "34e42f30fd5afb68b39892cd9de9cdb27812bc2aacfbb08c7c69123d9fbde241",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dimensional-build-independent-20261003/audit.py": "5124876bb09dc5333c182255ceb0dfb8a049bd8ac03758ac6bc54a2b23603e5c",
+    "/Users/romaindespoulain/dev/tmp/sol61-sdk25-dimensional-build-independent-20261003/variants_addendum.py": "685c9c547529fb4878a48556a0b9d9cc00c922d3d7e174eb04756d98b95e0c77"
+  },
+  "root_replayed_independent_audit": true,
+  "root_replayed_typed_variant_addendum": true,
+  "schema": "root.sdk25.dimensional-build-reception@1",
+  "scope": "Genuine builds/install identities only; Native execution jobs have separate receipts.",
+  "source_freeze": "717936347672aeb4bc9146e2b3065bfd42cf1ef5",
+  "typed_variant_results": [
+    {
+      "built_variant_matches_actual_wheel_and_selected_identity": true,
+      "dimension": 1,
+      "job": 732365,
+      "sibling_dim2_matches_before_after_inventory": true,
+      "variant_dimensions": [
+        1,
+        2
+      ]
+    },
+    {
+      "built_variant_matches_actual_wheel_and_selected_identity": true,
+      "dimension": 3,
+      "job": 732370,
+      "sibling_dim2_matches_before_after_inventory": true,
+      "variant_dimensions": [
+        2,
+        3
+      ]
+    }
+  ],
+  "whole_mission_complete": false
+}

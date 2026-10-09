@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="10" skipped="0" tests="19" time="180.212" timestamp="2026-09-29T06:59:46.342283+02:00" hostname="macbookpro.home"><testcase classname="tests.python.integration.runtime.test_api040_coordinated_face_independent_runtime" name="test_native_asymmetric_face_matches_independent_oracle_and_preserves_transverse_invariance[order0]" time="15.788" /><testcase classname="tests.python.integration.runtime.test_api040_coordinated_face_independent_runtime" name="test_native_asymmetric_face_matches_independent_oracle_and_preserves_transverse_invariance[order1]" time="15.324" /><testcase classname="tests.python.integration.runtime.test_api040_coordinated_face_independent_runtime" name="test_one_coordinated_artifact_two_bind_time_dissipations_match_separate_oracles" time="16.532" /><testcase classname="tests.python.integration.runtime.test_local_residual_product_runtime" name="test_joint_product_rebind_or_atomic_failure[False-False]" time="0.503"><failure message="RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []">tests/python/integration/runtime/test_local_residual_product_runtime.py:21: in test_joint_product_rebind_or_atomic_failure
+    artifact, world = _compile(case, layout, "local-product-%s-%s" % (reverse, invalid))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []</failure></testcase><testcase classname="tests.python.integration.runtime.test_local_residual_product_runtime" name="test_joint_product_rebind_or_atomic_failure[False-True]" time="0.518"><failure message="RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []">tests/python/integration/runtime/test_local_residual_product_runtime.py:21: in test_joint_product_rebind_or_atomic_failure
+    artifact, world = _compile(case, layout, "local-product-%s-%s" % (reverse, invalid))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []</failure></testcase><testcase classname="tests.python.integration.runtime.test_local_residual_product_runtime" name="test_joint_product_rebind_or_atomic_failure[True-False]" time="0.493"><failure message="RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []">tests/python/integration/runtime/test_local_residual_product_runtime.py:21: in test_joint_product_rebind_or_atomic_failure
+    artifact, world = _compile(case, layout, "local-product-%s-%s" % (reverse, invalid))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []</failure></testcase><testcase classname="tests.python.integration.runtime.test_local_residual_product_runtime" name="test_joint_product_rebind_or_atomic_failure[True-True]" time="0.526"><failure message="RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []">tests/python/integration/runtime/test_local_residual_product_runtime.py:21: in test_joint_product_rebind_or_atomic_failure
+    artifact, world = _compile(case, layout, "local-product-%s-%s" % (reverse, invalid))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []</failure></testcase><testcase classname="tests.python.integration.runtime.test_api040_m22_h05_runtime" name="test_h05_original_residual_rebind_and_domain_rollback[False]" time="0.751"><failure message="RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []">tests/python/integration/runtime/test_api040_m22_h05_runtime.py:35: in test_h05_original_residual_rebind_and_domain_rollback
+    artifact,world=_compile(case,layout,"M22-H05-%s" % reverse)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []</failure></testcase><testcase classname="tests.python.integration.runtime.test_api040_m22_h05_runtime" name="test_h05_original_residual_rebind_and_domain_rollback[True]" time="0.678"><failure message="RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []">tests/python/integration/runtime/test_api040_m22_h05_runtime.py:35: in test_h05_original_residual_rebind_and_domain_rollback
+    artifact,world=_compile(case,layout,"M22-H05-%s" % reverse)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []</failure></testcase><testcase classname="tests.python.integration.runtime.test_api040_m22_h05_adversarial_runtime" name="test_h05_nonuniform_cells_rebind_and_collective_negative_rate[False]" time="0.716"><failure message="RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []">tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py:51: in test_h05_nonuniform_cells_rebind_and_collective_negative_rate
+    artifact, world = _compile(case, layout, "H05-adversarial-%s" % reverse)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []</failure></testcase><testcase classname="tests.python.integration.runtime.test_api040_m22_h05_adversarial_runtime" name="test_h05_nonuniform_cells_rebind_and_collective_negative_rate[True]" time="0.696"><failure message="RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []">tests/python/integration/runtime/test_api040_m22_h05_adversarial_runtime.py:51: in test_h05_nonuniform_cells_rebind_and_collective_negative_rate
+    artifact, world = _compile(case, layout, "H05-adversarial-%s" % reverse)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_user_numerical_bodies_runtime.py:66: in _compile
+    artifact = compile_resolved_plan_once(world, resolved, route=route,
+tests/python/integration/mpi/_compile_once.py:110: in compile_resolved_plan_once
+    raise RuntimeError("rank 0 artifact publication failed: " + publication[1])
+E   RuntimeError: rank 0 artifact publication failed: ValueError: emit_cpp_brick flux must define one canonical Cartesian axis prefix; got []</failure></testcase><testcase classname="tests.python.integration.runtime.test_symbolic_path_uniform_protocol" name="test_uniform_path_adaptive_cfl_without_max_dt_matches_two_step_oracle" time="15.040" /><testcase classname="tests.python.integration.runtime.test_symbolic_path_uniform_protocol" name="test_uniform_path_refusal_preserves_accepted_state_and_clock[fixed_dt]" time="15.185"><failure message="Failed: DID NOT RAISE any of (ValueError, RuntimeError)">tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py:111: in test_uniform_path_refusal_preserves_accepted_state_and_clock
+    with pytest.raises((ValueError, RuntimeError), match="user_face_numerical_stability"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE any of (ValueError, RuntimeError)</failure></testcase><testcase classname="tests.python.integration.runtime.test_symbolic_path_uniform_protocol" name="test_uniform_path_refusal_preserves_accepted_state_and_clock[actual_stage_cfl]" time="15.284" /><testcase classname="tests.python.integration.runtime.test_symbolic_path_uniform_protocol" name="test_uniform_path_fixed_dt_uses_unit_numerical_budget" time="15.570" /><testcase classname="tests.python.integration.runtime.test_symbolic_path_uniform_protocol" name="test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_state[fractional]" time="16.844" /><testcase classname="tests.python.integration.runtime.test_symbolic_path_uniform_protocol" name="test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_state[diagnostic]" time="16.222" /><testcase classname="tests.python.integration.runtime.test_symbolic_path_uniform_protocol" name="test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_state[guarded]" time="16.581"><failure message="Failed: DID NOT RAISE any of (ValueError, RuntimeError)">tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py:151: in test_path_external_grid_checks_each_actual_consumer_and_restores_rejected_state
+    with pytest.raises((ValueError, RuntimeError), match="user_face_numerical_stability"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE any of (ValueError, RuntimeError)</failure></testcase><testcase classname="tests.python.integration.runtime.test_symbolic_path_uniform_protocol" name="test_uniform_path_checkpoint_restart_does_not_request_an_absent_poisson_field" time="16.377" /></testsuite></testsuites>

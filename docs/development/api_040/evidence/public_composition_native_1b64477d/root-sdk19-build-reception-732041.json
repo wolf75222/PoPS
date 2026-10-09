@@ -1,0 +1,46 @@
+{
+  "abi_key": "compiler=15.3.0;std=202002L;headers=2d3aa1140e6b24d30cdb501d70012b700b1ce70ce36871756f2e7cffda7d828d;kokkos=1;stdlib=libstdc++_20260612;mpi=1;mpi_abi=f0d5c4a08c55d4d84a14c6cfd4d12d992c3afa7c5f9c2ca3ee140e5d87a0fa9e;dim=2",
+  "checks": {
+    "doctor_all_true": true,
+    "git_source_blobs_verified": 1191,
+    "installed_codegen_authority_matches_git": true,
+    "installed_files": 1156,
+    "observed_CXX_objects": 24,
+    "observed_snapshot_domain_count": 1191,
+    "old_environment_preserved": true,
+    "root_transfer_pins_rehashed": 21,
+    "sdk18_archive_verified_files": 1155,
+    "sdk18_matches_sdk18_prior_installation": true,
+    "shipped_source_verified_files": 1147,
+    "source_before_after_equal": true,
+    "wheel_nonRECORD_members_verified": 1152
+  },
+  "codegen_source_authority": {
+    "contract": "pops.codegen-source@1",
+    "sha256": "c90343018034d7259dacccfb6e37dc92f0e1c72735b8fa0f74c7a9ef31301d4b"
+  },
+  "compiler_to_dso_graph_proof": false,
+  "independent_artifacts_rewritten": false,
+  "independent_reader": "/Users/romaindespoulain/dev/tmp/sol61-sdk19-build-independent-732041/audit_final.py",
+  "independent_reader_sha256": "384e3400ee406d20d9b949bbc84d619562ca49e52e47dc60cd04c8df00a95023",
+  "independent_report": "/Users/romaindespoulain/dev/tmp/sol61-sdk19-build-independent-732041/report.json",
+  "independent_report_sha256": "23ab18bc354b8aa3b72233d395846f9e5124d97ba2aeb104231e7af6d0cdde40",
+  "installed_header_signature": "2d3aa1140e6b24d30cdb501d70012b700b1ce70ce36871756f2e7cffda7d828d",
+  "installed_native_sha256": "4efc61b3a4a01ed82e41ef1eac4baaa450914afa516e806b88e282a0ac8fc0b7",
+  "job": "732041",
+  "limitations": [
+    "Offline actual receipts; no Native import/execution by reviewer",
+    "Actual incremental build logged 24 CXX objects including AMR/System/bindings; compile_commands not retained",
+    "Installed source and package hashes do not prove scientific correctness or transitive compiler graph",
+    "No MPI transport or M16/M17 performance/scientific qualification"
+  ],
+  "native_scientific_acceptance": false,
+  "reader_actually_replayed": true,
+  "replayed_report_byte_identical": true,
+  "schema": "root.sdk19.build-install-reception@1",
+  "scope": "exact rebuilt CPU Kokkos MPI-enabled Dim2 SDK19 build/install identity, not a Native scientific receipt",
+  "source_freeze": "1b64477d2f1c93e856e996a4c83e506fcc91b386",
+  "transfer_receipt_sha256": "d724daf063fecbe9220a5f56e2aee8d81b16c30bb119f85288ad61753b3ea18b",
+  "wheel_sha256": "acc63114ce089fdffadd23532c12014c51a7eadf53bd453328e0768056288136",
+  "whole_mission_complete": false
+}

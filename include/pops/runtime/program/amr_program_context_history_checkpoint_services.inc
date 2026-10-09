@@ -1,4 +1,13 @@
+void require_unfrozen_history_authoring_() const {
+  const ExecutionLane& lane = prepared_execution_lane();
+  const long frozen = facade_->restart_regrid_history_sequence_active() ? 1L : 0L;
+  if (all_reduce_max(frozen, lane) != 0)
+    throw std::logic_error(
+        "AMR Program history authoring cannot change a frozen restart regrid image");
+}
+
 void store_history_(const std::string& name, const field_type& value) const {
+  require_unfrozen_history_authoring_();
   struct StoreCandidate {
     std::string key;
     std::vector<field_type> rollback_ring;
@@ -58,6 +67,7 @@ void store_history_(const std::string& name, const field_type& value) const {
 
   const auto found = manager.histories.find(candidate.key);
   const auto flux_found = history_flux_expressions_.find(candidate.key);
+  for (const auto& slot : found->second) program_values_.revoke_buffer_(slot);
   // Public history() references name individual ring elements.  Keep those elements at stable
   // addresses.  A MultiFab valid-copy has no allocation path after its exact field contract has
   // been prepared above; nevertheless, converge a device/local exception before metadata moves.
@@ -94,6 +104,7 @@ void store_history_(const std::string& name, const field_type& value) const {
 }
 
 void rotate_histories_(std::optional<std::string> clock_identity) const {
+  require_unfrozen_history_authoring_();
   auto& manager = runtime_state().hist_;
   struct RotateCandidate {
     std::vector<std::string> selected;
@@ -135,6 +146,7 @@ void rotate_histories_(std::optional<std::string> clock_identity) const {
       "AMR Program history rotation");
   for (const std::string& key : candidate.selected) {
     auto& ring = manager.histories.at(key);
+    for (const auto& slot : ring) program_values_.revoke_buffer_(slot);
     for (std::size_t slot = ring.size(); slot-- > 1;)
       std::swap(ring[slot], ring[slot - 1]);
     auto& dts = manager.slot_dt.at(key);
@@ -259,7 +271,9 @@ field_type& deferred_history_lag_(const std::string& key,
   auto& manager = runtime_state().hist_;
   struct DeferredCandidate {
     AmrProgramPendingHistoryRemap marker;
-    std::map<std::string, field_type> scratches;
+    DeferredHistoryLagScratches scratch;
+    field_type* published_scratch = nullptr;
+    bool inserts_scratch = false;
     FluxExpressionRegistry expressions;
     std::uint64_t next_identity = 0;
     std::string exact_contract;
@@ -271,8 +285,10 @@ field_type& deferred_history_lag_(const std::string& key,
           throw std::logic_error("AMR Program deferred history lag has no pending remap");
         const auto& marker = pending->second;
         if (marker.consumed || ring.size() != 2 || marker.child_level != active_level_ ||
-            marker.published_topology_epoch != runtime_->topology_epoch() ||
-            marker.published_materialization_generation != runtime_->materialization_generation() ||
+            !checkpoint_detail::pending_qualification_valid(
+                marker, runtime_->topology_epoch(), runtime_->materialization_generation()) ||
+            manager.slot_sample.at(key).size() != 2 ||
+            manager.slot_sample.at(key)[1] != marker.source_sample ||
             !manager.store_pending.at(key) || manager.slot_dt.at(key).size() != 2 ||
             static_cast<double>(manager.slot_dt.at(key)[0]) != current_dt_ ||
             static_cast<double>(manager.slot_dt.at(key)[1]) != marker.source_dt ||
@@ -286,10 +302,17 @@ field_type& deferred_history_lag_(const std::string& key,
             provenance->second.size() != ring.size())
           throw std::logic_error(
               "AMR Program deferred history lag lacks its persistent ring provenance");
-        DeferredCandidate staged{
-            marker, deferred_history_lag_scratches_, {}, next_active_flux_basis_identity_, {}};
-        auto [scratch, inserted] = staged.scratches.try_emplace(key, ring.front());
-        (void)inserted;
+        DeferredCandidate staged;
+        staged.marker = marker;
+        staged.next_identity = next_active_flux_basis_identity_;
+        const auto live_scratch = deferred_history_lag_scratches_.find(key);
+        staged.inserts_scratch = live_scratch == deferred_history_lag_scratches_.end();
+        auto scratch =
+            staged.scratch
+                .try_emplace(key, staged.inserts_scratch ? ring.front() : live_scratch->second)
+                .first;
+        staged.published_scratch =
+            staged.inserts_scratch ? &scratch->second : &live_scratch->second;
         require_same_field_contract_(scratch->second, ring.front(),
                                      "AMR Program deferred history lag");
         if (marker.temporal_numerator == 1)
@@ -297,21 +320,10 @@ field_type& deferred_history_lag_(const std::string& key,
         else
           pops::lincomb(scratch->second, Real(0.5), ring[0], Real(0.5), ring[1]);
 
-        // A map swap preserves every node address.  Rebind all existing deferred-scratch
-        // registry entries to their staged nodes before the old map is replaced, otherwise a
-        // repeated deferred read could leave a live expression pointing at a destroyed map.
+        // Generated Programs retain MultiFab& values from earlier history() calls.  Prepare
+        // only this value, retaining every published object address and registry key, including
+        // when the same lag is read twice before either reference is consumed.
         staged.expressions = active_flux_expressions_;
-        for (const auto& [scratch_key, live_scratch] : deferred_history_lag_scratches_) {
-          const auto live_expression = staged.expressions.find(&live_scratch);
-          if (live_expression == staged.expressions.end())
-            continue;
-          const auto staged_scratch = staged.scratches.find(scratch_key);
-          if (staged_scratch == staged.scratches.end())
-            throw std::logic_error("AMR Program deferred history scratch staging lost a live key");
-          FluxExpression expression = std::move(live_expression->second);
-          staged.expressions.erase(live_expression);
-          staged.expressions.emplace(&staged_scratch->second, std::move(expression));
-        }
 
         FluxExpression current_expression;
         FluxExpression lag_expression;
@@ -345,9 +357,9 @@ field_type& deferred_history_lag_(const std::string& key,
         }
         const std::size_t detached_term_count = detached.size();
         if (!detached.empty())
-          staged.expressions[&scratch->second] = std::move(detached);
+          staged.expressions[staged.published_scratch] = std::move(detached);
         ExactContractBuilder contract;
-        contract.text("pops.amr.deferred-history-lag.v1")
+        contract.text("pops.amr.deferred-history-lag.v2")
             .bytes(key)
             .scalar(marker.parent_level)
             .scalar(marker.child_level)
@@ -364,25 +376,42 @@ field_type& deferred_history_lag_(const std::string& key,
             .scalar(static_cast<std::uint64_t>(current_expression.size()))
             .scalar(static_cast<std::uint64_t>(lag_expression.size()))
             .scalar(static_cast<std::uint64_t>(detached_term_count))
-            .scalar(static_cast<std::uint64_t>(staged.scratches.size()))
+            .scalar(staged.inserts_scratch)
+            .scalar(static_cast<std::uint64_t>(deferred_history_lag_scratches_.size()) +
+                    static_cast<std::uint64_t>(staged.inserts_scratch))
             .scalar(static_cast<std::uint64_t>(staged.expressions.size()));
         staged.exact_contract = std::move(contract).release();
         return staged;
       },
       [](const DeferredCandidate& staged) -> const std::string& { return staged.exact_contract; },
       "AMR Program deferred history lag");
-  static_assert(std::is_nothrow_swappable_v<decltype(deferred_history_lag_scratches_)>);
+  static_assert(std::is_nothrow_swappable_v<field_type>);
+  static_assert(
+      std::is_nothrow_invocable_r_v<bool, typename DeferredHistoryLagScratches::key_compare,
+                                    const std::string&, const std::string&>);
+  static_assert(std::allocator_traits<
+                typename DeferredHistoryLagScratches::allocator_type>::is_always_equal::value);
   static_assert(std::is_nothrow_swappable_v<FluxExpressionRegistry>);
-  deferred_history_lag_scratches_.swap(candidate.scratches);
-  active_flux_expressions_.swap(candidate.expressions);
-  next_active_flux_basis_identity_ = candidate.next_identity;
+  [&]() noexcept {
+    if (candidate.inserts_scratch) {
+      // extract(iterator) cannot throw.  insert(node) does not allocate and can throw only
+      // through Compare; the assertions above also guarantee equal node allocators.  No code
+      // mutates the live map between the prepared absence check and this publication.
+      auto node = candidate.scratch.extract(candidate.scratch.begin());
+      deferred_history_lag_scratches_.insert(std::move(node));
+    } else {
+      std::swap(*candidate.published_scratch, candidate.scratch.begin()->second);
+    }
+    active_flux_expressions_.swap(candidate.expressions);
+    next_active_flux_basis_identity_ = candidate.next_identity;
+  }();
   // Profiling is observational: after the no-throw publication boundary it must not turn a
   // committed deferred scratch/provenance pair into a reported failed history read.
   try {
     count_kernel_();
   } catch (...) {
   }
-  return deferred_history_lag_scratches_.at(key);
+  return *candidate.published_scratch;
 }
 
 field_type& history_slot_(const std::string& name, int lag, bool zero_start, int components) const {
@@ -391,6 +420,10 @@ field_type& history_slot_(const std::string& name, int lag, bool zero_start, int
   const auto found = manager.histories.find(key);
   if (found == manager.histories.end() || lag < 0 || lag >= manager.depth.at(key))
     throw std::out_of_range("AMR Program history slot is absent");
+  if (manager.space_identity.at(key) == kScalarOutputHistorySpace ||
+      manager.space_identity.at(key) == kOutputHistoryProjectionSpace)
+    throw std::invalid_argument(
+        "AMR scalar output history permits inspection/export, not Program reads");
   field_type& result = found->second[static_cast<std::size_t>(lag)];
   if (components >= 0 && result.ncomp() != components)
     throw std::invalid_argument("AMR Program history component contract differs");

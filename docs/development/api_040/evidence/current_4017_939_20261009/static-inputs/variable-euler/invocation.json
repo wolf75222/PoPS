@@ -1,0 +1,18 @@
+{
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "/Users/romaindespoulain/dev/tmp/PoPS-root-static-inputs-reviewed-runner-r2-4017-20261009/run_native_reception.py",
+    "--checkout",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+    "--build-receipt",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/native-build-admission.json",
+    "--out",
+    "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009",
+    "--stage",
+    "representative",
+    "--authorize-native-execution"
+  ],
+  "runner_sha256": "fa0296b91640c368535d92ea1d6d971727d34b1b8a5ed242ad301a35dd33619c",
+  "source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "scope": "Actual corrected external collector representative; failed original retained. Numerical clauses unchanged."
+}

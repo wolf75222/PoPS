@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .cpp_strings import cpp_string_literal, cpp_string_expression, cpp_string_view_expression
+
 import json
 from collections.abc import Mapping
 import math
@@ -17,7 +19,7 @@ _BACKEND_CAPS = {
 
 # Must match pops::runtime::system::kNativeSystemPackageAbiVersion.  Host
 # add_native_block looks up NATIVE_SYSTEM_PACKAGE_ABI_EXPORT on every package.
-NATIVE_SYSTEM_PACKAGE_ABI_VERSION = 5
+NATIVE_SYSTEM_PACKAGE_ABI_VERSION = 8
 NATIVE_SYSTEM_PACKAGE_ABI_EXPORT = "pops_native_system_package_abi_version"
 
 
@@ -212,6 +214,16 @@ def model_hash(model: Any, params: Any = None) -> str:
 
     m = model
     parts = []
+    from pops.codegen.user_reconstruction_lowering import user_reconstruction_source_identity
+
+    reconstruction_identity = user_reconstruction_source_identity(m)
+    if reconstruction_identity is not None:
+        parts.append("user_reconstruction=" + reconstruction_identity)
+    from pops.codegen.user_riemann_lowering import user_face_source_identity
+
+    face_identity = user_face_source_identity(m)
+    if face_identity is not None:
+        parts.append("user_face=" + face_identity)
     from pops.codegen.native_build import model_native_roots
     from pops._ir.native_call import native_functions
     native_roots = model_native_roots(m)
@@ -475,6 +487,30 @@ def _consumer_owner_qid(model: Any, consumer_owner_qid: Any = None) -> str:
     return consumer_owner_qid
 
 
+def _default_auxiliary_evaluation_policy_cpp(kind):
+    """Default pure-expression providers follow the event of their actual consumer.
+
+    DerivedAux and AnalyticAux are lowered immutable expressions. Numeric reads
+    request residual or Field preparation at the actual consuming evaluation.
+    Forced invalidation handles layout recomputation separately; allowing a
+    generic after_regrid event would also select unrelated temporal expressions
+    on the legacy topology diagnostic point, which has no physical authority.
+    Permission does not trigger evaluation: the registry still selects the exact
+    required dependency closure and authenticates point, frame, owner and freshness.
+    Explicit native policies remain authoritative; this helper emits only defaults.
+    """
+    if kind != "AuxiliaryProviderKind::derived":
+        return ("AuxiliaryEvaluationPolicy{AuxiliaryEvaluationEvent::initialization, "
+                "AuxiliaryFreshness::once}")
+    events = (
+        "before_residual",      # residual and local implicit consumer prerequisites
+        "before_field_solve",   # Field RHS, including an accepted zero-interval source
+    )
+    return ("AuxiliaryEvaluationPolicy{std::vector<AuxiliaryEvaluationEvent>{%s}, "
+            "AuxiliaryFreshness::evaluation}" % ", ".join(
+                "AuxiliaryEvaluationEvent::" + event for event in events))
+
+
 def _emit_auxiliary_route_registration(
     model: Any,
     *,
@@ -501,6 +537,14 @@ def _emit_auxiliary_route_registration(
     routes = getattr(model, "_auxiliary_provider_routes", None)
     if routes is None:
         raise ValueError("native auxiliary route emission requires resolved typed producer routes")
+    from .provider_instances import emitter_contract, runtime_key
+    from pops.model.provider_pack import ComponentKey
+    instance = emitter_contract(model, owner_qid=consumer_owner_qid)
+    if instance is not None and consumer_owner_qid is None:
+        raise ValueError('instanced native providers require the exact consumer block owner')
+
+    def native_key(value: Mapping[str, Any]) -> dict[str, Any]:
+        return runtime_key(ComponentKey(**value), instance).to_data()
 
     def route_key(row: Mapping[str, Any]) -> tuple[str, str, str, str]:
         value = row["key"]
@@ -520,7 +564,7 @@ def _emit_auxiliary_route_registration(
     }
 
     def literal(value: Any) -> str:
-        return json.dumps(value)
+        return cpp_string_expression(value)
 
     def optional(value: Any) -> str:
         if value is None:
@@ -528,17 +572,19 @@ def _emit_auxiliary_route_registration(
         return "std::optional<std::string>{%s}" % literal(value)
 
     def key(row: Mapping[str, Any]) -> str:
-        value = row["key"]
+        value = native_key(row["key"])
         return "Key{%s, %s, %s, %s}" % tuple(
             literal(value[name]) for name in ("owner_qid", "space_kind", "space_name", "component")
         )
+
+    from ._native_units import optional_unit_cpp
 
     def contract(row: Mapping[str, Any]) -> str:
         value = row["contract"]
         return "Contract{%s, %s, %s, %s, %s}" % (
             literal(value["representation"]),
             literal(value["centering"]),
-            optional(value["unit"]),
+            optional_unit_cpp(value["unit"]),
             literal(value["layout"]),
             optional(value["value_kind"]),
         )
@@ -580,7 +626,7 @@ def _emit_auxiliary_route_registration(
         free-name ``Var`` and state/parameter reads are rejected rather than
         becoming a hidden carrier lookup.
         """
-        from pops._ir.expr import Abs, Const, Div, Maximum, Minimum, Mul, Neg, Pow, Sqrt, Sub, Add
+        from pops._ir.expr import Abs, Const, Div, Exp, Maximum, Minimum, Mul, Neg, Pow, Sqrt, Sub, Add
         from pops._ir.handle_expr import ValueExpr
 
         if isinstance(expression, Const):
@@ -619,6 +665,8 @@ def _emit_auxiliary_route_registration(
             return "(-%s)" % derived_expression_cpp(expression.a, bindings)
         if isinstance(expression, Sqrt):
             return "Kokkos::sqrt(%s)" % derived_expression_cpp(expression.a, bindings)
+        if isinstance(expression, Exp):
+            return "Kokkos::exp(%s)" % derived_expression_cpp(expression.a, bindings)
         if isinstance(expression, Abs):
             return "Kokkos::abs(%s)" % derived_expression_cpp(expression.a, bindings)
         raise TypeError(
@@ -627,6 +675,10 @@ def _emit_auxiliary_route_registration(
         )
 
     def derived_launcher(identity: str, route: Mapping[str, Any]) -> str:
+        from pops.fields.aux import AnalyticAux
+        if isinstance(route["producer"], AnalyticAux):
+            from pops.codegen._analytic_aux import emit_analytic_aux_launcher
+            return emit_analytic_aux_launcher(identity, route["producer"])
         dependencies = route["dependencies"]
         producer = route["producer"]
         bindings = {
@@ -643,7 +695,7 @@ def _emit_auxiliary_route_registration(
                     % tuple(
                         literal(value)
                         for value in (
-                            key_value.owner_qid,
+                            runtime_key(key_value, instance).owner_qid,
                             key_value.space_kind,
                             key_value.space_name,
                             key_value.component,
@@ -651,7 +703,7 @@ def _emit_auxiliary_route_registration(
                     ),
                     literal(contract_value.representation),
                     literal(contract_value.centering),
-                    optional(contract_value.unit),
+                    optional_unit_cpp(contract_value.unit),
                     literal(contract_value.layout),
                     optional(contract_value.value_kind),
                     shape_for(
@@ -672,7 +724,7 @@ def _emit_auxiliary_route_registration(
             "      Provider::launcher_type::trusted_extension(",
             "          pops::PreparedProviderIdentity{%s, 1}, %s,"
             % (
-                literal("pops.derived-aux." + identity),
+                cpp_string_view_expression("pops.derived-aux." + identity),
                 literal(identity),
             ),
             "          [](const pops::runtime::system::AuxiliaryKernelLaunchContext<"
@@ -798,17 +850,11 @@ def _emit_auxiliary_route_registration(
             )
         identity = "provider:%s:%s/%s/%s" % (
             value["producer"],
-            row["key"]["owner_qid"],
+            native_key(row["key"])["owner_qid"],
             row["key"]["space_name"],
             row["key"]["component"],
         )
-        policy = (
-            "AuxiliaryEvaluationPolicy{AuxiliaryEvaluationEvent::before_residual, "
-            "AuxiliaryFreshness::evaluation}"
-            if kind == "AuxiliaryProviderKind::derived"
-            else "AuxiliaryEvaluationPolicy{AuxiliaryEvaluationEvent::initialization, "
-            "AuxiliaryFreshness::once}"
-        )
+        policy = _default_auxiliary_evaluation_policy_cpp(kind)
         lines.extend(
             (
                 "  sys->install_prepared_auxiliary_provider(Provider{",
@@ -861,6 +907,9 @@ def _emit_auxiliary_route_registration(
 # ---------------------------------------------------------------------------
 
 
+from .cpp_symbols import printer_scope
+
+@printer_scope
 def emit_cpp_native_loader(
     model: Any,
     name: Any = None,
@@ -885,9 +934,13 @@ def emit_cpp_native_loader(
         _emit_bricks,
         _emit_metadata,
         _elliptic_field_registrations,
+        _elliptic_provider_locals,
     )
 
     m = model
+    from .provider_instances import emitter_contract, runtime_key
+    from pops.model.provider_pack import ComponentKey
+    instance = emitter_contract(m, owner_qid=consumer_owner_qid)
     from pops.codegen.component_provider_packs import (
         bind_emitter_provider_packs,
         require_emitter_provider_carrier,
@@ -900,6 +953,31 @@ def emit_cpp_native_loader(
             "emit_cpp_native_loader: target 'system' | 'amr_system' (got %r)" % (target,)
         )
     nv, bricks, composite = _emit_bricks(m, name, hoist_reciprocals=hoist_reciprocals)
+    from pops.codegen.user_reconstruction_lowering import (
+        emit_user_reconstruction_policy, user_reconstruction_source_identity,
+    )
+
+    # A Program-owned carrier supplies storage and halo access, not an independent
+    # face operator. Its numerical policies are instantiated by the complete
+    # Program operator (for example the principal group), with that operator's
+    # coupled states and parameter contexts. Passing them to this row's builder
+    # would instead instantiate an unavailable standalone physical flux/speed.
+    storage_only = bool(getattr(getattr(m, "_m", m), "_program_only_storage_axes", ()))
+    user_reconstruction_identity = None if storage_only else user_reconstruction_source_identity(m)
+    user_reconstruction_source = "" if storage_only else emit_user_reconstruction_policy(m)
+    user_reconstruction_descriptor = (None if storage_only else
+        getattr(getattr(m, "_m", m), "_user_reconstruction", None))
+    user_reconstruction_captures = bool(
+        user_reconstruction_descriptor is not None and
+        user_reconstruction_descriptor.options["runtime_captures"])
+    from pops.codegen.user_riemann_lowering import emit_user_face_policy, user_face_source_identity
+
+    user_face_identity = None if storage_only else user_face_source_identity(m)
+    user_face_source = "" if storage_only else emit_user_face_policy(m)
+    user_face_descriptor = (None if storage_only else
+        getattr(getattr(m, "_m", m), "_user_face", None))
+    user_face_captures = bool(user_face_descriptor is not None and
+                              user_face_descriptor.options["runtime_captures"])
     model_identity = str(model_identity if model_identity is not None else model_hash(m))
     if len(model_identity) != 64 or any(ch not in "0123456789abcdef" for ch in model_identity):
         raise ValueError("emit_cpp_native_loader requires one lowercase 64-hex model identity")
@@ -917,13 +995,15 @@ def emit_cpp_native_loader(
         "#include <array>\n"
         "#include <cstddef>\n"
         "#include <optional>\n"
+        "#include <limits>\n"
         "#include <stdexcept>\n"
         "#include <string>\n"
         "#include <utility>\n"
         "#include <pops/runtime/dynamic/abi_key.hpp>\n"
         "#include <pops/core/foundation/native_dimension.hpp>\n"
         "#include <pops/runtime/builders/compiled/model_runtime_params.hpp>\n"
-        "#include <pops/physics/bricks/bricks.hpp>\n"
+        "#include <pops/physics/composition/composite.hpp>\n"
+        "#include <pops/physics/composition/no_source.hpp>\n"
         "#include <pops/core/state/variables.hpp>\n"
     )
     head += (
@@ -944,8 +1024,8 @@ def emit_cpp_native_loader(
         "  return POPS_ABI_KEY_LITERAL;\n"
         "}\n"
         "POPS_LOADER_API const char* pops_compiled_model_identity() {\n"
-        '  return "%s";\n'
-        "}\n" % model_identity
+        '  return %s;\n'
+        "}\n" % cpp_string_literal(model_identity)
     )
     key += (
         "POPS_LOADER_API int %s() {\n"
@@ -961,10 +1041,34 @@ def emit_cpp_native_loader(
     system_elliptic_prepare_lines = ""
     system_elliptic_package_lines = ""
     system_registrations = [(*registration, None) for registration in ell_field_regs]
+    default_rhs_width = (0 if m._elliptic is None else
+                         _elliptic_provider_locals(m, "fields_from_state", m._elliptic)[0])
+    default_rhs_brick = ("pops_generated::%sEll_DefaultRhs" % nm
+                         if m._elliptic is not None else None)
+
+    def rhs_width(key):
+        if key == "fields_from_state" and m._elliptic is not None:
+            return default_rhs_width
+        return _elliptic_provider_locals(m, key, m._elliptic_fields[key]["rhs"])[0]
+
+    def rhs_consumer(key):
+        return _consumer_owner_qid(m, consumer_owner_qid) + "/operator/" + key
+
+    def rhs_assignment(variable, key, *, v2=True):
+        if not v2:
+            return "    attachment.rhs = std::move(%s);\n" % variable
+        return ("    attachment.rhs_v2 = std::move(%s);\n"
+                "    attachment.rhs_consumer_qid = %s;\n"
+                "    attachment.rhs_provider_count = %d;\n"
+                "    attachment.rhs_input_contract_version = 2;\n"
+                % (variable, cpp_string_expression(rhs_consumer(key)), rhs_width(key)))
+
     if target == "system" and native_field_roles is not None:
         # A Case owns one complete field output. Model packages contribute only their resolved
         # RHS laws; the available output FieldSpace does not confer output or gradient ownership.
         local_fields = {field: brick for field, brick, _ in ell_field_regs}
+        if default_rhs_brick is not None:
+            local_fields["fields_from_state"] = default_rhs_brick
         system_registrations = []
         system_bindings = {}
         for role in amr_field_roles:
@@ -1003,15 +1107,16 @@ def emit_cpp_native_loader(
                 "  pops::compiled_model::apply_runtime_params(\n"
                 "      named_elliptic_model_%d,\n"
                 "      pops::compiled_model::declaration_runtime_params(model));\n"
-                "  auto named_elliptic_rhs_%d = pops::make_poisson_rhs(named_elliptic_model_%d);\n"
-                % (index, brick, index, index, index)
+                "  auto named_elliptic_rhs_%d = pops::%s(named_elliptic_model_%d);\n"
+                % (index, brick, index, index,
+                   "make_poisson_rhs_v2" if rhs_width(fld) else "make_poisson_rhs", index)
             )
         key_values = ", ".join(
             "pops::runtime::system::AuxiliaryComponentKey{%s, %s, %s, %s}"
             % tuple(
-                json.dumps(value)
+                cpp_string_expression(value)
                 for value in (
-                    key.owner_qid,
+                    runtime_key(key, instance).owner_qid,
                     key.space_kind,
                     key.space_name,
                     key.component,
@@ -1021,11 +1126,17 @@ def emit_cpp_native_loader(
         )
         if rhs_role is None:
             system_elliptic_package_lines += (
-                '  package.elliptic_attachments.push_back({"%s", "%s/%s", '
-                "std::vector<pops::runtime::system::AuxiliaryComponentKey>{%s}, %d, "
-                "std::move(named_elliptic_rhs_%d)});\n"
-                % (fld, model_identity, fld, key_values, gradient_sign, index)
-            )
+                "  {\n"
+                "    pops::runtime::system::PreparedNativeEllipticAttachment<pops::kNativeDimension> attachment;\n"
+                "    attachment.field = %s;\n"
+                "    attachment.rhs_identity = %s;\n"
+                "    attachment.outputs = {%s};\n"
+                "    attachment.gradient_sign = %d;\n"
+                % (cpp_string_expression(fld), cpp_string_expression("%s/%s" % (model_identity, fld)),
+                   key_values, gradient_sign))
+            system_elliptic_package_lines += rhs_assignment(
+                "named_elliptic_rhs_%d" % index, fld, v2=bool(rhs_width(fld)))
+            system_elliptic_package_lines += "    package.elliptic_attachments.push_back(std::move(attachment));\n  }\n"
         else:
             system_elliptic_package_lines += (
                 "  {\n"
@@ -1035,31 +1146,47 @@ def emit_cpp_native_loader(
                 "    attachment.role = pops::runtime::system::NativeEllipticAttachmentRole::rhs_only;\n"
                 "    attachment.field_slot = %s;\n"
                 "    attachment.binding_identity = %s;\n"
-                "    attachment.rhs = std::move(named_elliptic_rhs_%d);\n"
-                "    package.elliptic_attachments.push_back(std::move(attachment));\n"
-                "  }\n"
-                % (json.dumps(fld), json.dumps("%s/%s" % (model_identity, fld)),
-                   json.dumps(rhs_role["field"]), json.dumps(rhs_role["binding_identity"]), index)
+                % (cpp_string_expression(fld), cpp_string_expression("%s/%s" % (model_identity, fld)),
+                   cpp_string_expression(rhs_role["field"]), cpp_string_expression(rhs_role["binding_identity"])))
+            system_elliptic_package_lines += rhs_assignment(
+                "named_elliptic_rhs_%d" % index, fld, v2=bool(rhs_width(fld)))
+            system_elliptic_package_lines += (
+                "    package.elliptic_attachments.push_back(std::move(attachment));\n  }\n"
             )
     if m._elliptic is not None and (target != "system" or native_field_roles is None):
-        system_elliptic_prepare_lines += (
-            "  auto fields_from_state_rhs = pops::make_poisson_rhs(model);\n"
-        )
-        system_elliptic_package_lines += (
-            '  package.elliptic_attachments.push_back({"fields_from_state", '
-            '"%s/fields_from_state", {}, 1, std::move(fields_from_state_rhs)});\n' % model_identity
-        )
+        if default_rhs_width:
+            system_elliptic_prepare_lines += (
+                "  auto fields_from_state_model = %s{};\n"
+                "  pops::compiled_model::apply_runtime_params(fields_from_state_model,\n"
+                "      pops::compiled_model::declaration_runtime_params(model));\n"
+                "  auto fields_from_state_rhs = pops::make_poisson_rhs_v2(fields_from_state_model);\n"
+                % default_rhs_brick)
+            system_elliptic_package_lines += (
+                "  {\n"
+                "    pops::runtime::system::PreparedNativeEllipticAttachment<pops::kNativeDimension> attachment;\n"
+                '    attachment.field = "fields_from_state";\n'
+                "    attachment.rhs_identity = %s;\n"
+                % cpp_string_expression("%s/fields_from_state" % model_identity))
+            system_elliptic_package_lines += rhs_assignment("fields_from_state_rhs", "fields_from_state")
+            system_elliptic_package_lines += "    package.elliptic_attachments.push_back(std::move(attachment));\n  }\n"
+        else:
+            system_elliptic_prepare_lines += "  auto fields_from_state_rhs = pops::make_poisson_rhs(model);\n"
+            system_elliptic_package_lines += (
+                '  package.elliptic_attachments.push_back({"fields_from_state", '
+                '"%s/fields_from_state", {}, 1, std::move(fields_from_state_rhs)});\n' % model_identity)
 
     amr_elliptic_prepare_lines = ""
     amr_elliptic_package_lines = ""
     local_fields = {field: brick for field, brick, _ in ell_field_regs}
+    if default_rhs_brick is not None:
+        local_fields["fields_from_state"] = default_rhs_brick
     rhs_index = 0
     for role in (amr_field_roles if target == "amr_system" else ()):
         if role["kind"] == "output":
             key_values = ", ".join(
                 "pops::runtime::system::AuxiliaryComponentKey{%s, %s, %s, %s}"
                 % tuple(
-                    json.dumps(key[name])
+                    cpp_string_expression(runtime_key(ComponentKey(**key), instance).to_data()[name])
                     for name in ("owner_qid", "space_kind", "space_name", "component")
                 )
                 for key in role["output_keys"]
@@ -1074,8 +1201,8 @@ def emit_cpp_native_loader(
                 "    package.elliptic_attachments.push_back(std::move(attachment));\n"
                 "  }\n"
                 % (
-                    json.dumps(role["field"]),
-                    json.dumps(role["block"]),
+                    cpp_string_expression(role["field"]),
+                    cpp_string_expression(role["block"]),
                     key_values,
                     role["gradient_sign"],
                 )
@@ -1094,8 +1221,9 @@ def emit_cpp_native_loader(
             "  pops::compiled_model::apply_runtime_params(\n"
             "      named_elliptic_model_%d,\n"
             "      pops::compiled_model::declaration_runtime_params(model));\n"
-            "  auto named_elliptic_rhs_%d = pops::make_poisson_rhs(named_elliptic_model_%d);\n"
-            % (rhs_index, brick, rhs_index, rhs_index, rhs_index)
+            "  auto named_elliptic_rhs_%d = pops::%s(named_elliptic_model_%d);\n"
+            % (rhs_index, brick, rhs_index, rhs_index,
+               "make_poisson_rhs_v2" if rhs_width(provider_key) else "make_poisson_rhs", rhs_index)
         )
         amr_elliptic_package_lines += (
             "  {\n"
@@ -1107,35 +1235,51 @@ def emit_cpp_native_loader(
             "    attachment.rhs_provider_key = %s;\n"
             "    attachment.binding_ordinal = %d;\n"
             "    attachment.coefficient = %s;\n"
-            "    attachment.rhs = std::move(named_elliptic_rhs_%d);\n"
-            "    package.elliptic_attachments.push_back(std::move(attachment));\n"
-            "  }\n"
+            "    if constexpr (pops::poisson_rhs_read_contract_version<decltype(named_elliptic_model_%d)>() == %d) {\n"
+            "      attachment.rhs_read_contract_version = pops::poisson_rhs_read_contract_version<decltype(named_elliptic_model_%d)>();\n"
+            "      attachment.rhs_state_read_cells.fill(pops::poisson_rhs_state_read_cells<decltype(named_elliptic_model_%d)>());\n"
+            "      attachment.rhs_read_authority = %s;\n"
+            "    }\n"
             % (
-                json.dumps(role["field"]),
-                json.dumps(role["block"]),
-                json.dumps(role["binding_identity"]),
-                json.dumps("%s/%s" % (model_identity, provider_key)),
-                json.dumps(provider_key),
+                cpp_string_expression(role["field"]),
+                cpp_string_expression(role["block"]),
+                cpp_string_expression(role["binding_identity"]),
+                cpp_string_expression("%s/%s" % (model_identity, provider_key)),
+                cpp_string_expression(provider_key),
                 role["binding_ordinal"],
                 scalar_cpp(role["coefficient"]),
-                rhs_index,
+                rhs_index, 2 if rhs_width(provider_key) else 1, rhs_index, rhs_index,
+                cpp_string_expression("compiler.pointwise-state-aux-ast@2" if rhs_width(provider_key)
+                                      else "compiler.cell-state-ast@1"),
             )
         )
+        amr_elliptic_package_lines += rhs_assignment(
+            "named_elliptic_rhs_%d" % rhs_index, provider_key, v2=bool(rhs_width(provider_key)))
+        amr_elliptic_package_lines += "    package.elliptic_attachments.push_back(std::move(attachment));\n  }\n"
         rhs_index += 1
-    if m._elliptic is not None:
-        amr_elliptic_prepare_lines += (
-            "  auto fields_from_state_rhs = pops::make_poisson_rhs(model);\n"
-        )
+    if m._elliptic is not None and not any(
+            role["kind"] == "rhs" and role["provider_key"] == "fields_from_state"
+            for role in amr_field_roles):
+        if default_rhs_width:
+            amr_elliptic_prepare_lines += (
+                "  auto fields_from_state_model = %s{};\n"
+                "  pops::compiled_model::apply_runtime_params(fields_from_state_model,\n"
+                "      pops::compiled_model::declaration_runtime_params(model));\n"
+                "  auto fields_from_state_rhs = pops::make_poisson_rhs_v2(fields_from_state_model);\n"
+                % default_rhs_brick)
+        else:
+            amr_elliptic_prepare_lines += "  auto fields_from_state_rhs = pops::make_poisson_rhs(model);\n"
         amr_elliptic_package_lines += (
             "  {\n"
             "    pops::PreparedNativeAmrEllipticAttachment<pops::kNativeDimension> attachment;\n"
             '    attachment.field = "fields_from_state";\n'
             '    attachment.rhs_provider_identity = "%s/fields_from_state";\n'
             "    attachment.coefficient = 1.0;\n"
-            "    attachment.rhs = std::move(fields_from_state_rhs);\n"
-            "    package.elliptic_attachments.push_back(std::move(attachment));\n"
-            "  }\n" % model_identity
+            % model_identity
         )
+        amr_elliptic_package_lines += rhs_assignment(
+            "fields_from_state_rhs", "fields_from_state", v2=bool(default_rhs_width))
+        amr_elliptic_package_lines += "    package.elliptic_attachments.push_back(std::move(attachment));\n  }\n"
     if target == "system":
         install = (
             "POPS_LOADER_API void pops_install_native(void* sys, const char* name, const char* limiter,\n"
@@ -1153,7 +1297,7 @@ def emit_cpp_native_loader(
             + system_elliptic_prepare_lines
             + "  pops::runtime::system::PreparedNativeSystemPackage<pops::kNativeDimension> package;\n"
             "  package.consumer_qid = "
-            + json.dumps(_consumer_owner_qid(m, consumer_owner_qid) + "/native_model")
+            + cpp_string_expression(_consumer_owner_qid(m, consumer_owner_qid) + "/native_model")
             + ";\n"
             "  const pops::NewtonOptions newton = pops::newton_options_from_abi(\n"
             "      newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);\n"
@@ -1183,6 +1327,16 @@ def emit_cpp_native_loader(
             "  auto* s = reinterpret_cast<NativeAmrSystem*>(sys);\n"
             "  auto model = pops::compiled_model::bind_runtime_params(\n"
             "      pops_generated::ProdModel{}, params, nparams);\n"
+            + ("  auto user_reconstruction = pops_generated::UserReconstructionPolicy{\n"
+               "      pops::compiled_model::declaration_runtime_params(model)};\n"
+               if user_reconstruction_captures else
+               "  auto user_reconstruction = pops_generated::UserReconstructionPolicy{};\n"
+               if user_reconstruction_identity is not None else "")
+            + ("  auto user_face = pops_generated::UserFacePolicy{\n"
+               "      pops::compiled_model::declaration_runtime_params(model)};\n"
+               if user_face_captures else
+               "  auto user_face = pops_generated::UserFacePolicy{};\n"
+               if user_face_identity is not None else "")
             + amr_elliptic_prepare_lines
             + "  pops::PreparedNativeAmrPackage<pops::kNativeDimension> package;\n"
             "  const pops::NewtonOptions newton = pops::newton_options_from_abi(\n"
@@ -1190,8 +1344,10 @@ def emit_cpp_native_loader(
             "  package.block = pops::prepare_compiled_amr_system_block<pops::kNativeDimension>(\n"
             "      name, std::move(model), limiter, riemann, recon, time, gamma, substeps,\n"
             "      stride, pos_floor, weno_epsilon, wave_speed_cache, %s, newton,\n"
-            "      newton_diagnostics != 0);\n"
-            % json.dumps(_consumer_owner_qid(m, consumer_owner_qid) + "/native_model")
+            "      newton_diagnostics != 0%s);\n"
+            % (cpp_string_expression(_consumer_owner_qid(m, consumer_owner_qid) + "/native_model"),
+               (", user_reconstruction" if user_reconstruction_identity is not None else "") +
+               (", user_face" if user_face_identity is not None else ""))
             + amr_elliptic_package_lines
             + "  s->install_prepared_native_amr_package(std::move(package));\n"
             "}\n"
@@ -1211,8 +1367,20 @@ def emit_cpp_native_loader(
             '              "generated model rank differs from the selected native artifact");\n'
             "inline pops::PreparedSystemBlock<pops::kNativeDimension> prepare_exact_system_block(\n"
             "    pops::CompiledSystemBlockPreparation<pops::kNativeDimension, ProdModel> request) {\n"
-            "  return pops::prepare_generated_system_block(std::move(request));\n"
-            "}\n"
+            + ("  auto user_reconstruction = UserReconstructionPolicy{\n"
+               "      pops::compiled_model::declaration_runtime_params(request.model)};\n"
+               if user_reconstruction_captures else
+               "  auto user_reconstruction = UserReconstructionPolicy{};\n"
+               if user_reconstruction_identity is not None else "")
+            + ("  auto user_face = UserFacePolicy{\n"
+               "      pops::compiled_model::declaration_runtime_params(request.model)};\n"
+               if user_face_captures else
+               "  auto user_face = UserFacePolicy{};\n"
+               if user_face_identity is not None else "")
+            + "  return pops::prepare_generated_system_block(std::move(request)%s);\n"
+            % ((", user_reconstruction" if user_reconstruction_identity is not None else "") +
+               (", user_face" if user_face_identity is not None else ""))
+            + "}\n"
             "}  // namespace pops_generated\n"
         )
     auxiliary_routes = _emit_auxiliary_route_registration(
@@ -1224,6 +1392,8 @@ def emit_cpp_native_loader(
     return (
         head
         + bricks
+        + user_reconstruction_source
+        + user_face_source
         + "\nnamespace pops_generated { using ProdModel = %s; }\n" % composite
         + package_preparer
         + key

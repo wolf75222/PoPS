@@ -1,0 +1,991 @@
+{
+  "baseRefName": "master",
+  "headRefName": "codex/api040-integrated-main-20261004",
+  "headRefOid": "65861f43124ebd70987af66908afe97f3f5286f3",
+  "isDraft": true,
+  "number": 681,
+  "statusCheckRollup": [
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:52:09Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404138630",
+      "name": "routage (chemins modifies)",
+      "startedAt": "2026-10-08T15:51:56Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:52:25Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221414/job/113404139278",
+      "name": "documentation conformance",
+      "startedAt": "2026-10-08T15:51:56Z",
+      "status": "COMPLETED",
+      "workflowName": "Docs"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:52:05Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221264/job/113404137930",
+      "name": "scan",
+      "startedAt": "2026-10-08T15:51:56Z",
+      "status": "COMPLETED",
+      "workflowName": "no-ai-authors"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:52:02Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804216411/job/113404118814",
+      "name": "scan",
+      "startedAt": "2026-10-08T15:51:53Z",
+      "status": "COMPLETED",
+      "workflowName": "no-ai-authors"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:52:26Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404264390",
+      "name": "mode (fast/full)",
+      "startedAt": "2026-10-08T15:52:17Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:54:52Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404399024",
+      "name": "ubuntu-latest / Kokkos Serial (C++ prewarm system)",
+      "startedAt": "2026-10-08T15:52:29Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:54:42Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404398947",
+      "name": "ubuntu-latest / Kokkos Serial (C++ prewarm amr-runtime)",
+      "startedAt": "2026-10-08T15:52:29Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:53:27Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404399027",
+      "name": "ubuntu-latest / Kokkos Serial (C++ prewarm amr-fields)",
+      "startedAt": "2026-10-08T15:52:30Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:06Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404398884",
+      "name": "ubuntu-latest / Python architecture",
+      "startedAt": "2026-10-08T15:52:29Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:54:37Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404399332",
+      "name": "ubuntu-latest / Kokkos Serial (Python prewarm Dim1 system)",
+      "startedAt": "2026-10-08T15:52:30Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:55:13Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404399448",
+      "name": "ubuntu-latest / Kokkos Serial (Python prewarm Dim1 amr-runtime)",
+      "startedAt": "2026-10-08T15:52:30Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:53:34Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404399338",
+      "name": "ubuntu-latest / Kokkos Serial (Python prewarm Dim1 amr-fields)",
+      "startedAt": "2026-10-08T15:52:30Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:54:42Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404399402",
+      "name": "ubuntu-latest / Kokkos Serial (Python prewarm Dim2 system)",
+      "startedAt": "2026-10-08T15:52:30Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:54:55Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404399421",
+      "name": "ubuntu-latest / Kokkos Serial (Python prewarm Dim2 amr-runtime)",
+      "startedAt": "2026-10-08T15:52:30Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:53:39Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404399462",
+      "name": "ubuntu-latest / Kokkos Serial (Python prewarm Dim2 amr-fields)",
+      "startedAt": "2026-10-08T15:52:30Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:54:28Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404399483",
+      "name": "ubuntu-latest / Kokkos Serial (Python prewarm Dim3 system)",
+      "startedAt": "2026-10-08T15:52:30Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:55:33Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404399326",
+      "name": "ubuntu-latest / Kokkos Serial (Python prewarm Dim3 amr-runtime)",
+      "startedAt": "2026-10-08T15:52:30Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:53:28Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404399323",
+      "name": "ubuntu-latest / Kokkos Serial (Python prewarm Dim3 amr-fields)",
+      "startedAt": "2026-10-08T15:52:30Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:55:29Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404398878",
+      "name": "ubuntu-24.04 / MPI + Kokkos Serial (C++ prewarm system)",
+      "startedAt": "2026-10-08T15:52:30Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:55:56Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404399064",
+      "name": "ubuntu-24.04 / MPI + Kokkos Serial (C++ prewarm amr-runtime)",
+      "startedAt": "2026-10-08T15:52:30Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:54:06Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404399465",
+      "name": "ubuntu-24.04 / MPI + Kokkos Serial (C++ prewarm amr-fields)",
+      "startedAt": "2026-10-08T15:52:30Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:54:44Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404399330",
+      "name": "ubuntu-latest / Kokkos OpenMP (cpp prewarm system)",
+      "startedAt": "2026-10-08T15:52:30Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:55:25Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404399174",
+      "name": "ubuntu-latest / Kokkos OpenMP (cpp prewarm amr-runtime)",
+      "startedAt": "2026-10-08T15:52:30Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:53:52Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404398986",
+      "name": "ubuntu-latest / Kokkos OpenMP (cpp prewarm amr-fields)",
+      "startedAt": "2026-10-08T15:52:29Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:54:13Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404399093",
+      "name": "ubuntu-latest / Kokkos OpenMP (python prewarm system)",
+      "startedAt": "2026-10-08T15:52:30Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:54:58Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404399335",
+      "name": "ubuntu-latest / Kokkos OpenMP (python prewarm amr-runtime)",
+      "startedAt": "2026-10-08T15:52:30Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:53:15Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113404399272",
+      "name": "ubuntu-latest / Kokkos OpenMP (python prewarm amr-fields)",
+      "startedAt": "2026-10-08T15:52:30Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:01:02Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405529859",
+      "name": "ubuntu-latest / Kokkos Serial (C++) shard 0",
+      "startedAt": "2026-10-08T15:54:55Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:05:01Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405529941",
+      "name": "ubuntu-latest / Kokkos Serial (C++) shard 1",
+      "startedAt": "2026-10-08T15:54:56Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:00:22Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405530135",
+      "name": "ubuntu-latest / Kokkos Serial (C++) shard 2",
+      "startedAt": "2026-10-08T15:54:55Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:00:28Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405531197",
+      "name": "ubuntu-latest / Kokkos Serial (C++) shard 3",
+      "startedAt": "2026-10-08T15:54:56Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:02:04Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405530133",
+      "name": "ubuntu-latest / Kokkos Serial (C++) shard 4",
+      "startedAt": "2026-10-08T15:54:55Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:59:14Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405529947",
+      "name": "ubuntu-latest / Kokkos Serial (C++) shard 5",
+      "startedAt": "2026-10-08T15:54:56Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:59:41Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405530476",
+      "name": "ubuntu-latest / Kokkos Serial (C++) shard 6",
+      "startedAt": "2026-10-08T15:54:57Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:56:52Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405530153",
+      "name": "ubuntu-latest / Kokkos Serial (C++) shard 7",
+      "startedAt": "2026-10-08T15:54:55Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:56:06Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405530373",
+      "name": "ubuntu-latest / Kokkos Serial (C++) shard 8",
+      "startedAt": "2026-10-08T15:54:56Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:56:16Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405529935",
+      "name": "ubuntu-latest / Kokkos Serial (C++) shard 9",
+      "startedAt": "2026-10-08T15:54:55Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:41Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405530386",
+      "name": "ubuntu-latest / Kokkos Serial (C++) shard 10",
+      "startedAt": "2026-10-08T15:54:56Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:56:33Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405529929",
+      "name": "ubuntu-latest / Kokkos Serial (C++) shard 11",
+      "startedAt": "2026-10-08T15:54:55Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:54Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405530124",
+      "name": "ubuntu-latest / Kokkos Serial (C++) shard 12",
+      "startedAt": "2026-10-08T15:54:55Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:33Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405843968",
+      "name": "ubuntu-latest / Kokkos Serial (Python build Dim1)",
+      "startedAt": "2026-10-08T15:55:36Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:30Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405844060",
+      "name": "ubuntu-latest / Kokkos Serial (Python build Dim2)",
+      "startedAt": "2026-10-08T15:55:37Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:19Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405844107",
+      "name": "ubuntu-latest / Kokkos Serial (Python build Dim3)",
+      "startedAt": "2026-10-08T15:55:36Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:01:57Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406023346",
+      "name": "ubuntu-24.04 / MPI + Kokkos Serial + collective HDF5",
+      "startedAt": "2026-10-08T15:55:59Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:01:05Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405788207",
+      "name": "ubuntu-latest / Kokkos (OpenMP, cpp-0)",
+      "startedAt": "2026-10-08T15:55:29Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:02:32Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405788194",
+      "name": "ubuntu-latest / Kokkos (OpenMP, cpp-1)",
+      "startedAt": "2026-10-08T15:55:28Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:01:37Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405788222",
+      "name": "ubuntu-latest / Kokkos (OpenMP, cpp-2)",
+      "startedAt": "2026-10-08T15:55:29Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:00:03Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405788221",
+      "name": "ubuntu-latest / Kokkos (OpenMP, cpp-3)",
+      "startedAt": "2026-10-08T15:55:29Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:03:50Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405788392",
+      "name": "ubuntu-latest / Kokkos (OpenMP, cpp-4)",
+      "startedAt": "2026-10-08T15:55:29Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:59:38Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405788302",
+      "name": "ubuntu-latest / Kokkos (OpenMP, cpp-5)",
+      "startedAt": "2026-10-08T15:55:29Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:00:08Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405788156",
+      "name": "ubuntu-latest / Kokkos (OpenMP, cpp-6)",
+      "startedAt": "2026-10-08T15:55:29Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:28Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405788265",
+      "name": "ubuntu-latest / Kokkos (OpenMP, cpp-7)",
+      "startedAt": "2026-10-08T15:55:29Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:56:48Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405788074",
+      "name": "ubuntu-latest / Kokkos (OpenMP, cpp-8)",
+      "startedAt": "2026-10-08T15:55:29Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:56:26Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405788349",
+      "name": "ubuntu-latest / Kokkos (OpenMP, cpp-9)",
+      "startedAt": "2026-10-08T15:55:29Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:58:08Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405788314",
+      "name": "ubuntu-latest / Kokkos (OpenMP, cpp-10)",
+      "startedAt": "2026-10-08T15:55:29Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:11Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405788451",
+      "name": "ubuntu-latest / Kokkos (OpenMP, cpp-11)",
+      "startedAt": "2026-10-08T15:55:29Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:59:17Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405788357",
+      "name": "ubuntu-latest / Kokkos (OpenMP, cpp-12)",
+      "startedAt": "2026-10-08T15:56:05Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:25:22Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113405788178",
+      "name": "ubuntu-latest / Kokkos (OpenMP, python)",
+      "startedAt": "2026-10-08T15:55:29Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:05:13Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113410264111",
+      "name": "ubuntu-latest / Kokkos Serial (C++)",
+      "startedAt": "2026-10-08T16:05:05Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776967",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 0",
+      "startedAt": "2026-10-08T15:57:43Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:14:53Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406777509",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 1",
+      "startedAt": "2026-10-08T15:57:58Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:08:33Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776820",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 2",
+      "startedAt": "2026-10-08T15:57:37Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:02:42Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776836",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 3",
+      "startedAt": "2026-10-08T15:57:37Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:09:34Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776937",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 4",
+      "startedAt": "2026-10-08T15:57:49Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:47Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776758",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 5",
+      "startedAt": "2026-10-08T15:57:37Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:57Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776936",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 6",
+      "startedAt": "2026-10-08T15:57:46Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:47Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406777028",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 7",
+      "startedAt": "2026-10-08T15:57:37Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:50Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776983",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 8",
+      "startedAt": "2026-10-08T15:57:37Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:44Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776859",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 9",
+      "startedAt": "2026-10-08T15:57:37Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:58:02Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776962",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 10",
+      "startedAt": "2026-10-08T15:57:51Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:45Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776822",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 11",
+      "startedAt": "2026-10-08T15:57:37Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:47Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776851",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 12",
+      "startedAt": "2026-10-08T15:57:37Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:45Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776855",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 13",
+      "startedAt": "2026-10-08T15:57:37Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:51Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776871",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 14",
+      "startedAt": "2026-10-08T15:57:37Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:56Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406777087",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 15",
+      "startedAt": "2026-10-08T15:57:47Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:58:08Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776973",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 16",
+      "startedAt": "2026-10-08T15:57:57Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:49Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776829",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 17",
+      "startedAt": "2026-10-08T15:57:37Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:58Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406777032",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 18",
+      "startedAt": "2026-10-08T15:57:47Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:44Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776903",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 19",
+      "startedAt": "2026-10-08T15:57:37Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:46Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406777054",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 20",
+      "startedAt": "2026-10-08T15:57:37Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:58:06Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406777144",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 21",
+      "startedAt": "2026-10-08T15:57:53Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:58:06Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406777061",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 22",
+      "startedAt": "2026-10-08T15:57:49Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:56Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406777119",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 23",
+      "startedAt": "2026-10-08T15:57:49Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:58:05Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776980",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 24",
+      "startedAt": "2026-10-08T15:57:54Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:52Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776935",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 25",
+      "startedAt": "2026-10-08T15:57:38Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:58:05Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406777043",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 26",
+      "startedAt": "2026-10-08T15:57:53Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:44Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776839",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 27",
+      "startedAt": "2026-10-08T15:57:37Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:58:08Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776875",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 28",
+      "startedAt": "2026-10-08T15:57:59Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:58:31Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406777304",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 29",
+      "startedAt": "2026-10-08T15:58:24Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:46Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776920",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 30",
+      "startedAt": "2026-10-08T15:57:37Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:50Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776981",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 31",
+      "startedAt": "2026-10-08T15:57:38Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:59Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406777105",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 32",
+      "startedAt": "2026-10-08T15:57:48Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:45Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406776995",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 33",
+      "startedAt": "2026-10-08T15:57:37Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:58:01Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406777123",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 34",
+      "startedAt": "2026-10-08T15:57:49Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:58:32Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406777136",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 35",
+      "startedAt": "2026-10-08T15:58:25Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:57:57Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406777151",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 36",
+      "startedAt": "2026-10-08T15:57:46Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:58:03Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406777003",
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 37",
+      "startedAt": "2026-10-08T15:57:53Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T15:59:48Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/wolf75222/PoPS/actions/runs/37804221197/job/113406775628",
+      "name": "ubuntu-latest / Kokkos Serial (Python) compile-cache",
+      "startedAt": "2026-10-08T15:57:37Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    }
+  ],
+  "url": "https://github.com/wolf75222/PoPS/pull/681",
+  "observed_utc": "2026-10-08T16:29:59.092904+00:00"
+}

@@ -1,0 +1,75 @@
+{
+  "CMakeCache.txt": {
+    "bytes": 32642,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-nextsdk-dim2-0abbe253/CMakeCache.txt",
+    "sha256": "6f24801c7c279c8722f8682137928ef7bd6d08025074de10e2a334da88852931"
+  },
+  "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=9f57def42c90cfc0e7ee127afa5050d95f27ecbc65b4ed198f788a097e4b4bad;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=4f0ddfff213bbc8f41ec9b7c80af3672d966f0527a55a041ed2b7e91e90198ab;dim=2",
+  "build.ninja": {
+    "bytes": 119182,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-nextsdk-dim2-0abbe253/build.ninja",
+    "sha256": "b962cda5209eaba92f02956ee690f21d7c6e7c7ba2a2857d845f85f695b95ae3"
+  },
+  "build_log": {
+    "bytes": 69851,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-nextsdk-dim2-0abbe253/build.log",
+    "sha256": "3672df15231a3731093f9483b43ddfe181a93857d26f02708f879dc223c8fc52"
+  },
+  "build_returncode": 0,
+  "closed_at": "2026-10-01T15:12:36.326445+00:00",
+  "command": {
+    "bytes": 1406,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-nextsdk-dim2-0abbe253/command.json",
+    "sha256": "971e867259e8665da2b0014e130bc6fa70ca1ef8539ab603e3719604e0c9e5ba"
+  },
+  "compile_commands.json": {
+    "bytes": 51436,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-nextsdk-dim2-0abbe253/compile_commands.json",
+    "sha256": "3e03454d4e8d2d11376fae6c4a016009017ef55aa00a60aca7a94fd0fc423b4a"
+  },
+  "cpp_to_dso_cryptographic_graph_proof": false,
+  "dimension": 2,
+  "environment": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17",
+  "installed_identity": {
+    "bytes": 2917,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-nextsdk-dim2-0abbe253/installed-identity/identity.json",
+    "sha256": "b4afdc991277df4a9d325d6c8e1975fc6f643a710363a2fcc22c37f3e2bedb91"
+  },
+  "installed_identity_returncode": 0,
+  "native": {
+    "bytes": 13572024,
+    "path": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "sha256": "c8a45b013042f53a76ca6754a0285203aa5a9fda6a18f1d580e181dec99642fe"
+  },
+  "native_scientific_acceptance": false,
+  "ninja_commands": {
+    "bytes": 50600,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-nextsdk-dim2-0abbe253/ninja-commands.txt",
+    "sha256": "cc77ba347ee81e90c071daa60f26fc2aeabbef9d9f2b4f5c2f1195ecd53eeb79"
+  },
+  "preserved_copy_receipt": {
+    "bytes": 1585,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/next-sdk-environment-clone-reception.json",
+    "sha256": "02cdf62b13bd97eadcfc3bc8dc9867c880642843d660a605c404b4473e1775ae"
+  },
+  "preserved_sdk2e4_unchanged": true,
+  "production_bytes_unchanged": true,
+  "schema": "root.api040.repository-native-build@3",
+  "sdk_manifest_file": {
+    "bytes": 21537,
+    "path": "/Users/romaindespoulain/miniforge3/envs/pops-api040-ir17/lib/python3.12/site-packages/pops/include/pops_headers.manifest",
+    "sha256": "64801a0868bed87060d969ebe1911b4c5937bbe72f55c96000e6c9ae60d9dbac"
+  },
+  "source_commit": "0abbe25395a44e570d8d5525693b8e2dcbf4d387",
+  "source_file_count": 1223,
+  "source_head_unchanged": true,
+  "verified_installed_source_files": 1128,
+  "wheel": {
+    "bytes": 8889652,
+    "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/native-nextsdk-dim2-0abbe253/retained-wheel/pops-1.1.0-cp312-cp312-macosx_26_0_arm64.whl",
+    "sha256": "52f158e8cc456333110558fac2d7d23f671d60c371cf2aae001b689d48d6a7b0"
+  },
+  "wheel_and_installed_native_bytes_equal": true,
+  "wheel_native_member": "pops/_native/dim2/_pops.cpython-312-darwin.so",
+  "wheel_native_member_sha256": "c8a45b013042f53a76ca6754a0285203aa5a9fda6a18f1d580e181dec99642fe"
+}

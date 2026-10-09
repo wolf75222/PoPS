@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='a280d9ef8d95c261be61b61f6d0b1f8da0be7a24515380eaaa03cfd9489f3943'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-native-initial-checkpoint-fc0-20260930/pytest.xml",
+    "--basetemp=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-integral-native-initial-checkpoint-fc0-20260930/pytest-tmp",
+    "tests/python/integration/runtime/test_integral_state_trace_runtime.py",
+    "tests/python/integration/runtime/test_integral_state_public_restart.py"
+  ],
+  "returncode": 1,
+  "pytest_base_temp": "pytest-tmp",
+  "duration_seconds": 212.4954823339358,
+  "counts": {
+    "tests": 6,
+    "failures": 6,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "failed",
+  "identity_sha256": "15c47606959c47fabb1ad6ca692937c3b2949cf6eb8e7f2d11ed5b92aec3ade7",
+  "log_sha256": "40b0f59f304216f5aa72c3bd43ec0c4d00e6eb4eb26e71f7db299598eb40cec7"
+}

@@ -43,7 +43,7 @@ from pops.codegen.krylov_contract import validated_krylov_footprint
 # for. These mirror Program._SCRATCH_OPS; the bucketing is by the produced vtype, not the op name.
 _RHS_OPS = ("rhs", "source", "apply", "coupled_rate")
 _STATE_SCRATCH_OPS = (
-    "local_transform", "linear_combine", "solve_local_linear", "solve_local_nonlinear",
+    "local_transform", "affine_moment_update", "linear_combine", "solve_local_linear", "solve_local_nonlinear",
     "solve_coupled_implicit", "solve_spatial_nonlinear", "where")
 _SCALAR_FIELD_OPS = ("solve_linear", "scalar_field", "cell_compare")
 # A linear_source is a pure operator DECLARATION node (vtype 'operator', no allocated buffer): it
@@ -429,21 +429,56 @@ def _persistent_solver_buffers(program: Any) -> list:
         if value.op == "matrix_free_operator"
     }
     for v in values:
-        if v.op == "solve_spatial_nonlinear":
+        if v.op in ("solve_spatial_nonlinear", "solve_spatial_field"):
             from pops.time._program.spatial_solve import spatial_newton_options
 
             restart = spatial_newton_options(v.attrs["newton_controls"])["restart"]
+            selected_jacobi = v.attrs.get("right_preconditioner") == "pops.amr.original-spatial-jacobi.basis-response@1"
+            selected_full_lu = v.attrs.get("right_preconditioner") == "pops.amr.full-residual-basis-lu@1"
             persistent.append({
                 "kind": "prepared_spatial_residual",
                 "name": v.name,
-                "buffers": restart + 13,
+                "buffers": restart + 13 + (2 + v.attrs["capture_count"] if v.op == "solve_spatial_field" else 0) + int(selected_jacobi),
                 "exact": False,
                 "per_materialized_level": True,
                 "note": (
                     "four FD/candidate fields + seven Newton fields + restart+1 GMRES basis "
                     "fields + one full-halo trial field; lower bound excludes the selected "
-                    "diffusion face/boundary workspace and residual-operation scratch"),
+                    "diffusion face/boundary workspace and residual-operation scratch"
+                    + ("; includes one finite-status field, one independent solved output and exact frozen captures"
+                       if v.op == "solve_spatial_field" else "")
+                    + ("; selected SpatialBasisJacobi@1 adds one inverse field and prepares with 1 + stored DOFs composite operator applications"
+                       if selected_jacobi else "")),
             })
+            if selected_full_lu:
+                from pops.time.canonical_data import _json_ready
+                persistent[-1]["buffers"] += 3
+                persistent[-1]["full_residual_basis_lu"] = {
+                    "identity": v.attrs["right_preconditioner"],
+                    "resources": _json_ready(v.attrs["right_preconditioner_resources"]),
+                    "matrix_scope": "replicated_per_rank_active_owned_quotient",
+                    "residual_evaluations_per_newton": "2*Nactive",
+                    "dense_matrix_bytes_per_rank": "sizeof(Real)*Nactive*Nactive",
+                    "factorization_cost": "O(Nactive**3)",
+                    "additional_numeric_towers": 3,
+                    "control_policy": "seven_Newton_GMRES_controls_unchanged",
+                }
+                persistent[-1]["note"] += "; explicit FullResidualBasisLU@1 adds three numeric towers, active map, two vectors and pivots; rebuilds full central-residual Jacobian each Newton iterate"
+            if v.attrs.get("coefficient_evaluation") is not None:
+                persistent[-1]["buffers"] += 1
+                persistent[-1]["candidate_coefficient_evaluation"] = {
+                    "identity": v.attrs["coefficient_evaluation"],
+                    "coefficient_components": v.attrs["ncomp"] ** 2,
+                    "per_residual": "evaluate D(q,captures), prepare covered restriction/halos, apply original full F",
+                    "linear_residual_verification": v.attrs["linear_residual_verification"],
+                    "per_gmres_correction": "one full JVP and true residual norm, including projected convergence",
+                    "amr_resource": "private apply-only composite FAC entries; no second GMRES basis",
+                    "storage_cost": "O(components^2 * stored cells); coarse/fine transfer workspace additional",
+                }
+                persistent[-1]["note"] += (
+                    "; PerCandidate@1 adds an owned coefficient field or synchronized q tower; "
+                    "this lower bound excludes the private AMR FAC coefficient/phi/image/transfer resources, "
+                    "which are built once per invocation and reused for every F/JVP/recheck")
         elif v.op == "matrix_free_operator":
             operator_bundle = _operator_bundle_footprint(v)
             conditional = operator_bundle["jacvec_conditional_buffers"]

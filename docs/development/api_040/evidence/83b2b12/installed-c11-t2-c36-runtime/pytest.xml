@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="2" time="216.590" timestamp="2026-09-29T02:55:45.250633+02:00" hostname="macbookpro.home"><testcase classname="tests.python.integration.runtime.test_principal_group_runtime" name="test_native_principal_scalars_match_vector_and_independent_face_oracle[False-2]" time="49.616"><failure message="ValueError: Program-only model requires the exact state-storage route">tests/python/integration/runtime/test_principal_group_runtime.py:120: in test_native_principal_scalars_match_vector_and_independent_face_oracle
+    scalars, world = _run(matrix, initial, vector=False, permutation=permutation)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_principal_group_runtime.py:79: in _run
+    runtime = pops.bind(artifact, initial_values=values, resources={"execution_context": context})
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:91: in bind
+    return phase(artifact, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:623: in bind
+    return install(install_plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:638: in install
+    return runtime_install(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_adapters.py:32: in install_plan
+    return RuntimeInstance(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_runtime_instance.py:478: in __init__
+    native = install_runtime_executor(plan, runtime_plan) if executor is None else executor
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_runtime_executor.py:475: in install_runtime_executor
+    return matches[0].install(plan, runtime_plan)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_runtime_executor.py:345: in install
+    engine._install_compiled(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_system_unified_install.py:390: in _install_compiled
+    self._s._finalize_native_packages()
+E   ValueError: Program-only model requires the exact state-storage route</failure></testcase><testcase classname="tests.python.integration.runtime.test_principal_group_runtime" name="test_native_principal_scalars_match_vector_and_independent_face_oracle[False-3]" time="59.559"><failure message="ValueError: Program-only model requires the exact state-storage route">tests/python/integration/runtime/test_principal_group_runtime.py:120: in test_native_principal_scalars_match_vector_and_independent_face_oracle
+    scalars, world = _run(matrix, initial, vector=False, permutation=permutation)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/python/integration/runtime/test_principal_group_runtime.py:79: in _run
+    runtime = pops.bind(artifact, initial_values=values, resources={"execution_context": context})
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/_api.py:91: in bind
+    return phase(artifact, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:623: in bind
+    return install(install_plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/codegen/_phases.py:638: in install
+    return runtime_install(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_bind_adapters.py:32: in install_plan
+    return RuntimeInstance(plan)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_runtime_instance.py:478: in __init__
+    native = install_runtime_executor(plan, runtime_plan) if executor is None else executor
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_runtime_executor.py:475: in install_runtime_executor
+    return matches[0].install(plan, runtime_plan)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_runtime_executor.py:345: in install
+    engine._install_compiled(
+../../../../../../miniforge3/envs/pops-api040/lib/python3.12/site-packages/pops/runtime/_system_unified_install.py:390: in _install_compiled
+    self._s._finalize_native_packages()
+E   ValueError: Program-only model requires the exact state-storage route</failure></testcase><testcase time="0.001" /></testsuite></testsuites>

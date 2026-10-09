@@ -1,0 +1,37 @@
+{
+  "checks": {
+    "before_after_exact": true,
+    "event_count": 1377,
+    "pins": 22,
+    "production_git_blobs_verified": 1241,
+    "test_files": 58,
+    "xml_jsonl_exact": true
+  },
+  "ci_qualified": false,
+  "counts": {
+    "deselected": 1,
+    "errors": 0,
+    "failed": 0,
+    "passed": 459,
+    "selected": 459,
+    "skips": 0
+  },
+  "historical_sdk19_red_preserved": true,
+  "historical_sdk20_green_preserved": true,
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk21-source-independent-20261003/report.json",
+    "sha256": "4c1ddc976c28ddcd14a600ba6a515255ea093524601a324dcab8d92bc6f7b2a7"
+  },
+  "launcher_cwd_refusal_preserved": true,
+  "native_qualified": false,
+  "original_report_unchanged": true,
+  "reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk21-source-independent-20261003/audit.py",
+    "sha256": "3b0f25f9267109f40ac8fe850e86197a23ace55d7dd54724e7e3edd5ba42b8b8"
+  },
+  "root_recompute_exact_bytes": true,
+  "schema": "root.sdk21.source-terminal-reception@1",
+  "source_cohort_green": true,
+  "source_freeze": "3302c4a19d94a0b08dbba9c05c4de3ae2debb232",
+  "whole_mission_complete": false
+}

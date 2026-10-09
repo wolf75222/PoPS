@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from .spatial_interaction import (SpatialInteractionKernel, CellVolumeMeasure,
+                                  CellMidpoint, DirectSpatialInteraction, FieldInteractionQuadrature)
+
 from .context import (
     Accepted,
     FieldContext,
@@ -14,7 +17,7 @@ from .context import (
     UseHeldField,
     UseMaterializedField,
 )
-from .aux import AuxiliaryBoundary, DerivedAux, InputAux
+from .aux import AuxiliaryBoundary, AnalyticAux, DerivedAux, InputAux
 from .discretization import (
     CompositeHierarchySolve,
     FieldDiscretization,
@@ -34,6 +37,7 @@ from .nullspace import (
     PreparedNullspace,
     RHSCompatibilityEvidence,
 )
+from .mapping import ConsumedFieldPort
 from .problem import FieldBoundary, FieldProblem, FieldProblemError, FieldStorageBinding, SharedMeanGauge, ConstantModeGauge
 from .operator import (
     FieldOperator,
@@ -42,7 +46,8 @@ from .operator import (
     FieldProviderPack,
     SourceDensity,
 )
-from .methods import CellCenteredSecondOrder, PreparedFieldMethod
+from .methods import (CellCenteredGeneralCoupled, CellCenteredNonlinearCoupled,
+                      CellCenteredSecondOrder, PreparedFieldMethod)
 from .lowering import (
     PreparedFieldLoweringBinding,
     PreparedFieldLoweringEvidence,
@@ -107,10 +112,14 @@ from .catalog import fields as catalog
 
 
 __all__ = [
+    "SpatialInteractionKernel", "CellVolumeMeasure", "CellMidpoint",
+    "DirectSpatialInteraction", "FieldInteractionQuadrature",
     "Accepted",
     "AnisotropicPoissonOperator",
     "CompositeHierarchySolve",
     "CellCenteredSecondOrder",
+    "CellCenteredGeneralCoupled",
+    "CellCenteredNonlinearCoupled",
     "PreparedFieldMethod",
     "PreparedFieldLoweringBinding",
     "PreparedFieldLoweringEvidence",
@@ -125,6 +134,7 @@ __all__ = [
     "DerivedField",
     "DirichletContribution",
 "DerivedAux",
+"AnalyticAux",
 "AuxiliaryBoundary",
     "FailFieldRead",
     "FieldAttemptRejected",

@@ -1,0 +1,67 @@
+{
+  "source_commit": "29daef24292f17c3f11b0b6c8c9357523e951600",
+  "source_only_new_tests": 22,
+  "native_rerun": false,
+  "logs": [
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-public-ale-canonical-relative-amount-mpi2-dim1-sdke49c-20260930/rank0.log",
+      "sha256": "76396651a9711d70583eb4dbb158e91030728c932b518d93039ad4391913bd10",
+      "strictly_received_actual_failure_records": [
+        [
+          [
+            "RuntimeError",
+            "collective step attempt failed during solve: rank 0 RuntimeError: System step failed collectively; rank 0: Program cadence phase failed collectively; rank 0: moving shared face or fixed-domain boundary is inconsistent; rank 1 RuntimeError: System step failed collectively; rank 0: Program cadence phase failed collectively; rank 0: moving shared face or fixed-domain boundary is inconsistent",
+            true
+          ],
+          [
+            "RuntimeError",
+            "collective step attempt failed during solve: rank 0 RuntimeError: System step failed collectively; rank 0: Program cadence phase failed collectively; rank 0: moving shared face or fixed-domain boundary is inconsistent; rank 1 RuntimeError: System step failed collectively; rank 0: Program cadence phase failed collectively; rank 0: moving shared face or fixed-domain boundary is inconsistent",
+            true
+          ]
+        ],
+        [
+          [
+            "RuntimeError",
+            "collective step attempt failed during solve: rank 0 RuntimeError: System step failed collectively; rank 0: Program cadence phase failed collectively; rank 0: moving shared face or fixed-domain boundary is inconsistent; rank 1 RuntimeError: System step failed collectively; rank 0: Program cadence phase failed collectively; rank 0: moving shared face or fixed-domain boundary is inconsistent",
+            true
+          ],
+          [
+            "RuntimeError",
+            "collective step attempt failed during solve: rank 0 RuntimeError: System step failed collectively; rank 0: Program cadence phase failed collectively; rank 0: moving shared face or fixed-domain boundary is inconsistent; rank 1 RuntimeError: System step failed collectively; rank 0: Program cadence phase failed collectively; rank 0: moving shared face or fixed-domain boundary is inconsistent",
+            true
+          ]
+        ]
+      ]
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-public-ale-canonical-relative-amount-mpi2-dim1-sdke49c-20260930/rank1.log",
+      "sha256": "2b72b9804790e0e23dd4d269a4bd0c8dfd7ef054e168d890d433f0185ce07685",
+      "strictly_received_actual_failure_records": [
+        [
+          [
+            "RuntimeError",
+            "collective step attempt failed during solve: rank 0 RuntimeError: System step failed collectively; rank 0: Program cadence phase failed collectively; rank 0: moving shared face or fixed-domain boundary is inconsistent; rank 1 RuntimeError: System step failed collectively; rank 0: Program cadence phase failed collectively; rank 0: moving shared face or fixed-domain boundary is inconsistent",
+            true
+          ],
+          [
+            "RuntimeError",
+            "collective step attempt failed during solve: rank 0 RuntimeError: System step failed collectively; rank 0: Program cadence phase failed collectively; rank 0: moving shared face or fixed-domain boundary is inconsistent; rank 1 RuntimeError: System step failed collectively; rank 0: Program cadence phase failed collectively; rank 0: moving shared face or fixed-domain boundary is inconsistent",
+            true
+          ]
+        ],
+        [
+          [
+            "RuntimeError",
+            "collective step attempt failed during solve: rank 0 RuntimeError: System step failed collectively; rank 0: Program cadence phase failed collectively; rank 0: moving shared face or fixed-domain boundary is inconsistent; rank 1 RuntimeError: System step failed collectively; rank 0: Program cadence phase failed collectively; rank 0: moving shared face or fixed-domain boundary is inconsistent",
+            true
+          ],
+          [
+            "RuntimeError",
+            "collective step attempt failed during solve: rank 0 RuntimeError: System step failed collectively; rank 0: Program cadence phase failed collectively; rank 0: moving shared face or fixed-domain boundary is inconsistent; rank 1 RuntimeError: System step failed collectively; rank 0: Program cadence phase failed collectively; rank 0: moving shared face or fixed-domain boundary is inconsistent",
+            true
+          ]
+        ]
+      ]
+    }
+  ]
+}

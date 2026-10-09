@@ -1,0 +1,114 @@
+{
+  "environment20_DOP853_qualification": false,
+  "ghost_formula_qualified": false,
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk20-pure-nine-state-recompute-independent-20261003/report.json",
+    "sha256": "80a8e988c961cececa6e9b27586359765985e82221b486032f256520d6bb2ca5"
+  },
+  "native_end_to_end_qualified": false,
+  "native_job": "732072",
+  "native_node_status": "FAILED",
+  "pins_rehashed": 66,
+  "pure_math_and_storage": {
+    "native_authority": false,
+    "root_scientific_approval": false,
+    "science": {
+      "contract": "pops.fan-li15.uniform-eight-saved-math@1",
+      "dop853_final_error": 4.460334324107862e-10,
+      "h3_max": 0.017545356253353284,
+      "h4_max": 0.005277108301697017,
+      "metrics": [
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.00756390007852085,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 1
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.007562055866979791,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 2
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.007560198272613448,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 3
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.0075583273010747755,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 4
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.007556442958074221,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 5
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.007554545249378193,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 6
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.00755263418081085,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 7
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.007550709758252182,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 8
+        }
+      ],
+      "native_authority": false,
+      "root_scientific_approval": false,
+      "whole_carrier_qualification": false
+    },
+    "storage": {
+      "checkpoint_restart_qualified": false,
+      "contract": "sol61.fan-li15-eight-uniform-storage-reception@1",
+      "ghost_formula_qualified": false,
+      "native_authority": false,
+      "patch_counts": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "phases": [
+        "initial",
+        "accepted1",
+        "accepted2",
+        "accepted3",
+        "accepted4",
+        "accepted5",
+        "accepted6",
+        "accepted7",
+        "accepted8"
+      ],
+      "ranks": 1,
+      "root_scientific_approval": false
+    }
+  },
+  "reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk20-pure-nine-state-recompute-independent-20261003/run.py",
+    "sha256": "45f6fcc2c84655f93956ab3b8f463eb5bd53e2068ccd208060f03bec243205ad"
+  },
+  "root_recompute_exact_bytes": true,
+  "schema": "root.sdk20-pure-nine-state-math-reception@1",
+  "scope": "pure offline math/storage of actual nine SDK20 captures, ir17 SciPy; does not change Native failed node",
+  "source_freeze": "bdfea618dd5479e30f451f16e0dea5b632b12ccf",
+  "whole_mission_complete": false
+}

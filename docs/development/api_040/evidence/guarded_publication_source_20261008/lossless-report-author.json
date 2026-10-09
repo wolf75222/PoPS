@@ -1,0 +1,28 @@
+{
+  "Main_changed": false,
+  "Native_loaded": [],
+  "baseline_file_sha256": "afec9df8fff8ae876a92e60d54d5479b6a219b5052f2d8df39f3714a19c26828",
+  "candidate_file_sha256": "e9af0d5d68f0f53d9f90d4f0009f8ad39822f82bca2f6c9b8a8ed13eb45766cb",
+  "invariants": [
+    "No physics/method/solver/guard/bounds/history/oracle/CIcost/core change",
+    "No broad default=str",
+    "Original V1 negative review retained"
+  ],
+  "patch": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-V2-port-v2-lossless-report-20261008/lossless-report-port-v1-to-v2.patch",
+    "sha256": "aad777afeee35dc74a7120a22ef2c4069a27127731ed36f4393353a6fe947add"
+  },
+  "provenance": "Both original model and Program CPP dumped after actualcompile beforebind/run; no regenerated Model recipe",
+  "semantic_probe": {
+    "actual_classes": [
+      "RunReport",
+      "Identity"
+    ],
+    "baseline": "TypeError bytes not JSONserializable",
+    "baseline_diagnostic": "Object of type bytes is not JSON serializable",
+    "candidate": "repository evidence_dumps exact bytes_hex digest roundtrip for all4 typed identities; no native",
+    "encoding": "json-with-bytes-hex.v1",
+    "unsupported_Path_rejected": true
+  },
+  "status": "SOURCE_REPORT_CODEC_PASS"
+}

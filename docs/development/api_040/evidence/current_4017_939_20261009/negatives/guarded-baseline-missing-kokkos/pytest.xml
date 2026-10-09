@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="0" skipped="0" tests="1" time="0.614" timestamp="2026-10-09T02:26:53.479567+02:00" hostname="macbookpro.home"><testcase classname="tests.python.integration.runtime.test_guarded_field_diffusion_publication" name="test_public_guarded_field_coefficient_diffusion[baseline]" time="0.002"><error message="failed on setup with &quot;RuntimeError: required native test unavailable: Kokkos root is not configured&quot;">tests/python/conftest.py:201: in kokkos_root
+    require_native_or_skip(
+tests/python/support/requirements.py:80: in require_native_or_skip
+    raise RuntimeError(f"required native test unavailable: {reason}")
+E   RuntimeError: required native test unavailable: Kokkos root is not configured</error></testcase></testsuite></testsuites>

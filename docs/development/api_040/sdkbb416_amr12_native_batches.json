@@ -1,0 +1,112 @@
+{
+  "batches": [
+    {
+      "counts_by_rank": [
+        {
+          "errors": 0,
+          "failures": 0,
+          "skipped": 0,
+          "tests": 4
+        }
+      ],
+      "identity_after": {
+        "bytes": 2917,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-serial-dim2/after/identity.json",
+        "sha256": "3e448c93e31dcbad8b6f4b2558f23f7d13205d8669dbe9ab0818cc665209280c"
+      },
+      "identity_before": {
+        "bytes": 2917,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-serial-dim2/identity.json",
+        "sha256": "3e448c93e31dcbad8b6f4b2558f23f7d13205d8669dbe9ab0818cc665209280c"
+      },
+      "junit": [
+        {
+          "bytes": 3045,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-serial-dim2/pytest.xml",
+          "sha256": "fd673e98e172bceebc510a8fc61d43c625b2d330fb4509ce0d8d1237968abb12"
+        }
+      ],
+      "mode": "serial",
+      "result": {
+        "bytes": 1695,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-serial-dim2/result.json",
+        "sha256": "707662f0a1cec2a94e58a8ab3e05f7270ec948ddc69d284f4cb539c3d037ff24"
+      },
+      "source_after": {
+        "bytes": 132419,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-serial-dim2/after/source-files.json",
+        "sha256": "bb592911dad61f6bfb15bd0dda602235d8ea2c9dbd57cbd983bab63db3f51b84"
+      },
+      "source_before": {
+        "bytes": 132419,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-serial-dim2/source-files.json",
+        "sha256": "bb592911dad61f6bfb15bd0dda602235d8ea2c9dbd57cbd983bab63db3f51b84"
+      },
+      "source_identity_equal": true,
+      "verified_installed_sources": 1132
+    },
+    {
+      "counts_by_rank": [
+        {
+          "errors": 0,
+          "failures": 0,
+          "skipped": 0,
+          "tests": 4
+        },
+        {
+          "errors": 0,
+          "failures": 0,
+          "skipped": 0,
+          "tests": 4
+        }
+      ],
+      "identity_after": {
+        "bytes": 2917,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-mpi2-dim2/after/identity.json",
+        "sha256": "3e448c93e31dcbad8b6f4b2558f23f7d13205d8669dbe9ab0818cc665209280c"
+      },
+      "identity_before": {
+        "bytes": 2917,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-mpi2-dim2/before/identity.json",
+        "sha256": "3e448c93e31dcbad8b6f4b2558f23f7d13205d8669dbe9ab0818cc665209280c"
+      },
+      "junit": [
+        {
+          "bytes": 3034,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-mpi2-dim2/rank0.xml",
+          "sha256": "61923afbcc42d1fd96bf34ca6da58f85ec41297dda7ee7c963d9e07fa24bf22d"
+        },
+        {
+          "bytes": 3034,
+          "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-mpi2-dim2/rank1.xml",
+          "sha256": "cc6177b8f6a2492ca9bc84b464abfbce83cb02165e5b6ce1b818d1d015438463"
+        }
+      ],
+      "mode": "mpi2",
+      "result": {
+        "bytes": 3393,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-mpi2-dim2/result.json",
+        "sha256": "b6ab026a33315046dca8126fd0dc1c21a8ba5b583892aebd5469b20920e487a6"
+      },
+      "source_after": {
+        "bytes": 132419,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-mpi2-dim2/after/source-files.json",
+        "sha256": "bb592911dad61f6bfb15bd0dda602235d8ea2c9dbd57cbd983bab63db3f51b84"
+      },
+      "source_before": {
+        "bytes": 132419,
+        "path": "/Users/romaindespoulain/dev/tmp/pops-api040-native-reception-evidence-20261001/installed-sdkbb416-amr12-variants-mpi2-dim2/before/source-files.json",
+        "sha256": "bb592911dad61f6bfb15bd0dda602235d8ea2c9dbd57cbd983bab63db3f51b84"
+      },
+      "source_identity_equal": true,
+      "verified_installed_sources": 1132
+    }
+  ],
+  "historical_results_promoted": false,
+  "native_scientific_acceptance": false,
+  "native_sha256": "488123fe4d7c4ecb3ac604f4eec9e97525a8e745034ea01a69624616d8b09e54",
+  "native_source": "fc670393ce346557583a64dac82908541483fef8",
+  "schema": "root.api040.amr12-current-native-batches@1",
+  "scientific_reception_followup": "sdkbb416_amr12_scientific_reception.json",
+  "scope": "actual homogeneous original composite-Q Dim2 variants N8/N16 widths1/2; raw pytest batch gate only; subsequent scientific reception is separately sealed"
+}

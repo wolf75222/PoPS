@@ -1,0 +1,167 @@
+{
+  "rows": [
+    {
+      "phase": "initial",
+      "journal": "program_exchange",
+      "world1_offsets": [
+        0,
+        16
+      ],
+      "MPI2_offsets": [
+        0,
+        16,
+        32
+      ],
+      "each_MPI_rank_chunk_bitwise_equal_world1": [
+        true,
+        true
+      ],
+      "world1_bytes": 16,
+      "MPI_chunk_bytes": [
+        16,
+        16
+      ],
+      "world1_sha256": "2396f2e74b79bc21b55fffd87c268411fea10ff3c778cb859912305773c5c0dc",
+      "MPI_chunk_sha256": [
+        "2396f2e74b79bc21b55fffd87c268411fea10ff3c778cb859912305773c5c0dc",
+        "2396f2e74b79bc21b55fffd87c268411fea10ff3c778cb859912305773c5c0dc"
+      ]
+    },
+    {
+      "phase": "initial",
+      "journal": "program_diagnostics",
+      "world1_offsets": [
+        0,
+        40
+      ],
+      "MPI2_offsets": [
+        0,
+        40,
+        80
+      ],
+      "each_MPI_rank_chunk_bitwise_equal_world1": [
+        false,
+        false
+      ],
+      "world1_bytes": 40,
+      "MPI_chunk_bytes": [
+        40,
+        40
+      ],
+      "world1_sha256": "e9955b382ea745643613b23d81e55cca447fbabb23df485cfc38635b9835de29",
+      "MPI_chunk_sha256": [
+        "18c8e0d9cb92bc26b2ae69a74fc4d4fa3516ec31365ca5c9c16808700879bdfd",
+        "03db1e6adb4ffc4500371f2d7a52bdd9d3a41e84fb8c0f95a76902a186c4df7e"
+      ]
+    },
+    {
+      "phase": "accepted1",
+      "journal": "program_exchange",
+      "world1_offsets": [
+        0,
+        16
+      ],
+      "MPI2_offsets": [
+        0,
+        16,
+        32
+      ],
+      "each_MPI_rank_chunk_bitwise_equal_world1": [
+        true,
+        true
+      ],
+      "world1_bytes": 16,
+      "MPI_chunk_bytes": [
+        16,
+        16
+      ],
+      "world1_sha256": "2396f2e74b79bc21b55fffd87c268411fea10ff3c778cb859912305773c5c0dc",
+      "MPI_chunk_sha256": [
+        "2396f2e74b79bc21b55fffd87c268411fea10ff3c778cb859912305773c5c0dc",
+        "2396f2e74b79bc21b55fffd87c268411fea10ff3c778cb859912305773c5c0dc"
+      ]
+    },
+    {
+      "phase": "accepted1",
+      "journal": "program_diagnostics",
+      "world1_offsets": [
+        0,
+        336
+      ],
+      "MPI2_offsets": [
+        0,
+        336,
+        672
+      ],
+      "each_MPI_rank_chunk_bitwise_equal_world1": [
+        false,
+        false
+      ],
+      "world1_bytes": 336,
+      "MPI_chunk_bytes": [
+        336,
+        336
+      ],
+      "world1_sha256": "a01a6a32a7235cd67ebad0c58c4d2707d4a7042b2ee1e090204480557a4b8ba8",
+      "MPI_chunk_sha256": [
+        "eef2fe312ca02f30acf3bcad8023a4a3f85fd5b1f2f87112ab965f438604ffef",
+        "1a6b18821d62d3bf2d2ac858485585bc3c7238bc186fb355a4779751f7cd0e2c"
+      ]
+    },
+    {
+      "phase": "accepted2",
+      "journal": "program_exchange",
+      "world1_offsets": [
+        0,
+        16
+      ],
+      "MPI2_offsets": [
+        0,
+        16,
+        32
+      ],
+      "each_MPI_rank_chunk_bitwise_equal_world1": [
+        true,
+        true
+      ],
+      "world1_bytes": 16,
+      "MPI_chunk_bytes": [
+        16,
+        16
+      ],
+      "world1_sha256": "2396f2e74b79bc21b55fffd87c268411fea10ff3c778cb859912305773c5c0dc",
+      "MPI_chunk_sha256": [
+        "2396f2e74b79bc21b55fffd87c268411fea10ff3c778cb859912305773c5c0dc",
+        "2396f2e74b79bc21b55fffd87c268411fea10ff3c778cb859912305773c5c0dc"
+      ]
+    },
+    {
+      "phase": "accepted2",
+      "journal": "program_diagnostics",
+      "world1_offsets": [
+        0,
+        336
+      ],
+      "MPI2_offsets": [
+        0,
+        336,
+        672
+      ],
+      "each_MPI_rank_chunk_bitwise_equal_world1": [
+        false,
+        false
+      ],
+      "world1_bytes": 336,
+      "MPI_chunk_bytes": [
+        336,
+        336
+      ],
+      "world1_sha256": "a01a6a32a7235cd67ebad0c58c4d2707d4a7042b2ee1e090204480557a4b8ba8",
+      "MPI_chunk_sha256": [
+        "eef2fe312ca02f30acf3bcad8023a4a3f85fd5b1f2f87112ab965f438604ffef",
+        "1a6b18821d62d3bf2d2ac858485585bc3c7238bc186fb355a4779751f7cd0e2c"
+      ]
+    }
+  ],
+  "scope": "Offline CP journal aggregation/framing. Native local journal and carrier/restart metadata may differ by actual rank context. No wholeCPbyte equality or Native reload claim."
+}

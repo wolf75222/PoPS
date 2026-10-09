@@ -202,8 +202,13 @@ class _ProgramHistory(_ProgramBase):
         *,
         depth: Any = None,
         checkpoint_policy: Any = None,
+        owner_block: Any = None,
     ) -> Any:
         """Store a ring value with one typed, immutable checkpoint-persistence policy.
+
+        ``owner_block`` gives a consumed global field observation a separate storage scope. The
+        block must already have an issued TimeState in this Program and clock. This does not change
+        the observation's global physical identity, width or original residual inputs.
 
         ``depth`` declares the maximum readable lag before reads are authored; the physical ring has
         ``depth + 1`` slots because slot zero is the current value. It is required when a non-Dense
@@ -215,6 +220,7 @@ class _ProgramHistory(_ProgramBase):
             value,
             checkpoint_policy=checkpoint_policy,
             history_depth=depth,
+            owner_block=owner_block,
         )
 
     def _store_history(
@@ -224,6 +230,7 @@ class _ProgramHistory(_ProgramBase):
         *,
         checkpoint_policy: Any,
         history_depth: Any,
+        owner_block: Any = None,
     ) -> Any:
         self._guard_mutable("store history")
         if not isinstance(name, str) or not name:
@@ -231,6 +238,12 @@ class _ProgramHistory(_ProgramBase):
         if not _is_field_value(value):
             raise ValueError("store_history: value must be a State/RHS field (got %r)" % (value,))
         require_top_level(self, value, "store_history")
+        storage = None
+        if owner_block is not None:
+            from .global_history_storage import prepare_issuance, storage_contract
+            storage = storage_contract(self, value, owner_block)
+            issued_storage = prepare_issuance(self, name, storage)
+        storage_owner = value.block if storage is None else owner_block
         declared_lag = self._histories.get(name, 0)
         if history_depth is None:
             from pops.time._history.persistence import Dense, resolve_history_persistence
@@ -260,7 +273,7 @@ class _ProgramHistory(_ProgramBase):
             self._declare_history_state(name, value.state_ref, value.block)
         elif name in self._history_spaces:
             raise ValueError("store_history: cannot store a scalar field in a full-state ring")
-        elif name in self._history_blocks and self._history_blocks[name] != value.block:
+        elif name in self._history_blocks and self._history_blocks[name] != storage_owner:
             raise ValueError("store_history: scalar history block provenance mismatch")
         if value.op == "field_component":
             from pops.fields._observation_contract import validate_field_observation
@@ -276,10 +289,28 @@ class _ProgramHistory(_ProgramBase):
             if self._histories_ncomp.get(name, width) != width:
                 raise ValueError("store_history: solved field gradient history width changed")
             self._histories_ncomp[name] = width
+        elif value.vtype == "scalar_field" and value.block is not None:
+            # A block-owned scalar scratch/solve already carries its exact component
+            # count. A store-only ring must register that count and owner without
+            # inventing a history read (which has temporal semantics after regrid).
+            width = value.attrs.get("ncomp", 1)
+            if isinstance(width, bool) or not isinstance(width, int) or width < 1:
+                raise ValueError("store_history: scalar history requires a positive component width")
+            if self._histories_ncomp.get(name, width) != width:
+                raise ValueError("store_history: scalar history component width changed")
+            self._histories_ncomp[name] = width
+            self._declare_history_block(name, value.block)
+        attrs = {"history": name, "state": value.state_ref}
+        if storage is not None:
+            self._declare_history_block(name, storage_owner)
+            attrs["global_field_storage"] = storage
         node = self._new(
             "state", "store_history", (value,),
-            {"history": name, "state": value.state_ref}, name, value.block,
+            attrs, name, storage_owner,
             space=value.space, state_ref=value.state_ref)
+        if storage is not None:
+            from .global_history_storage import publish_issuance
+            publish_issuance(self, name, issued_storage)
         self._histories[name] = max_lag
         self._history_persistence[name] = (ring_slots, policy)
         return node

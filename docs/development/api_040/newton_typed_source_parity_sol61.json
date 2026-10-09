@@ -1,0 +1,14 @@
+{
+  "schema": "sol61.newton-typed-source-parity@1",
+  "baseline_source": "5486e2d9",
+  "fixture_physical_path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-constant-projection/tests/python/unit/fields/test_nonlinear_mixed_field_problem.py",
+  "combined_bytes_sha256": "29ed315b2c02ebb9b9e8d5d5b3ddf74a1f7b9f545e297681e1826e2e40e5243d",
+  "equal_components": [
+    "Newton.options seven controls",
+    "prepared spatial solver identity",
+    "prepared field nonlinear manifest and identity",
+    "ProgramIR including provenance",
+    "emitted C++"
+  ],
+  "native_qualification": false
+}

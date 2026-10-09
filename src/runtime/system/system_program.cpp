@@ -6,6 +6,8 @@
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
+#include <pops/runtime/program/program_diagnostics_checkpoint.hpp>
+#include <pops/parallel/collective_exception.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -478,12 +480,15 @@ typename SystemInterfaceProvider<Dim>::CoreEvaluator System<Dim>::prepare_interf
             const int mode = flux_only.empty() ? 0 : flux_only[block];
             if (mode != 0 && mode != 1)
               throw std::invalid_argument("shared-interface core has a nonboolean flux mode");
+            const auto& selected = owner->sp[block];
             const bool capture = !retained_faces.empty() && retained_faces[block] != nullptr;
             contract.presence(states[block] != nullptr)
                 .scalar(static_cast<std::uint8_t>(mode))
-                .presence(capture);
+                .presence(capture)
+                .presence(selected.boundary != nullptr)
+                .presence(static_cast<bool>(selected.periodic_flux_at_point_prepared))
+                .presence(static_cast<bool>(selected.periodic_full_at_point_prepared));
             if (capture) {
-              const auto& selected = owner->sp[block];
               const auto omitted = selected.boundary ? selected.boundary->omitted_interface_faces()
                                                      : std::array<bool, 2 * Dim>{};
               if (states[block] == nullptr ||
@@ -505,7 +510,6 @@ typename SystemInterfaceProvider<Dim>::CoreEvaluator System<Dim>::prepare_interf
                   (other < block && residuals[block] == residuals[other]))
                 throw std::invalid_argument(
                     "prepared physical group outputs must not alias states or outputs");
-            const auto& selected = owner->sp[block];
             require_same_block_field(*states[block], selected.U, "shared-interface core state");
             require_same_block_field(*residuals[block], selected.U, "shared-interface core result");
             if (&sessions[block]->lane() != lane)
@@ -528,8 +532,14 @@ typename SystemInterfaceProvider<Dim>::CoreEvaluator System<Dim>::prepare_interf
       auto& state = *states[block];
       auto& result = *residuals[block];
       const bool only_flux = !flux_only.empty() && flux_only[block] != 0;
-      if (!selected.boundary && (retained_faces.empty() || retained_faces[block] == nullptr)) {
-        owner->blocks_.evaluate_rhs_core(point, block, state, result, only_flux);
+      const bool prepared_periodic = only_flux
+                                         ? static_cast<bool>(selected.periodic_flux_at_point_prepared)
+                                         : static_cast<bool>(selected.periodic_full_at_point_prepared);
+      if (!selected.boundary && !prepared_periodic) {
+        runtime::program::collective_boundary_provider_phase(
+            *lane, "System shared-interface unprepared core failed collectively", [&] {
+              owner->blocks_.evaluate_rhs_core(point, block, state, result, only_flux);
+            });
         continue;
       }
       const auto& transport = *sessions[block];
@@ -574,15 +584,34 @@ void System<Dim>::prepare_bound_physical_group_() {
   const bool physical = !p_->boundary_registry_.boundaries().empty();
   if (!physical && !prepared_boundary_execution_lane_)
     return;
-  if (!physical && std::none_of(p_->sp.begin(), p_->sp.end(), [](const auto& block) {
-        return static_cast<bool>(block.periodic_flux_at_point_prepared);
-      }))
+  const auto& lane = prepared_boundary_execution_lane();
+  std::string route_contract;
+  runtime::program::collective_boundary_provider_phase(
+      lane, "System prepared physical group route authentication", [&] {
+        ExactContractBuilder contract;
+        contract.text("pops.system.prepared-physical-group-route")
+            .scalar(std::int32_t{Dim})
+            .presence(physical)
+            .scalar(static_cast<std::uint64_t>(p_->sp.size()));
+        for (const auto& block : p_->sp)
+          contract.presence(block.boundary != nullptr)
+              .presence(static_cast<bool>(block.periodic_flux_at_point_prepared))
+              .presence(static_cast<bool>(block.periodic_full_at_point_prepared));
+        route_contract = std::move(contract).release();
+      });
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"system-prepared-physical-group-route", route_contract}}, lane))
+    throw std::runtime_error("System prepared physical group route differs across MPI ranks");
+  const bool periodic_prepared = std::any_of(p_->sp.begin(), p_->sp.end(), [](const auto& block) {
+    return static_cast<bool>(block.periodic_flux_at_point_prepared) &&
+           static_cast<bool>(block.periodic_full_at_point_prepared);
+  });
+  if (!physical && !periodic_prepared)
     return;
   // Native finalization has published the exact complete block/boundary graph. Prepare the
   // transport scratch once before bound-state publication; grouped calls subsequently borrow it.
   auto core = prepare_interface_core_evaluator_(&p_->prepared_boundary_group_faces_);
-  if (physical)
-    p_->prepared_boundary_group_core_ = std::move(core);
+  p_->prepared_boundary_group_core_ = std::move(core);
 }
 
 template <int Dim>
@@ -863,6 +892,78 @@ void System<Dim>::block_rhs_into_at_prepared(
 }
 
 template <int Dim>
+void System<Dim>::block_path_rhs_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, int block,
+    MultiFab<Dim>& state, MultiFab<Dim>& residual, Real courant,
+    const System* prepared_system, int prepared_block,
+    const runtime::multiblock::BoundaryEvaluationPoint& prepared_point,
+    const ExecutionLane& lane,
+    const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+  block_path_rhs_into_at(point, block, state, residual, courant, prepared_system,
+                         prepared_block, prepared_point, lane, transport, nullptr);
+}
+
+template <int Dim>
+void System<Dim>::block_path_rhs_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, int block,
+    MultiFab<Dim>& state, MultiFab<Dim>& residual, Real courant,
+    const System* prepared_system, int prepared_block,
+    const runtime::multiblock::BoundaryEvaluationPoint& prepared_point,
+    const ExecutionLane& lane,
+    const runtime::program::PreparedScalarBoundarySession<Dim>& transport,
+    Real* evaluated_frequency) {
+  const bool valid_block = block >= 0 && block < p_->blocks_.size();
+  collective_boundary_preflight<Dim>(
+      point, block, prepared_system, prepared_block, prepared_point, lane,
+      "System::block_path_rhs_into_at", [&] {
+        if (prepared_system != this || !valid_block || prepared_block != block ||
+            prepared_point != point || &transport.lane() != &lane)
+          throw std::invalid_argument("Uniform path RHS has a foreign prepared session");
+        const double active_courant = active_program_step_courant();
+        const Real budget = std::isfinite(active_courant) && active_courant > 0
+                                ? static_cast<Real>(active_courant) : Real(1);
+        if (!std::isfinite(courant) || !(courant > Real(0)) || courant != budget)
+          throw std::invalid_argument("Uniform path RHS Courant differs from the active step");
+      });
+  ExactContractBuilder stability_contract;
+  stability_contract.text("pops.uniform-path-stability.v2")
+      .scalar(courant).scalar(evaluated_frequency != nullptr);
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"path-stability", std::move(stability_contract).release()}}, lane))
+    throw std::invalid_argument("Uniform path stability consumer differs between ranks");
+  typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  collective_boundary_preflight<Dim>(
+      point, block, prepared_system, prepared_block, prepared_point, lane,
+      "System::block_path_rhs_into_at", [&] {
+        if (&state == &residual || state.shares_storage_with(residual))
+          throw std::invalid_argument("Uniform path RHS state and result alias storage");
+        require_same_block_field(state, selected.U, "Uniform path RHS state");
+        require_same_block_field(residual, selected.U, "Uniform path RHS result");
+        if (!selected.path_rhs_at_point_prepared || p_->blocks_.has_interfaces(block) ||
+            (p_->embedded_boundary_ && p_->embedded_boundary_->mode() !=
+                                           runtime::system::PreparedEmbeddedBoundaryMode::inactive))
+          throw std::invalid_argument("Uniform path RHS has no complete single-block path authority");
+      });
+  Real frequency = Real(0);
+  invoke_prepared_boundary_transaction<Dim>(
+      state, residual, lane, "System::block_path_rhs_into_at", transport,
+      [&](MultiFab<Dim>& candidate, auto& scratch) {
+        materialize_detached_valid_field(state, scratch.detached_state);
+        frequency = selected.path_rhs_at_point_prepared(
+            point, scratch.detached_state, candidate, selected.boundary.get(), lane, transport);
+        const double scaled = point.dt * static_cast<double>(frequency);
+        if (!std::isfinite(frequency) || frequency < Real(0) ||
+            (evaluated_frequency == nullptr &&
+             (!std::isfinite(point.dt) || point.dt < 0 || !std::isfinite(scaled) ||
+              scaled > static_cast<double>(courant))))
+          throw std::runtime_error(
+              "Uniform path RHS refused publication: actual incident-face CFL exceeds Courant");
+      });
+  if (evaluated_frequency != nullptr)
+    *evaluated_frequency = frequency;
+}
+
+template <int Dim>
 void System<Dim>::block_neg_div_flux_into_at_prepared(
     const runtime::multiblock::BoundaryEvaluationPoint& point, int block, MultiFab<Dim>& state,
     MultiFab<Dim>& residual, const System* prepared_system, int prepared_block,
@@ -1110,6 +1211,7 @@ void System<Dim>::block_source_into(int block, MultiFab<Dim>& state, MultiFab<Di
 template <int Dim>
 SolveOutcome System<Dim>::solve_block_source(int block, MultiFab<Dim>& state, Real dt,
                                              const NewtonOptions& options) {
+  require_solve_outcome_creation_(2);
   if (block < 0 || block >= p_->blocks_.size())
     throw std::out_of_range("System implicit-source block index is out of range");
   typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
@@ -1117,7 +1219,8 @@ SolveOutcome System<Dim>::solve_block_source(int block, MultiFab<Dim>& state, Re
     throw std::runtime_error("System block '" + selected.name +
                              "' lacks a prepared implicit-source Newton provider");
   validate_newton_options(options, "System::solve_block_source");
-  return selected.solve_implicit_source(state, dt, options, prepared_boundary_execution_lane());
+  return track_solve_outcome(
+      selected.solve_implicit_source(state, dt, options, prepared_boundary_execution_lane()));
 }
 
 template <int Dim>
@@ -1326,6 +1429,75 @@ std::map<std::string, Real> System<Dim>::program_diagnostics() const {
 }
 
 template <int Dim>
+std::vector<std::uint8_t> System<Dim>::checkpoint_program_diagnostics() const {
+  if (step_transaction_depth() != 0 || p_->external_restart_transaction_ ||
+      solve_outcome_authority_->pending.load(std::memory_order_acquire) != 0)
+    throw std::logic_error("Program diagnostic checkpoint requires fully accepted native state");
+  Kokkos::fence();
+  const auto& lane = prepared_boundary_execution_lane();
+  return runtime::program::checkpoint_program_diagnostics(p_->program_.diagnostics_, lane.rank(),
+                                                          lane.size());
+}
+
+template <int Dim>
+std::vector<std::uint8_t> System<Dim>::checkpoint_capture_program_diagnostics() const {
+  const auto depth = step_transaction_depth();
+  const bool candidate = depth == 1 && p_->external_step_transaction_ &&
+                         !p_->external_step_transaction_committed_;
+  const auto phase = p_->lifecycle_.state(p_->macro_step_);
+  if ((depth != 0 && !candidate) || p_->external_restart_transaction_ ||
+      solve_outcome_authority_->pending.load(std::memory_order_acquire) != 0 ||
+      (phase != "bound" && phase != "running" && phase != "checkpointed"))
+    throw std::logic_error("Program diagnostic checkpoint capture requires idle or uncommitted external candidate state");
+  Kokkos::fence();
+  const auto& lane = prepared_boundary_execution_lane();
+  return runtime::program::checkpoint_program_diagnostics(p_->program_.diagnostics_, lane.rank(),
+                                                          lane.size());
+}
+
+template <int Dim>
+void System<Dim>::validate_checkpoint_program_diagnostics(
+    std::span<const std::uint8_t> bytes) const {
+  if (!bytes.empty()) {
+    const auto& lane = prepared_boundary_execution_lane();
+    (void)runtime::program::read_program_diagnostics_checkpoint(bytes, lane.rank(), lane.size());
+  }
+}
+
+template <int Dim>
+void System<Dim>::restore_checkpoint_program_diagnostics(
+    std::span<const std::uint8_t> (*producer)(const void*), const void* context) {
+  const auto& lane = prepared_boundary_execution_lane();
+  std::map<std::string, Real> candidate;
+  std::exception_ptr error;
+  try {
+    if (!p_->external_restart_transaction_ || p_->external_step_transaction_committed_ ||
+        solve_outcome_authority_->pending.load(std::memory_order_acquire) != 0)
+      throw std::logic_error(
+          "Program diagnostic restore requires an active native restart transaction");
+    if (!producer)
+      throw std::invalid_argument("Program diagnostic restore producer is null");
+    const auto bytes = producer(context);
+    if (!bytes.empty())
+      candidate =
+          runtime::program::read_program_diagnostics_checkpoint(bytes, lane.rank(), lane.size());
+  } catch (...) {
+    error = std::current_exception();
+  }
+  try {
+    Kokkos::fence();
+  } catch (...) {
+    if (!error)
+      error = std::current_exception();
+  }
+  collectively_rethrow_exception(error, lane, "Program diagnostic restore preparation");
+  // No rank equality: local diagnostics and reduced diagnostics share this accepted table.
+  // Everything fallible completed before any rank publishes; outer restart retains rollback.
+  static_assert(noexcept(p_->program_.diagnostics_.swap(candidate)));
+  p_->program_.diagnostics_.swap(candidate);
+}
+
+template <int Dim>
 std::map<std::string, Real> System<Dim>::accepted_balance_terms(const std::string& route) const {
   if (!p_->external_step_transaction_ || p_->external_step_transaction_committed_)
     throw std::runtime_error(
@@ -1425,6 +1597,16 @@ template void System<kNativeDimension>::block_rhs_into_at_prepared(
     MultiFab<kNativeDimension>&, const System<kNativeDimension>*, int,
     const runtime::multiblock::BoundaryEvaluationPoint&, const ExecutionLane&,
     const runtime::program::PreparedScalarBoundarySession<kNativeDimension>&);
+template void System<kNativeDimension>::block_path_rhs_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
+    MultiFab<kNativeDimension>&, Real, const System<kNativeDimension>*, int,
+    const runtime::multiblock::BoundaryEvaluationPoint&, const ExecutionLane&,
+    const runtime::program::PreparedScalarBoundarySession<kNativeDimension>&);
+template void System<kNativeDimension>::block_path_rhs_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
+    MultiFab<kNativeDimension>&, Real, const System<kNativeDimension>*, int,
+    const runtime::multiblock::BoundaryEvaluationPoint&, const ExecutionLane&,
+    const runtime::program::PreparedScalarBoundarySession<kNativeDimension>&, Real*);
 template void System<kNativeDimension>::block_neg_div_flux_into_at_prepared(
     const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
     MultiFab<kNativeDimension>&, const System<kNativeDimension>*, int,
@@ -1481,6 +1663,13 @@ template bool System<kNativeDimension>::program_balance_consumer_is_due(const st
                                                                         int) const;
 template Real System<kNativeDimension>::program_diagnostic(const std::string&) const;
 template std::map<std::string, Real> System<kNativeDimension>::program_diagnostics() const;
+template std::vector<std::uint8_t> System<kNativeDimension>::checkpoint_program_diagnostics() const;
+template std::vector<std::uint8_t> System<kNativeDimension>::checkpoint_capture_program_diagnostics() const;
+template void System<kNativeDimension>::validate_checkpoint_program_diagnostics(
+    std::span<const std::uint8_t>) const;
+template void System<kNativeDimension>::restore_checkpoint_program_diagnostics(
+    std::span<const std::uint8_t> (*)(const void*), const void*);
+
 template std::map<std::string, Real> System<kNativeDimension>::accepted_balance_terms(
     const std::string&) const;
 template std::map<std::string, Real> System<kNativeDimension>::selected_accepted_balance_terms(

@@ -1,0 +1,65 @@
+{
+  "Native_planned": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "PDE": "ddt(U)=div(.1*grad(U)); screened Field (I-laplacian_h)phi=(3+tau)Y",
+  "Source_base": "e01eb5b8b39b20762639be1e7dde45d12542b770",
+  "catalog": {
+    "duration_basis_refreshed_only": true,
+    "files": 878,
+    "measured_runtime_or_CI": false,
+    "new_files": 0,
+    "seconds": 600
+  },
+  "control_static_binding": {
+    "limit": 80,
+    "same_artifact": true,
+    "thresholds": [
+      70,
+      60
+    ],
+    "two_same_instance_runs": true
+  },
+  "core_fingerprint": "bd29159d6ea92bae81cd96b827eeb3712aa3455942b928acd0f0e0ede728dda9",
+  "failure_static_binding": {
+    "first_run": "pops.run(t_end=DT,max_steps=1)",
+    "first_threshold": 30,
+    "limit": 40,
+    "second_same_instance_run": "pops.run(t_end=2DT,max_steps=1) refuses",
+    "second_threshold": 20
+  },
+  "final_field_oracle": "(3+2DT)*(2+.5*(1-z)^2*face_integral_mode/(1+lambda_h))",
+  "guard_public_math": "norm2(Y)<=max(limit+0*Y-2560*tau); tau existing AnalyticAux(time(program.clock))",
+  "history_scope": {
+    "before_failure_fill": 1,
+    "current_control_sample": "Physical slot1 after accepted rotation; slot0 remains included in full snapshot",
+    "max_readable_lag": 1,
+    "physical_slots": 2,
+    "positive_control_fill": 2,
+    "snapshots": "Both raw physical slots, initialized/fill flags; exact Program/aux bytes, all Field potentials/state/clock, plus public consumer_cursors.to_data"
+  },
+  "independent_pre_run_norms": [
+    28.124317480256234,
+    28.111971544591224
+  ],
+  "limits": [
+    "No Native compile/bind/run by author",
+    "Existing private Native journals instrument rollback; public snapshot API not qualified",
+    "Consumer cursors may be empty because no external consumers authored; emptiness recorded, not a populated-cursor claim",
+    "No public parameter update, rank0-only refusal, ticket validator/revocation or local ownership census",
+    "No full94/GPU/3D/AMR2 claim",
+    "First Source panel two probe assertions failed after successful emit (.spec frozen-module lookup then decimal-vs-binary64 repr); originals retained. Final real Source4PASS no Native."
+  ],
+  "physical_constants": {
+    "amplitude": 0.5,
+    "cells": [
+      16,
+      12
+    ],
+    "dt": 0.00390625,
+    "kappa": 0.1,
+    "mean": 2,
+    "solver_atol": 1e-14,
+    "solver_rtol": 1e-13
+  },
+  "status": "PREDECLARED_FUTURE_RUNTIME_NOT_EXECUTED",
+  "two_interval_gain": 0.9697835860273427
+}

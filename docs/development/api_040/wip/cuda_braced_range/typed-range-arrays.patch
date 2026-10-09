@@ -1,0 +1,48 @@
+diff --git a/src/runtime/amr/amr_layout_transfer.cpp b/src/runtime/amr/amr_layout_transfer.cpp
+--- a/src/runtime/amr/amr_layout_transfer.cpp
++++ b/src/runtime/amr/amr_layout_transfer.cpp
+@@ -8,6 +8,7 @@
+ #include <pops/runtime/dynamic/physical_support_transfer.hpp>
+ 
+ #include <algorithm>
++#include <array>
+ #include <bit>
+ #include <cmath>
+ #include <exception>
+@@ -229,7 +230,9 @@
+     if (state.ncomp() <= 0 || state.rank_space().size() != static_cast<std::size_t>(lane.size()) ||
+         state.rank_space().linear_rank(state.local_rank()) != static_cast<std::size_t>(lane.rank()))
+       throw std::invalid_argument("AMR transfer endpoint differs from its execution rank space");
+-    for (const auto* mask : {view.coverage, view.activity, view.relative_measure})
++    const std::array<const MultiFab<Dim>*, 3> measure_fields{
++        view.coverage, view.activity, view.relative_measure};
++    for (const auto* mask : measure_fields)
+       if (mask && (mask->ncomp() != 1 || mask->layout() != state.layout() ||
+                    mask->distribution() != state.distribution() ||
+                    mask->local_rank() != state.local_rank()))
+@@ -989,9 +992,10 @@
+       for (double weight : spec.base_bin_weights[axis])
+         real(result, weight);
+     }
+-    for (auto value :
+-         {spec.budget.destination_cells, spec.budget.intersection_probes,
+-          spec.budget.canonical_jobs, spec.budget.transported_elements, spec.budget.prepared_bytes})
++    const std::array<std::size_t, 5> budget_values{
++        spec.budget.destination_cells, spec.budget.intersection_probes,
++        spec.budget.canonical_jobs, spec.budget.transported_elements, spec.budget.prepared_bytes};
++    for (auto value : budget_values)
+       integer(result, value);
+     return result;
+   }
+@@ -1358,8 +1362,9 @@
+         throw std::invalid_argument("AMR Transfer capacity endpoint is incomplete");
+       for (const auto& box : level.state->layout().boxes())
+         add(present, cells(box), limit, "AMR Transfer capacity valid-cell overflow");
+-      for (const auto* field :
+-           {level.state, level.coverage, level.activity, level.relative_measure}) {
++      const std::array<const MultiFab<Dim>*, 4> capacity_fields{
++          level.state, level.coverage, level.activity, level.relative_measure};
++      for (const auto* field : capacity_fields) {
+         if (!field)
+           continue;
+         for (int axis = 0; axis < Dim; ++axis)

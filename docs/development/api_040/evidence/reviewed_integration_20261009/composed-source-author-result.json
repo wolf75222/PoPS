@@ -1,0 +1,38 @@
+{
+  "exit": 0,
+  "counts": {
+    "tests": 900,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "Native_attempts": [
+    "_pops",
+    "pops._pops",
+    "_pops",
+    "pops._pops"
+  ],
+  "Native_loaded": [],
+  "candidate": "/Users/romaindespoulain/dev/tmp/PoPS-root-reviewed-next-source-98804c68-20261009",
+  "package": "/Users/romaindespoulain/dev/tmp/PoPS-root-reviewed-next-source-98804c68-20261009/python/pops/__init__.py",
+  "assembly_receipt": "next-source-assembly.json",
+  "args": [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-q",
+    "-ra",
+    "--confcutdir=/Users/romaindespoulain/dev/tmp/PoPS-root-reviewed-next-source-98804c68-20261009",
+    "-o",
+    "pythonpath=",
+    "-p",
+    "no:cacheprovider",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/sol61-composed-source-inventory-validation-20261009/final-tmp",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/sol61-composed-source-inventory-validation-20261009/final-architecture.xml",
+    "tests/python/architecture",
+    "tests/python/unit/codegen/test_static_provider_ssp_proof.py",
+    "tests/python/unit/time/test_temporal_tau_program_authority.py"
+  ],
+  "failures": [],
+  "scope": "Author integration validation of composed Source architecture/SSP/owner; not independent review of all6patches, no Native/build/runtime/CI admission"
+}

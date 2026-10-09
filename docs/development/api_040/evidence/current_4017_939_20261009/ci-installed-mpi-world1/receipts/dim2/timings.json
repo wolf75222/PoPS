@@ -1,0 +1,16 @@
+{
+  "schema": "pops.pytest-phase-timings.v1",
+  "complete": true,
+  "active_node": null,
+  "active_phase": "between_tests",
+  "files": {
+    "tests/python/integration/mpi/test_dsl_compile_cache.py": {
+      "collected": 1,
+      "finished": 1,
+      "reported_phase_seconds": 68.18593133301329,
+      "complete": true
+    }
+  },
+  "elapsed_seconds": 68.52278629099601,
+  "exit_code": 0
+}

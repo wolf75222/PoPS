@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,7 @@ def _raise_cleanup_failures(message: str, failures: list[BaseException]) -> None
 
 class _CheckpointTransportFailure(RuntimeError):
     """A broken control transport after which no second collective is legal."""
+    publication_retryable = False
 
 
 class _CheckpointEntryAuthority:
@@ -544,6 +546,228 @@ class ReopenedRestart:
     cursors: Any
 
 
+def _sealed_entry_digest(entry: _CheckpointEntryAuthority, limit: int, links: int) -> tuple[int, str]:
+    """Read the retained inode in bounded chunks, without another checkpoint capture."""
+    before = os.fstat(entry.fileno())
+    if (not stat.S_ISREG(before.st_mode) or _owner(before) != entry.owner
+            or before.st_nlink != links or not 0 < before.st_size <= limit):
+        raise RuntimeError("sealed checkpoint replay inode, link count or archive budget changed")
+    digest = hashlib.sha256()
+    offset = 0
+    while offset < before.st_size:
+        chunk = os.pread(entry.fileno(), min(65536, before.st_size - offset), offset)
+        if not chunk:
+            raise RuntimeError("sealed checkpoint replay archive became incomplete")
+        digest.update(chunk)
+        offset += len(chunk)
+    after = os.fstat(entry.fileno())
+    if (_owner(after) != entry.owner or after.st_size != before.st_size
+            or after.st_nlink != links or after.st_mtime_ns != before.st_mtime_ns
+            or after.st_ctime_ns != before.st_ctime_ns):
+        raise RuntimeError("sealed checkpoint replay archive changed during its bounded read")
+    return offset, digest.hexdigest()
+
+
+class _SealedCheckpointReplay:
+    """pops.checkpoint.sealed-replay@1: one rank-zero readonly inode lease."""
+
+    contract = "pops.checkpoint.sealed-replay@1"
+
+    def __init__(self, snapshot: _RestartSnapshot) -> None:
+        from ._checkpoint_collective import root_attempt
+        from ._checkpoint_contract import require_checkpoint_resource_budget
+
+        self.runtime, self.topology = snapshot._runtime, snapshot._topology
+        self.limit = require_checkpoint_resource_budget(self.runtime).max_archive_bytes
+        self.proof: _CheckpointPayloadProof | None = None
+        self.released = False
+        self.transport_lost = False
+        self.size, self.sha256 = 0, ""
+
+        def retain_root() -> dict[str, Any]:
+            source = snapshot._proof
+            if source is None or not snapshot._staging_owned:
+                raise RuntimeError("checkpoint replay requires its still-unpublished sealed proof")
+            source.transaction.authenticate_entry_at(source.entry)
+            # Replace the resealer's writable descriptor by an authenticated readonly one.
+            readonly = source.transaction.open_candidate_at(source.entry.name)
+            if readonly.owner != source.owner:
+                readonly.close()
+                raise RuntimeError("checkpoint replay readonly source differs from sealed inode")
+            source.entry.close()
+            source.entry = readonly
+            size, digest = _sealed_entry_digest(source.entry, self.limit, 1)
+            self.proof = self._link(source, source.transaction.parent)
+            if _sealed_entry_digest(self.proof.entry, self.limit, 2) != (size, digest):
+                raise RuntimeError("checkpoint retained replay differs from the completed seal")
+            return dict(size=size, sha256=digest)
+
+        attempt = root_attempt(self.topology, "sealed replay retention", retain_root)
+        if attempt.transport_error is not None or attempt.producer_error is not None:
+            error = attempt.producer_error
+            if attempt.transport_error is not None:
+                self.transport_lost = True
+                snapshot._discarded = True
+                error = _CheckpointTransportFailure(
+                    "checkpoint transport failed during sealed replay retention: %s"
+                    % attempt.transport_error)
+            if self.topology.rank == 0:
+                try:
+                    self._cleanup_root()
+                except BaseException as cleanup_error:
+                    _append_exception_note(error, "sealed replay retention cleanup: %s" % cleanup_error)
+                if self.transport_lost:
+                    try:
+                        snapshot._cleanup_root(include_published=True)
+                    except BaseException as cleanup_error:
+                        _append_exception_note(error, "checkpoint local staging cleanup: %s" % cleanup_error)
+            raise error
+        evidence_error = None
+        try:
+            value = attempt.value
+            if (type(value) is not dict or set(value) != {"size", "sha256"}
+                    or type(value["size"]) is not int or not 0 < value["size"] <= self.limit
+                    or type(value["sha256"]) is not str or len(value["sha256"]) != 64):
+                raise RuntimeError("checkpoint replay returned invalid bounded seal evidence")
+            self.size, self.sha256 = value["size"], value["sha256"]
+        except BaseException as error:
+            evidence_error = error
+        try:
+            consensus(self.topology, "sealed replay agreement", error=evidence_error,
+                      value=dict(size=self.size, sha256=self.sha256))
+        except BaseException as error:
+            # Consensus may itself have lost transport. Do not start another collective on
+            # that exception path, even when the rejection was a healthy peer vote.
+            self.transport_lost = True
+            snapshot._discarded = True
+            if self.topology.rank == 0:
+                for action in (self._cleanup_root,
+                               lambda: snapshot._cleanup_root(include_published=True)):
+                    try:
+                        action()
+                    except BaseException as cleanup_error:
+                        _append_exception_note(error, "checkpoint local retention cleanup: %s" % cleanup_error)
+            raise _CheckpointTransportFailure("checkpoint sealed replay agreement failed: %s" % error) from error
+
+    @staticmethod
+    def _link(source: _CheckpointPayloadProof, parent: Path) -> _CheckpointPayloadProof:
+        transaction = _CheckpointTransactionReceipt.created(parent)
+        entry = None
+        try:
+            transaction.quarantine_entry_at(transaction.take_native_entry(), phase="replay blank staging")
+            source.transaction.authenticate_entry_at(source.entry)
+            os.link(source.entry.name, transaction._NATIVE_NAME,
+                    src_dir_fd=source.transaction.directory_fileno(),
+                    dst_dir_fd=transaction.directory_fileno(), follow_symlinks=False)
+            entry = _CheckpointEntryAuthority(transaction._NATIVE_NAME, source.owner, None)
+            entry._descriptor = source.entry.duplicate()
+            return _CheckpointPayloadProof(transaction, entry)
+        except BaseException as error:
+            try:
+                if entry is not None:
+                    transaction.quarantine_entry_at(entry, phase="failed replay staging")
+                transaction.cleanup_empty()
+            except BaseException as cleanup_error:
+                _append_exception_note(error, "checkpoint replay staging cleanup: %s" % cleanup_error)
+            raise
+
+    def authenticate_root(self, *, links: int) -> None:
+        if self.released or self.proof is None:
+            raise RuntimeError("checkpoint replay lease is no longer live")
+        self.proof.transaction.authenticate_entry_at(self.proof.entry)
+        if _sealed_entry_digest(self.proof.entry, self.limit, links) != (self.size, self.sha256):
+            raise RuntimeError("checkpoint replay archive differs from its retained seal")
+
+    def stage(self, previous: _RestartSnapshot) -> _RestartSnapshot:
+        from ._checkpoint_collective import root_attempt
+
+        if self.released or self.transport_lost:
+            raise RuntimeError("checkpoint replay lease is no longer live")
+        if previous._prepared_capture is not None:
+            self.runtime._validate_committed_checkpoint_candidate(previous._prepared_capture)
+        result = object.__new__(_RestartSnapshot)
+        result._runtime, result._topology = self.runtime, self.topology
+        result._prepared_capture = previous._prepared_capture
+        result._proof = None
+        result._staging_owned = False
+        result._published_target = result._published_entry = result._published_parent_fd = None
+        result._discarded = False
+        result._sealed_replay = self
+
+        def stage_root() -> dict[str, Any]:
+            self.authenticate_root(links=1)
+            result._proof = self._link(self.proof, self.proof.transaction.parent)
+            result._staging_owned = True
+            self.authenticate_root(links=2)
+            return dict(transaction=result._proof.transaction.to_data(), proof=result._proof.to_data())
+
+        attempt = root_attempt(self.topology, "sealed replay staging", stage_root)
+        if attempt.transport_error is not None or attempt.producer_error is not None:
+            error = attempt.producer_error
+            if attempt.transport_error is not None:
+                self.transport_lost = True
+                error = _CheckpointTransportFailure("checkpoint transport failed during sealed replay staging")
+            if self.topology.rank == 0:
+                try:
+                    result._cleanup_root(include_published=True)
+                except BaseException as cleanup_error:
+                    _append_exception_note(error, "checkpoint replay cleanup: %s" % cleanup_error)
+            result._discarded = True
+            raise error
+        evidence_error = None
+        try:
+            if self.topology.rank != 0:
+                transaction = _CheckpointTransactionReceipt.observed(attempt.value["transaction"])
+                result._proof = _CheckpointPayloadProof.observed(transaction, attempt.value["proof"])
+                result._staging_owned = True
+            elif attempt.value != dict(transaction=result._proof.transaction.to_data(),
+                                       proof=result._proof.to_data()):
+                raise RuntimeError("checkpoint replay staging evidence changed")
+            if (previous._proof is None
+                    or result._proof.transaction.parent != previous._proof.transaction.parent
+                    or result._proof.owner != previous._proof.owner):
+                raise RuntimeError("checkpoint replay staging differs from its original owner and parent")
+        except BaseException as error:
+            evidence_error = error
+        try:
+            consensus(self.topology, "sealed replay staging agreement", error=evidence_error)
+        except BaseException as error:
+            self.transport_lost = True
+            result._discarded = True
+            if self.topology.rank == 0:
+                try:
+                    result._cleanup_root(include_published=True)
+                except BaseException as cleanup_error:
+                    _append_exception_note(error, "checkpoint local replay staging cleanup: %s" % cleanup_error)
+            raise _CheckpointTransportFailure("checkpoint replay staging agreement failed: %s" % error) from error
+        return result
+
+    def _cleanup_root(self) -> None:
+        if self.proof is not None:
+            self.proof.transaction.quarantine_entry_at(self.proof.entry, phase="sealed replay release")
+            self.proof.transaction.cleanup_empty()
+            self.proof = None
+
+    def close(self) -> None:
+        from ._checkpoint_collective import root_attempt
+
+        if self.released:
+            return
+        if self.transport_lost:
+            if self.topology.rank == 0:
+                self._cleanup_root()
+            self.released = True
+            return
+        attempt = root_attempt(self.topology, "sealed replay release", self._cleanup_root)
+        if attempt.transport_error is not None:
+            self.transport_lost = True
+            raise _CheckpointTransportFailure("checkpoint sealed replay release transport failed: %s"
+                                              % attempt.transport_error) from attempt.transport_error
+        if attempt.producer_error is not None:
+            raise attempt.producer_error
+        self.released = True
+
+
 class _RestartSnapshot:
     """One exact resealed-fd handoff whose publication remains compensatable."""
 
@@ -556,12 +780,18 @@ class _RestartSnapshot:
         "_published_entry",
         "_published_parent_fd",
         "_discarded",
+        "_prepared_capture",
+        "_sealed_replay",
     )
 
-    def __init__(self, runtime: Any, directory: Any) -> None:
+    def __init__(self, runtime: Any, directory: Any, *, prepared_capture: Any = None) -> None:
         from ._checkpoint_collective import root_attempt
 
         self._runtime = runtime
+        self._prepared_capture = prepared_capture
+        self._sealed_replay: _SealedCheckpointReplay | None = None
+        if prepared_capture is not None:
+            runtime._validate_prepared_checkpoint_candidate(prepared_capture)
         self._topology = checkpoint_topology(runtime)
         self._proof: _CheckpointPayloadProof | None = None
         self._staging_owned = False
@@ -641,6 +871,7 @@ class _RestartSnapshot:
             proof = runtime._checkpoint_payload(
                 transaction.staging_path,
                 transaction_receipt=transaction,
+                **({} if prepared_capture is None else {"prepared_capture": prepared_capture}),
             )
         except _CheckpointTransportFailure:
             self._discarded = True
@@ -678,6 +909,13 @@ class _RestartSnapshot:
             raise error
         self._proof = proof
         self._staging_owned = True
+
+    def retain_sealed_replay(self) -> _SealedCheckpointReplay:
+        if self._sealed_replay is not None:
+            raise RuntimeError("checkpoint snapshot already owns a sealed replay")
+        replay = _SealedCheckpointReplay(self)
+        self._sealed_replay = replay
+        return replay
 
     @property
     def path(self) -> Path:
@@ -801,6 +1039,8 @@ class _RestartSnapshot:
             raise RuntimeError("discarded restart snapshot cannot be published")
         if self._proof is None:
             raise RuntimeError("restart snapshot has no checkpoint payload proof")
+        if self._prepared_capture is not None:
+            self._runtime._validate_committed_checkpoint_candidate(self._prepared_capture)
         local_target = canonical_checkpoint_path(target)
         target_error = None
         try:
@@ -844,11 +1084,15 @@ class _RestartSnapshot:
                     not stat.S_ISREG(named.st_mode)
                     or _owner(named) != proof.owner
                     or _owner(retained) != proof.owner
+                    or (self._sealed_replay is not None
+                        and retained.st_nlink != (3 if self._staging_owned else 2))
                 ):
                     raise RuntimeError("checkpoint publication differs from its retained proof")
 
             try:
                 proof.transaction.authenticate_entry_at(proof.entry)
+                if self._sealed_replay is not None:
+                    self._sealed_replay.authenticate_root(links=2)
                 os.link(
                     proof.entry.name,
                     local_target.name,
@@ -1045,7 +1289,10 @@ class _RestartSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class RestartV3:
-    """Compatibility-named adapter over strict Uniform v8 / AMR v11 accepted-state payloads."""
+    """Adapter over Uniform9 / AMR12; explicit legacy Uniform8 is valid-only.
+
+    The default identity guarantee applies to full current payloads. A per-call
+    state_storage="valid_only_legacy8" request never certifies grown State bits."""
 
     __pops_ir_immutable__ = True
     bit_identical: bool = False
@@ -1064,7 +1311,7 @@ class RestartV3:
     def consumer_data(self) -> dict[str, Any]:
         return {
             "schema_version": 1,
-            "provider_id": "pops.restart.accepted-state-v5",
+            "provider_id": "pops.restart.accepted-state-v6",
             "extension": ".npz",
             "bit_identical": self.bit_identical,
             "guarantee": (
@@ -1077,6 +1324,7 @@ class RestartV3:
             # distributed communicator is present.
             "supports_singleton_collective": True,
             "supports_regrid_on_restart": True,
+            "publication_retry_contract": "pops.checkpoint.sealed-replay@1",
         }
 
     def validate_configuration(self) -> None:
@@ -1084,9 +1332,10 @@ class RestartV3:
         if self.bit_identical and self.hierarchy.mode == "regrid_on_restart":
             raise ValueError("RestartV3 cannot combine bit_identical=True with RegridOnRestart()")
 
-    def snapshot(self, runtime: Any, directory: Any) -> Any:
+    def snapshot(self, runtime: Any, directory: Any, *, prepared_capture: Any = None) -> Any:
         self.validate_configuration()
-        return self.validate_snapshot(_RestartSnapshot(runtime, directory))
+        return self.validate_snapshot(_RestartSnapshot(runtime, directory,
+                                                       prepared_capture=prepared_capture))
 
     @staticmethod
     def validate_snapshot(snapshot: Any) -> Any:
@@ -1147,8 +1396,10 @@ class RestartV3:
             raise RuntimeError("restart cursor consensus returned no cursor set")
         return ReopenedRestart(Path(target), payload, cursors)
 
-    def restore(self, runtime: Any, reopened: Any) -> Any:
+    def restore(self, runtime: Any, reopened: Any, *, state_storage: str = "full") -> Any:
         self.validate_configuration()
+        if state_storage != "full" and self.hierarchy.mode == "regrid_on_restart":
+            raise ValueError("legacy Uniform8 state storage cannot regrid on restart")
         if type(reopened) is not ReopenedRestart:
             raise TypeError("RestartV3.restore requires an exact ReopenedRestart")
         if self.hierarchy.mode == "regrid_on_restart":
@@ -1159,10 +1410,12 @@ class RestartV3:
                 hierarchy_mode=self.hierarchy.mode,
                 hierarchy_identity=self.hierarchy.identity.token,
             )
+        options = {} if state_storage == "full" else {"state_storage": state_storage}
         return runtime._restore_checkpoint(
             reopened.payload,
             reopened.cursors,
             bit_identical=self.bit_identical,
+            **options,
         )
 
 

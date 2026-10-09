@@ -7,11 +7,13 @@
 
 #include <pops/numerics/fv/reconstruction.hpp>
 #include <pops/numerics/spatial/nd/reconstruction.hpp>
+#include <pops/numerics/spatial/nd/state_schema.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <random>
 #include <vector>
 
 using namespace pops;
@@ -39,6 +41,18 @@ struct ExternalFourSamplePolicy {
   POPS_HD Real stencil_face_value(const Sample& sample) const {
     return (sample(-3) + Real(2) * sample(-1) + Real(3) * sample(0) + Real(4) * sample(2)) /
            Real(10);
+  }
+};
+
+struct GuardedSamplePolicy {
+  static constexpr int formal_order = 1;
+  static constexpr int n_ghost = 2;
+  static constexpr int stencil_min_offset = -1;
+  static constexpr int stencil_max_offset = 1;
+
+  template <class Sample>
+  POPS_HD Real stencil_face_value(const Sample& sample) const {
+    return sample(0) > Real(0) ? sample(-1) : sample(1);
   }
 };
 
@@ -175,10 +189,13 @@ struct PrimitiveTestModel {
   static constexpr int dimension = 1;
   static constexpr int n_vars = 2;
   int* primitive_calls = nullptr;
+  bool reject_nonpositive = false;
 
   POPS_HD nd::StateConversion<Primitive> recover(const State& state) const {
     if (primitive_calls != nullptr)
       ++*primitive_calls;
+    if (reject_nonpositive && state[0] <= Real(0))
+      return {{}, nd::StateConversionStatus::NonPositiveDensity};
     return {Primitive{state[0] * state[0], state[1]}, nd::StateConversionStatus::Success};
   }
   POPS_HD nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
@@ -188,6 +205,25 @@ struct PrimitiveTestModel {
     return nd::StateConversionStatus::Success;
   }
 };
+
+struct JointCrossPolicy {
+  static constexpr int n_components = 2;
+  static constexpr int formal_order = 1;
+  static constexpr int n_ghost = 2;
+  static constexpr int stencil_min_offset = -1;
+  static constexpr int stencil_max_offset = 1;
+  template <class Sample>
+  POPS_HD std::array<Real, 2> stencil_face_state(const Sample& sample) const {
+    // Read the other component at an oriented offset; no scalar-per-component policy can do this.
+    const Real first = sample(0, 0);
+    const int selected = first > Real(0) ? -1 : 1;
+    return {first + sample(selected, 1), sample(selected, 0)};
+  }
+};
+static_assert(JointStencilReconstruction<JointCrossPolicy>);
+static_assert(StencilReconstruction<JointCrossPolicy>);
+static_assert(ReconstructionPolicy<JointCrossPolicy>);
+static_assert(!ScalarStencilReconstruction<JointCrossPolicy>);
 
 static_assert(SlopeReconstruction<WideSlopePolicy>);
 static_assert(ReconstructionPolicy<MC>);
@@ -214,6 +250,44 @@ TEST(test_weno_convergence, preserves_constants) {
   EXPECT_LE(std::fabs(weno5z(c, c, c, c, c) - c), 1e-13) << "constante";
 }
 
+TEST(test_weno_convergence, finite_extreme_stencils_and_step_faces) {
+  const Real largest = std::numeric_limits<Real>::max();
+  const Real tiny = std::numeric_limits<Real>::denorm_min();
+  ASSERT_GT(tiny, Real(0));
+  EXPECT_EQ(weno5z(largest, largest, largest, largest, largest), largest);
+  EXPECT_EQ(weno5z(tiny, tiny, tiny, tiny, tiny), tiny);
+  // The exact reconstruction of a linear stencil is its value at the face, 3.5*amplitude.
+  // Intermediate Jiang-Shu indicators and unnormalized weights overflow at this scale.
+  const Real amplitude = largest / Real(16);
+  const Real linear = weno5z(amplitude, Real(2) * amplitude, Real(3) * amplitude,
+                             Real(4) * amplitude, Real(5) * amplitude);
+  ASSERT_TRUE(std::isfinite(linear));
+  EXPECT_NEAR(linear / amplitude, Real(3.5), Real(16) * std::numeric_limits<Real>::epsilon());
+
+  const auto faces = reconstruct_periodic_faces<Weno5>({Real(1), Real(1), Real(1), Real(0),
+                                                        Real(0), Real(0), Real(0), Real(0)});
+  ASSERT_TRUE(faces.publication_permitted);
+  for (const Real face : faces.left) EXPECT_TRUE(std::isfinite(face));
+  for (const Real face : faces.right) EXPECT_TRUE(std::isfinite(face));
+}
+
+TEST(test_weno_convergence, invalid_stencil_or_epsilon_remains_nonfinite) {
+  const Real nan = std::numeric_limits<Real>::quiet_NaN();
+  const Real inf = std::numeric_limits<Real>::infinity();
+  for (const Real input : {nan, inf, -inf})
+    EXPECT_FALSE(std::isfinite(weno5z(Real(1), input, Real(1), Real(0), Real(0))));
+  for (const Real eps : {Real(0), Real(-2), nan, inf})
+    EXPECT_FALSE(std::isfinite(weno5z(Real(1), Real(2), Real(3), Real(4), Real(5), eps)));
+  auto averages = std::vector<Real>{Real(1), Real(1), Real(1), Real(0), Real(0), Real(0),
+                                    Real(0), Real(0)};
+  averages[1] = nan;
+  const auto faces = reconstruct_periodic_faces<Weno5>(averages);
+  EXPECT_TRUE(std::any_of(faces.left.begin(), faces.left.end(),
+                          [](Real value) { return !std::isfinite(value); }));
+  EXPECT_TRUE(std::any_of(faces.right.begin(), faces.right.end(),
+                          [](Real value) { return !std::isfinite(value); }));
+}
+
 TEST(test_weno_convergence, reconstruction_protocol_is_independent_of_storage_radius) {
   const auto policy = configured_reconstruction<WideSlopePolicy>();
   EXPECT_EQ(policy.limited_slope(Real(2), Real(4)), Real(3));
@@ -229,6 +303,99 @@ TEST(test_muscl_limiters, mc_and_superbee_match_reference_formulas) {
   EXPECT_EQ(superbee.limited_slope(Real(1), Real(3)), Real(2));
   EXPECT_EQ(superbee.limited_slope(Real(2), Real(4)), Real(4));
   EXPECT_EQ(superbee.limited_slope(Real(3), Real(1)), Real(2));
+}
+
+TEST(test_muscl_limiters, minmod_and_vanleer_handle_extreme_finite_differences) {
+  const Minmod minmod{};
+  const VanLeer vanleer{};
+  const Real tiny = std::numeric_limits<Real>::denorm_min();
+  const Real largest = std::numeric_limits<Real>::max();
+  ASSERT_GT(tiny, Real(0));
+
+  for (const Real sign : {Real(1), Real(-1)}) {
+    EXPECT_EQ(minmod.limited_slope(sign * tiny, sign * tiny), sign * tiny);
+    EXPECT_EQ(vanleer.limited_slope(sign * tiny, sign * tiny), sign * tiny);
+    EXPECT_EQ(minmod.limited_slope(sign * largest, sign * largest), sign * largest);
+    EXPECT_EQ(vanleer.limited_slope(sign * largest, sign * largest), sign * largest);
+    EXPECT_EQ(minmod.limited_slope(sign * tiny, sign * largest), sign * tiny);
+    EXPECT_EQ(vanleer.limited_slope(sign * tiny, sign * largest), sign * Real(2) * tiny);
+  }
+
+  for (const auto slope : {minmod.limited_slope(Real(0), largest),
+                           minmod.limited_slope(-tiny, largest),
+                           vanleer.limited_slope(Real(0), largest),
+                           vanleer.limited_slope(-tiny, largest)})
+    EXPECT_EQ(slope, Real(0));
+
+  // A limiter must not turn an invalid neighbour into a plausible zero/finite face state.
+  const Real nan = std::numeric_limits<Real>::quiet_NaN();
+  const Real inf = std::numeric_limits<Real>::infinity();
+  for (const auto slope : {minmod.limited_slope(nan, Real(1)),
+                           minmod.limited_slope(Real(1), inf),
+                           minmod.limited_slope(-inf, Real(1)),
+                           vanleer.limited_slope(nan, Real(1)),
+                           vanleer.limited_slope(Real(1), inf),
+                           vanleer.limited_slope(-inf, Real(1))})
+    EXPECT_FALSE(std::isfinite(slope));
+}
+
+TEST(test_muscl_limiters, mc_and_superbee_do_not_mask_invalid_inputs_or_tiny_slopes) {
+  const MC mc{};
+  const Superbee superbee{};
+  const Real tiny = std::numeric_limits<Real>::denorm_min();
+  const Real nan = std::numeric_limits<Real>::quiet_NaN();
+  const Real inf = std::numeric_limits<Real>::infinity();
+  ASSERT_GT(tiny, Real(0));
+  EXPECT_EQ(mc.limited_slope(tiny, tiny), tiny);
+  EXPECT_EQ(mc.limited_slope(-tiny, -tiny), -tiny);
+  EXPECT_EQ(superbee.limited_slope(tiny, tiny), tiny);
+  EXPECT_EQ(superbee.limited_slope(-tiny, -tiny), -tiny);
+  for (const Real value : {nan, inf, -inf}) {
+    for (const Real slope : {mc.limited_slope(value, Real(1)),
+                             mc.limited_slope(Real(-1), value),
+                             superbee.limited_slope(value, Real(1)),
+                             superbee.limited_slope(Real(-1), value)})
+      EXPECT_FALSE(std::isfinite(slope));
+  }
+  EXPECT_EQ(mc.limited_slope(Real(0), Real(1)), Real(0));
+  EXPECT_EQ(superbee.limited_slope(Real(-1), Real(1)), Real(0));
+}
+
+TEST(test_muscl_limiters, scalar_upwind_euler_tvd_and_mean_at_half_cfl) {
+  // Fixed 600-case witness for the scalar periodic MUSCL/upwind Euler setting in 04_numerics.tex.
+  // Face fluxes telescope; this does not establish positivity for systems or other fluxes.
+  std::mt19937_64 generator(0x6040);
+  std::uniform_real_distribution<Real> sample(Real(-1), Real(1));
+  constexpr int cells = 24;
+  constexpr Real courant = Real(0.5);
+  for (int limiter = 0; limiter < 2; ++limiter) {
+    for (int case_index = 0; case_index < 600; ++case_index) {
+      std::vector<Real> initial(cells), face(cells), next(cells);
+      for (auto& value : initial) value = sample(generator);
+      for (int i = 0; i < cells; ++i) {
+        const Real backward = initial[i] - initial[(i + cells - 1) % cells];
+        const Real forward = initial[(i + 1) % cells] - initial[i];
+        const Real slope = limiter == 0 ? Minmod{}.limited_slope(backward, forward)
+                                        : VanLeer{}.limited_slope(backward, forward);
+        face[i] = initial[i] + Real(0.5) * slope;
+      }
+      for (int i = 0; i < cells; ++i)
+        next[i] = initial[i] - courant * (face[i] - face[(i + cells - 1) % cells]);
+
+      long double before_sum = 0, after_sum = 0, before_tv = 0, after_tv = 0;
+      for (int i = 0; i < cells; ++i) {
+        before_sum += initial[i];
+        after_sum += next[i];
+        before_tv += std::abs(static_cast<long double>(initial[i] -
+                                                    initial[(i + cells - 1) % cells]));
+        after_tv += std::abs(static_cast<long double>(next[i] -
+                                                   next[(i + cells - 1) % cells]));
+      }
+      const long double tolerance = 64 * std::numeric_limits<Real>::epsilon() * cells;
+      EXPECT_LE(std::abs(after_sum - before_sum), tolerance) << limiter << ':' << case_index;
+      EXPECT_LE(after_tv, before_tv + tolerance) << limiter << ':' << case_index;
+    }
+  }
 }
 
 TEST(test_muscl_limiters, zero_opposite_sign_symmetry_and_homogeneity) {
@@ -383,9 +550,8 @@ TEST(test_weno_convergence, external_sampled_policy_controls_offsets_and_orienta
   const auto primitive = nd::reconstruct_face_state<0, 1, nd::ReconstructionVariables::Primitive>(
       model, state, Index<1>{5}, policy);
   ASSERT_TRUE(primitive.succeeded());
-  EXPECT_EQ(primitive_calls, ExternalFourSamplePolicy::stencil_max_offset -
-                                 ExternalFourSamplePolicy::stencil_min_offset + 1)
-      << "primitive states are converted once per declared offset, not once per component";
+  EXPECT_EQ(primitive_calls, 4)
+      << "primitive states are converted once per requested offset, not once per component";
   const Real primitive_component = combine([&](int offset) {
     const Real conservative = sample_x(5 + offset);
     return conservative * conservative;
@@ -393,6 +559,62 @@ TEST(test_weno_convergence, external_sampled_policy_controls_offsets_and_orienta
   EXPECT_NEAR(primitive.value[0], std::sqrt(primitive_component), Real(1e-14));
   EXPECT_DOUBLE_EQ(primitive.value[1], combine([&](int offset) { return sample_y(5 + offset); }));
   EXPECT_NE(primitive.value[0], right.value[0]);
+}
+
+TEST(test_weno_convergence, primitive_sampled_policy_converts_only_the_selected_branch) {
+  const Box<1> valid = Box<1>::from_extents(Extent<1>{11});
+  Fab<1> values(valid, PrimitiveTestModel::n_vars, Extent<1>{GuardedSamplePolicy::n_ghost});
+  auto host = values.create_host_mirror();
+  for (int i = values.grown_box().lo[0]; i <= values.grown_box().hi[0]; ++i) {
+    const Real value = i == 6 ? Real(-1) : Real(i == 4 ? 3 : 2);
+    for (int component = 0; component < PrimitiveTestModel::n_vars; ++component)
+      host(host_offset(values.grown_box(), Index<1>{i}, component)) = value;
+  }
+  values.copy_from_host(host);
+
+  int recover_calls = 0;
+  const PrimitiveTestModel model{&recover_calls, true};
+  const auto state = static_cast<const Fab<1>&>(values).view();
+  const auto selected = nd::reconstruct_face_state<0, 1, nd::ReconstructionVariables::Primitive>(
+      model, state, Index<1>{5}, GuardedSamplePolicy{});
+  ASSERT_TRUE(selected.succeeded());
+  EXPECT_DOUBLE_EQ(selected.value[0], Real(3));
+  EXPECT_DOUBLE_EQ(selected.value[1], Real(3));
+  EXPECT_EQ(recover_calls, 2) << "inactive invalid offset was converted";
+
+  const auto rejected = nd::reconstruct_face_state<0, -1, nd::ReconstructionVariables::Primitive>(
+      model, state, Index<1>{5}, GuardedSamplePolicy{});
+  EXPECT_EQ(rejected.status, nd::StateConversionStatus::NonPositiveDensity);
+  EXPECT_EQ(recover_calls, 4) << "the active conversion must fail without reading other offsets";
+}
+
+TEST(test_weno_convergence, joint_stencil_cross_components_preserve_lazy_primitive_status) {
+  const Box<1> valid = Box<1>::from_extents(Extent<1>{11});
+  Fab<1> values(valid, 2, Extent<1>{2});
+  auto host = values.create_host_mirror();
+  for (int i = values.grown_box().lo[0]; i <= values.grown_box().hi[0]; ++i) {
+    host(host_offset(values.grown_box(), Index<1>{i}, 0)) = Real(i == 6 ? -1 : i == 4 ? 3 : 2);
+    host(host_offset(values.grown_box(), Index<1>{i}, 1)) = Real(10 + i);
+  }
+  values.copy_from_host(host);
+  int calls = 0;
+  const PrimitiveTestModel model{&calls, true};
+  const auto state = static_cast<const Fab<1>&>(values).view();
+  const auto conservative =
+      nd::reconstruct_face_state<0, 1>(model, state, Index<1>{5}, JointCrossPolicy{});
+  EXPECT_EQ(conservative.value[0], Real(16));
+  EXPECT_EQ(conservative.value[1], Real(3));
+  const auto selected = nd::reconstruct_face_state<0, 1, nd::ReconstructionVariables::Primitive>(
+      model, state, Index<1>{5}, JointCrossPolicy{});
+  ASSERT_TRUE(selected.succeeded());
+  EXPECT_NEAR(selected.value[0], std::sqrt(Real(18)),
+              Real(8) * std::numeric_limits<Real>::epsilon());
+  EXPECT_EQ(selected.value[1], Real(9));
+  EXPECT_EQ(calls, 2) << "each selected offset converts once for all components";
+  const auto invalid = nd::reconstruct_face_state<0, -1, nd::ReconstructionVariables::Primitive>(
+      model, state, Index<1>{5}, JointCrossPolicy{});
+  EXPECT_EQ(invalid.status, nd::StateConversionStatus::NonPositiveDensity);
+  EXPECT_EQ(calls, 4);
 }
 
 template <int Dim>

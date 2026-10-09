@@ -2,11 +2,13 @@
 /// @brief Exact owner-qualified auxiliary-provider registry and carrier publication for System.
 
 #include "system_impl.hpp"
+#include "auxiliary_consumer_preparation.hpp"
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/runtime/system/auxiliary_ghost_fill.hpp>
 #include <pops/runtime/system/exact_field_marshaling.hpp>
+#include <pops/runtime/system/auxiliary_checkpoint_capacity.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -325,51 +327,26 @@ AuxiliaryPublicationStatus System<Dim>::prepare_program_auxiliary_consumer_for_s
     const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
     int block, const MultiFab<Dim>& stage_state, int evaluation_sequence) {
   const ExecutionLane& lane = prepared_boundary_execution_lane();
-  std::exception_ptr preflight_error;
-  try {
-    if (point.clock.empty() || point.tick != p_->macro_step_ || point.level != 0 ||
-        point.substep < 0 || point.stage < 0 || point.stage_fraction < amr::Rational(0, 1) ||
-        amr::Rational(1, 1) < point.stage_fraction || !std::isfinite(point.dt) || point.dt <= 0 ||
-        !std::isfinite(point.physical_time) || evaluation_sequence < 0)
-      throw std::invalid_argument("Program auxiliary read requires its complete current point");
-    const auto& accepted = block_state(block);
-    if (stage_state.layout() != accepted.layout() ||
-        stage_state.distribution() != accepted.distribution() ||
-        stage_state.local_rank() != accepted.local_rank() ||
-        stage_state.ncomp() != accepted.ncomp())
-      throw std::invalid_argument("Program auxiliary read SSA state differs from its block layout");
-    (void)p_->auxiliary_registry_.consumer_plan(consumer_qid);
-  } catch (...) {
-    preflight_error = std::current_exception();
-  }
-  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-      preflight_error, &lane, "Program auxiliary read preflight failed collectively");
-  ExactContractBuilder exact;
-  exact.text("pops.system.program-auxiliary-read")
-      .scalar(std::uint32_t{1})
-      .text(consumer_qid)
-      .scalar(block)
-      .text(point.clock)
-      .scalar(point.tick)
-      .scalar(point.level)
-      .scalar(point.substep)
-      .scalar(point.stage)
-      .scalar(point.stage_fraction.numerator)
-      .scalar(point.stage_fraction.denominator)
-      .scalar(point.dt)
-      .scalar(point.physical_time)
-      .scalar(evaluation_sequence);
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"program-auxiliary-read", std::move(exact).release()}}, lane))
-    throw std::invalid_argument("Program auxiliary read identity differs across MPI ranks");
-  AuxiliaryEvaluationPoint auxiliary_point;
-  auxiliary_point.clock = point.clock;
-  auxiliary_point.accepted_step = static_cast<std::uint64_t>(point.tick);
-  auxiliary_point.layout_generation = p_->embedded_boundary_generation_;
-  auxiliary_point.substep = point.substep;
-  auxiliary_point.stage = point.stage;
-  auxiliary_point.nonlinear_iteration = evaluation_sequence;
-  auxiliary_point.event = runtime::system::AuxiliaryEvaluationEvent::before_residual;
+  const auto auxiliary_point = runtime::system::detail::prepare_auxiliary_consumer_point(
+      point, p_->embedded_boundary_generation_, p_->embedded_boundary_generation_,
+      evaluation_sequence, runtime::system::AuxiliaryEvaluationEvent::before_residual,
+      lane, consumer_qid, block, "system-program-residual", [&] {
+        if (point.clock.empty() || point.tick != p_->macro_step_ || point.level != 0 ||
+            point.substep < 0 || point.stage < 0 || point.stage_fraction.denominator <= 0 ||
+            point.stage_fraction.numerator < 0 ||
+            point.stage_fraction.numerator > point.stage_fraction.denominator ||
+            amr::Rational(point.stage_fraction.numerator, point.stage_fraction.denominator) != point.stage_fraction || !std::isfinite(point.dt) || point.dt <= 0 ||
+            !std::isfinite(point.physical_time) || evaluation_sequence < 0)
+          throw std::invalid_argument("Program auxiliary read requires its complete current point");
+        const auto& accepted = block_state(block);
+        if (stage_state.layout() != accepted.layout() ||
+            stage_state.distribution() != accepted.distribution() ||
+            stage_state.local_rank() != accepted.local_rank() ||
+            stage_state.ncomp() != accepted.ncomp())
+          throw std::invalid_argument("Program auxiliary read SSA state differs from its block layout");
+        (void)p_->auxiliary_registry_.consumer_plan(consumer_qid);
+      });
+
   return refresh_auxiliary_(auxiliary_point, {consumer_qid});
 }
 
@@ -439,7 +416,8 @@ void System<Dim>::publish_program_field_components(
             exact_keys.end())
           throw std::invalid_argument("Program field publication omits a provider output");
     remaining_dirty = p_->dirty_auxiliary_providers_;
-    for (const auto& identity : p_->auxiliary_registry_.dependent_provider_identities(provider_ids))
+    for (const auto& identity :
+         p_->auxiliary_registry_.accepted_dependent_provider_identities(provider_ids))
       if (std::find(remaining_dirty.begin(), remaining_dirty.end(), identity) ==
           remaining_dirty.end())
         remaining_dirty.push_back(identity);
@@ -500,7 +478,7 @@ void System<Dim>::publish_program_field_components(
   const auto refresh_ghosts = [&] { transport.execute(candidate); };
   refresh_ghosts();
   transaction->launch_ready_native(
-      {&*p_->provider_carrier_, &candidate}, [&](const auto&, std::exception_ptr failure) {
+      {&*p_->provider_carrier_, &candidate, &p_->geom}, [&](const auto&, std::exception_ptr failure) {
         runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
             failure, &lane, "Program field prerequisite failed collectively");
         refresh_ghosts();
@@ -579,7 +557,8 @@ AuxiliaryPublicationStatus System<Dim>::refresh_auxiliary_(
     }
     remaining_dirty = p_->dirty_auxiliary_providers_;
     if (!consumer_qids.empty())
-      for (const auto& identity : p_->auxiliary_registry_.dependent_provider_identities(published))
+      for (const auto& identity :
+           p_->auxiliary_registry_.accepted_dependent_provider_identities(published))
         if (std::find(remaining_dirty.begin(), remaining_dirty.end(), identity) ==
             remaining_dirty.end())
           remaining_dirty.push_back(identity);
@@ -657,7 +636,7 @@ AuxiliaryPublicationStatus System<Dim>::refresh_auxiliary_(
     // observes a predecessor's valid-only candidate image.
     refresh_candidate_ghosts();
     transaction.launch_ready_native(
-        {&*p_->provider_carrier_, &candidate}, [&](const auto&, std::exception_ptr local_error) {
+        {&*p_->provider_carrier_, &candidate, &p_->geom}, [&](const auto&, std::exception_ptr local_error) {
           runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
               local_error, &*p_->auxiliary_ghost_lane_,
               "System auxiliary native provider launch failed collectively before ghost fill");
@@ -723,10 +702,11 @@ System<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
   std::string layout_contract;
   std::exception_ptr preparation_error;
   try {
-    if (!p_->dirty_auxiliary_providers_.empty())
-      throw std::logic_error(
-          "System auxiliary checkpoint refuses dirty provider state before accepted publication");
-    result = runtime::system::capture_auxiliary_checkpoint_state(p_->auxiliary_registry_);
+    if (p_->auxiliary_registry_.has_pending_publication())
+      throw std::logic_error("System auxiliary checkpoint refuses pending publication");
+    runtime::system::require_no_pending_auxiliary_input_checkpoint(p_->auxiliary_registry_, p_->dirty_auxiliary_providers_);
+    result = runtime::system::capture_auxiliary_checkpoint_state(
+        p_->auxiliary_registry_, p_->dirty_auxiliary_providers_);
     if (result.groups.empty()) {
       if (p_->provider_carrier_)
         throw std::logic_error("System auxiliary checkpoint has storage without registry groups");
@@ -830,7 +810,8 @@ System<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
 
 template <int Dim>
 std::pair<std::size_t, std::size_t> System<Dim>::checkpoint_auxiliary_capacity() const {
-  const auto state = runtime::system::capture_auxiliary_checkpoint_state(p_->auxiliary_registry_);
+  const auto state = runtime::system::current_accepted_auxiliary_checkpoint_observation(
+      p_->auxiliary_registry_, p_->dirty_auxiliary_providers_);
   std::size_t components = 0;
   for (const auto& group : state.groups) {
     if (group.component_count > std::numeric_limits<std::size_t>::max() - components)
@@ -841,14 +822,32 @@ std::pair<std::size_t, std::size_t> System<Dim>::checkpoint_auxiliary_capacity()
 }
 
 template <int Dim>
+std::pair<std::size_t, std::size_t> System<Dim>::checkpoint_program_auxiliary_capacity() const {
+  const auto& program = p_->program_;
+  const auto& manifest = program.checkpoint_metadata_.uniform_auxiliary_clocks;
+  if (!program.artifact_backed_ || program.installed_hash_.empty() ||
+      manifest.owner_identity != program.installed_hash_ ||
+      manifest.installation_generation == 0 ||
+      manifest.installation_generation != program.step_install_generation_ ||
+      manifest.logical_clock_identities != program.checkpoint_metadata_.logical_clock_identities ||
+      manifest.primary_clock_identity != program.checkpoint_metadata_.primary_clock_identity)
+    throw std::logic_error("System future auxiliary capacity requires its installed Program clock owner");
+  const auto current = checkpoint_auxiliary_capacity();
+  return {runtime::system::program_auxiliary_metadata_capacity(p_->auxiliary_registry_, manifest), current.second};
+}
+
+template <int Dim>
 void System<Dim>::restore_auxiliary_checkpoint_accepted_state(
     const runtime::system::AuxiliaryCheckpointAcceptedState<Dim>& state) {
   const ExecutionLane& lane = prepared_boundary_execution_lane();
   std::string collective_contract;
   std::exception_ptr preflight_error;
   try {
-    if (!p_->dirty_auxiliary_providers_.empty())
-      throw std::logic_error("System auxiliary checkpoint restore refuses dirty live providers");
+    if (p_->auxiliary_registry_.has_pending_publication())
+      throw std::logic_error("System auxiliary checkpoint restore refuses pending publication");
+    // A durable accepted checkpoint supersedes newer transient task work. Validate only
+    // the live registry shape here; the attempt snapshot owns its pending journal separately.
+    (void)runtime::system::capture_auxiliary_checkpoint_state(p_->auxiliary_registry_);
     if (state.groups.empty()) {
       if (p_->provider_carrier_)
         throw std::invalid_argument(
@@ -908,8 +907,11 @@ void System<Dim>::restore_auxiliary_checkpoint_accepted_state(
   std::optional<registry_type> candidate_registry;
   std::optional<carrier_type> candidate_carrier;
   decltype(p_->dirty_auxiliary_providers_) candidate_dirty;
+  decltype(p_->staged_auxiliary_inputs_) candidate_inputs;
   std::exception_ptr candidate_error;
   try {
+    candidate_dirty = state.invalidated_providers;
+    candidate_inputs = runtime::system::restored_accepted_auxiliary_inputs(state, domain_cells(p_->dom));
     candidate_registry.emplace(p_->auxiliary_registry_);
     if (p_->provider_carrier_) {
       candidate_carrier.emplace(*p_->provider_carrier_);
@@ -946,6 +948,7 @@ void System<Dim>::restore_auxiliary_checkpoint_accepted_state(
   // accepted carrier/provenance through noexcept ownership swaps.
   static_assert(std::is_nothrow_swappable_v<carrier_type>);
   static_assert(std::is_nothrow_swappable_v<decltype(p_->dirty_auxiliary_providers_)>);
+  static_assert(std::is_nothrow_swappable_v<decltype(p_->staged_auxiliary_inputs_)>);
   if (candidate_carrier) {
     if (!p_->provider_carrier_)
       std::terminate();
@@ -953,6 +956,7 @@ void System<Dim>::restore_auxiliary_checkpoint_accepted_state(
   }
   p_->auxiliary_registry_.swap_accepted_publication(*candidate_registry);
   p_->dirty_auxiliary_providers_.swap(candidate_dirty);
+  p_->staged_auxiliary_inputs_.swap(candidate_inputs);
   p_->auxiliary_registry_consensus_verified_ = true;
 }
 
@@ -1040,6 +1044,8 @@ template runtime::system::AuxiliaryCheckpointAcceptedState<kNativeDimension>
 System<kNativeDimension>::capture_auxiliary_checkpoint_accepted_state() const;
 template std::pair<std::size_t, std::size_t>
 System<kNativeDimension>::checkpoint_auxiliary_capacity() const;
+template std::pair<std::size_t, std::size_t>
+System<kNativeDimension>::checkpoint_program_auxiliary_capacity() const;
 template void System<kNativeDimension>::restore_auxiliary_checkpoint_accepted_state(
     const runtime::system::AuxiliaryCheckpointAcceptedState<kNativeDimension>&);
 template void System<kNativeDimension>::restore_auxiliary_checkpoint_accepted_state_bytes(

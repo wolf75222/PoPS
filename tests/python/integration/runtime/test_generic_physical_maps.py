@@ -22,7 +22,17 @@ PHYSICAL = PhysicalSupport((("position", "periodic-position"),))
 ROOT = Path(__file__).resolve().parents[4]
 
 
-def resolve_generic_maps(directory, *, reverse=False):
+def resolve_generic_maps(directory, *, reverse=False, nx=7, nv=4,
+                         components=("first", "second"), weights=None,
+                         provider_factory=native_physical_mapping):
+    if any(type(n) is not int or n <= 0 for n in (nx, nv)):
+        raise ValueError("fixture cell counts must be positive integers")
+    components = tuple(components)
+    if not components or len(set(components)) != len(components):
+        raise ValueError("fixture requires distinct component names")
+    weights = tuple(2 * j - (nv - 1) for j in range(nv)) if weights is None else tuple(weights)
+    if len(weights) != nv:
+        raise ValueError("fixture requires one weight per velocity cell")
     phase_frame = Rectangle("phase axes v then x", (-2, 0), (2, 1)).frame(Cartesian2D())
     physical_frame = Rectangle("physical x then hidden", (0, 0), (1, 1)).frame(Cartesian2D())
     case = pops.Case("independent weighted moments and explicit extension")
@@ -33,11 +43,11 @@ def resolve_generic_maps(directory, *, reverse=False):
                                   ("weighted", physical_frame, PHYSICAL),
                                   ("extended", phase_frame, PHASE)):
         model = pops.Model(name + " model", frame=frame)
-        state = model.state("U", components=("first", "second"), support=support,
-                            units=(UNIT, UNIT), sampling="cell_average")
+        state = model.state("U", components=components, support=support,
+                            units=(UNIT,) * len(components), sampling="cell_average")
         flux = model.flux("zero_flux", frame=frame, state=state,
-                          components={axis: tuple(0 * state[index] for index in range(2)) for axis in frame.axes},
-                          waves={axis: (Const(0), Const(0)) for axis in frame.axes})
+                          components={axis: tuple(0 * state[index] for index in range(len(components))) for axis in frame.axes},
+                          waves={axis: (Const(0),) * len(components) for axis in frame.axes})
         rate = model.rate("retain", equation=ddt(state) == -div(flux))
         numerics = DiscretizationPlan()
         numerics.rates.add(rate, FiniteVolume(flux=flux, variables=variables.Conservative(state),
@@ -59,8 +69,8 @@ def resolve_generic_maps(directory, *, reverse=False):
     validated = pops.validate(case)
     subjects = validated.layout_subjects()
     builder = LayoutPlanBuilder(validated.owner_path.canonical())
-    phase_grid = Uniform(CartesianGrid(frame=phase_frame, cells=(4, 7), periodic=PeriodicAxes(phase_frame.axes)))
-    physical_grid = Uniform(CartesianGrid(frame=physical_frame, cells=(7, 1), periodic=PeriodicAxes(physical_frame.axes)))
+    phase_grid = Uniform(CartesianGrid(frame=phase_frame, cells=(nv, nx), periodic=PeriodicAxes(phase_frame.axes)))
+    physical_grid = Uniform(CartesianGrid(frame=physical_frame, cells=(nx, 1), periodic=PeriodicAxes(physical_frame.axes)))
     layouts = {"population": builder.layout("source", phase_grid),
                "integral": builder.layout("moments", physical_grid),
                "extended": builder.layout("extension", phase_grid)}
@@ -71,9 +81,9 @@ def resolve_generic_maps(directory, *, reverse=False):
         builder.assign_state(resolved_states[block.local_id], layouts[block.local_id])
     requirements = []
     recipes = [("population", "integral", PhysicalSupportMap(PHASE, PHYSICAL,
-                    reductions=(AxisQuadrature(0, -2, 2, 4, UNIT),)), LayoutSynchronization.BEFORE_STEP_V1),
+                    reductions=(AxisQuadrature(0, -2, 2, nv, UNIT),)), LayoutSynchronization.BEFORE_STEP_V1),
                ("population", "weighted", PhysicalSupportMap(PHASE, PHYSICAL,
-                    reductions=(AxisQuadrature(0, -2, 2, 4, UNIT, weights=(-3, -1, 1, 3)),)),
+                    reductions=(AxisQuadrature(0, -2, 2, nv, UNIT, weights=weights),)),
                     LayoutSynchronization.BEFORE_STEP_V1),
                ("weighted", "extended", PhysicalSupportMap(PHYSICAL, PHASE),
                     LayoutSynchronization.AFTER_SOURCE_STEP_V1)]
@@ -85,7 +95,7 @@ def resolve_generic_maps(directory, *, reverse=False):
             operation=LayoutMappingOperation(physical_map.operation_abi), synchronization=synchronization,
             physical_map=physical_map)
         requirements.append(requirement)
-    providers = tuple(native_physical_mapping(row, directory) for row in requirements)
+    providers = tuple(provider_factory(row, directory) for row in requirements)
     layout = builder.resolve(**subjects.to_dict(), providers=providers)
     resolved = pops.resolve(validated, layout=layout,
         layout_providers={layouts["population"]: phase_grid, layouts["integral"]: physical_grid,

@@ -1,0 +1,37 @@
+{
+  "scope": "Source only; Native explicitly blocked and never loaded; no model/production implementation changes",
+  "comparison": "current integrated Main emits byte-identical C++ to true installed Source676 for n16/32/64",
+  "old_installed_test": {
+    "cohort": "old-installed",
+    "package": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/__init__.py",
+    "exit": 1,
+    "counts": {
+      "tests": 3,
+      "failures": 3,
+      "errors": 0,
+      "skipped": 0
+    },
+    "Native_loaded": []
+  },
+  "final_candidate_module": {
+    "cohort": "candidate-main",
+    "package": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/__init__.py",
+    "exit": 0,
+    "counts": {
+      "tests": 16,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "Native_loaded": []
+  },
+  "Native_file_sha256": "22da10777dbd3e17698ba80193f3de4b95d1953d1009d0a952d0bdc92aa18f52",
+  "math": "R_spatial=D+T; frozenR=1*R_spatial; endpoint=1*state+dt*frozenR. Exact metadata powers0,0,1 remain numerically consistent; reference_dt argument is metadata evaluation time, not an extra factor.",
+  "C++scope": "amr_program_context_flux_expression_public.inc applies saxpy factor; exact_coefficient_unchecked_ independently evaluates metadata polynomial and checks equality",
+  "patch_sha256": "2aa5feceaaa856e470198d75c445f3c1f8a49569d85adf51825820970c798837",
+  "emission_hashes": {
+    "16": "085ed32bc0a551df5c39596e5d6fc869b0e46b814fcb16a42bc5dc2d8d8b3592",
+    "32": "8b2d90e055c5f9abd02dc7f5aef52dfa5c4722bd94a6a2f166afd6cb3af100ad",
+    "64": "31243f238bc55fc5df7dedfef65fbd35006e11098ff9d43c359767026661ad77"
+  }
+}

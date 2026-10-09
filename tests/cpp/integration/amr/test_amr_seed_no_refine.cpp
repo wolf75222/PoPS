@@ -4,6 +4,7 @@
 #include "explicit_amr_program.hpp"
 
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/parallel/comm.hpp>
 #include <pops/amr/hierarchy/amr_hierarchy.hpp>
 #include <pops/runtime/amr/persistent_tagging_state.hpp>
 #include <pops/runtime/amr_patch.hpp>
@@ -15,6 +16,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -208,6 +210,23 @@ TEST(test_amr_seed_no_refine, TransitionNeighborhoodOverflowFailsBeforeHierarchy
   config.transition_buffers[0][0] = std::numeric_limits<std::int64_t>::max();
   config.transition_lookaheads[0][0] = std::numeric_limits<std::int64_t>::max();
   EXPECT_THROW((void)pops::AmrSystem<Dim>(config), std::overflow_error);
+}
+
+TEST(test_amr_seed_no_refine, TagSelectionRejectsLegacyAndRankedOverflowBeforeAllocation) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  config.tag_selection_contract_version = 0;
+  EXPECT_THROW((void)pops::AmrSystem<Dim>(config), std::invalid_argument);
+  config.tag_selection_contract_version = 1;
+  config.tag_selection_buffer[0] = -1;
+  EXPECT_THROW((void)pops::AmrSystem<Dim>(config), std::overflow_error);
+  config.tag_selection_buffer[0] = std::numeric_limits<std::int64_t>::max();
+  EXPECT_THROW((void)pops::AmrSystem<Dim>(config), std::overflow_error);
+  if constexpr (Dim == 3) {
+    for (int axis = 0; axis < Dim; ++axis)
+      config.tag_selection_buffer[axis] = std::numeric_limits<int>::max();
+    EXPECT_THROW((void)pops::AmrSystem<Dim>(config), std::overflow_error);
+  }
 }
 
 TEST(test_amr_seed_no_refine, AutomaticBootstrapRefusesFieldLeafBeforeMaterialization) {
@@ -439,13 +458,33 @@ TEST(test_amr_seed_no_refine,
       pops::runtime::program::serialize_amr_program_accepted_state(corrupted);
   const auto before = restored.program_accepted_state();
   const std::uint64_t revision_before = restored.program_accepted_state_revision();
-  EXPECT_THROW(restored.restore_program_accepted_state(invalid), std::invalid_argument);
+  const auto expect_restore_refusal = [&](const auto& restore, const char* collective_message) {
+    // This fixture installs a duplicate of the process world as its execution lane.
+    if (pops::n_ranks() == 1) {
+      EXPECT_THROW(restore(), std::invalid_argument);
+      return;
+    }
+    EXPECT_THROW(
+        {
+          try {
+            restore();
+          } catch (const std::runtime_error& error) {
+            EXPECT_STREQ(error.what(), collective_message);
+            throw;
+          }
+        },
+        std::runtime_error);
+  };
+  expect_restore_refusal([&] { restored.restore_program_accepted_state(invalid); },
+                         "AMR Program accepted-state restore failed collectively");
   EXPECT_EQ(restored.program_accepted_state(), before);
   EXPECT_EQ(restored.program_accepted_state_revision(), revision_before);
-  EXPECT_THROW(restored.restore_checkpoint_accepted_state(omission), std::invalid_argument);
+  expect_restore_refusal([&] { restored.restore_checkpoint_accepted_state(omission); },
+                         "AMR checkpoint post-requalification validation failed collectively");
   EXPECT_EQ(restored.program_accepted_state(), before);
   EXPECT_EQ(restored.program_accepted_state_revision(), revision_before);
-  EXPECT_THROW(restored.restore_checkpoint_accepted_state(invalid), std::invalid_argument);
+  expect_restore_refusal([&] { restored.restore_checkpoint_accepted_state(invalid); },
+                         "AMR checkpoint post-requalification validation failed collectively");
   EXPECT_EQ(restored.program_accepted_state(), before);
   EXPECT_EQ(restored.program_accepted_state_revision(), revision_before);
 }

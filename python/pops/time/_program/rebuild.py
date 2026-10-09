@@ -28,9 +28,10 @@ def rebuild_program(
     transformation: str = "normalize",
 ) -> Any:
     """Clone this Program into a fresh one keeping the flat nodes for which ``keep(v)`` is true,
-    renumbering surviving ids to a contiguous 0.. range in original order. Sub-blocks are cloned
-    wholesale (never filtered). The clone reproduces the IR identity of an equivalent hand-built
-    Program (same serialization), so it is byte-identical when nothing was dropped.
+    renumbering surviving ids to a contiguous 0.. range when nodes are removed or aliased.
+    A no-drop, no-alias clone preserves the original ids, including gaps left by temporary
+    authoring regions. Sub-blocks are cloned wholesale (never filtered). A lossless clone must
+    preserve the original serialization even when the original ids are not contiguous.
 
     @p alias (optional) maps a DROPPED node id -> the kept representative node id it should be
     replaced by (the CSE / redundant-solve passes use it to rewire every use of a duplicate onto its
@@ -72,6 +73,8 @@ def rebuild_program(
         raise TypeError("Program._rebuild registry_keep must be callable or None")
     if not isinstance(canonical_owner, bool):
         raise TypeError("Program._rebuild canonical_owner must be bool")
+    from .global_history_storage import transfer_issuances, validate_issuances
+    validate_issuances(self)
     out = type(self)(self.name)
     if canonical_owner:
         object.__setattr__(out, "_owner_path", out.owner_path.canonical())
@@ -90,6 +93,8 @@ def rebuild_program(
     out._post_sync_recording = False
     out._transaction_stores = tuple(getattr(self, "_transaction_stores", ()))
     out._acceptance_guards = tuple(getattr(self, "_acceptance_guards", ()))
+    out._integral_states = dict(getattr(self, "_integral_states", {}))
+    out._integral_units = dict(getattr(self, "_integral_units", {}))
     if project_states and (self._dt_bound is not None or out._acceptance_guards):
         raise ValueError(
             "state-partitioned Program rebuild requires global dt bounds and guards to be lowered "
@@ -296,10 +301,19 @@ def rebuild_program(
             % (type(value).__module__, type(value).__qualname__)
         )
 
+    def remap_storage_metadata(image: Any) -> Any:
+        mapped = remap_metadata(image)
+        mapped["clock"] = remap_clock(image["clock"])
+        mapped["point"] = remap_point(image["point"])
+        mapped["region"] = mapped_region(image["region"])
+        return mapped
+
     def clone_attrs(v: Any) -> Any:
         attrs = {}
         for key, val in v.attrs.items():
-            if key in ("parent_clock", "child_clock"):
+            if key == "global_field_storage":
+                attrs[key] = remap_storage_metadata(val)
+            elif key in ("parent_clock", "child_clock"):
                 attrs[key] = remap_clock(val)
             elif key in ("cond_block", "body_block", "apply_block", "residual_block",
                        "true_block", "false_block"):
@@ -349,8 +363,8 @@ def rebuild_program(
         # own clone).
         for w in deps(v):
             clone(w)
-        vid = out._next_id
-        out._next_id += 1
+        vid = v.id if preserve_value_ids else out._next_id
+        out._next_id = max(out._next_id, vid + 1)
         # Reserve the owning node's region before clone_attrs recursively maps branch/sub-block
         # regions. Parent-first allocation is part of exact rebuild identity for nested branches.
         node_region = mapped_region(v.region)
@@ -380,13 +394,25 @@ def rebuild_program(
         idmap[v.id] = nv
         return nv
 
-    # Clone all surviving flat nodes (and, transitively, their sub-block ops and any later-created
-    # sub-block ops) in ascending original id, so the contiguous renumbering matches the original
-    # build order exactly -- a no-op clone is byte-for-byte identical.
+    # Temporary authoring regions can consume ids without becoming executable nodes (for
+    # example a local product encodes its placeholders as argument roles). Their gaps are part
+    # of the existing IR identity; detachment is not an optimization that may renumber it.
+    # Actual elimination/aliasing retains the existing compact numbering behavior.
     kept = sorted((v for v in self._values if keep(v)), key=lambda v: v.id)
+    preserve_value_ids = (len(kept) == len(self._values)
+                          and all(source == target for source, target in alias.items()))
+    if preserve_value_ids:
+        out._next_id = self._next_id
     for v in kept:
         clone(v)
     out._values = [idmap[v.id] for v in kept]
+    source_by_id = by_id  # Includes owned child-region evaluations retained by integral selectors.
+    out._integral_transfers = [
+        (name, idmap[rep(source_by_id[rate_id]).id].id,
+         axis, side, component, scale)
+        for name, rate_id, axis, side, component, scale
+        in getattr(self, "_integral_transfers", ())
+    ]
     out._commits = {
         reference_of(state_ref): idmap[rep(value).id]
         for state_ref, value in self._commits.items()
@@ -411,6 +437,7 @@ def rebuild_program(
         out._dt_bound = (cloned_sub, idmap[rep(result).id])
     self._rebuild_time_handle_tables(
         out, idmap, rep, reference_of=reference_of, state_keep=state_keep)
+    transfer_issuances(self, out, remap_storage_metadata, history_names)
     return out
 
 

@@ -1,0 +1,216 @@
+{
+  "GPU_inter_node_Dim1_Dim3_qualified": false,
+  "actual_shard_patch_counts": {
+    "accepted1": [
+      1,
+      0
+    ],
+    "accepted2": [
+      1,
+      0
+    ],
+    "accepted3": [
+      1,
+      0
+    ],
+    "accepted4": [
+      1,
+      0
+    ],
+    "accepted5": [
+      1,
+      0
+    ],
+    "accepted6": [
+      1,
+      0
+    ],
+    "accepted7": [
+      1,
+      0
+    ],
+    "accepted8": [
+      1,
+      0
+    ],
+    "initial": [
+      1,
+      0
+    ]
+  },
+  "backend_scope": "Dim2 CPU OpenMP, MPI-enabled SDK, 2 actual rank(s)",
+  "canonical_inverse_comparisons": {
+    "canonical_CPU": {
+      "criterion": 1e-12,
+      "errors": {
+        "accepted1": 0.0,
+        "accepted2": 0.0,
+        "accepted3": 0.0,
+        "accepted4": 0.0,
+        "accepted5": 0.0,
+        "accepted6": 0.0,
+        "accepted7": 0.0,
+        "accepted8": 0.0,
+        "initial": 0.0
+      }
+    },
+    "canonical_MPI2": {
+      "criterion": 1e-12,
+      "errors": {
+        "accepted1": 0.0,
+        "accepted2": 0.0,
+        "accepted3": 0.0,
+        "accepted4": 0.0,
+        "accepted5": 0.0,
+        "accepted6": 0.0,
+        "accepted7": 0.0,
+        "accepted8": 0.0,
+        "initial": 0.0
+      }
+    }
+  },
+  "checkpoint_restart_qualified": false,
+  "compiled_provenance": {
+    "compiler_to_binary_semantic_proof": false,
+    "model_DSO_sha256": "955ce62ca22d584f4b219f2b34b820b055ffd8b4de9e779687bcabafeae58de0",
+    "model_TU_sha256": "ff61f2985219320bc72a2500428e7080cdd2df84d827ecb73e7712de80ab275a",
+    "models": 1,
+    "program_CPP_sha256": "491b35620de36657e3ed961c241fc310fa303fa34d5730eb5f25d3e265e7981d",
+    "program_DSO_sha256": "2dc84e52bf3112fadd40087146fd56324540cf6c70e47dd9c2e71b37cd9607b3",
+    "program_IR_sha256": "6b247f806ecc0af40a92e45ba93685f3a18f67680b80da695f817cf2f355db55"
+  },
+  "full_M17_qualified": false,
+  "ghost_formula_qualified": false,
+  "github_ci_qualified": false,
+  "independent_report": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk21-fanli-reverse-mpi2-independent-732112/report.json",
+    "sha256": "3326858c0894d887d6a74fdba939f37327907f91631c0960b94370c28ddb686c"
+  },
+  "math_and_storage": {
+    "native_authority": false,
+    "root_scientific_approval": false,
+    "science": {
+      "contract": "pops.fan-li15.uniform-eight-saved-math@1",
+      "dop853_final_error": 4.460334324107862e-10,
+      "h3_max": 0.017545356253353284,
+      "h4_max": 0.005277108301697017,
+      "metrics": [
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.00756390007852085,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 1
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.007562055866979791,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 2
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.007560198272613448,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 3
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.0075583273010747755,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 4
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.007556442958074221,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 5
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.007554545249378193,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 6
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.00755263418081085,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 7
+        },
+        {
+          "quadrature24_48_gap": 0.0,
+          "regularized_face_max": 0.007550709758252182,
+          "ssprk2_error": 4.440892098500626e-16,
+          "step": 8
+        }
+      ],
+      "native_authority": false,
+      "root_scientific_approval": false,
+      "whole_carrier_qualification": false
+    },
+    "storage": {
+      "checkpoint_restart_qualified": false,
+      "contract": "sol61.fan-li15-eight-uniform-storage-reception@1",
+      "ghost_formula_qualified": false,
+      "native_authority": false,
+      "patch_counts": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "phases": [
+        "initial",
+        "accepted1",
+        "accepted2",
+        "accepted3",
+        "accepted4",
+        "accepted5",
+        "accepted6",
+        "accepted7",
+        "accepted8"
+      ],
+      "ranks": 2,
+      "root_scientific_approval": false
+    }
+  },
+  "native_job": "732112",
+  "native_node_status": "PASSED",
+  "performance_qualified": false,
+  "pins_rehashed": 142,
+  "pins_sha256": "7aa9f2fc2570e21f7b8bd2dcff0d3057b71b8de3d7cd4b827884a2d1961dc648",
+  "pure_reader_imported_pops": false,
+  "rank_authority": {
+    "JUnit_timing": {
+      "rank0.xml": {
+        "case_seconds": 420.076,
+        "suite_seconds": 420.396
+      },
+      "rank1.xml": {
+        "case_seconds": 420.074,
+        "suite_seconds": 420.397
+      }
+    },
+    "actual_native_ranks": [
+      0,
+      1
+    ],
+    "logical_scenarios": 1,
+    "world": 2
+  },
+  "reader": {
+    "path": "/Users/romaindespoulain/dev/tmp/sol61-sdk21-fanli-reverse-mpi2-independent-732112/run.py",
+    "sha256": "bfc05ab389e885c6314e6b8fc618024f37cbb2c154e1f89cc6eed93e1ec477f3"
+  },
+  "root_recompute_exact_bytes": true,
+  "schema": "root.sdk21-fanli-eight-reverse-mpi2-scoped-scientific-reception@1",
+  "scope": "original smooth periodic Fan-Li15, normalized analytic path, reverse order, N16x16 extrusion, dt1e-4, eight SSPRK2 accepted steps and nine saved captures only",
+  "scoped_native_scientific_acceptance": true,
+  "source_freeze": "3302c4a19d94a0b08dbba9c05c4de3ae2debb232",
+  "whole_mission_complete": false
+}

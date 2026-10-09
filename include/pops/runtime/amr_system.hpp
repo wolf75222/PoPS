@@ -1,6 +1,8 @@
 #pragma once
+#include <pops/runtime/system/prepared_field_rhs_inputs.hpp>
 
 #include <pops/runtime/program/accepted_exchange.hpp>
+#include <pops/runtime/accepted_halo_test_failure.hpp>
 #include <pops/runtime/program/amr_history_flux_snapshot.hpp>
 #include <limits>
 
@@ -71,6 +73,20 @@ struct AmrProgramHistoryRemapDescriptor;
 
 namespace pops {
 
+/// Diagnostic producer witness, not an accepted Field publication or numeric checkpoint member.
+/// carrier_bytes is a rank-local POPSCAR1 archive with one qualified provider and every level.
+struct FieldCandidateObservation {
+  std::uint32_t version = 1;
+  std::string provider_slot, consumer_block, configuration_identity;
+  std::string provider_identity, plan_identity, output_owner_identity, output_block, output_key;
+  int consumer_level = 0;
+  std::int64_t owner_macro_step = 0;
+  double owner_time = 0.0;
+  std::uint64_t topology_epoch = 0, materialization_generation = 0;
+  runtime::multiblock::BoundaryEvaluationPoint point;
+  std::vector<std::uint8_t> carrier_bytes;
+};
+
 template <int Dim>
 class FieldNullspaceProvider;
 struct FieldLogicalTimePoint;
@@ -139,8 +155,20 @@ template <int Dim>
 struct PreparedInterfaceFluxSpec;
 struct BoundaryEvaluationPoint;
 struct InterfaceFluxSample;
+template <int Dim>
+struct InterfaceFluxSampleProjection;
 }  // namespace multiblock
 }  // namespace runtime
+
+/// Typed numerical effect, qualified by the complete candidate tower and BC/transfer provider graph.
+template <int Dim>
+struct AcceptedHaloPreparationRequest {
+  static constexpr std::uint32_t version = 1;
+  runtime::multiblock::BoundaryEvaluationPoint point;
+  Extent<Dim> extent{};
+  std::string candidate_hierarchy_authority;
+  std::string numerical_provider_authority;
+};
 
 /// Exact ranked AMR mesh and cadence (per-block physical parameters live in the ModelSpec).
 template <int Dim>
@@ -156,6 +184,13 @@ struct AmrSystemConfig : RuntimeSpatialDomain<Dim> {
   std::vector<Extent<Dim>> transition_ratios{runtime_config_detail::filled_extent<Dim>(2)};
   std::vector<Extent<Dim>> transition_buffers{runtime_config_detail::filled_extent<Dim>(2)};
   std::vector<Extent<Dim>> transition_lookaheads{runtime_config_detail::filled_extent<Dim>(2)};
+  /// pops.amr.tag-selection@1: only this authored ranked buffer dilates candidates.
+  /// Transition buffers/lookaheads are separate parent-coverage requirements.
+  std::uint32_t tag_selection_contract_version = 1;
+  Extent<Dim> tag_selection_buffer{};
+  /// Explicit optional AcceptedHaloPreparation@1, never inferred from allocated ghosts.
+  std::uint32_t accepted_halo_contract_version = 0;
+  Extent<Dim> accepted_halo_extent{};
   bool explicit_bootstrap = false;  ///< coarse-only start; BootstrapPlan creates fine levels
   /// OWNERSHIP POLICY of the coarse level (cf. AmrCouplerMP::replicated_coarse).
   /// false (DEFAULT, historical): coarse mono-box REPLICATED on all ranks. The coarse Poisson
@@ -417,6 +452,23 @@ class AmrSystem {
                                           std::span<MultiFab<Dim>* const> program_rhs);
   POPS_EXPORT std::string authenticate_prepared_amr_interface_sample(
       const runtime::multiblock::InterfaceFluxSample& sample) const;
+  POPS_EXPORT runtime::multiblock::InterfaceFluxSampleProjection<Dim>
+  prepare_prepared_amr_interface_sample_projection(
+      const runtime::multiblock::InterfaceFluxSample& sample, int target_level) const;
+  POPS_EXPORT bool requests_accepted_halo_preparation() const noexcept;
+  POPS_EXPORT void prepare_accepted_halo_candidates(
+      std::vector<std::vector<MultiFab<Dim>>>& candidates,
+      const std::vector<std::vector<runtime::multiblock::BoundaryEvaluationPoint>>& points);
+  POPS_EXPORT std::vector<std::vector<std::string>> checkpoint_accepted_halo_contract() const;
+  // Private diagnostic test seam. Arm collectively at an accepted, inspectable owner.
+  POPS_EXPORT void arm_accepted_halo_test_failure(const AcceptedHaloTestFailureRequest& request);
+  POPS_EXPORT AcceptedHaloTestFailureReceipt accepted_halo_test_failure_receipt() const;
+  /// Private opt-in observation capability @1. Collective activation precedes initial bootstrap.
+  POPS_EXPORT void enable_field_candidate_observation(std::uint32_t version);
+  /// Read-only rank-local last witnesses per (slot, consumer block, consumer level). No solve.
+  POPS_EXPORT std::vector<FieldCandidateObservation> field_candidate_observations() const;
+
+
   POPS_EXPORT void publish_prepared_amr_program_candidates(
       int level, std::span<MultiFab<Dim>* const> program_candidates);
 
@@ -643,6 +695,9 @@ class AmrSystem {
   /// from the successively remapped parent.
   POPS_EXPORT void begin_restart_regrid_history_sequence();
   POPS_EXPORT void end_restart_regrid_history_sequence() noexcept;
+  /// Query the native frozen-image authority. Generated Program history stores and rotations use
+  /// this at their collective preflight; internal topology remaps are not authoring mutations.
+  POPS_EXPORT bool restart_regrid_history_sequence_active() const noexcept;
   /// Install one exact parent/child temporal relation per AMR transition.  These ratios are an
   /// independent execution authority and are never inferred from spatial refinement.
   void set_temporal_relations(const std::vector<std::int64_t>& numerators,
@@ -754,6 +809,11 @@ class AmrSystem {
   void set_field_newton_plan(const std::string& provider_slot, double tolerance, int max_iterations,
                              double linear_tolerance, int linear_max_iterations, int restart,
                              double armijo, double minimum_step);
+  void set_field_newton_convergence_plan(const std::string& provider_slot, double tolerance,
+                                         int max_iterations, double linear_tolerance,
+                                         int linear_max_iterations, int restart, double armijo,
+                                         double minimum_step, int convergence_kind, double relative,
+                                         double absolute);
 
   /// Install one immutable analytic embedded-boundary definition.  The expression is sampled
   /// independently on every live AMR level whenever the hierarchy is materialized or regridded.
@@ -850,6 +910,12 @@ class AmrSystem {
   POPS_EXPORT void stage_auxiliary_input(const runtime::system::AuxiliaryComponentKey& key,
                                          const std::vector<double>& values);
   POPS_EXPORT void refresh_auxiliary(const runtime::system::AuxiliaryEvaluationPoint& point);
+  /// Publish one exact generated consumer on a hierarchy containing only the root level.
+  /// The SSA state authenticates ownership; auxiliary launchers read only their declared
+  /// auxiliary dependencies. This does not infer stage states for other hierarchy levels.
+  POPS_EXPORT void prepare_single_level_program_auxiliary_consumer(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& consumer_qid,
+      int block, const MultiFab<Dim>& stage_state, int evaluation_sequence);
   [[nodiscard]] POPS_EXPORT runtime::system::AuxiliaryStorageAddress<Dim> auxiliary_address(
       const runtime::system::AuxiliaryComponentKey& key) const;
   [[nodiscard]] POPS_EXPORT std::vector<double> auxiliary_component(
@@ -879,6 +945,39 @@ class AmrSystem {
   /// owner-qualified ComponentKeys, shapes and accepted provider generations before publication.
   [[nodiscard]] POPS_EXPORT std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>
   capture_auxiliary_checkpoint_accepted_state() const;
+  /// Canonical all-source-patch POPSCAR1 image, including every accepted ghost bit.
+  [[nodiscard]] POPS_EXPORT std::vector<std::uint8_t> checkpoint_state_carriers() const;
+  /// Opaque immutable candidate image, bound to one live outer step transaction. The rollback
+  /// AcceptedSnapshot supplies its lifetime authority, never the candidate's numerical content.
+  /// pops.amr.prepared-checkpoint-capture@1 does not change the checkpoint wire format.
+  class PreparedCheckpointCapture {
+    struct State;
+    std::shared_ptr<const State> state_;
+    explicit PreparedCheckpointCapture(std::shared_ptr<const State> state)
+        : state_(std::move(state)) {}
+    friend class AmrSystem<Dim>;
+   public:
+    PreparedCheckpointCapture(const PreparedCheckpointCapture&) = default;
+    PreparedCheckpointCapture(PreparedCheckpointCapture&&) noexcept = default;
+    PreparedCheckpointCapture& operator=(const PreparedCheckpointCapture&) = default;
+    PreparedCheckpointCapture& operator=(PreparedCheckpointCapture&&) noexcept = default;
+  };
+  [[nodiscard]] POPS_EXPORT PreparedCheckpointCapture prepare_checkpoint_capture() const;
+  POPS_EXPORT void validate_prepared_checkpoint_capture(const PreparedCheckpointCapture&) const;
+  POPS_EXPORT void validate_committed_checkpoint_capture(const PreparedCheckpointCapture&) const;
+  [[nodiscard]] POPS_EXPORT std::vector<std::uint8_t> prepared_checkpoint_state_carriers(
+      const PreparedCheckpointCapture&) const;
+  [[nodiscard]] POPS_EXPORT std::vector<std::uint8_t> prepared_checkpoint_program_diagnostics(
+      const PreparedCheckpointCapture&) const;
+  /// Configured POPSCAR1 maximum bytes from sealed block storage and ranked hierarchy; collective.
+  [[nodiscard]] POPS_EXPORT std::uint64_t checkpoint_state_carriers_byte_capacity() const;
+  /// Schema/source coverage validation before target hierarchy rebuild. Collective, nonmutating.
+  POPS_EXPORT void validate_checkpoint_state_carriers(
+      std::span<const std::uint8_t> (*producer)(const void*), const void* context) const;
+  /// Exact-geometry restore on the current ownership, within the native restart transaction.
+  /// Valid cells must already match the independently restored scientific-state projection.
+  POPS_EXPORT void restore_checkpoint_state_carriers(
+      std::span<const std::uint8_t> (*producer)(const void*), const void* context);
   /// Rank-local, collective-free rollback witness for accepted state, auxiliary and elliptic
   /// carriers plus each level-qualified auxiliary registry. Values include full ghost storage.
   [[nodiscard]] POPS_EXPORT std::vector<std::vector<std::string>>
@@ -886,7 +985,7 @@ class AmrSystem {
   /// Exact pending provider identities retained by accepted rollback snapshots.
   [[nodiscard]] POPS_EXPORT std::vector<std::string> dirty_auxiliary_provider_identities() const;
   /// Rank-local capacity derived from the qualified provider registries. The pair is the largest
-  /// payload-free POPSAUX2 image and scalar width of one full-domain level.
+  /// payload-free POPSAUX2/3 image and scalar width of one full-domain level.
   [[nodiscard]] POPS_EXPORT std::pair<std::size_t, std::size_t>
   checkpoint_auxiliary_level_capacity() const;
   /// Restore only after the caller has staged compatible rank-local group payloads privately.  A
@@ -894,7 +993,7 @@ class AmrSystem {
   /// exposing a partial accepted generation.
   POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state(
       const std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>& state);
-  /// Decode every sealed level POPSAUX2 image inside the prepared hierarchy lane while one native
+  /// Decode every sealed level POPSAUX2/3 image inside the prepared hierarchy lane while one native
   /// restart transaction owns rollback authority. The complete decoded vector is consensus-closed
   /// before the typed restore enters finite/registry phases; this route never lazily builds an
   /// engine or selects a process-global communicator.
@@ -928,6 +1027,11 @@ class AmrSystem {
       const std::string& block_name, const std::string& field,
       const std::string& rhs_provider_identity,
       std::function<void(const MultiFab<Dim>&, MultiFab<Dim>&)> rhs);
+  POPS_EXPORT void set_block_elliptic_field_v2(
+      const std::string& block_name, const std::string& field,
+      const std::string& rhs_provider_identity, const std::string& binding_identity,
+      const std::string& consumer_qid, std::size_t provider_count,
+      runtime::system::FieldRhsCallbackV2<Dim> rhs);
   /// Solved potential of named @p field on the coarse level, flattened in native index order. Solves the
   /// hierarchy fields if needed (so it is current even before any step), then reads the field's phi
   /// component. AMR counterpart of System::aux_field_component for a named elliptic field. @throws if the
@@ -985,6 +1089,8 @@ class AmrSystem {
   std::uint64_t checkpoint_topology_epoch() const;
   void restore_checkpoint_counters(int regrid_count, std::uint64_t topology_epoch);
   std::vector<std::vector<std::string>> checkpoint_temporal_relations() const;
+  /// Exact selection and parent-coverage policy for strict accepted restart preflight.
+  std::vector<std::vector<std::string>> checkpoint_tag_selection_contract() const;
   /// Canonical rows for every required bootstrap transfer route: subject, operation, route identity,
   /// provider, kernel, descriptor fields.  The sealed checkpoint compares these rows byte-for-byte.
   std::vector<std::vector<std::string>> checkpoint_transfer_routes() const;
@@ -1005,8 +1111,14 @@ class AmrSystem {
   POPS_EXPORT void stage_program_exchange(runtime::program::ExchangeRecord record);
   POPS_EXPORT void stage_program_exchanges(std::span<runtime::program::ExchangeRecord> records);
   POPS_EXPORT std::vector<runtime::program::ExchangeRecord> program_exchange_records() const;
+  POPS_EXPORT void declare_program_integral(const std::string& identity, double initial);
+  POPS_EXPORT double program_integral(const std::string& identity) const;
+  POPS_EXPORT double consume_program_external_trace(
+      const std::string& integral_identity,
+      const runtime::program::AcceptedExchangeLedger::TraceSelection& selection, double scale);
   POPS_EXPORT std::vector<std::vector<std::string>> continuation_transition_rows() const;
   POPS_EXPORT std::vector<std::uint8_t> checkpoint_program_exchanges() const;
+  POPS_EXPORT void validate_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes) const;
   POPS_EXPORT void restore_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes);
   void commit_step_transaction();
   void finalize_step_transaction();
@@ -1211,6 +1323,11 @@ class AmrSystem {
   /// The recorded diagnostic @p name (0 if absent) / the whole map. Exposed to Python for inspection.
   POPS_EXPORT double program_diagnostic(const std::string& name) const;
   POPS_EXPORT std::map<std::string, double> program_diagnostics() const;
+  /// Rank-owned exact Real-bit diagnostics; replacement belongs to the accepted restart transaction.
+  POPS_EXPORT std::vector<std::uint8_t> checkpoint_program_diagnostics() const;
+  POPS_EXPORT void validate_checkpoint_program_diagnostics(std::span<const std::uint8_t>) const;
+  POPS_EXPORT void restore_checkpoint_program_diagnostics(
+      std::span<const std::uint8_t> (*producer)(const void*), const void* context);
   /// Five current-attempt scalars for one typed balance route. RuntimeInstance calls this only
   /// inside its active outer accepted-step transaction; missing/stale/non-finite evidence fails.
   POPS_EXPORT std::map<std::string, double> accepted_balance_terms(const std::string& route) const;
@@ -1294,6 +1411,10 @@ class AmrSystem {
   /// Forces the lazy build (ensure_built) like n_patches()/mass()/density().
   int coarse_local_boxes();
   int coarse_total_boxes();
+  /// V1 rank-local level-0 ownership snapshot: valid-cell boxes in native axis order,
+  /// with inclusive C++ corners. Read between steps; query again after regrid/restart.
+  /// The Python binding projects upper corners to exclusive indices.
+  std::vector<Box<Dim>> coarse_local_box_bounds();
 
   /// AMR CHECKPOINT / RESTART (ADC-65 single-block single-rank; ADC-509 multi-block + np>1):
   /// per-level STATE accessors + hierarchy imposition for a BIT-IDENTICAL resumption (cf.
@@ -1372,6 +1493,9 @@ class AmrSystem {
   /// exactly named block through the shared runtime and returns compact native valid-cell pieces
   /// without allocating a global level buffer.
   std::vector<OutputPiece<Dim>> output_state_local_pieces(const std::string& name, int k);
+  /// Prepared local measure lookup after collective hierarchy refresh.
+  [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_amr_block_level_volume_fraction(
+      int runtime_block, int level) const;
   /// Exact per-level EB sidecars: pops_active, pops_phi, or pops_kappa.
   std::vector<OutputPiece<Dim>> output_embedded_boundary_local_pieces(const std::string& name,
                                                                       int k);
@@ -1487,6 +1611,15 @@ class AmrSystem {
   POPS_EXPORT const PreparedLevelEvaluation& prepare_prepared_amr_block_level_flux_at(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
+  /// The path operator can only be evaluated through its synchronized Program stage pack.
+  /// The returned workspace remains detached until the complete hierarchy batch is published.
+  POPS_EXPORT PreparedLevelEvaluation& prepare_prepared_amr_block_level_path_rhs_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
+  POPS_EXPORT std::string prepared_amr_block_path_operator_identity_(int runtime_block,
+                                                                    int level) const;
+  POPS_EXPORT double active_program_step_courant_() const;
+  POPS_EXPORT double numerical_face_courant_() const;
   /// The validation phase is collective and must complete before any caller publishes another
   /// transaction member.  The companion publication only performs proven-noexcept swaps/stores.
   POPS_EXPORT void validate_prepared_amr_block_level_batch(
@@ -1524,8 +1657,15 @@ class AmrSystem {
   POPS_EXPORT SolveOutcome solve_program_field_from_blocks_on_prepared_lane(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       int active_level, const std::vector<const MultiFab<Dim>*>& stage_overrides);
+  POPS_EXPORT SolveOutcome solve_fields_from_request_at_in_place_(
+      const runtime::system::FieldSolveRequest<Dim>& request);
+  void invoke_field_rhs_v2_(const std::string& field, int block, int level,
+      const MultiFab<Dim>& state, MultiFab<Dim>& rhs, const std::string& binding,
+      const std::string& consumer, std::size_t count,
+      const runtime::system::FieldRhsCallbackV2<Dim>& callback);
   POPS_EXPORT void refresh_auxiliary_on_prepared_lane(
-      const runtime::system::AuxiliaryEvaluationPoint& point);
+      const runtime::system::AuxiliaryEvaluationPoint& point,
+      const std::vector<std::string>& consumer_qids = {}, int consumer_source_block = -1);
   void install_prepared_amr_block_candidate_(PreparedBlock block, bool native_package_candidate);
   POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state_on_prepared_lane(
       const std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>& state,
@@ -1533,6 +1673,7 @@ class AmrSystem {
   POPS_EXPORT SolveOutcome solve_program_default_field(int active_level);
   void complete_program_step_();
   struct Impl;
+  void require_checkpoint_capture_(const PreparedCheckpointCapture&, bool committed) const;
   std::unique_ptr<Impl> p_;
 };
 

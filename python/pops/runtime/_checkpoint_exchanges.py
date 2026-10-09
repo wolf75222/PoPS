@@ -33,7 +33,7 @@ def capture_checkpoint_continuation(owner, payload):
         plan.require("restart")
         plan_json = plan._json
         local = owner._s._checkpoint_program_exchanges()
-        if type(local) is not bytes or not local.startswith(b"POPSEX01"):
+        if type(local) is not bytes or not local.startswith((b"POPSEX01", b"POPSEX02", b"POPSEX03", b"POPSEX04")):
             raise RuntimeError("checkpoint accepted exchange mailbox is not an exact native image")
     except BaseException as exc:
         error = exc
@@ -98,6 +98,12 @@ def prepare_checkpoint_continuation(owner, payload):
         raise ValueError("restart cannot remap rank-dependent accepted exchange mailboxes")
     selected = images[topology.rank] if len(images) == topology.size else images[0]
     owner._s._validate_checkpoint_program_exchanges(selected)
+    if selected.startswith((b"POPSEX03", b"POPSEX04")):
+        accepted_time, macro_step = np.asarray(payload.get("t")), np.asarray(payload.get("macro_step"))
+        if accepted_time.ndim != 0 or accepted_time.dtype.kind != "f" or not np.isfinite(accepted_time) \
+                or macro_step.ndim != 0 or macro_step.dtype.kind not in "iu" or int(macro_step) < 0:
+            raise ValueError("moving checkpoint requires exact enclosing accepted time and macro-step")
+        owner._s._validate_checkpoint_moving_geometry(selected,float(accepted_time),int(macro_step))
     return selected
 
 
@@ -143,8 +149,29 @@ def exchange_checkpoint_byte_capacity(program, *, cells, dimension, rank_capacit
         * (2 * dimension) * clock_ticks
     max_text = max((len(text.encode("utf-8")) for text in strings), default=1)
     # Four identifiers, including the runtime-qualified context and cell/axis/side quadrature.
-    record_bytes = 72 + 4 * max_text + 512
-    capacity = rank_capacity * (16 + record_count * record_bytes) + 8 * (rank_capacity + 1)
+    # POPSEX02 carries four support words per record, one consumed-key copy per selected record,
+    # and the explicitly authored persistent scalar states. POPSEX01 remains valid for plans with
+    # no integral declarations; native preflight checks that distinction against the installed plan.
+    record_bytes = 72 + 4 * max_text + 512 + 32 + 8 + max_text + 32 + 4 * max_text
+    integrals = getattr(program, "_integral_states", {})
+    from pops.codegen.program_integral_transfers import integral_identity
+    state_bytes = sum(32 + len(integral_identity(program, name).encode("utf-8"))
+                      for name in integrals)
+    capacity = rank_capacity * (24 + record_count * record_bytes + state_bytes) \
+        + 8 * (rank_capacity + 1)
+    geometry_states = getattr(program, "_geometry_states", {})
+    for value in geometry_states.values():
+        components = len(value.space.components)
+        # POPSEX03/04 keep current/previous/source physical fields, two measures,
+        # and old/new/swept/physical/trace faces, including each patch endpoint.
+        # A partition can contain at most one nonempty patch per resolved cell.
+        field_words = (3 * components + 2) * max(1, sum(cells))
+        face_words = (3 + 2 * components) * 2 * max(1, sum(cells))
+        topology_words = (7 + 3 * dimension) * max(1, sum(cells)) + 16
+        moving_records = (2 + 3 * components) * max(1,sum(cells)) * clock_ticks
+        capacity += rank_capacity * (moving_records * record_bytes
+                                     + 8 * (field_words + face_words + 5 * topology_words)
+                                     + 12 * max_text + 2048 + 8)
     if capacity > (1 << 63) - 1:
         raise OverflowError("resolved accepted exchange checkpoint capacity exceeds int64")
     return capacity

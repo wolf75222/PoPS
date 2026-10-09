@@ -10,12 +10,13 @@ import errno
 import os
 import re
 import shlex
-from threading import Lock
+from threading import Lock, local
 import tempfile
 import time
 from typing import Any
 
 
+_artifact_lock_owners = local()
 
 # Optimization flags shared by generated libraries on the sole production path.
 # Default -O3 -DNDEBUG: hot-loop asserts disarmed + full vectorization -> parity with a native block (at
@@ -23,6 +24,11 @@ from typing import Any
 # through the closed path-free vocabulary below. The flags do not alter the ABI contract; explicit
 # ISA choices and every other accepted codegen option remain part of the artifact identity.
 _DSL_OPTFLAGS_DEFAULT = "-O3 -DNDEBUG"
+_STRICT_FLOATING_FLAGS = ("-fno-fast-math", "-ffp-contract=off")
+_INCOMPATIBLE_FLOATING_FLAGS = frozenset({
+    "-Ofast", "-ffast-math", "-fassociative-math", "-ffinite-math-only",
+    "-fno-signed-zeros", "-freciprocal-math", "-ffp-contract=fast", "-ffp-contract=on",
+})
 
 # This is deliberately a closed vocabulary. ``POPS_DSL_OPTFLAGS`` participates in a native
 # compiler command whose other inputs are content-authenticated. Accepting a generic compiler token
@@ -90,6 +96,8 @@ def _dsl_optflags() -> list[str]:
     except ValueError as exc:
         raise ValueError("POPS_DSL_OPTFLAGS is not a valid shell-style token list") from exc
     for flag in flags:
+        if flag in _INCOMPATIBLE_FLOATING_FLAGS:
+            raise ValueError("strict scientific floating profile rejects %r" % flag)
         if not _is_safe_dsl_codegen_flag(flag):
             raise ValueError(
                 "POPS_DSL_OPTFLAGS rejects unsupported token %r; only the closed path-free "
@@ -97,7 +105,7 @@ def _dsl_optflags() -> list[str]:
                 "includes, object/response files, linker options, plugins or toolchain overrides)"
                 % flag
             )
-    return flags
+    return flags + [flag for flag in _STRICT_FLOATING_FLAGS if flag not in flags]
 
 
 def _platform_cache_key() -> str:
@@ -178,6 +186,17 @@ def _artifact_cache_lock(so_path: Any):
     released by the operating system if a compiler process exits unexpectedly.
     """
     path = os.path.abspath(os.fspath(so_path)) + ".pops-cache.lock"
+    # Recursive facades share this thread's OS lock; other threads/processes wait.
+    owners = _artifact_lock_owners
+    if getattr(owners, 'pid', None) != os.getpid():
+        owners.pid = os.getpid()
+        owners.held = set()  # a fork cannot inherit this thread's lock authority
+    held = getattr(owners, 'held', None)
+    if held is None:
+        held = owners.held = set()
+    if path in held:
+        yield
+        return
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     handle = open(path, "a+b")
     windows_locked = False
@@ -203,7 +222,11 @@ def _artifact_cache_lock(so_path: Any):
             import fcntl
 
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        yield
+        held.add(path)
+        try:
+            yield
+        finally:
+            held.remove(path)
     finally:
         try:
             if os.name == "nt":

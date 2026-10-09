@@ -1,0 +1,77 @@
+{
+  "actual_fixture_origin": "FAILED native job 732268 accepted.npz; four accepted steps, no restart qualification",
+  "github_ci_qualified": false,
+  "historical_pure_helpers_unchanged_git_blobs": {
+    "tests/review/sol61_amr_full_carrier_offline.py": "c5148a74fb067087f4c157c38d5a763e85169089c988b8a302c1d93720ad5e9d",
+    "tests/review/sol61_evolved_stage_amr_saved_reception.py": "737c612cc3ba45f8490e22b40bcf2fedc7dd36fcda111e8929658b58c2ccfe6f",
+    "tests/review/sol61_evolved_stage_amr_saved_reception_v2.py": "daca8f4d42d720040cd5363ac39e882e492129bccad44fbefb2ec72added6468",
+    "tests/review/sol61_evolved_stage_amr_saved_reception_v3.py": "7c68df827727b4a53aad2934bde362505a8fb812a9fb7f64b795f699fb32ffea",
+    "tests/review/sol61_integral_feedback_offline_oracle.py": "21041d64af5378a35b5a8717cc0300b6a399d95cc2c9209e66d66e5e2ed54f89"
+  },
+  "integrated_files": {
+    "docs/review/sol61_cp9_member_admission_nonauthor.md": {
+      "bytes": 1789,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "ff5024accd897037101939907645930721605c2c4ac770dcd91d4d4b27c9ccfd"
+    },
+    "python/pops/runtime/_uniform_restart_preflight.py": {
+      "bytes": 13621,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "c7a523c74e424fae46a478b7e750a63ce00762b94abfc29e586e098d292ff142"
+    },
+    "tests/python/unit/codegen/test_checkpoint_migration.py": {
+      "bytes": 30525,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "f18415478cdc8ffcd006f5a4710ee3a574dde0c0bd96ede8278b1dae26ff7297"
+    },
+    "tests/review/fixtures/cp9-native732268-accepted.npz": {
+      "bytes": 18300,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "622bdbed5df95fef86fe74490ba67ad5662a355c48988d569c519d4d08de9251"
+    },
+    "tests/review/sol61_cp9_archive_member_admission_fix.json": {
+      "bytes": 1328,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "ede4dc035cb67c112143152614b2ef44151c0fcb6cd5afd8a62a8c6c6b298586"
+    },
+    "tests/review/sol61_cp9_migration_fragment_version_fix.json": {
+      "bytes": 752,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "c748c888098747ac50ae818bb6edc278aadb2150831028055aad8df308798c9a"
+    },
+    "tests/review/test_sol61_cp9_archive_member_admission.py": {
+      "bytes": 1574,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "389eeeb9880bb40b50f02e0350d7f050a4680d9180c05566d810da96f05378e9"
+    },
+    "tests/review/test_sol61_cp9_member_admission_nonauthor.py": {
+      "bytes": 2011,
+      "git_and_actual_filesystem_equal": true,
+      "sha256": "d8ea5248b4834507d61e556fddaaf098589342283d6963b88b364799f8fb34df"
+    }
+  },
+  "main_commit": "2a2f010b4f0cb1cd336dc780a18b5da076349782",
+  "native_rebuild_required": true,
+  "native_restart_qualified": false,
+  "native_source_freeze": "12320d97c060246c35f4a9b2a36b6f53798795ab",
+  "previous_test_source": "78c75abb8b20318c9c0a8d5d93a85e4ac4bdb965",
+  "production_changes": [
+    "python/pops/runtime/_uniform_restart_preflight.py"
+  ],
+  "proof_pins": {
+    "/Users/romaindespoulain/dev/tmp/sol61-cp9-member-admission-independent-20261003/receipt.json": "026e089fda2df9efa0ed20e3635590bf528a78b05070a6e66d27e7acf64d2516",
+    "/Users/romaindespoulain/dev/tmp/sol61-cp9-migration-fragment-green.xml": "4ac829707d6e5cd303586ca70b97d679accca1549ca78d0d676cfc0ae43b4b51",
+    "/Users/romaindespoulain/dev/tmp/sol61-cp9-migration-fragment-independent.review.json": "1b68f3503cba3da675d173ca6d72b8e46eadac751ba41e11d84ff3ac1d9021a4",
+    "/Users/romaindespoulain/dev/tmp/sol61-cp9-migration-fragment-independent.xml": "d2d021d27cf3f47041d433d328075b9b31180769c3e5d8d7c7a14a5b7e0be4a3",
+    "/Users/romaindespoulain/dev/tmp/sol61-cp9-migration-fragment-red.xml": "111193477f27924efab137d39fbdab70cc2160ddd2ba14b9d06de3fcbc4257ad"
+  },
+  "schema": "root.sdk23-checkpoint-member-admission-source-integration@1",
+  "source_tests": {
+    "independent_admission_exclusions": 0,
+    "independent_admission_pass": 18,
+    "independent_affected_cohort_pass": 24,
+    "native_loader_explicit_deselections": 17,
+    "whole_552_source_cohort_freeze": "7bbeb375df24d22d08f91e9f009ffe05812ec9ef"
+  },
+  "whole_mission_complete": false
+}

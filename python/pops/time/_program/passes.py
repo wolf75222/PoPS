@@ -93,6 +93,7 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
             for w in self._subblock_value_refs(v):
                 by_id.setdefault(w.id, w)
         roots = [s.id for s in self._commits.values()]
+        roots.extend(row[1] for row in getattr(self, "_integral_transfers", ()))
         for v in self._values:
             if v.op not in self._REMOVABLE_OPS:
                 roots.append(v.id)
@@ -317,6 +318,13 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
         if not self._commits:
             raise ValueError("a time Program must commit each advanced block exactly once "
                              "(no block was committed)")
+        from pops.time._step.strategy import ComputedDt
+        computed = [v for v in self._values if v.op == "reached_duration"]
+        if type(self._step_strategy) is ComputedDt:
+            if len(computed) != 1:
+                raise ValueError("ComputedDt requires exactly one Program.reached_duration Scalar")
+        elif computed:
+            raise ValueError("Program.reached_duration requires ComputedDt")
         seen = set()
         for v in self._values:
             for inp in v.inputs:
@@ -337,7 +345,8 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
                 self._validate_block(v.attrs["apply_block"], seen)
             elif v.op == "solve_spatial_nonlinear":
                 self._validate_block(v.attrs["residual_block"], seen.copy())
-            elif v.op == "solve_local_nonlinear":
+            elif v.op == "solve_local_nonlinear" or (
+                    v.op == "solve_coupled_implicit" and "residual_block" in v.attrs):
                 # The residual sub-block is self-contained: the iterate / guess State placeholders are
                 # defined inside it (first ops) and every op reads only the placeholders or earlier
                 # sub-block ops. Validate against an EMPTY outer scope so a residual that closes over an

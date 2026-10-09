@@ -1,0 +1,46 @@
+{
+  "scope": "source and complete-TU syntax only; no native execution",
+  "author_commit": "221dd9af73974201b7d8493b9d8939db656b58c4",
+  "author_files": {
+    "include/pops/numerics/diffusion/prepared_diffusion.hpp": "9e04a4cbe250114becdaf72f7bd29770db275a08504d4ac2240bcadb628a4eb4",
+    "python/pops/numerics/diffusion.py": "7c4ca747d7e41ac4f26a6f7695c175f93f10e04697055b7ab1bec31b01dccdb0",
+    "python/pops/codegen/program_emit_diffusion.py": "b70f43e5896024e37b0339f7cf74acf6a55e5a5b6b2c90740a4ed7ca542fdf1f",
+    "tests/python/integration/runtime/test_coupled_gradient_dim2_fourier_runtime.py": "1dc829b03dcb03abee7f48c1e1715b7eedaaadfe5ff0838b41863d63256e9358"
+  },
+  "complete_programs": [
+    {
+      "name": "test_nd_complete_ssprk2_progra0",
+      "command_file": "test_nd_complete_ssprk2_progra0-command.txt",
+      "source_sha256": "26c9ba41be4cc99ab9d051843dcd719c4f16f8b6f45d1eb2023101f5dfcfc395",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "test_nd_complete_ssprk2_progra1",
+      "command_file": "test_nd_complete_ssprk2_progra1-command.txt",
+      "source_sha256": "5079ae8586eb526a4b0bf17d47f7f1172c80fe3b6c3e4a6adb7b66551359e7fe",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "test_nd_complete_ssprk2_progracurrent",
+      "command_file": "test_nd_complete_ssprk2_progracurrent-command.txt",
+      "source_sha256": "5079ae8586eb526a4b0bf17d47f7f1172c80fe3b6c3e4a6adb7b66551359e7fe",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "counts": {
+    "numpy": 13,
+    "sdk_identity": 1,
+    "complete_program": 2
+  },
+  "files": {
+    "complete-program.xml": "3afc409d70a7a4b13af68f8ac3b689470623a5308f4e5aa20d27a44ca56c775c",
+    "oracles-and-identity.xml": "4329cee25541e07ee396ad09f933d34b53acc5f70d8eb84a5bd3847c69808280",
+    "signature-proof.txt": "d2a3fad5b4d494b4e3a5875f64d9a52712bedb66337bcf29a34d532e2e0a30c4",
+    "test_nd_complete_ssprk2_progra0-command.txt": "a4e6bcafce28d2cdb86beec237cac103cab157cef1509ce24a0367660a8adaa9",
+    "test_nd_complete_ssprk2_progra0-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "test_nd_complete_ssprk2_progra1-command.txt": "d978f1f1927ceb7c8efec8edc08d5e4b6bae08ba2c0eb073c79d7a82c20955df",
+    "test_nd_complete_ssprk2_progra1-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "test_nd_complete_ssprk2_progracurrent-command.txt": "d978f1f1927ceb7c8efec8edc08d5e4b6bae08ba2c0eb073c79d7a82c20955df",
+    "test_nd_complete_ssprk2_progracurrent-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

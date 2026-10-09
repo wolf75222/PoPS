@@ -1,0 +1,559 @@
+{
+  "actual_independent_reader_replayed": true,
+  "amr_qualified_by_these_uniform_cases": false,
+  "ci_qualified": false,
+  "field_history_cache_qualified": false,
+  "ghost_formula_qualified": false,
+  "gpu_qualified": false,
+  "header_signature": "8ee6d09b428cfe172d08008253c2ea490eb733f9b1458f6f2ed8da1584effbf5",
+  "independent_artifacts_rewritten": false,
+  "inter_node_mpi_qualified": false,
+  "jobs": {
+    "732338": {
+      "JUnit": [
+        {
+          "cases": [
+            {
+              "name": "test_installed_uniform_full_state_checkpoint_restart[fanli15]",
+              "time": "276.557"
+            },
+            {
+              "name": "test_installed_uniform_full_state_checkpoint_restart[two-transports]",
+              "time": "127.710"
+            }
+          ],
+          "file": "output/pytest.xml"
+        }
+      ],
+      "actual_build_inventory_equal": true,
+      "header": "8ee6d09b428cfe172d08008253c2ea490eb733f9b1458f6f2ed8da1584effbf5",
+      "installed_files": 1157,
+      "job": 732338,
+      "logical_scenarios": 2,
+      "native": "a661f3b1a7440850985d44f4b3936a94edd7059e570a20633bbe3f96bc64b97e",
+      "production_files": 1192,
+      "profiles": {
+        "fanli15": {
+          "actual_refusals": {
+            "legacy8": [
+              [
+                "ValueError",
+                "collective checkpoint native restart preflight failed: rank 0: builtins.ValueError: restart: Uniform checkpoint payload version 8 unsupported; expected exactly 9; historical checkpoints require offline migration",
+                false
+              ]
+            ],
+            "projection-contradiction": [
+              [
+                "ValueError",
+                "collective checkpoint native restart apply failed: rank 0: builtins.ValueError: Uniform carrier valid cells contradict scientific state projection",
+                false
+              ]
+            ],
+            "truncated-carrier": [
+              [
+                "ValueError",
+                "collective checkpoint native restart preflight failed: rank 0: builtins.ValueError: state carrier payload exceeds bytes",
+                false
+              ]
+            ]
+          },
+          "math": {
+            "math": {
+              "continuous": {
+                "contract": "pops.fan-li15.uniform-eight-saved-math@1",
+                "dop853_final_error": 4.460334324107862e-10,
+                "h3_max": 0.017545356253353284,
+                "h4_max": 0.005277108301697017,
+                "metrics": [
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.00756390007852085,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 1
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007562055866979791,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 2
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007560198272613448,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 3
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.0075583273010747755,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 4
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007556442958074221,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 5
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007554545249378193,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 6
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.00755263418081085,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 7
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007550709758252182,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 8
+                  }
+                ],
+                "native_authority": false,
+                "root_scientific_approval": false,
+                "whole_carrier_qualification": false
+              },
+              "replay": {
+                "contract": "pops.fan-li15.uniform-eight-saved-math@1",
+                "dop853_final_error": 4.460334324107862e-10,
+                "h3_max": 0.017545356253353284,
+                "h4_max": 0.005277108301697017,
+                "metrics": [
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.00756390007852085,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 1
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007562055866979791,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 2
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007560198272613448,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 3
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.0075583273010747755,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 4
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007556442958074221,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 5
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007554545249378193,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 6
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.00755263418081085,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 7
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007550709758252182,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 8
+                  }
+                ],
+                "native_authority": false,
+                "root_scientific_approval": false,
+                "whole_carrier_qualification": false
+              }
+            },
+            "native_authority": false,
+            "root_seal": false,
+            "schema": "sol61.sdk22.cp9-fanli-pure-math-preparation@1",
+            "scope": "pure independent Original FanLi15 SPD/rho, GL24/48 SSPRK2+DOP853 on authentic valid images; CP9 State/refusal scope separate; no Field/cache/history/Ghost formula or Native envelope qualification",
+            "state_cp9": {
+              "field_history_cache_qualified": false,
+              "ghost_formula_qualified": false,
+              "global_state_storage_exact": true,
+              "phases": 22,
+              "profile": "fanli15",
+              "rank_local_join_qualified": true,
+              "root_approval": false,
+              "schema": "sol61.uniform-checkpoint9-offline@2",
+              "signed_zero_observed": false
+            }
+          },
+          "math_qualified": true,
+          "state": {
+            "field_history_cache_qualified": false,
+            "ghost_formula_qualified": false,
+            "global_state_storage_exact": true,
+            "phases": 22,
+            "profile": "fanli15",
+            "rank_local_join_qualified": true,
+            "root_approval": false,
+            "schema": "sol61.uniform-checkpoint9-offline@3",
+            "signed_zero_observed": false
+          }
+        },
+        "two-transports": {
+          "actual_refusals": {
+            "legacy8": [
+              [
+                "ValueError",
+                "collective checkpoint native restart preflight failed: rank 0: builtins.ValueError: restart: Uniform checkpoint payload version 8 unsupported; expected exactly 9; historical checkpoints require offline migration",
+                false
+              ]
+            ],
+            "projection-contradiction": [
+              [
+                "ValueError",
+                "collective checkpoint native restart apply failed: rank 0: builtins.ValueError: Uniform carrier valid cells contradict scientific state projection",
+                false
+              ]
+            ],
+            "truncated-carrier": [
+              [
+                "ValueError",
+                "collective checkpoint native restart preflight failed: rank 0: builtins.ValueError: state carrier payload exceeds bytes",
+                false
+              ]
+            ]
+          },
+          "math": null,
+          "math_qualified": false,
+          "state": {
+            "field_history_cache_qualified": false,
+            "ghost_formula_qualified": false,
+            "global_state_storage_exact": true,
+            "phases": 13,
+            "profile": "two-transports",
+            "rank_local_join_qualified": true,
+            "root_approval": false,
+            "schema": "sol61.uniform-checkpoint9-offline@3",
+            "signed_zero_observed": false
+          }
+        }
+      },
+      "regular_rehashed": 335,
+      "root_seal": false,
+      "schema": "sol61.sdk25.cp9-profiles-independent@1",
+      "scope": "FanLi Original15 pure SSPRK2 GL24/48+DOP853 and CP9 full State; two-transports State/engineering only. Actual world/backend bound separately. No Field/history/cache/Ghost formula, AMR12, performance, GPU/inter-node or whole-mission qualification.",
+      "source": "717936347672aeb4bc9146e2b3065bfd42cf1ef5",
+      "wholebody_before_after_equal": true,
+      "world": 1
+    },
+    "732339": {
+      "JUnit": [
+        {
+          "cases": [
+            {
+              "name": "test_installed_uniform_full_state_checkpoint_restart[fanli15]",
+              "time": "488.846"
+            },
+            {
+              "name": "test_installed_uniform_full_state_checkpoint_restart[two-transports]",
+              "time": "132.079"
+            }
+          ],
+          "file": "output/rank0.xml"
+        },
+        {
+          "cases": [
+            {
+              "name": "test_installed_uniform_full_state_checkpoint_restart[fanli15]",
+              "time": "488.846"
+            },
+            {
+              "name": "test_installed_uniform_full_state_checkpoint_restart[two-transports]",
+              "time": "132.078"
+            }
+          ],
+          "file": "output/rank1.xml"
+        }
+      ],
+      "actual_build_inventory_equal": true,
+      "header": "8ee6d09b428cfe172d08008253c2ea490eb733f9b1458f6f2ed8da1584effbf5",
+      "installed_files": 1157,
+      "job": 732339,
+      "logical_scenarios": 2,
+      "native": "a661f3b1a7440850985d44f4b3936a94edd7059e570a20633bbe3f96bc64b97e",
+      "production_files": 1192,
+      "profiles": {
+        "fanli15": {
+          "actual_refusals": {
+            "legacy8": [
+              [
+                "ValueError",
+                "collective checkpoint native restart preflight failed: rank 0: builtins.ValueError: restart: Uniform checkpoint payload version 8 unsupported; expected exactly 9; historical checkpoints require offline migration; rank 1: builtins.ValueError: restart: Uniform checkpoint payload version 8 unsupported; expected exactly 9; historical checkpoints require offline migration",
+                false
+              ],
+              [
+                "ValueError",
+                "collective checkpoint native restart preflight failed: rank 0: builtins.ValueError: restart: Uniform checkpoint payload version 8 unsupported; expected exactly 9; historical checkpoints require offline migration; rank 1: builtins.ValueError: restart: Uniform checkpoint payload version 8 unsupported; expected exactly 9; historical checkpoints require offline migration",
+                false
+              ]
+            ],
+            "projection-contradiction": [
+              [
+                "RuntimeError",
+                "collective checkpoint native restart apply failed: rank 0: builtins.RuntimeError: Uniform carrier restore preparation; rank 0: Uniform carrier valid cells contradict scientific state projection; rank 1: builtins.RuntimeError: Uniform carrier restore preparation; rank 0: Uniform carrier valid cells contradict scientific state projection",
+                true
+              ],
+              [
+                "RuntimeError",
+                "collective checkpoint native restart apply failed: rank 0: builtins.RuntimeError: Uniform carrier restore preparation; rank 0: Uniform carrier valid cells contradict scientific state projection; rank 1: builtins.RuntimeError: Uniform carrier restore preparation; rank 0: Uniform carrier valid cells contradict scientific state projection",
+                true
+              ]
+            ],
+            "truncated-carrier": [
+              [
+                "ValueError",
+                "collective checkpoint native restart preflight failed: rank 0: builtins.ValueError: state carrier payload exceeds bytes; rank 1: builtins.ValueError: state carrier payload exceeds bytes",
+                false
+              ],
+              [
+                "ValueError",
+                "collective checkpoint native restart preflight failed: rank 0: builtins.ValueError: state carrier payload exceeds bytes; rank 1: builtins.ValueError: state carrier payload exceeds bytes",
+                false
+              ]
+            ]
+          },
+          "math": {
+            "math": {
+              "continuous": {
+                "contract": "pops.fan-li15.uniform-eight-saved-math@1",
+                "dop853_final_error": 4.460334324107862e-10,
+                "h3_max": 0.017545356253353284,
+                "h4_max": 0.005277108301697017,
+                "metrics": [
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.00756390007852085,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 1
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007562055866979791,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 2
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007560198272613448,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 3
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.0075583273010747755,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 4
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007556442958074221,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 5
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007554545249378193,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 6
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.00755263418081085,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 7
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007550709758252182,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 8
+                  }
+                ],
+                "native_authority": false,
+                "root_scientific_approval": false,
+                "whole_carrier_qualification": false
+              },
+              "replay": {
+                "contract": "pops.fan-li15.uniform-eight-saved-math@1",
+                "dop853_final_error": 4.460334324107862e-10,
+                "h3_max": 0.017545356253353284,
+                "h4_max": 0.005277108301697017,
+                "metrics": [
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.00756390007852085,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 1
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007562055866979791,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 2
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007560198272613448,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 3
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.0075583273010747755,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 4
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007556442958074221,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 5
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007554545249378193,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 6
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.00755263418081085,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 7
+                  },
+                  {
+                    "quadrature24_48_gap": 0.0,
+                    "regularized_face_max": 0.007550709758252182,
+                    "ssprk2_error": 4.440892098500626e-16,
+                    "step": 8
+                  }
+                ],
+                "native_authority": false,
+                "root_scientific_approval": false,
+                "whole_carrier_qualification": false
+              }
+            },
+            "native_authority": false,
+            "root_seal": false,
+            "schema": "sol61.sdk22.cp9-fanli-pure-math-preparation@1",
+            "scope": "pure independent Original FanLi15 SPD/rho, GL24/48 SSPRK2+DOP853 on authentic valid images; CP9 State/refusal scope separate; no Field/cache/history/Ghost formula or Native envelope qualification",
+            "state_cp9": {
+              "field_history_cache_qualified": false,
+              "ghost_formula_qualified": false,
+              "global_state_storage_exact": true,
+              "phases": 22,
+              "profile": "fanli15",
+              "rank_local_join_qualified": true,
+              "root_approval": false,
+              "schema": "sol61.uniform-checkpoint9-offline@2",
+              "signed_zero_observed": false
+            }
+          },
+          "math_qualified": true,
+          "state": {
+            "field_history_cache_qualified": false,
+            "ghost_formula_qualified": false,
+            "global_state_storage_exact": true,
+            "phases": 22,
+            "profile": "fanli15",
+            "rank_local_join_qualified": true,
+            "root_approval": false,
+            "schema": "sol61.uniform-checkpoint9-offline@3",
+            "signed_zero_observed": false
+          }
+        },
+        "two-transports": {
+          "actual_refusals": {
+            "legacy8": [
+              [
+                "ValueError",
+                "collective checkpoint native restart preflight failed: rank 0: builtins.ValueError: restart: Uniform checkpoint payload version 8 unsupported; expected exactly 9; historical checkpoints require offline migration; rank 1: builtins.ValueError: restart: Uniform checkpoint payload version 8 unsupported; expected exactly 9; historical checkpoints require offline migration",
+                false
+              ],
+              [
+                "ValueError",
+                "collective checkpoint native restart preflight failed: rank 0: builtins.ValueError: restart: Uniform checkpoint payload version 8 unsupported; expected exactly 9; historical checkpoints require offline migration; rank 1: builtins.ValueError: restart: Uniform checkpoint payload version 8 unsupported; expected exactly 9; historical checkpoints require offline migration",
+                false
+              ]
+            ],
+            "projection-contradiction": [
+              [
+                "RuntimeError",
+                "collective checkpoint native restart apply failed: rank 0: builtins.RuntimeError: Uniform carrier restore preparation; rank 0: Uniform carrier valid cells contradict scientific state projection; rank 1: builtins.RuntimeError: Uniform carrier restore preparation; rank 0: Uniform carrier valid cells contradict scientific state projection",
+                true
+              ],
+              [
+                "RuntimeError",
+                "collective checkpoint native restart apply failed: rank 0: builtins.RuntimeError: Uniform carrier restore preparation; rank 0: Uniform carrier valid cells contradict scientific state projection; rank 1: builtins.RuntimeError: Uniform carrier restore preparation; rank 0: Uniform carrier valid cells contradict scientific state projection",
+                true
+              ]
+            ],
+            "truncated-carrier": [
+              [
+                "ValueError",
+                "collective checkpoint native restart preflight failed: rank 0: builtins.ValueError: state carrier payload exceeds bytes; rank 1: builtins.ValueError: state carrier payload exceeds bytes",
+                false
+              ],
+              [
+                "ValueError",
+                "collective checkpoint native restart preflight failed: rank 0: builtins.ValueError: state carrier payload exceeds bytes; rank 1: builtins.ValueError: state carrier payload exceeds bytes",
+                false
+              ]
+            ]
+          },
+          "math": null,
+          "math_qualified": false,
+          "state": {
+            "field_history_cache_qualified": false,
+            "ghost_formula_qualified": false,
+            "global_state_storage_exact": true,
+            "phases": 13,
+            "profile": "two-transports",
+            "rank_local_join_qualified": true,
+            "root_approval": false,
+            "schema": "sol61.uniform-checkpoint9-offline@3",
+            "signed_zero_observed": false
+          }
+        }
+      },
+      "regular_rehashed": 500,
+      "root_seal": false,
+      "schema": "sol61.sdk25.cp9-profiles-independent@1",
+      "scope": "FanLi Original15 pure SSPRK2 GL24/48+DOP853 and CP9 full State; two-transports State/engineering only. Actual world/backend bound separately. No Field/history/cache/Ghost formula, AMR12, performance, GPU/inter-node or whole-mission qualification.",
+      "source": "717936347672aeb4bc9146e2b3065bfd42cf1ef5",
+      "wholebody_before_after_equal": true,
+      "world": 2
+    }
+  },
+  "math_scope": "Original15 Fan--Li: continuous and checkpoint-replayed eight steps/nine valid images per branch; independent SSPRK2, GL24/48 and DOP853 references, unchanged criteria",
+  "native_sha256": "a661f3b1a7440850985d44f4b3936a94edd7059e570a20633bbe3f96bc64b97e",
+  "performance_at_comparable_calculation_qualified": false,
+  "pins_sha256": "4581fc47218cde55d7ac3dc83d28aa9a472fdb5311645c8fe27df0994865f0c0",
+  "reader_sha256": "5cbee8d57a210cbd8f924182c4b0e809f023f2816cfcb1698d1bf23ef402cc9f",
+  "reports_identical_on_replay": true,
+  "root_approval": true,
+  "schema": "root.sdk25-cp9-profiles-native-reception@1",
+  "source_freeze": "717936347672aeb4bc9146e2b3065bfd42cf1ef5",
+  "state_scope": "Two logical profiles each on CPU1 and same-node MPI2; full grown/local/global valid State and clock, checkpoint9 restore/refusals/replay, qualified-name native block join",
+  "two_transport_physical_oracle_qualified": false,
+  "verified_pins": 859,
+  "whole_mission_complete": false
+}

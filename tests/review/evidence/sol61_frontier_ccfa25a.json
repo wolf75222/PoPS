@@ -1,0 +1,67 @@
+{
+  "base_commit": "ccfa25af07f592638c6a4b09925f116a08543804",
+  "source_tree_sha256": "be7a2ea8a40769bf4a700318cceca86f40841780da16f7ec96a7ddedb7c03450",
+  "source_package": "/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS-sol61-coverage-review/outputs/frontier-sol61-ccfa25a-source/python/pops/__init__.py",
+  "probe_sha256": "1123b6c4b4239d738e4c0a8341feeb9df616e2778a08184d610a542469d93efb",
+  "python_executable": "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+  "python_version": "3.12.13 | packaged by conda-forge | (main, Mar  5 2026, 17:06:14) [Clang 19.1.7 ]",
+  "host_compiler": "/usr/bin/clang++",
+  "header_sha256": {
+    "include/pops/runtime/program/amr_program_context.hpp": "5332ffb0da77f646214b54bf87f82753f67f5190af2528cc7af75a8320a73d87",
+    "include/pops/runtime/program/program_cadence_continuation.inc": "9efbe3ff3e94e006a3a1f3dd3ec76b97333301db7717f2130f5f6286538593cb",
+    "include/pops/runtime/program/program_context.hpp": "4a42ae4362602eb057efc2b5275a81c62cb488584e51e379e0f6f10260817a46"
+  },
+  "scope": "source/math/host only; no native JIT, MPI or AMR execution",
+  "results": [
+    {
+      "check": "check_rotation_and_owned_scalar",
+      "passed": true
+    },
+    {
+      "check": "check_scoped_spatial_refusal",
+      "passed": true
+    },
+    {
+      "check": "check_controller_refusals_and_restart",
+      "passed": true
+    },
+    {
+      "check": "check_policy_divergence_preflight",
+      "passed": true
+    },
+    {
+      "check": "check_actual_duration_setter",
+      "passed": true
+    }
+  ],
+  "observations": {
+    "rotation": {
+      "gamma": "4/5",
+      "candidate": [
+        "3/5",
+        "4/5"
+      ],
+      "accepted_duration": "4/5",
+      "norm_squared": "1",
+      "program_version": 5
+    },
+    "graph_conversion": "Scalar type shared with dot; graph retains frontier ops and authoring identity",
+    "scoped_spatial_top_ops": [
+      "state",
+      "requested_dt",
+      "compare",
+      "branch",
+      "linear_combine",
+      "scalar_op",
+      "reached_duration"
+    ],
+    "scoped_spatial": {
+      "refused": true,
+      "diagnostic": "ComputedDt version 1 refuses spatial interval exchanges, nested clocks and held scheduler caches"
+    },
+    "controller_invalid": "zero/negative/nan/inf/overshoot refused before temporal publication",
+    "live_receipt": "last dt/missing/request/rejection corruption refused before next native.step",
+    "mpi_policy_seam": "policy/entry time/step/endpoint/prior receipt divergence refused before native.step",
+    "cpp_setter": "actual method: request/stages preserved, outgoing history retimed, invalid/stalled/duplicate refused"
+  }
+}

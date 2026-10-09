@@ -1,0 +1,114 @@
+{
+  "build_receipt_sha256": "5e48488724fc719ad3e4febf394ea3867e34f55fe1975242d16ada1c9e199566",
+  "expected_adversary_count": 5,
+  "independent_adversaries_report_sha256": "e3994b90704b1e28608aa635ba11023d7eb0353888ad1c54e82ec61894f79b37",
+  "independent_directory": "/Users/romaindespoulain/dev/tmp/sol61-sdk19-m16-uniform-independent-20261003",
+  "independent_pins_reverified": 59,
+  "independent_pins_sha256": "1806529ce42671d62fd352cfbf9e9cc46356989e83433f843125ad8718c6430d",
+  "independent_report_sha256": "412c997d18350ae3d2f5be6231ccf8344fd9482c45a8abff45701529d5155ea4",
+  "pops_imported_by_reception": false,
+  "reader_actually_replayed": true,
+  "replayed_report_byte_identical": true,
+  "schema": "root.sdk19-uniform-storage-cpu-engineering-reception@1",
+  "scientific_scope": {
+    "JUnit_seconds": 37.938,
+    "build_receipt_sha256": "5e48488724fc719ad3e4febf394ea3867e34f55fe1975242d16ada1c9e199566",
+    "clock": [
+      0.0,
+      0
+    ],
+    "identity": {
+      "abi_key": "compiler=15.3.0;std=202002L;headers=2d3aa1140e6b24d30cdb501d70012b700b1ce70ce36871756f2e7cffda7d828d;kokkos=1;stdlib=libstdc++_20260612;mpi=1;mpi_abi=f0d5c4a08c55d4d84a14c6cfd4d12d992c3afa7c5f9c2ca3ee140e5d87a0fa9e;dim=2",
+      "doctor": {
+        "compilateur": [
+          true,
+          "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/bin/g++ [baked by the _pops build] ; -std=c++20 accepted"
+        ],
+        "headers_sync": [
+          true,
+          "headers == module build (sig 2d3aa1140e6b...)"
+        ],
+        "include": [
+          true,
+          "/project/r250127/api040-composition15-mpich-20261002-v15/source/include"
+        ],
+        "interpreteur": [
+          true,
+          "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/bin/python (3.12) ; extension /gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "kokkos": [
+          true,
+          "Kokkos module (thread/device resources selected before initialization)"
+        ],
+        "kokkos_root": [
+          true,
+          "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15"
+        ],
+        "numpy": [
+          true,
+          "2.5.3"
+        ],
+        "threads": [
+          true,
+          "OMP_NUM_THREADS=1 ; first System created=False"
+        ]
+      },
+      "execution_environment": {
+        "FI_PROVIDER": null,
+        "FI_TCP_IFACE": null,
+        "OMP_NUM_THREADS": "1",
+        "OMP_PROC_BIND": "false",
+        "POPS_THREADS": "1"
+      },
+      "native_file": "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so",
+      "native_sha256": "4efc61b3a4a01ed82e41ef1eac4baaa450914afa516e806b88e282a0ac8fc0b7",
+      "package_file": "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages/pops/__init__.py",
+      "package_version": "1.1.0",
+      "python": "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/bin/python",
+      "schema_version": 2,
+      "scope": "installed production PoPS, local CPU Kokkos, MPI-enabled Dim=2",
+      "source_commit": "1b64477d2f1c93e856e996a4c83e506fcc91b386",
+      "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_files_sha256": "3a555a75268830b2b7073a33040562ab181af1600b67a28d73d4d28f93043cfa",
+      "sys_path": [
+        "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/source/scripts",
+        "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/source",
+        "/gpfs/projet/r250127/api040-composition15-mpich-20261002-v15/source/docs/development/api_040",
+        "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python312.zip",
+        "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12",
+        "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/lib-dynload",
+        "/project/r250127/api040-composition15-mpich-20261002-v15/envs/pops_api040_composition15_mpich_v15/lib/python3.12/site-packages"
+      ],
+      "verified_source_files": 1147
+    },
+    "limits": [
+      "One persisted snapshot only: repeated image equality comes from genuine JUnit assertion, not independent raw pair",
+      "No NPY raw, C25 actual-TU proof, physics/evolution/rollback/Ghost readiness, MPI2 transport, performance/GPU/inter-node qualification"
+    ],
+    "logical_nodes": 1,
+    "root_seal": false,
+    "root_transfer_sha256": "b63e22db705a7c87e0351b05a242a22f3395886aba1bf7fed3b398d50247d5a0",
+    "schema": "sol61-sdk19-uniform-storage-engineering@1",
+    "scope": "Uniform idle initial full-grown snapshot and same-process readonly assertion passed",
+    "storage": {
+      "blocks": [
+        "population"
+      ],
+      "complete_sha256": "327ae1b49fc6cb67a66feb02ae899db0ca597e264405431ff00c7e18ddc9677d",
+      "grown_words": 360,
+      "patches": 1,
+      "rank_local_sha256": [
+        "5a13b6a50fa70a51727ea5e9f1b362ee449b415920ae1eaea4e4191e18214a0d"
+      ],
+      "root_seal": false,
+      "world": 1
+    },
+    "transfer_sha256": "1998c405b6cc15ac7ea7d9dd25b8dbc060fb61bd25afc5c5525ffef4d7e5e889",
+    "world": 1
+  },
+  "scope": "installed SDK19 Uniform initial idle snapshot plus genuine readonly JUnit assertion; one raw snapshot only",
+  "source_freeze": "1b64477d2f1c93e856e996a4c83e506fcc91b386",
+  "symlink_targets_reverified": 1,
+  "whole_mission_complete": false,
+  "world_size": 1
+}

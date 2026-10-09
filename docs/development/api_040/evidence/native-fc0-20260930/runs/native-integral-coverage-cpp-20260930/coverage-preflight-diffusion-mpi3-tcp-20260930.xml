@@ -1,0 +1,358 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)"
+	tests="20"
+	failures="0"
+	disabled="0"
+	skipped="0"
+	hostname=""
+	time="3"
+	timestamp="2026-09-30T10:01:47"
+	>
+	<testcase name="PreparedDiffusion.RejectsSameSizedForeignLayoutAndGhostsBeforeWriting" classname="PreparedDiffusion.RejectsSameSizedForeignLayoutAndGhostsBeforeWriting" time="0.0643534" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.RejectsSameSizedForeignLayoutAndGhostsBeforeWriting
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.RejectsSameSizedForeignLayoutAndGhostsBeforeWriting
+[       OK ] PreparedDiffusion.RejectsSameSizedForeignLayoutAndGhostsBeforeWriting (16 ms)
+[----------] 1 test from PreparedDiffusion (16 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (16 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedDiffusion.RejectsNegativeFaceSecantEvenWhenSampleDerivativesArePositive" classname="PreparedDiffusion.RejectsNegativeFaceSecantEvenWhenSampleDerivativesArePositive" time="0.0383111" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.RejectsNegativeFaceSecantEvenWhenSampleDerivativesArePositive
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.RejectsNegativeFaceSecantEvenWhenSampleDerivativesArePositive
+[       OK ] PreparedDiffusion.RejectsNegativeFaceSecantEvenWhenSampleDerivativesArePositive (7 ms)
+[----------] 1 test from PreparedDiffusion (7 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (7 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedDiffusion.RejectsFailedConstitutiveEvaluationInPreparedInternalGhost" classname="PreparedDiffusion.RejectsFailedConstitutiveEvaluationInPreparedInternalGhost" time="0.0371111" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.RejectsFailedConstitutiveEvaluationInPreparedInternalGhost
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.RejectsFailedConstitutiveEvaluationInPreparedInternalGhost
+[       OK ] PreparedDiffusion.RejectsFailedConstitutiveEvaluationInPreparedInternalGhost (6 ms)
+[----------] 1 test from PreparedDiffusion (6 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedDiffusion.SparseAmrLevelPreservesFullDomainRefusalAndUsesPreparedGhosts" classname="PreparedDiffusion.SparseAmrLevelPreservesFullDomainRefusalAndUsesPreparedGhosts" time="0.0359078" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.SparseAmrLevelPreservesFullDomainRefusalAndUsesPreparedGhosts
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.SparseAmrLevelPreservesFullDomainRefusalAndUsesPreparedGhosts
+[       OK ] PreparedDiffusion.SparseAmrLevelPreservesFullDomainRefusalAndUsesPreparedGhosts (6 ms)
+[----------] 1 test from PreparedDiffusion (6 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedDiffusion.SparsePeriodicEdgesAndCornersUsePreparedGhostsWithoutFineDonors" classname="PreparedDiffusion.SparsePeriodicEdgesAndCornersUsePreparedGhostsWithoutFineDonors" time="0.0359543" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.SparsePeriodicEdgesAndCornersUsePreparedGhostsWithoutFineDonors
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.SparsePeriodicEdgesAndCornersUsePreparedGhostsWithoutFineDonors
+[       OK ] PreparedDiffusion.SparsePeriodicEdgesAndCornersUsePreparedGhostsWithoutFineDonors (6 ms)
+[----------] 1 test from PreparedDiffusion (6 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedDiffusion.SparsePeriodicVariableLawMatchesFullDomainReference" classname="PreparedDiffusion.SparsePeriodicVariableLawMatchesFullDomainReference" time="0.0365775" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.SparsePeriodicVariableLawMatchesFullDomainReference
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.SparsePeriodicVariableLawMatchesFullDomainReference
+[       OK ] PreparedDiffusion.SparsePeriodicVariableLawMatchesFullDomainReference (6 ms)
+[----------] 1 test from PreparedDiffusion (6 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedDiffusion.SparsePeriodicGhostStatusAndNonfiniteValuesFailBeforeWriting" classname="PreparedDiffusion.SparsePeriodicGhostStatusAndNonfiniteValuesFailBeforeWriting" time="0.0365977" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.SparsePeriodicGhostStatusAndNonfiniteValuesFailBeforeWriting
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.SparsePeriodicGhostStatusAndNonfiniteValuesFailBeforeWriting
+[       OK ] PreparedDiffusion.SparsePeriodicGhostStatusAndNonfiniteValuesFailBeforeWriting (6 ms)
+[----------] 1 test from PreparedDiffusion (6 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedDiffusion.SparseMixedBoundaryExcludesPhysicalExteriorFromConstitutiveLaw" classname="PreparedDiffusion.SparseMixedBoundaryExcludesPhysicalExteriorFromConstitutiveLaw" time="0.0387218" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.SparseMixedBoundaryExcludesPhysicalExteriorFromConstitutiveLaw
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.SparseMixedBoundaryExcludesPhysicalExteriorFromConstitutiveLaw
+[       OK ] PreparedDiffusion.SparseMixedBoundaryExcludesPhysicalExteriorFromConstitutiveLaw (6 ms)
+[----------] 1 test from PreparedDiffusion (6 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedDiffusion.VariableDiagonalStaysInsideDivergenceWithPhysicalValueTrace" classname="PreparedDiffusion.VariableDiagonalStaysInsideDivergenceWithPhysicalValueTrace" time="0.036352" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.VariableDiagonalStaysInsideDivergenceWithPhysicalValueTrace
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.VariableDiagonalStaysInsideDivergenceWithPhysicalValueTrace
+[       OK ] PreparedDiffusion.VariableDiagonalStaysInsideDivergenceWithPhysicalValueTrace (6 ms)
+[----------] 1 test from PreparedDiffusion (6 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedDiffusion.BernoulliRetainsZeroJumpAndLargeDriftLimits" classname="PreparedDiffusion.BernoulliRetainsZeroJumpAndLargeDriftLimits" time="0.0305918" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.BernoulliRetainsZeroJumpAndLargeDriftLimits
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.BernoulliRetainsZeroJumpAndLargeDriftLimits
+[       OK ] PreparedDiffusion.BernoulliRetainsZeroJumpAndLargeDriftLimits (0 ms)
+[----------] 1 test from PreparedDiffusion (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedDiffusion.FittedZeroPotentialIsTheSameConservativeDiffusion" classname="PreparedDiffusion.FittedZeroPotentialIsTheSameConservativeDiffusion" time="0.0412727" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.FittedZeroPotentialIsTheSameConservativeDiffusion
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.FittedZeroPotentialIsTheSameConservativeDiffusion
+[       OK ] PreparedDiffusion.FittedZeroPotentialIsTheSameConservativeDiffusion (7 ms)
+[----------] 1 test from PreparedDiffusion (7 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (7 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedDiffusion.FittedExponentialEquilibriumHasZeroOrientedFaceExchange" classname="PreparedDiffusion.FittedExponentialEquilibriumHasZeroOrientedFaceExchange" time="0.0379633" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.FittedExponentialEquilibriumHasZeroOrientedFaceExchange
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.FittedExponentialEquilibriumHasZeroOrientedFaceExchange
+[       OK ] PreparedDiffusion.FittedExponentialEquilibriumHasZeroOrientedFaceExchange (7 ms)
+[----------] 1 test from PreparedDiffusion (7 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (7 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedDiffusion.FailedConstitutiveOutputsStayUnreadAndPreserveExactWorstReason" classname="PreparedDiffusion.FailedConstitutiveOutputsStayUnreadAndPreserveExactWorstReason" time="0.0367022" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.FailedConstitutiveOutputsStayUnreadAndPreserveExactWorstReason
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.FailedConstitutiveOutputsStayUnreadAndPreserveExactWorstReason
+[       OK ] PreparedDiffusion.FailedConstitutiveOutputsStayUnreadAndPreserveExactWorstReason (6 ms)
+[----------] 1 test from PreparedDiffusion (6 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedDiffusion.ThreeAxesTwoComponentsAndCoupledCoefficientsPreserveEachInventory" classname="PreparedDiffusion.ThreeAxesTwoComponentsAndCoupledCoefficientsPreserveEachInventory" time="0.044647" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.ThreeAxesTwoComponentsAndCoupledCoefficientsPreserveEachInventory
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.ThreeAxesTwoComponentsAndCoupledCoefficientsPreserveEachInventory
+[       OK ] PreparedDiffusion.ThreeAxesTwoComponentsAndCoupledCoefficientsPreserveEachInventory (15 ms)
+[----------] 1 test from PreparedDiffusion (15 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (15 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedDiffusion.FullVariableTensorAndCrossGradientsDissipateAndConvergeInThreeDimensions" classname="PreparedDiffusion.FullVariableTensorAndCrossGradientsDissipateAndConvergeInThreeDimensions" time="2.01077" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.FullVariableTensorAndCrossGradientsDissipateAndConvergeInThreeDimensions
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.FullVariableTensorAndCrossGradientsDissipateAndConvergeInThreeDimensions
+[       OK ] PreparedDiffusion.FullVariableTensorAndCrossGradientsDissipateAndConvergeInThreeDimensions (1974 ms)
+[----------] 1 test from PreparedDiffusion (1975 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1975 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedDiffusion.TensorRejectsAnIndefiniteMetricBeforePublishingFaces" classname="PreparedDiffusion.TensorRejectsAnIndefiniteMetricBeforePublishingFaces" time="0.038967" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.TensorRejectsAnIndefiniteMetricBeforePublishingFaces
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.TensorRejectsAnIndefiniteMetricBeforePublishingFaces
+[       OK ] PreparedDiffusion.TensorRejectsAnIndefiniteMetricBeforePublishingFaces (7 ms)
+[----------] 1 test from PreparedDiffusion (7 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (7 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedDiffusion.DistinctComponentValueTracesDriveTheirOwnBoundaryFluxes" classname="PreparedDiffusion.DistinctComponentValueTracesDriveTheirOwnBoundaryFluxes" time="0.038795" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.DistinctComponentValueTracesDriveTheirOwnBoundaryFluxes
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.DistinctComponentValueTracesDriveTheirOwnBoundaryFluxes
+[       OK ] PreparedDiffusion.DistinctComponentValueTracesDriveTheirOwnBoundaryFluxes (8 ms)
+[----------] 1 test from PreparedDiffusion (8 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (8 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedDiffusion.FittedThreeAxisPeriodicEquilibriumUsesEveryPotentialGradient" classname="PreparedDiffusion.FittedThreeAxisPeriodicEquilibriumUsesEveryPotentialGradient" time="0.0362427" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.FittedThreeAxisPeriodicEquilibriumUsesEveryPotentialGradient
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.FittedThreeAxisPeriodicEquilibriumUsesEveryPotentialGradient
+[       OK ] PreparedDiffusion.FittedThreeAxisPeriodicEquilibriumUsesEveryPotentialGradient (7 ms)
+[----------] 1 test from PreparedDiffusion (7 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (7 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="PreparedDiffusion.TensorRejectsAnIndefiniteConstitutiveJacobianWithPositiveSpatialMetric" classname="PreparedDiffusion.TensorRejectsAnIndefiniteConstitutiveJacobianWithPositiveSpatialMetric" time="0.0360276" status="run">
+		<properties>
+			<property name="cmake_labels" value="cpp-target:test_prepared_diffusion;fast;runtime;unit"/>
+		</properties>
+		<system-out>Note: Google Test filter = PreparedDiffusion.TensorRejectsAnIndefiniteConstitutiveJacobianWithPositiveSpatialMetric
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PreparedDiffusion
+[ RUN      ] PreparedDiffusion.TensorRejectsAnIndefiniteConstitutiveJacobianWithPositiveSpatialMetric
+[       OK ] PreparedDiffusion.TensorRejectsAnIndefiniteConstitutiveJacobianWithPositiveSpatialMetric (6 ms)
+[----------] 1 test from PreparedDiffusion (6 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+</system-out>
+	</testcase>
+	<testcase name="test_mpi_exchange_batches_np3" classname="test_mpi_exchange_batches_np3" time="0.419357" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;cpp-target:test_mpi_exchange_batches;medium;mpi"/>
+		</properties>
+		<system-out>[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ExchangeBatches
+[ RUN      ] ExchangeBatches.UnequalPhysicalBoundaryOwnershipConservesAndFailuresRollbackCollectively
+[----------] 1 test from ExchangeBatches
+[ RUN      ] ExchangeBatches.UnequalPhysicalBoundaryOwnershipConservesAndFailuresRollbackCollectively
+[----------] 1 test from ExchangeBatches
+[ RUN      ] ExchangeBatches.UnequalPhysicalBoundaryOwnershipConservesAndFailuresRollbackCollectively
+[       OK ] ExchangeBatches.UnequalPhysicalBoundaryOwnershipConservesAndFailuresRollbackCollectively (14 ms)
+[----------] 1 test from ExchangeBatches (14 ms total)
+
+[----------] Global test environment tear-down
+[       OK ] ExchangeBatches.UnequalPhysicalBoundaryOwnershipConservesAndFailuresRollbackCollectively (14 ...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+</testsuite>

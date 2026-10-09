@@ -67,6 +67,18 @@ struct GeometricMultigridCapabilities {
 
 namespace detail {
 
+template <int Dim>
+struct CopyVectorKernel {
+  FieldView<Real, Dim> destination{};
+  FieldView<const Real, Dim> source{};
+  int components = 0;
+
+  POPS_HD void operator()(const Index<Dim>& cell) const {
+    for (int component = 0; component < components; ++component)
+      destination(cell, component) = source(cell, component);
+  }
+};
+
 inline std::size_t checked_size_product(std::size_t left, std::size_t right,
                                         const char* operation) {
   if (left != 0 && right > std::numeric_limits<std::size_t>::max() / left)
@@ -861,9 +873,8 @@ class GeometricMG {
       for (std::size_t local = 0; local < fine.phi.local_size(); ++local) {
         const auto source = static_cast<const field_type&>(*boundary_view_).fab(local).view();
         const auto destination = fine.phi.fab(local).view();
-        for_each_cell(fine.phi.fab(local).grown_box(), [=] POPS_HD(const Index<Dim>& cell) {
-          destination(cell, 0) = source(cell, 0);
-        });
+        for_each_cell(fine.phi.fab(local).grown_box(),
+                      detail::CopyScalarKernel<Dim>{destination, source});
       }
       Kokkos::fence();
     }
@@ -962,10 +973,7 @@ class GeometricMG {
       const auto in = source.fab(local).view();
       const auto out = destination.fab(local).view();
       const int components = source.ncomp();
-      for_each_cell(source.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-        for (int component = 0; component < components; ++component)
-          out(cell, component) = in(cell, component);
-      });
+      for_each_cell(source.box(local), detail::CopyVectorKernel<Dim>{out, in, components});
     }
     Kokkos::fence();
   }

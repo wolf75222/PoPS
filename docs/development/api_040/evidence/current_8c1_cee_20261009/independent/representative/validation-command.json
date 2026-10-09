@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "rtk",
+    "proxy",
+    "python3",
+    "-B",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/receive_actual.py"
+  ],
+  "observed_tool_chunk_id": "b9ff10",
+  "exit_code": 0,
+  "wall_time_seconds": 0.415064375,
+  "stdout": "{\"status\": \"ACCEPT_REPRESENTATIVE_CPU_WORLD1_WITH_LIMITS\", \"core\": 1221, \"payload\": 1175, \"objects\": 24, \"changed\": 5, \"exchanges\": 2304, \"checkpoint_arrays\": 144}\n",
+  "scope": "Observed offline reader execution only; no new Native execution."
+}

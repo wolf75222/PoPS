@@ -1,0 +1,220 @@
+Test project /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS/build-mpi
+      Start 1362: test_amr_synthetic_program_loader_transaction_np2
+ 1/95 Test #1362: test_amr_synthetic_program_loader_transaction_np2 ............................................................................   Passed   30.01 sec
+      Start  887: GeneratedAmrSystemBlock.SubcyclingRetainsDeclaredDurationAcrossAbsoluteTimeBinade
+      Start 1058: test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage
+ 2/95 Test #1058: test_amr_synthetic_program_loader_transaction.AttemptCursorFreshInteriorRestartMatchesEntireAcceptedImage ....................   Passed    4.95 sec
+      Start 1063: test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements
+ 3/95 Test #1063: test_amr_synthetic_program_loader_transaction.RestartRegridRetainsDescendantHistoriesAcrossTwoParentReplacements .............   Passed    1.99 sec
+      Start 1056: test_amr_synthetic_program_loader_transaction.SourceBuiltArtifactLoadsBudgetRollsBackAndRetries
+ 4/95 Test #1056: test_amr_synthetic_program_loader_transaction.SourceBuiltArtifactLoadsBudgetRollsBackAndRetries ..............................   Passed    3.13 sec
+      Start 1059: test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes
+ 5/95 Test #1059: test_amr_synthetic_program_loader_transaction.AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes .................   Passed    2.77 sec
+      Start 1064: test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication
+ 6/95 Test #1064: test_amr_synthetic_program_loader_transaction.ScheduledHistoryRegridRefreshesCapturedBodiesAndRollsBackPublication ...........   Passed    2.52 sec
+      Start 1065: test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback
+ 7/95 Test #1065: test_amr_synthetic_program_loader_transaction.ScheduledRegridCompletionUsesDurableRuntimeLaneAfterMoveAndRollback ............   Passed    2.49 sec
+      Start 1055: test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh
+ 8/95 Test #1055: test_amr_synthetic_program_loader_transaction.InterfacePublicationPreparesCapacityBeforeBootstrapAndRollsBackFailedRefresh ...   Passed    1.84 sec
+      Start 1057: test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack
+ 9/95 Test #1057: test_amr_synthetic_program_loader_transaction.InitializedHistoryRestartRequiresCompleteRestorationAndRollsBack ...............   Passed    1.98 sec
+      Start 1062: test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority
+10/95 Test #1062: test_amr_synthetic_program_loader_transaction.AttemptCursorInvalidRestorePreservesFacadeAndLiveAuthority .....................   Passed    1.40 sec
+      Start 1061: test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart
+11/95 Test #1061: test_amr_synthetic_program_loader_transaction.AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart ....................   Passed    1.38 sec
+      Start 1060: test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback
+12/95 Test #1060: test_amr_synthetic_program_loader_transaction.AttemptCursorRankLocalTypedRejectionRetainsMetadataAndRollback .................   Passed    1.40 sec
+      Start 1117: test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction
+13/95 Test #1117: test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction .........................................   Passed    0.92 sec
+      Start  869: GeneratedAmrSystemBlock.PreparesOneExactNativePackageImage
+14/95 Test  #869: GeneratedAmrSystemBlock.PreparesOneExactNativePackageImage ...................................................................   Passed    0.06 sec
+      Start  912: GeneratedAmrSystemBlock.PreparedHistoryRemapAcceptsPublishedReplacement
+15/95 Test  #912: GeneratedAmrSystemBlock.PreparedHistoryRemapAcceptsPublishedReplacement ......................................................   Passed    0.64 sec
+      Start 1133: test_temporal_partition_restart.PendingRemapKeepsOriginAcrossTwoUnchangedQualifications
+16/95 Test #1133: test_temporal_partition_restart.PendingRemapKeepsOriginAcrossTwoUnchangedQualifications ......................................   Passed    0.33 sec
+      Start 1134: test_temporal_partition_restart.PendingRemapRefusesForgedQualificationAndChangedSample
+17/95 Test #1134: test_temporal_partition_restart.PendingRemapRefusesForgedQualificationAndChangedSample .......................................   Passed    0.02 sec
+      Start 1115: test_amr_history_ring.RetainsAndInterpolatesExactRankedState
+18/95 Test #1115: test_amr_history_ring.RetainsAndInterpolatesExactRankedState .................................................................   Passed    0.06 sec
+      Start  901: GeneratedAmrSystemBlock.BootstrapRecomputeHelmholtzAfterCreateLevel
+19/95 Test  #901: GeneratedAmrSystemBlock.BootstrapRecomputeHelmholtzAfterCreateLevel ..........................................................   Passed    0.24 sec
+      Start  909: GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically
+20/95 Test  #909: GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically ................................................   Passed    0.17 sec
+      Start  913: GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences
+21/95 Test  #913: GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences ......................................................   Passed    0.16 sec
+      Start  886: GeneratedAmrSystemBlock.SparseParentRegridRequiresOnlyChildInterpolationSources
+22/95 Test  #886: GeneratedAmrSystemBlock.SparseParentRegridRequiresOnlyChildInterpolationSources ..............................................   Passed    0.14 sec
+      Start  898: GeneratedAmrSystemBlock.ExplicitFieldTopologyIsIndependentOfPeriodicTransport
+23/95 Test  #898: GeneratedAmrSystemBlock.ExplicitFieldTopologyIsIndependentOfPeriodicTransport ................................................   Passed    0.09 sec
+      Start  885: GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts
+24/95 Test  #885: GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts .................................................   Passed    0.08 sec
+      Start  894: GeneratedAmrSystemBlock.RhsGroupPrevalidatesAndPublishesFullAndFluxRoundsAtomically
+25/95 Test  #894: GeneratedAmrSystemBlock.RhsGroupPrevalidatesAndPublishesFullAndFluxRoundsAtomically ..........................................   Passed    0.08 sec
+      Start  918: GeneratedAmrSystemBlock.ConstantBootstrapReprojectionPreservesExactValue
+26/95 Test  #918: GeneratedAmrSystemBlock.ConstantBootstrapReprojectionPreservesExactValue .....................................................   Passed    0.07 sec
+      Start  900: GeneratedAmrSystemBlock.CompositeFieldInstallsCoverageAwareNullspaceOnEveryLiveLevel
+27/95 Test  #900: GeneratedAmrSystemBlock.CompositeFieldInstallsCoverageAwareNullspaceOnEveryLiveLevel .........................................   Passed    0.07 sec
+      Start  914: GeneratedAmrSystemBlock.NoopPreparedRegridPreservesInitializedHistory
+28/95 Test  #914: GeneratedAmrSystemBlock.NoopPreparedRegridPreservesInitializedHistory ........................................................   Passed    0.07 sec
+      Start  890: GeneratedAmrSystemBlock.DiffusiveEmbeddedRoutesRefuseWithoutFaceGeometry
+29/95 Test  #890: GeneratedAmrSystemBlock.DiffusiveEmbeddedRoutesRefuseWithoutFaceGeometry .....................................................   Passed    0.07 sec
+      Start  897: GeneratedAmrSystemBlock.NamedFieldConsumesExactStageWithoutPublishingState
+30/95 Test  #897: GeneratedAmrSystemBlock.NamedFieldConsumesExactStageWithoutPublishingState ...................................................   Passed    0.07 sec
+      Start  899: GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance
+31/95 Test  #899: GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance ..........................   Passed    0.07 sec
+      Start  896: GeneratedAmrSystemBlock.DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptance
+32/95 Test  #887: GeneratedAmrSystemBlock.SubcyclingRetainsDeclaredDurationAcrossAbsoluteTimeBinade ............................................   Passed   29.32 sec
+      Start  919: GeneratedAmrSystemBlock.CellIntegralBootstrapReprojectionPreservesConstant
+33/95 Test  #896: GeneratedAmrSystemBlock.DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptance .................................................   Passed    0.07 sec
+      Start  892: GeneratedAmrSystemBlock.ProgramContextOwnsOneExactHierarchyTensorAuthority
+34/95 Test  #919: GeneratedAmrSystemBlock.CellIntegralBootstrapReprojectionPreservesConstant ...................................................   Passed    0.07 sec
+      Start  915: GeneratedAmrSystemBlock.CflUsesFinestExactGeometryAndPreparedModelSpeed
+35/95 Test  #892: GeneratedAmrSystemBlock.ProgramContextOwnsOneExactHierarchyTensorAuthority ...................................................   Passed    0.07 sec
+      Start  884: GeneratedAmrSystemBlock.RegridRebuildsExactFineGhostProvidersAndInvalidatesLedger
+36/95 Test  #915: GeneratedAmrSystemBlock.CflUsesFinestExactGeometryAndPreparedModelSpeed ......................................................   Passed    0.06 sec
+      Start  906: GeneratedAmrSystemBlock.EmptyStateHistoryFluxRegistryIsExplicitAndMissingProvenanceRefuses
+37/95 Test  #884: GeneratedAmrSystemBlock.RegridRebuildsExactFineGhostProvidersAndInvalidatesLedger ............................................   Passed    0.07 sec
+      Start  888: GeneratedAmrSystemBlock.EmbeddedBoundaryRematerializesPerLevelAndWeightsCompositeMassAndSidecars
+38/95 Test  #906: GeneratedAmrSystemBlock.EmptyStateHistoryFluxRegistryIsExplicitAndMissingProvenanceRefuses ...................................   Passed    0.07 sec
+      Start  903: GeneratedAmrSystemBlock.SpatialHierarchyTraversalRequiresReleasedLevelEnvelopes
+39/95 Test  #888: GeneratedAmrSystemBlock.EmbeddedBoundaryRematerializesPerLevelAndWeightsCompositeMassAndSidecars .............................   Passed    0.07 sec
+      Start  916: GeneratedAmrSystemBlock.DiffusiveCflUsesFinestParabolicGeometryAndReportsFrequency
+40/95 Test  #903: GeneratedAmrSystemBlock.SpatialHierarchyTraversalRequiresReleasedLevelEnvelopes ..............................................   Passed    0.07 sec
+      Start  904: GeneratedAmrSystemBlock.ProgramContextRetainsAndInterpolatesExactLevelHistory
+41/95 Test  #916: GeneratedAmrSystemBlock.DiffusiveCflUsesFinestParabolicGeometryAndReportsFrequency ...........................................   Passed    0.07 sec
+      Start  921: GeneratedAmrSystemBlock.GaussianBootstrapReprojectionPreservesExactNeutrality
+42/95 Test  #904: GeneratedAmrSystemBlock.ProgramContextRetainsAndInterpolatesExactLevelHistory ................................................   Passed    0.06 sec
+      Start  882: GeneratedAmrSystemBlock.FacadeRetainsAndExecutesPreparedRootLevel
+43/95 Test  #921: GeneratedAmrSystemBlock.GaussianBootstrapReprojectionPreservesExactNeutrality ................................................   Passed    0.07 sec
+      Start  905: GeneratedAmrSystemBlock.FluxHistoryMigratesDeclaredFamiliesAndPreservesNativeEmptyMode
+44/95 Test  #882: GeneratedAmrSystemBlock.FacadeRetainsAndExecutesPreparedRootLevel ............................................................   Passed    0.06 sec
+      Start  902: GeneratedAmrSystemBlock.ProgramContextRefusesUnsynchronizedHierarchyBeforeMutation
+45/95 Test  #905: GeneratedAmrSystemBlock.FluxHistoryMigratesDeclaredFamiliesAndPreservesNativeEmptyMode .......................................   Passed    0.06 sec
+      Start  883: GeneratedAmrSystemBlock.VariableNamesReadAuthenticatedPreparedBlockMetadata
+46/95 Test  #902: GeneratedAmrSystemBlock.ProgramContextRefusesUnsynchronizedHierarchyBeforeMutation ...........................................   Passed    0.07 sec
+      Start  907: GeneratedAmrSystemBlock.ProgramContextRefusesHistoryRegridBeforeTopologyMutation
+47/95 Test  #883: GeneratedAmrSystemBlock.VariableNamesReadAuthenticatedPreparedBlockMetadata ..................................................   Passed    0.06 sec
+      Start  889: GeneratedAmrSystemBlock.CutCellCapabilityExecutesAtExactRank
+48/95 Test  #907: GeneratedAmrSystemBlock.ProgramContextRefusesHistoryRegridBeforeTopologyMutation .............................................   Passed    0.07 sec
+      Start  893: GeneratedAmrSystemBlock.ProgramContextEvaluatesExactStageStateWithoutPublishingIt
+49/95 Test  #889: GeneratedAmrSystemBlock.CutCellCapabilityExecutesAtExactRank .................................................................   Passed    0.06 sec
+      Start  917: GeneratedAmrSystemBlock.CflAuthenticatesRequestsAndBoundOrderBeforeCallbacks
+50/95 Test  #893: GeneratedAmrSystemBlock.ProgramContextEvaluatesExactStageStateWithoutPublishingIt ............................................   Passed    0.06 sec
+      Start 1120: test_amr_history_ring.ThreeLevelProgramFailsClosedWithoutExactFluxExpressionBudget
+51/95 Test  #917: GeneratedAmrSystemBlock.CflAuthenticatesRequestsAndBoundOrderBeforeCallbacks .................................................   Passed    0.06 sec
+      Start 1118: test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore
+52/95 Test #1120: test_amr_history_ring.ThreeLevelProgramFailsClosedWithoutExactFluxExpressionBudget ...........................................   Passed    0.07 sec
+53/95 Test #1118: test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore ..................................................   Passed    0.06 sec
+      Start 1366: test_generated_amr_system_block_np2
+54/95 Test #1366: test_generated_amr_system_block_np2 ..........................................................................................   Passed    0.40 sec
+      Start 1363: test_amr_history_ring_np2
+55/95 Test #1363: test_amr_history_ring_np2 ....................................................................................................   Passed    0.09 sec
+      Start  895: GeneratedAmrSystemBlock.RegistersOnlyExactRankedNullspaceProviders
+      Start  872: GeneratedAmrSystemBlock.ProgramStateRouteDoesNotInstantiateHyperbolicPhysics
+56/95 Test  #872: GeneratedAmrSystemBlock.ProgramStateRouteDoesNotInstantiateHyperbolicPhysics .................................................   Passed    0.05 sec
+      Start 1116: test_amr_history_ring.FacadeTransactionRestoresAcceptedHistoryImage
+57/95 Test  #895: GeneratedAmrSystemBlock.RegistersOnlyExactRankedNullspaceProviders ...........................................................   Passed    0.06 sec
+      Start  871: GeneratedAmrSystemBlock.ComposedProgramHalosPreserveHyperbolicReconstructionRequirements
+58/95 Test #1116: test_amr_history_ring.FacadeTransactionRestoresAcceptedHistoryImage ..........................................................   Passed    0.06 sec
+      Start  877: GeneratedAmrSystemBlock.PackageContractAuthenticatesPhysicalModelParameters
+59/95 Test  #871: GeneratedAmrSystemBlock.ComposedProgramHalosPreserveHyperbolicReconstructionRequirements .....................................   Passed    0.06 sec
+      Start  876: GeneratedAmrSystemBlock.PhysicalFacesUseTheirAuthenticatedNumericalAuthority
+60/95 Test  #877: GeneratedAmrSystemBlock.PackageContractAuthenticatesPhysicalModelParameters ..................................................   Passed    0.06 sec
+      Start  878: GeneratedAmrSystemBlock.PackageContractAuthenticatesVariableNamesRolesAndUserRoles
+61/95 Test  #876: GeneratedAmrSystemBlock.PhysicalFacesUseTheirAuthenticatedNumericalAuthority .................................................   Passed    0.05 sec
+      Start 1119: test_amr_history_ring.RegisteredHistoryRejectsTopologyPublicationBeforeMutation
+62/95 Test  #878: GeneratedAmrSystemBlock.PackageContractAuthenticatesVariableNamesRolesAndUserRoles ...........................................   Passed    0.05 sec
+      Start  881: GeneratedAmrSystemBlock.PrimitiveToConservativePublicationRoundtripsBeforeCommit
+63/95 Test #1119: test_amr_history_ring.RegisteredHistoryRejectsTopologyPublicationBeforeMutation ..............................................   Passed    0.06 sec
+      Start  880: GeneratedAmrSystemBlock.CellPrimitiveConversionConsumesPreparedRecoveryOutcome
+64/95 Test  #881: GeneratedAmrSystemBlock.PrimitiveToConservativePublicationRoundtripsBeforeCommit .............................................   Passed    0.06 sec
+      Start  911: GeneratedAmrSystemBlock.ProjectedSharedSourcesRequireCapturedAssociation
+65/95 Test  #880: GeneratedAmrSystemBlock.CellPrimitiveConversionConsumesPreparedRecoveryOutcome ...............................................   Passed    0.05 sec
+      Start  870: GeneratedAmrSystemBlock.ProgramStateHaloRequirementReachesUniformAndAmrFactories
+66/95 Test  #911: GeneratedAmrSystemBlock.ProjectedSharedSourcesRequireCapturedAssociation .....................................................   Passed    0.05 sec
+      Start  874: GeneratedAmrSystemBlock.SourceRoutePreflightDefersAuthenticationToCompiledPolicies
+67/95 Test  #870: GeneratedAmrSystemBlock.ProgramStateHaloRequirementReachesUniformAndAmrFactories .............................................   Passed    0.05 sec
+      Start  908: GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords
+68/95 Test  #874: GeneratedAmrSystemBlock.SourceRoutePreflightDefersAuthenticationToCompiledPolicies ...........................................   Passed    0.05 sec
+      Start  891: GeneratedAmrSystemBlock.EmbeddedBoundaryAuthoringRejectsDivergentMpiInputBeforeMutation
+69/95 Test  #908: GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords ..........................................   Passed    0.05 sec
+      Start  879: GeneratedAmrSystemBlock.RejectsUnpreparedOptionalAuthorities
+70/95 Test  #891: GeneratedAmrSystemBlock.EmbeddedBoundaryAuthoringRejectsDivergentMpiInputBeforeMutation ......................................   Passed    0.05 sec
+71/95 Test  #879: GeneratedAmrSystemBlock.RejectsUnpreparedOptionalAuthorities .................................................................   Passed    0.05 sec
+      Start  910: GeneratedAmrSystemBlock.ProjectedSharedSourcesKeepDistinctLedgerIdentities
+      Start  873: GeneratedAmrSystemBlock.CoordinatedFacePreflightDoesNotAuthenticateTheBody
+72/95 Test  #873: GeneratedAmrSystemBlock.CoordinatedFacePreflightDoesNotAuthenticateTheBody ...................................................   Passed    0.05 sec
+      Start  875: GeneratedAmrSystemBlock.SourceRoutePreflightRefusesMalformedIdentityAndInvalidControls
+73/95 Test  #910: GeneratedAmrSystemBlock.ProjectedSharedSourcesKeepDistinctLedgerIdentities ...................................................   Passed    0.06 sec
+      Start 1135: test_temporal_partition_restart.PendingRemapRejectedSecondTransitionDoesNotMutateCandidate
+74/95 Test #1135: test_temporal_partition_restart.PendingRemapRejectedSecondTransitionDoesNotMutateCandidate ...................................   Passed    0.03 sec
+      Start 1136: test_temporal_partition_restart.BatchedAttemptCommitRollbackAndCheckpointAreExact
+75/95 Test #1136: test_temporal_partition_restart.BatchedAttemptCommitRollbackAndCheckpointAreExact ............................................   Passed    0.02 sec
+      Start 1137: test_temporal_partition_restart.MalformedStateAndBatchesFailBeforeMutation
+76/95 Test  #875: GeneratedAmrSystemBlock.SourceRoutePreflightRefusesMalformedIdentityAndInvalidControls .......................................   Passed    0.06 sec
+      Start 1138: test_temporal_partition_restart.AcceptedImageIsCanonicalInOneTwoAndThreeDimensions
+77/95 Test #1137: test_temporal_partition_restart.MalformedStateAndBatchesFailBeforeMutation ...................................................   Passed    0.02 sec
+      Start 1139: test_temporal_partition_restart.RegridRequiresAnExactRematerializablePartition
+78/95 Test #1138: test_temporal_partition_restart.AcceptedImageIsCanonicalInOneTwoAndThreeDimensions ...........................................   Passed    0.02 sec
+      Start 1140: test_temporal_partition_restart.LegacyAndTruncatedImagesAreRefused
+79/95 Test #1139: test_temporal_partition_restart.RegridRequiresAnExactRematerializablePartition ...............................................   Passed    0.02 sec
+      Start  920: GeneratedAmrSystemBlock.CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry
+80/95 Test #1140: test_temporal_partition_restart.LegacyAndTruncatedImagesAreRefused ...........................................................   Passed    0.02 sec
+      Start  922: GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry
+81/95 Test  #920: GeneratedAmrSystemBlock.CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry .......................................***Skipped   0.05 sec
+      Start 1005: SystemInterfaceCoreSession.admission_failure_is_collective_before_any_core_or_callback
+82/95 Test  #922: GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry ...........................................***Skipped   0.05 sec
+      Start 1006: SystemInterfaceCoreSession.exact_group_and_lifetime_all_dimensions
+83/95 Test #1006: SystemInterfaceCoreSession.exact_group_and_lifetime_all_dimensions ...........................................................   Passed    0.94 sec
+      Start 1007: SystemInterfaceCoreSession.two_owning_stores_and_foreign_thread_all_dimensions
+84/95 Test #1005: SystemInterfaceCoreSession.admission_failure_is_collective_before_any_core_or_callback .......................................   Passed    0.95 sec
+      Start 1008: SystemInterfaceCoreSession.exception_and_missing_core_all_dimensions
+85/95 Test #1007: SystemInterfaceCoreSession.two_owning_stores_and_foreign_thread_all_dimensions ...............................................   Passed    0.06 sec
+      Start 1009: SystemInterfaceCoreSession.path_only_boundary_installs_without_legacy_linearization
+86/95 Test #1008: SystemInterfaceCoreSession.exception_and_missing_core_all_dimensions .........................................................   Passed    0.06 sec
+      Start 1010: SystemInterfaceCoreSession.path_and_legacy_boundary_routes_still_require_their_authority
+87/95 Test #1009: SystemInterfaceCoreSession.path_only_boundary_installs_without_legacy_linearization ..........................................   Passed    0.07 sec
+      Start 1011: SystemInterfaceCoreSession.prepared_analytic_inflow_uses_the_stage_physical_time
+88/95 Test #1010: SystemInterfaceCoreSession.path_and_legacy_boundary_routes_still_require_their_authority .....................................   Passed    0.07 sec
+      Start 1012: SystemInterfaceCoreSession.real_system_exact_request_after_move_and_stale_refusal
+89/95 Test #1011: SystemInterfaceCoreSession.prepared_analytic_inflow_uses_the_stage_physical_time .............................................   Passed    0.08 sec
+      Start 1013: SystemInterfaceCoreSession.real_system_rejects_divergent_group_before_output_then_retries
+90/95 Test #1012: SystemInterfaceCoreSession.real_system_exact_request_after_move_and_stale_refusal ............................................   Passed    0.07 sec
+      Start 1014: SystemInterfaceCoreSession.real_system_cannot_consume_another_system_active_session
+91/95 Test #1013: SystemInterfaceCoreSession.real_system_rejects_divergent_group_before_output_then_retries ....................................***Skipped   0.06 sec
+      Start 1015: SystemInterfaceCoreSession.real_physical_group_without_interfaces_retains_transport_and_ghost_hook
+92/95 Test #1014: SystemInterfaceCoreSession.real_system_cannot_consume_another_system_active_session ..........................................   Passed    0.08 sec
+      Start 1016: SystemInterfaceCoreSession.real_system_rank_local_boundary_discard_retains_runtime_lane
+93/95 Test #1015: SystemInterfaceCoreSession.real_physical_group_without_interfaces_retains_transport_and_ghost_hook ...........................   Passed    0.08 sec
+94/95 Test #1016: SystemInterfaceCoreSession.real_system_rank_local_boundary_discard_retains_runtime_lane ......................................   Passed    0.08 sec
+      Start 1368: test_system_interface_core_session_np2
+95/95 Test #1368: test_system_interface_core_session_np2 .......................................................................................   Passed    0.11 sec
+
+100% tests passed out of 95
+
+Label Time Summary:
+amr                                                         =   1.71 sec*proc (14 tests)
+backend                                                     =  61.23 sec*proc (4 tests)
+checkpoint                                                  =   0.49 sec*proc (8 tests)
+codegen                                                     =  25.85 sec*proc (11 tests)
+compiler                                                    =  25.85 sec*proc (11 tests)
+cpp-target:test_amr_history_ring                            =   1.40 sec*proc (7 tests)
+cpp-target:test_amr_synthetic_program_loader_transaction    =  85.88 sec*proc (12 tests)
+cpp-target:test_generated_amr_system_block                  =  34.48 sec*proc (55 tests)
+cpp-target:test_system_interface_core_session               =   2.83 sec*proc (13 tests)
+cpp-target:test_temporal_partition_restart                  =   0.49 sec*proc (8 tests)
+fast                                                        =  36.29 sec*proc (66 tests)
+integration                                                 =  27.56 sec*proc (25 tests)
+medium                                                      =  88.79 sec*proc (29 tests)
+mpi                                                         =  61.23 sec*proc (4 tests)
+native_loader                                               =  25.85 sec*proc (11 tests)
+nd                                                          =   0.49 sec*proc (8 tests)
+runtime                                                     =  36.78 sec*proc (74 tests)
+unit                                                        =  36.29 sec*proc (66 tests)
+
+Total Test time (real) =  62.62 sec
+
+The following tests did not run:
+	920 - GeneratedAmrSystemBlock.CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry (Skipped)
+	922 - GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry (Skipped)
+	1013 - SystemInterfaceCoreSession.real_system_rejects_divergent_group_before_output_then_retries (Skipped)

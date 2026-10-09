@@ -1,0 +1,21 @@
+# Post-7b35ffd scoped execution receipts
+
+All copied execution files retain their original bytes. `manifest.json` lists each path, size and SHA-256. `SHA256SUMS` covers the copied files, this README, the manifest and the independently recomputed M15 metrics. Source commits, native hashes, SDK header hashes and ABI keys come from the saved runner identities, not the current checkout. This bundle is not a global acceptance.
+
+The M15 Dim1 native SHA-256 is `cd45279c320533825f10a82433f6039fe4003c547f52546542bf314e176d8b01`; the selected Dim2 receipts use `00b38fe09ba42678a5a2beda64a3767be9aa130455ecdfcf864a7182fc519cc9`. Their installed ABI keys report SDK header SHA-256 `02723ae9a5d36640fb5ad31d3e89c9b7b3a4a097c92059aac57d2857a3b4020e`. The source commits vary by receipt and are listed individually in the manifest.
+
+- `installed-7b35ffd-integrated-unit`: 95/95 selected source/host tests pass on the installed Dim2 package. They are not 95 PDE trajectories.
+- `installed-7b35ffd-dim1-m15-refusal-mpi2`: one selected generated periodic-face collective refusal test passes on each of two real Dim1 MPI ranks, with matching pre/post native identity.
+- `m15-periodic-core-dim1-mpi2`: six real Dim1 periodic axial B.1 five-moment trajectories (N=32/64/128, two permutations) to T=0.02 and six invalid-state refusals pass on two ranks. `recomputed_m15_metrics.json` independently opens all six saved NPZ files and checks state/oracle error, cell-average conservation, time, permutation and Hankel-domain minima against the scientific receipt. This does not qualify Fox-Laurent multiorder or general HyQMOM.
+
+Across those six saved states, the recomputed maxima are state/oracle `4.440892098500626e-16`, integral drift `7.806255641895632e-17`, permutation `2.220446049250313e-16`, and time error `0`. Minimum density, second Hankel determinant and third Hankel determinant are respectively `0.9075207685881015`, `0.45697861460678224`, and `0.1774473584317789`.
+- `native-periodic-core-ctest.xml`: 95 selected C++ entries, 92 passing, three guard skips. The associated configure/build/CTest logs and repaired Dim1/Dim2 build logs are preserved. `build-m15-periodic-core-dim1.log` is the preceding failed build (duplicate `selected` declaration), not a successful receipt.
+- `installed-fc0d6f4c-native-smoke`: 3 pass/1 fail. The failing fixture duplicates `InitialConditionPlan` with `initial_state`; no positive readonly coverage is inferred for that node.
+- `installed-readonly-m11-m18-reception`: 8 pass/1 fail. Four unit and four native selected checks pass; the M18 target fixture supplies `(3,4,5)` while the binder requires `(3,5,4)`. This is not full M18 scientific acceptance.
+- `installed-m18-rectangular-repaired`: later fixture commit 2f7c8806 passes five source/host tests and one installed Dim2 native test. The native test checks twenty moderate interior targets, an outside-cone refusal twice and rollback. No distinct native classification of boundary versus infeasible target is shown. The earlier 8/9 rectangular-shape failure remains archived unchanged.
+- `installed-c22-frontier-mpi2`: one selected ExternalTimeGrid native frontier/rollback test passes per Dim2 rank, with pre/post authentication and rank parity.
+- `installed-affine-consumers-native`: 6 pass/2 fail. Four affine bodies, conditional affine library and old/new particle comparison pass. The two negative-test failures arise from the fixture's exact `RuntimeError` class check although the native `StepAttemptRejected` subclass was raised; the historical run remains failed.
+
+Registry reconciliation also removes four stale descriptions without treating this bundle as their execution source: W03 points to the earlier authenticated seven-route AMR receipt and keeps broader grouping open; C32 points to the corrected cfef849 M08 saved-stage receipt; C39 points to the earlier AND9 synthetic rollback/retry receipt and keeps general transfer properties open. M10 already points to its 4bb0639 N32 one-step MPI2 witness, with the full spatial campaign still open.
+
+Run `shasum -a 256 -c SHA256SUMS` here and `python3 ../../check_registry.py` from this directory to verify the archived corpus links. Later fixture repairs and live campaigns are excluded.

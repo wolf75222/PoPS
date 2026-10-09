@@ -1,0 +1,169 @@
+{
+  "schema": "sol61.m04-forward-euler-regime-audit@1",
+  "combined_bound": {
+    "status": "mathematical_prediction_only",
+    "native": false,
+    "step_policy": "combined_bound",
+    "rows": [
+      {
+        "n": 32,
+        "dt": 0.017149390243902437,
+        "courant": 0.548780487804878,
+        "combined_frequency_product": 0.8999999999999999,
+        "steps": 6,
+        "l1": 0.003483589963736898,
+        "stencil_mode_linf": 2.220446049250313e-16,
+        "leading_added_diffusivity_space": 0.015625,
+        "leading_added_diffusivity_time": -0.008368286641136228,
+        "leading_added_diffusivity_net": 0.007256713358863772
+      },
+      {
+        "n": 64,
+        "dt": 0.006167763157894736,
+        "courant": 0.3947368421052631,
+        "combined_frequency_product": 0.9,
+        "steps": 17,
+        "l1": 0.0022882130700147725,
+        "stencil_mode_linf": 4.440892098500626e-16,
+        "leading_added_diffusivity_space": 0.0078125,
+        "leading_added_diffusivity_time": -0.0030519606994459827,
+        "leading_added_diffusivity_net": 0.004760539300554017
+      },
+      {
+        "n": 128,
+        "dt": 0.001975070224719101,
+        "courant": 0.25280898876404495,
+        "combined_frequency_product": 0.9,
+        "steps": 51,
+        "l1": 0.0014068369727598205,
+        "stencil_mode_linf": 8.881784197001252e-16,
+        "leading_added_diffusivity_space": 0.00390625,
+        "leading_added_diffusivity_time": -0.0009829942693374424,
+        "leading_added_diffusivity_net": 0.002923255730662558
+      }
+    ],
+    "observed_orders": [
+      0.606353424537235,
+      0.7017662411343994
+    ],
+    "order_guard": 0.7,
+    "order_guard_met": false,
+    "formula_limitation": "leading modified-equation terms explain cancellation; exact stencil decides errors"
+  },
+  "fixed_courant": {
+    "status": "mathematical_prediction_only",
+    "native": false,
+    "step_policy": "fixed_courant",
+    "rows": [
+      {
+        "n": 32,
+        "dt": 0.00390625,
+        "courant": 0.125,
+        "combined_frequency_product": 0.20500000000000002,
+        "steps": 26,
+        "l1": 0.006416847451962249,
+        "stencil_mode_linf": 4.440892098500626e-16,
+        "leading_added_diffusivity_space": 0.015625,
+        "leading_added_diffusivity_time": -0.0019348144531250002,
+        "leading_added_diffusivity_net": 0.013690185546875
+      },
+      {
+        "n": 64,
+        "dt": 0.001953125,
+        "courant": 0.125,
+        "combined_frequency_product": 0.28500000000000003,
+        "steps": 52,
+        "l1": 0.0032562666674028056,
+        "stencil_mode_linf": 8.881784197001252e-16,
+        "leading_added_diffusivity_space": 0.0078125,
+        "leading_added_diffusivity_time": -0.0009735107421875,
+        "leading_added_diffusivity_net": 0.0068389892578125
+      },
+      {
+        "n": 128,
+        "dt": 0.0009765625,
+        "courant": 0.125,
+        "combined_frequency_product": 0.445,
+        "steps": 103,
+        "l1": 0.0016412216470861971,
+        "stencil_mode_linf": 6.661338147750939e-16,
+        "leading_added_diffusivity_space": 0.00390625,
+        "leading_added_diffusivity_time": -0.0004871368408203125,
+        "leading_added_diffusivity_net": 0.0034191131591796873
+      }
+    ],
+    "observed_orders": [
+      0.9786458344358433,
+      0.9884487638693287
+    ],
+    "order_guard": 0.7,
+    "order_guard_met": true,
+    "formula_limitation": "leading modified-equation terms explain cancellation; exact stencil decides errors"
+  },
+  "new_native_reception": "pending",
+  "historical": {
+    "status": "historical_failure_received",
+    "receipt_sha256": "8aab308a08c2a6c6c600db234fc89f3ef37421d9269e1355aea4f12e9b3b1355",
+    "native_sha256": "220b48d3264f413aa5ccd8bba58a8b0d1a6b31bf5bade6faac904b1b7ef8cc87",
+    "native_execution_here": false,
+    "rows": [
+      {
+        "n": 32,
+        "state_sha256": "76e616b8c019b9942e8376fb0ac11f5a16d2e0718190b72742e55f61ce409151",
+        "l1": 0.0034835899637369015,
+        "actual_errors": {
+          "stencil": 4.440892098500626e-16,
+          "mode": 2.220446049250313e-16
+        },
+        "mass_defect": 3.469446951953614e-17,
+        "y_invariance": 0.0,
+        "wrong_equation_linf": {
+          "ssprk2": 0.006222534584418238,
+          "reversed_advection": 0.21950869362266234,
+          "omitted_diffusion": 0.007543003749536981
+        },
+        "steps": 6
+      },
+      {
+        "n": 64,
+        "state_sha256": "91b4da3779628840f540508ab7d540927f0d224db18c52c828e65ee5ba5aa2f6",
+        "l1": 0.0022882130700148055,
+        "actual_errors": {
+          "stencil": 2.220446049250313e-16,
+          "mode": 4.440892098500626e-16
+        },
+        "mass_defect": 3.122502256758253e-17,
+        "y_invariance": 0.0,
+        "wrong_equation_linf": {
+          "ssprk2": 0.0022882430072532767,
+          "reversed_advection": 0.22186102055860346,
+          "omitted_diffusion": 0.007597576436122244
+        },
+        "steps": 17
+      },
+      {
+        "n": 128,
+        "state_sha256": "e7845d68d0f8cb366b3a9b14c715ac6616a9ddf56946b1308c852dbd77cad649",
+        "l1": 0.001406836972760282,
+        "actual_errors": {
+          "stencil": 2.220446049250313e-16,
+          "mode": 8.881784197001252e-16
+        },
+        "mass_defect": 2.6020852139652106e-18,
+        "y_invariance": 0.0,
+        "wrong_equation_linf": {
+          "ssprk2": 0.0007416878303818653,
+          "reversed_advection": 0.22344804445817112,
+          "omitted_diffusion": 0.00765535117676186
+        },
+        "steps": 51
+      }
+    ],
+    "observed_orders": [
+      0.6063534245372155,
+      0.701766241133947
+    ],
+    "historical_guard_met": false,
+    "qualification": "old failed CPU1 Dim2 receipt only; no new native qualification"
+  }
+}

@@ -1,0 +1,108 @@
+{
+  "baseline_native_sha256": "ed2f610f22c5a50b673049ef7fb38854d37f074517d536ad39da1dbe73ed821b",
+  "current_source_sdk": "899489b76564e612e5b3df489301255ab6b8ec6736627271df88a5a49ffc52b8",
+  "files": {
+    "authority-author.json": {
+      "bytes": 11394,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-accepted-ssp-independent-audit-53fd-20261008/receipt-v2.json",
+      "sha256": "63224e7a681597dd6aa2a116c0d05cd34affd131c496f960dc2a2d971d60b5bf"
+    },
+    "authority-independent.json": {
+      "bytes": 2626,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-accepted-ssp-publication-authority-V2-review-20261008/review.json",
+      "sha256": "363983926abbcf568f72233825309e39239081dc243d180a3d5363f94a21e566"
+    },
+    "authority-root.json": {
+      "bytes": 1354,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-root-accepted-publication-authority-V2-source-review-20261008/review.json",
+      "sha256": "553b1c71c0d45167e08aa8c9c8981d5b6450cbae530c3833a5d731c8797ea5d9"
+    },
+    "cpp-author.json": {
+      "bytes": 3538,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/sol61-composed-cpp-source-53fd6ec2-20261008/review-ready-composed-v1.json",
+      "sha256": "9c3fbf369f1946ac761b489760c2ce45f6dd4345d7f50ac0bca2cb7cb13184d2"
+    },
+    "cpp-independent.json": {
+      "bytes": 5082,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-independent-composed-cpp-source-review-20261008/review.json",
+      "sha256": "6f912a6f3384988e920d4b2e4223c4c6d7663a096f2ee27f471446716e0e2fc3"
+    },
+    "cpp-root.json": {
+      "bytes": 3166,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-root-composed-CPP-source-admission-20261008/admission.json",
+      "sha256": "650dc2e72ae1bc9999e835957e293ef405262a08b2ae1d354d6fc8cb4885c80f"
+    },
+    "fixture-checkpoint-source-checks.json": {
+      "bytes": 1366,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-guarded-reception-prep-20261008/source-only-checks.json",
+      "sha256": "c298a5a8f37dd869bea6b3fe2937c9caee5d8de4287b4a40dff162b6206be7cc"
+    },
+    "fixture-independent-source.json": {
+      "bytes": 5035,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-guarded-reception-prep-20261008/source-counterreview.json",
+      "sha256": "dd08dbbb2af8dff4039df8bf48ea1b5767fae6c4e4d53e45717730a9e297f554"
+    },
+    "lossless-report-author.json": {
+      "bytes": 1244,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-V2-port-v2-lossless-report-20261008/source-port-receipt.json",
+      "sha256": "0cfd98c5d8dd96933a3da5f3c7fcff7b5a76193dfab731f256e15f1e64bcaa96"
+    },
+    "root-integrated-source-result.json": {
+      "bytes": 1232,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-root-integrated-guarded-publication-CPP-source-retry2-20261008/result.json",
+      "sha256": "fc638ddee6c1304dcb7aa74e89eb3ccbff69126183d37b0d83b4c10090508019"
+    },
+    "root-integrated-source.xml": {
+      "bytes": 12767,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-root-integrated-guarded-publication-CPP-source-retry2-20261008/pytest.xml",
+      "sha256": "2a2d1dd369c8baadbb9b7dc07ed4249eb15bb5b7c1fbcd13de4c047abb9a7f8b"
+    },
+    "test-port-author.json": {
+      "bytes": 5157,
+      "original_local_path": "/Users/romaindespoulain/dev/tmp/PoPS-guarded-publication-V2-port-1766b40b-20261008/source-port-receipt.json",
+      "sha256": "8e88cf622887371e2a852f7a375ecf7520443e3a0670cfa76e496678af64aee8"
+    }
+  },
+  "fixture_checkpoint_supplement": {
+    "patch_sha256": "75fc229446bb8f073df5e4d3bfd00bdca3c639a6cd46c31028028b5ce288510d",
+    "scope": "Source-reviewed actual public capture added; true Native accepted checkpoint and restart not yet executed. Same collective path across MPI ranks.",
+    "test_sha256": "ff3e07e66d2fa02a25b959371a51c5e096561cb0d96b5ed747f08cec35561c0c"
+  },
+  "integrated_source_files": {
+    "include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp": {
+      "bytes": 110567,
+      "sha256": "bb33d7367bd54cdfeb8041f5916e1bb149b1a23223dad7a058e3cb99c44146c7"
+    },
+    "include/pops/runtime/program/program_context_moving_projection.inc": {
+      "bytes": 5896,
+      "sha256": "d11715b287f2d9d8459ff0546169f87daddfe0bbe1ab04859795b150525eba10"
+    },
+    "python/pops/codegen/program_accepted_ssp.py": {
+      "bytes": 20863,
+      "sha256": "bd799da58c0e547318b318ec0f4e2ec8a7c95cfc70235c68b9f6efe5f8585194"
+    },
+    "python/pops/codegen/program_emit_field_publication.py": {
+      "bytes": 5734,
+      "sha256": "69aaef32943ff91d912f7de2aa8c6094bba55a0470cc3037fa47da151e31bbff"
+    },
+    "python/pops/codegen/program_emit_ops.py": {
+      "bytes": 99232,
+      "sha256": "091187d1844c52601423a88d7c414f663e113cda27b553ca9cecfee23e20676c"
+    },
+    "python/pops/codegen/program_field_publication.py": {
+      "bytes": 10328,
+      "sha256": "cd24092df4840ca171f7d497d894cd4eb2470e5056b650c49d0ecb0ab1f058bf"
+    },
+    "src/runtime/system/system_fields.cpp": {
+      "bytes": 97296,
+      "sha256": "45a5b7a96ea60a4ee5438c6643e4d6bfa0c67ac002c48eaaa184a7c5f4f90efc"
+    }
+  },
+  "root_integrated_source_counts": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 71
+  },
+  "scope": "Integrated Source lot: 7 production files, actual Source 71 PASS and prior independent author/non-author admissions. Installed Native remains old ed2/af8 and is not qualification of this source. New official build required."
+}

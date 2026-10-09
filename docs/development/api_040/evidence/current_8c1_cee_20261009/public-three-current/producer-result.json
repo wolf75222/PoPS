@@ -1,0 +1,15 @@
+{
+  "qualified_cpu_build_source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "core_fingerprint_unchanged": "95d0ccaa1e7aa39f9cbb01d539c4e31a5a7e6e143207b088fd9c2730482963f5",
+  "Source": "e27d065a5eb7c086ced60b751a2468f729361ff0",
+  "exit": 0,
+  "seconds": 100.91147733300022,
+  "counts": {
+    "tests": 3,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "log_sha256": "0e5a0634e5c8a604774856bc812b2d7c80de2a6cf6e67339facfb1be74de4e7c",
+  "scope": "Author public Native tests using frozen independent oracle after separate representative math acceptance; not independent reception or GitHub CI."
+}

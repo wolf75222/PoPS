@@ -37,29 +37,11 @@ def _physical_metadata(node: Any) -> Mapping:
 def _solve_nodes(program: Any, handle: Any) -> tuple[Any, ...]:
     expected = _canonical(handle.canonical_identity())
     return tuple(node for node in _nodes(program)
-                 if node.op == "solve_linear"
+                 if node.op in ("solve_linear", "solve_spatial_field")
                  and _canonical(_physical_metadata(node).get("field_handle")) == expected)
 
 
-def _reachable(node: Any, all_nodes: tuple[Any, ...]) -> tuple[Any, ...]:
-    """Follow actual data inputs and nested apply blocks, never unrelated metadata witnesses."""
-    by_id = {item.id: item for item in all_nodes}
-    result = {}
-
-    def visit(value: Any) -> None:
-        if not hasattr(value, "id") or value.id in result:
-            return
-        value = by_id.get(value.id, value)
-        result[value.id] = value
-        for source in value.inputs:
-            visit(source)
-        for key in ("apply_block", "residual_block", "body_block"):
-            for child in value.attrs.get(key, ()):
-                visit(child)
-
-    visit(node)
-    return tuple(result.values())
-
+from pops.time._graph.value_traversal import reachable_values as _reachable
 
 @dataclass(frozen=True, slots=True)
 class ResolvedProgramFieldPlan:
@@ -144,13 +126,59 @@ class ResolvedProgramFieldPlan:
         }
         all_nodes = _nodes(program)
         for solve in solves:
-            if self.target == "amr_system" and solve.attrs.get("scope") != "hierarchy":
+            if self.target == "amr_system" and solve.attrs.get("scope") != "hierarchy" and solve.op != "solve_spatial_field":
                 raise ValueError("AMR field problems require an explicit synchronized hierarchy solver")
             if self.target == "system" and solve.attrs.get("scope") == "hierarchy":
                 raise ValueError("a hierarchy field solver requires an AMR layout")
             metadata = _physical_metadata(solve)
+            if self.storage.observation_axes is not None and _canonical(metadata.get("observation_axes", ())) != _canonical(self.storage.observation_axes):
+                raise ValueError("typed Field solve changed its physical-support storage-axis binding")
             if _canonical(metadata.get("field_problem")) != expected_problem:
                 raise ValueError("Program field solve changed its registered physical equations")
+            if solve.op == "solve_spatial_field":
+                from pops.fields._program_nonlinear_problem import (
+                    compile_equations, validate_nonlinear_field_request,
+                )
+                from pops.fields.methods import CellCenteredNonlinearCoupled
+                from pops.fields._program_problem import _physical_boundary
+                from pops.identity.scalar import scalar_data
+                validate_nonlinear_field_request(program, solve)
+                if solve.attrs.get("right_preconditioner") is not None and self.target != "amr_system":
+                    name = "FullResidualBasisLU@1" if solve.attrs["right_preconditioner"] == "pops.amr.full-residual-basis-lu@1" else "SpatialBasisJacobi@1"
+                    raise ValueError(f"{name} requires the original composite AMR FieldProblem provider; Uniform is unsupported")
+                if self.target not in ("system", "amr_system") or type(self.discretization.method) is not CellCenteredNonlinearCoupled:
+                    raise ValueError("original mixed residual requires its explicit native nonlinear method")
+                captures = solve.inputs[2:2 + solve.attrs["capture_count"]]
+                method_data = self.discretization.method.options()
+                diffusion, local = compile_equations(self.operator, captures, per_candidate=method_data.get("coefficient_evaluation") is not None)
+                from pops.fields._original_field_interaction import compile_interactions, interaction_identity_data
+                interactions = compile_interactions(self.operator, method_data.get("interaction_realization"))
+                if _canonical(interaction_identity_data(interactions)) != _canonical(interaction_identity_data(solve.attrs["source_contract"].get("interactions"))):
+                    raise ValueError("original residual changed its registered interaction physics/realization")
+                if solve.attrs["contract"] != method_data["contract"] or \
+                        solve.attrs.get("coefficient_face_policy") != method_data.get("coefficient_face_policy") or \
+                        solve.attrs.get("coefficient_evaluation") != method_data.get("coefficient_evaluation") or \
+                        solve.attrs.get("linear_residual_verification") != method_data.get("linear_residual_verification"):
+                    raise ValueError("original field coefficient realization differs from registered method")
+                if _canonical(local) != _canonical(solve.attrs["local_expressions"]) or \
+                        _canonical(diffusion) != _canonical(solve.attrs["source_contract"]["diffusion"] if method_data.get("coefficient_evaluation") else solve.inputs[1].attrs["expressions"]) or \
+                        _canonical(solve.attrs["finite_difference_step"]) != _canonical(scalar_data(self.discretization.method.finite_difference_step)) or \
+                        solve.attrs["physical_boundary"] != _physical_boundary(self.operator):
+                    raise ValueError("native residual changed its registered equations/method/boundaries")
+                from pops.fields._evolved_stage_contract import stage_projection, compile_accumulation
+                projection = stage_projection(self.operator, program, solve.point, authoring=False)
+                source = solve.attrs["source_contract"]
+                if projection is not None:
+                    if _canonical(source.get("evolved_stage")) != _canonical(projection.to_data()) or \
+                            _canonical(source.get("temporal_tau")) != _canonical(projection.tau.to_data()) or \
+                            _canonical(source.get("accumulation")) != _canonical(compile_accumulation(projection, captures, self.operator.unknowns)):
+                        raise ValueError("original evolved accumulation changed its registered declaration")
+                elif any(key in source for key in ("temporal_tau", "evolved_stage", "accumulation")):
+                    raise ValueError("original field solve invents an undeclared evolved accumulation")
+                from pops.time.references import canonical_handle
+                if {_canonical(canonical_handle(value.state_ref).canonical_identity()) for value in captures} != expected_dependencies:
+                    raise ValueError("native residual captures differ from the physical dependencies")
+                continue
             reachable = _reachable(solve, all_nodes)
             operations = tuple(node for node in reachable if node.op in (
                 "field_problem_load", "field_problem_coefficients", "field_problem_apply"))
@@ -182,10 +210,36 @@ def capture_program_field_plans(problem: Any, detach: Any, *, target: str,
             continue
         handle = problem.resolve(problem._field_registry.handle(name))
         solves = _solve_nodes(program, handle)
-        targets = tuple("program:solve_linear:%d" % node.id for node in solves)
+        targets = tuple("program:%s:%d" % (node.op, node.id) for node in solves)
         if not targets:
             raise ValueError("generic field %r requires an explicit Program solve" % name)
-        storage = FieldStorageBinding(registration.operator.unknowns, layout_plan.layout_for(handle))
+        storage = FieldStorageBinding(registration.operator.unknowns, layout_plan.layout_for(handle),
+            getattr(registration.discretization, "observation_axes", None) if getattr(registration.operator, "unknown_spaces", None) else None)
+        # Typed observations retain their own physical declaration. Storage is
+        # reconciled with every equation input; no species supplies a default.
+        observation_spaces = getattr(registration.operator, "unknown_spaces", {})
+        if observation_spaces:
+            dependencies = registration.operator.dependencies()
+            if not dependencies:
+                raise ValueError("typed field observation has no equation input from which to infer storage")
+            layouts = {layout_plan.layout_for(item) for item in dependencies}
+            if layouts != {storage.layout}:
+                raise ValueError("typed field observation equation inputs do not share its exact storage layout")
+            support = next(iter(observation_spaces.values())).support
+            if any(getattr(item, "space", None) is None or item.space.support != support
+                   for item in dependencies):
+                raise ValueError("typed field observation support disagrees with an equation input")
+            coordinates = registration.operator.coordinate_units
+            axes = getattr(registration.discretization, "observation_axes", None)
+            resolved_layout = next(row for row in layout_plan.layouts if row.handle == storage.layout)
+            dimension = resolved_layout.geometry.dimension
+            if axes is None or len(axes) != len(support.coordinates) or any(axis >= dimension for axis in axes):
+                raise ValueError("typed field observation has no exact support-to-storage-axis binding")
+            if coordinates and len(coordinates) != len(axes):
+                raise ValueError("typed field observation coordinate units disagree with its support")
+            for axis, cells in enumerate(resolved_layout.geometry.cells):
+                if axis not in axes and cells != 1:
+                    raise ValueError("typed field observation hidden storage axes must be singleton")
         if target == "amr_system":
             resolved_layout = next(row for row in layout_plan.layouts if row.handle == storage.layout)
             if resolved_layout.capabilities.get("execution") != "synchronous":

@@ -75,9 +75,70 @@ static std::string shared_flux_source_identity_(const shared_flux_sample_type& s
   return std::move(exact).release();
 }
 
+static std::string shared_flux_stage_(const shared_flux_sample_type& sample,
+                                      ::pops::amr::Rational weight,
+                                      const std::string& source_identity, bool projected) {
+  std::string stage = "shared-source/" + std::to_string(sample.source_point.tick) + "/" +
+                      std::to_string(sample.source_point.substep) + "/" +
+                      std::to_string(sample.source_point.stage) + "/weight/" +
+                      std::to_string(weight.numerator) + "/" + std::to_string(weight.denominator);
+  // A projected parent and a current child can share all rebased consumer coordinates. Retain
+  // the complete physical source identity, including its level/epoch, without attempt ordinals.
+  // The slash suffix cannot alias the historical format, whose final token is an integer.
+  if (projected)
+    stage += "/source/" + identity::sha256_hex(std::vector<std::uint8_t>(source_identity.begin(),
+                                                                         source_identity.end()));
+  return stage;
+}
+
+static std::string shared_flux_source_binding_(std::size_t block,
+                                               const shared_flux_samples_type& samples) {
+  ExactContractBuilder exact;
+  exact.text("pops.amr.shared-history-source-association.v1").scalar(block);
+  std::size_t count = 0;
+  for (const auto& sample : samples) {
+    if (!sample)
+      throw std::invalid_argument("shared history source association contains an absent sample");
+    if (sample->left_block == block || sample->right_block == block) {
+      exact.bytes(shared_flux_source_identity_(*sample));
+      ++count;
+    }
+  }
+  if (count == 0)
+    return {};
+  exact.scalar(count);
+  return std::move(exact).release();
+}
+
+std::optional<runtime::multiblock::InterfaceFluxSampleProjection<Dim>>
+prepare_shared_flux_projection_(const FluxBasis& basis,
+                                const shared_flux_sample_type& sample) const {
+  if (sample.left_block != basis.runtime_block && sample.right_block != basis.runtime_block)
+    throw std::invalid_argument("shared flux projection names a foreign basis endpoint");
+  if (sample.level == basis.level) {
+    facade_->authenticate_prepared_amr_interface_sample(sample);
+    return {};
+  }
+  if (!basis.history_snapshot)
+    throw std::invalid_argument("shared history projection lacks its physical face archive");
+  history_flux::require_shared_source_binding(
+      basis.history_snapshot->source_identity,
+      shared_flux_source_binding_(basis.runtime_block, basis.shared_samples));
+  const auto lineage = history_flux::require_projection_lineage(
+      basis.history_snapshot, sample.level, basis.level, sample.component_count,
+      facade_->configured_n_levels(),
+      [&](int level) { return facade_->prepared_amr_level_geometry(level); });
+  auto projection = facade_->prepare_prepared_amr_interface_sample_projection(sample, basis.level);
+  ExactContractBuilder contract;
+  contract.bytes(lineage).bytes(projection.exact_contract);
+  projection.exact_contract = std::move(contract).release();
+  return projection;
+}
+
 void materialize_active_shared_flux_() const {
   struct Consumption {
     std::shared_ptr<const shared_flux_sample_type> sample;
+    std::optional<runtime::multiblock::InterfaceFluxSampleProjection<Dim>> projection;
     ::pops::amr::ClockWindow window;
     runtime::multiblock::BoundaryEvaluationPoint point;
     ExactPolynomial left, right;
@@ -96,9 +157,12 @@ void materialize_active_shared_flux_() const {
         if (!term.basis || term.basis->identity != identity || term.basis->runtime_block != block)
           throw std::invalid_argument("shared flux consumer lost endpoint-owned basis authority");
         for (const auto& sample : term.basis->shared_samples) {
-          if (!sample || (sample->left_block != block && sample->right_block != block))
+          if (!sample || term.basis->level != active_level_ ||
+              (sample->left_block != block && sample->right_block != block))
             throw std::invalid_argument("shared flux sample names a foreign consumer endpoint");
-          routes.bytes(facade_->authenticate_prepared_amr_interface_sample(*sample));
+          auto projection = prepare_shared_flux_projection_(*term.basis, *sample);
+          routes.bytes(projection ? projection->exact_contract
+                                  : facade_->authenticate_prepared_amr_interface_sample(*sample));
           auto [entry, inserted] = consumed.try_emplace(shared_flux_source_identity_(*sample));
           auto& value = entry->second;
           auto point = term.basis->point;
@@ -108,12 +172,20 @@ void materialize_active_shared_flux_() const {
           point.application_identity = sample->source_point.application_identity;
           if (inserted) {
             value.sample = sample;
+            value.projection = std::move(projection);
             value.window = term.basis->window;
             value.point = point;
           } else if (value.sample->flux_density != sample->flux_density ||
                      value.sample->face_measure != sample->face_measure ||
+                     value.projection.has_value() != projection.has_value() ||
+                     (projection &&
+                      (value.projection->level != projection->level ||
+                       value.projection->face_measure != projection->face_measure ||
+                       value.projection->source_extents != projection->source_extents ||
+                       value.projection->target_extents != projection->target_extents)) ||
                      (value.window.begin != term.basis->window.begin ||
-                      value.window.end != term.basis->window.end) || value.point != point) {
+                      value.window.end != term.basis->window.end) ||
+                     value.point != point) {
             throw std::invalid_argument("shared source sample has inconsistent paired provenance");
           }
           add_exact_polynomial_(sample->left_block == block ? value.left : value.right,
@@ -123,7 +195,6 @@ void materialize_active_shared_flux_() const {
     }
     std::vector<typename interface_flux_ledger_type::Entry> entries;
     for (const auto& [identity, value] : consumed) {
-      (void)identity;
       if (value.left != value.right)
         throw std::invalid_argument("shared interface endpoint quadrature coefficients disagree");
       if (value.left.empty())
@@ -133,6 +204,11 @@ void materialize_active_shared_flux_() const {
       const auto weight = value.left.begin()->second;
       const auto& sample = *value.sample;
       const auto& point = value.point;
+      const auto projected_density =
+          value.projection ? value.projection->apply(sample) : std::vector<Real>{};
+      const auto& density = value.projection ? projected_density : sample.flux_density;
+      const double measure =
+          value.projection ? value.projection->face_measure : sample.face_measure;
       const double duration = active_flux_interval_duration_(value.window);
       if (point.level != active_level_ || point.substep != logical_substep_ ||
           point.dt != current_dt_ || duration != current_dt_ ||
@@ -144,17 +220,14 @@ void materialize_active_shared_flux_() const {
            value.window.end.physical_time != current_interval_start_time_ + current_dt_))
         throw std::invalid_argument("shared interface consumption names a foreign attempt window");
       const auto clock = runtime::multiblock::clock_stamp_in_window(point, value.window);
-      const std::string stage = "shared-source/" + std::to_string(sample.source_point.tick) + "/" +
-          std::to_string(sample.source_point.substep) + "/" +
-          std::to_string(sample.source_point.stage) + "/weight/" +
-          std::to_string(weight.numerator) + "/" + std::to_string(weight.denominator);
+      const std::string stage =
+          shared_flux_stage_(sample, weight, identity, value.projection.has_value());
       const auto append = [&](int coarse, int fine, ::pops::amr::InterfaceFluxOrientation orientation) {
         ::pops::amr::InterfaceFluxFragmentKey key{
             sample.interface_identity, runtime_->topology_epoch(), coarse, fine, clock, stage,
             point.graph_identity, point.rate_identity, point.application_identity, value.window,
             orientation, sample.left_block, sample.right_block};
-        entries.push_back({std::move(key), {weight, sample.face_measure, duration, true},
-                           sample.flux_density});
+        entries.push_back({std::move(key), {weight, measure, duration, true}, density});
       };
       if (active_level_ > 0)
         append(active_level_ - 1, active_level_, ::pops::amr::InterfaceFluxOrientation::FineOutward);

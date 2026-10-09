@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python",
+    "-m",
+    "pytest",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-w02-combined-bound/pytest.xml",
+    "tests/python/integration/runtime/test_api040_m04_combined_bound_runtime.py"
+  ],
+  "returncode": 0,
+  "duration_seconds": 35.15056325006299,
+  "counts": {
+    "tests": 1,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "passed",
+  "identity_sha256": "31ea919d5a664d8e599c3f62cd625159e7243f03a33d43b520d29a34655f1d45",
+  "log_sha256": "27863b599079d6d07addd4ead0ecc96dea921570bac5ab802405cbf071668119"
+}

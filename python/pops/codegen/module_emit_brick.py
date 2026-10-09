@@ -15,6 +15,7 @@ from typing import Any
 from pops.codegen.cpp_writer import (
     _collect_eig_witnesses,
     _cpp_identifier,
+    _cpp_expand,
     _eig_witness_helpers,
 )
 from pops.codegen.module_emit_helpers import (
@@ -35,8 +36,11 @@ from pops.codegen.module_emit_riemann import (
 )
 from pops._ir.expr import Const
 from pops.identity.scalar import scalar_cpp
+from .cpp_symbols import printer_scope,variable_identifier
+from .cpp_strings import cpp_string_literal, cpp_string_expression
 
 
+@printer_scope
 def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generated", cse: Any = True,
                    hoist_reciprocals: Any = False, *, native_input_plan: Any = None) -> str:
     """Generates a C++ BRICK satisfying the pops::HyperbolicModel concept (wrapping : step
@@ -65,6 +69,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         raise ValueError("emit_cpp_brick : set_conservative_from([...]) expected (%d expressions)"
                          % model.n_vars)
     program_only = bool(getattr(model, "_program_only_storage_axes", ()))
+    path_conservative = getattr(model, "_path_conservative", None) is not None
     if not model._flux and not program_only:
         raise ValueError("emit_cpp_brick : call set_flux(...) first")
     axes = _ranked_axes(model)
@@ -78,7 +83,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             "emit_cpp_brick : flux expected with %d components on every ranked axis; got %r"
             % (model.n_vars, wrong_flux_arity)
         )
-    if not program_only and not model._eig and model._wave_speeds is None and model._ws_jacobian is None:
+    if not program_only and not path_conservative and not model._eig and model._wave_speeds is None and model._ws_jacobian is None:
         raise ValueError("emit_cpp_brick : call set_eigenvalues(...), set_wave_speeds(...) "
                          "or set_wave_speeds_from_jacobian(...) first (source of "
                          "max_wave_speed / CFL)")
@@ -99,7 +104,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         )
 
     def cons_locals() -> list:
-        return ["    const pops::Real %s = U[%d];" % (_cpp_identifier(c), i)
+        return ["    const pops::Real %s = U[%d];" % (variable_identifier(c,'cons'), i)
                 for i, c in enumerate(model.cons_names)]
 
     def named_real_locals(lines: list) -> list:
@@ -247,8 +252,8 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             L.append("%s}" % ind)
         return L
 
-    cnames = ", ".join('"%s"' % c for c in model.cons_names)
-    pnames = ", ".join('"%s"' % p for p in model.prim_state)
+    cnames = ", ".join(cpp_string_expression(c, ensure_ascii=False) for c in model.cons_names)
+    pnames = ", ".join(cpp_string_expression(p, ensure_ascii=False) for p in model.prim_state)
     # Roles parallel to the names: the compiled-artifact ABI requires one explicit semantic per
     # component. Non-physical components additionally carry their exact label in VariableSet's
     # parallel user_roles vector; collapsing q1/q2 onto two anonymous Custom values would make any
@@ -286,7 +291,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
 
         user_roles = None
         if any_user_label:
-            user_roles = ", ".join(json.dumps(label) for label in labels)
+            user_roles = ", ".join(cpp_string_expression(label) for label in labels)
         return ", ".join(semantics), user_roles
 
     croles, cuser_roles = roles_init(_roles_for(model.cons_names, model.cons_roles))
@@ -300,9 +305,9 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "#include <Kokkos_MathematicalFunctions.hpp>",
         "#include <pops/core/identity/prepared_provider.hpp>",
         "#include <pops/numerics/fv/flux_interfaces.hpp>",
-        "#include <pops/numerics/spatial/nd/state_schema.hpp>",
+        "#include <pops/numerics/spatial/nd/state_conversion.hpp>",
         "// brique HYPERBOLIQUE generee depuis le modele symbolique '%s' (pops.dsl.emit_cpp_brick)."
-        % model.name,
+        % cpp_string_literal(model.name, ensure_ascii=False)[1:-1],
         "// Satisfait pops::HyperbolicModel : flux + max_wave_speed + conversions + descripteurs.",
     ]
     if rt_member:  # RuntimeParams header only if a formula reads a runtime param
@@ -316,6 +321,10 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     eig_pairs = _collect_eig_witnesses(model._proj or [])
     if model._ws_jacobian is not None or eig_pairs or model._roe_jacobian is not None:
         S.append("#include <pops/numerics/linalg/dense_eig.hpp>")
+    if path_conservative:
+        S += ["#include <string_view>", "#include <pops/numerics/fv/path_result.hpp>"]
+        if model._path_conservative["kernel"]["kind"] == "normalized_polynomial_path":
+            S.append("#include <pops/numerics/moments/normalized_moment_path.hpp>")
     S += [
         "namespace %s {" % namespace,
         "struct %s {" % nm,
@@ -351,16 +360,20 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "  inline static constexpr std::array<pops::QualifiedProviderRequirement, %d> "
         "flux_provider_requirements{{" % len(provider_rows)
     )
+    from ._native_units import unit_c_string_cpp
+
     for row in provider_rows:
         key, contract, provider = row["key"], row["contract"], row["provider"]
         values = [
             key["owner_qid"], key["space_kind"], key["space_name"], key["component"],
-            contract["representation"], contract["centering"], contract["unit"] or "",
+            contract["representation"], contract["centering"],
             contract["layout"], contract["value_kind"] or "", provider["producer"] or "",
         ]
         availability = "true" if provider["availability"] else "false"
         S.append("    {%s, %s, %d}," %
-                 (", ".join(json.dumps(value) for value in values),
+                 (", ".join([*(cpp_string_literal(value) for value in values[:6]),
+                              unit_c_string_cpp(contract["unit"]),
+                              *(cpp_string_literal(value) for value in values[6:])]),
                   availability, (row["consumer_slot"] if native_slots is None
                                  else native_slots[row["consumer_slot"]])))
     S.append("  }};")
@@ -382,14 +395,17 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     S.append("  static constexpr int n_providers = %d;" % input_width)
     if model._total_n_aux():
         S.append("  static constexpr int n_aux = %d;" % model._total_n_aux())
+    from pops.codegen.module_emit_path import emit_path_members
+    S += emit_path_members(model, cse=cse, aux_locals=aux_locals)
     if not program_only:
         from pops._ir.native_call import native_functions
+        from pops._ir.control_expr import has_evaluation_boundary
         from pops._ir.primitive_expansion import expand_primitive_recipes
         physical_fluxes = expand_primitive_recipes(model._flux, model.prim_defs)
         if not isinstance(physical_fluxes, Mapping):
             raise TypeError("expanded physical fluxes must preserve the axis mapping")
         all_fluxes = axis_values(physical_fluxes, "physical flux")
-        fallible_flux = bool(native_functions(all_fluxes))
+        fallible_flux = bool(native_functions(all_fluxes)) or has_evaluation_boundary(all_fluxes)
         # Keep legacy primitive locals for pure laws. Fallible recipes belong inside
         # the selected axis's joint evaluation and must not execute before its guard.
         if not fallible_flux:
@@ -487,13 +503,15 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         # parameter must be named even if no formula reads a provider directly.
         ws_jac: Any = model._ws_jacobian
         jac_fd = model._ws_jacobian is not None and model._ws_jacobian["eig"] == "fd"
-        mws_aux_param = "const auto& a" if (jac_fd and not model._eig) else aux_param
+        mws_aux_param = "const auto& a" if (path_conservative or (jac_fd and not model._eig)) else aux_param
         S += [
             "  template <int Axis>",
             "  POPS_HD pops::Real max_wave_speed(const State& U, %s) const {" % mws_aux_param,
             axis_guard("maximum-wave-speed"),
         ]
-        if model._eig:
+        if path_conservative:
+            mws_drv = []
+        elif model._eig:
             mws_drv = axis_values(model._eig, "eigenvalues")
         elif model._wave_speeds is not None:
             mws_drv = axis_values(model._wave_speeds, "explicit wave speeds")
@@ -501,8 +519,12 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             mws_drv = []  # fd path: max_wave_speed calls flux(), no direct primitive
         else:
             mws_drv = _jac_entries(model)
-        S += cons_locals() + aux_locals() + prim_locals(_live_prims(model, mws_drv))
-        if model._eig:
+        if not path_conservative:
+            S += cons_locals() + aux_locals() + prim_locals(_live_prims(model, mws_drv))
+        if path_conservative:
+            from pops.codegen.module_emit_path import emit_path_proposal_speed
+            S += emit_path_proposal_speed(model)
+        elif model._eig:
             for ordinal, axis in enumerate(axes):
                 S.append(axis_branch(ordinal))
                 etl, ecpps = _codegen_exprs(
@@ -736,19 +758,29 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         S += ["    Up[%d] = %s;" % (i, c) for i, c in enumerate(pcpps)]
         S += ["    return Up;", "  }", ""]
 
+    def primitive_identifier(name):
+        return variable_identifier(name, "prim" if name in model.prim_defs else "cons")
+
     recovery_constraints = getattr(model, "_recovery_admissibility", {})
-    if recovery_constraints:
+    if recovery_constraints or path_conservative:
         S.append("  POPS_HD bool recovery_admissible(const Prim& P, int* failing_component_) const {")
-        S += ["    const pops::Real %s = P[%d];" % (name, index)
+        S += ["    const pops::Real %s = P[%d];" % (primitive_identifier(name), index)
               for index, name in enumerate(model.prim_state)]
         for component, name in enumerate(model.prim_state):
             predicate = recovery_constraints.get(name)
             if predicate is None:
                 continue
-            S.append("    if (!(%s)) {" % predicate.to_cpp())
+            S.append("    if (!(%s)) {" % _cpp_expand(predicate, {}, None))
             S.append("      if (failing_component_ != nullptr) *failing_component_ = %d;" % component)
             S.append("      return false;")
             S.append("    }")
+        if path_conservative:
+            S += [
+                "    if (!path_admissible(to_conservative(P))) {",
+                "      if (failing_component_ != nullptr) *failing_component_ = 0;",
+                "      return false;",
+                "    }",
+            ]
         S += [
             "    if (failing_component_ != nullptr) *failing_component_ = -1;",
             "    return true;",
@@ -759,11 +791,11 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     S.append("  POPS_HD Prim to_primitive(const State& U) const {")
     S += cons_locals() + prim_locals(_live_prims(model, [], seed=model.prim_state))
     S.append("    Prim P{};")
-    S += ["    P[%d] = %s;" % (i, p) for i, p in enumerate(model.prim_state)]
+    S += ["    P[%d] = %s;" % (i, primitive_identifier(p)) for i, p in enumerate(model.prim_state)]
     S += ["    return P;", "  }", ""]
 
     S.append("  POPS_HD State to_conservative(const Prim& P) const {")
-    S += ["    const pops::Real %s = P[%d];" % (p, i) for i, p in enumerate(model.prim_state)]
+    S += ["    const pops::Real %s = P[%d];" % (primitive_identifier(p), i) for i, p in enumerate(model.prim_state)]
     ctl, ccpps = _codegen_exprs(model, model.cons_from, cse)
     S += ctl
     S.append("    State U{};")
@@ -781,7 +813,9 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "    for (int component = 0; component < n_vars; ++component)",
         "      if (!Kokkos::isfinite(result.value[component])) return result;",
     ]
-    if recovery_constraints:
+    if path_conservative:
+        S.append("    if (!path_admissible(U)) return result;")
+    if recovery_constraints or path_conservative:
         S += [
             "    int failing_component = -1;",
             "    if (!recovery_admissible(result.value, &failing_component)) return result;",
@@ -800,7 +834,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "    for (int component = 0; component < n_vars; ++component)",
         "      if (!Kokkos::isfinite(P[component])) return result;",
     ]
-    if recovery_constraints:
+    if recovery_constraints or path_conservative:
         S += [
             "    int failing_component = -1;",
             "    if (!recovery_admissible(P, &failing_component)) return result;",

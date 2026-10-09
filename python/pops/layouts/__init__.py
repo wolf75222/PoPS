@@ -355,6 +355,9 @@ def _authority_data(value: Any, slot: str) -> dict[str, Any]:
         json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False)
     except (TypeError, ValueError) as exc:
         raise TypeError("AMR.%s identity must be strict JSON data" % slot) from exc
+    if slot == "execution":
+        from pops.amr._execution_contract import validate_execution_data
+        data = validate_execution_data(data)
     return data
 
 

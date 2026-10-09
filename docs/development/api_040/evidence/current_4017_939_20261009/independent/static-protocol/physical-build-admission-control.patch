@@ -1,0 +1,85 @@
+--- a/run_native_reception.py
++++ b/run_native_reception.py
+@@ -34,17 +34,63 @@
+         stream.write("\n")
+ 
+ 
++BUILD_ADMISSION_SHA = "05f27f6c68525b852d517cfff476c715ca3aa78fbc7013311896510ca64beb68"
++BUILD_RESULT_SHA = "14b56ec61fc729a4092379652cbae21373279225e5510adbec2bac63095d5420"
++
++
++def validate_build_admission(document, status):
++    """The actual schema2 admission has no flat status: command exit is separate."""
++    assert type(document["schema"]) is int and document["schema"] == 2
++    assert document["Source"] == status["Source"] == SOURCE
++    assert document["SDK"] == status["SDK"] == SDK
++    assert document["core_fingerprint"] == CORE
++    assert type(document["core_files"]) is int and document["core_files"] > 0
++    assert type(status["exit"]) is int and status["exit"] == 0
++    assert document["total_object_graph_count"] == len(document["objects"]) > 0
++    row = document["installed_native"]
++    identity = document["identity"]
++    packaging = document["packaging"]
++    assert row["sha256"] == identity["native_sha256"] == NATIVE
++    assert identity["source_commit"] == SOURCE and "headers=" + SDK in identity["abi_key"]
++    native_path = Path(row["path"]).resolve()
++    package_file = Path(packaging["package_file"]).resolve()
++    sites = {Path(sysconfig.get_path(key)).resolve() for key in ("purelib", "platlib")}
++    assert any(native_path.is_relative_to(site / "pops/_native/dim2") for site in sites)
++    assert any(package_file == site / "pops/__init__.py" for site in sites)
++    assert native_path.is_relative_to(Path(sys.prefix).resolve())
++    assert Path(identity["native_file"]).resolve() == native_path
++    assert Path(identity["package_file"]).resolve() == package_file
++    assert Path(packaging["distribution_root"]).resolve() in sites
++    variants = [r for r in packaging["native_variants"] if r["dimension"] == 2]
++    assert len(variants) == 1 and variants[0]["sha256"] == NATIVE
++    assert Path(variants[0]["extension"]).resolve() == native_path
++
++
++def checked_build_admission(build_receipt):
++    assert sha(build_receipt) == BUILD_ADMISSION_SHA, "Exact Root physical admission required"
++    result_path = build_receipt.with_name("build-result.json")
++    assert sha(result_path) == BUILD_RESULT_SHA, "Exact Root actual build result required"
++    document = json.loads(build_receipt.read_text())
++    status = json.loads(result_path.read_text())
++    validate_build_admission(document, status)
++    row = document["installed_native"]
++    assert Path(row["path"]).stat().st_size == row["bytes"] and sha(row["path"]) == NATIVE
++    return document, result_path, status
++
++
+ def authenticate(checkout, build_receipt):
+     actual = subprocess.check_output(["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True).strip()
+     assert actual == SOURCE
+     subprocess.run(["git", "-C", str(checkout), "diff", "--quiet", "HEAD"], check=True)
+     assert build_receipt.is_file(), "Root physical build/install receipt required"
++    build_admission, build_result_path, build_status = checked_build_admission(build_receipt)
+     core_paths = subprocess.check_output(["git", "-C", str(checkout), "ls-files", "--",
+                                          "python/pops/", "python/bindings/", "include/", "src/"], text=True).splitlines()
+     core_rows = {name: {"bytes": (checkout / name).stat().st_size, "sha256": sha(checkout / name)}
+                  for name in core_paths}
+     core_hash = hashlib.sha256(json.dumps(core_rows, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+     assert core_hash == CORE
++    assert build_admission['core_files'] == len(core_rows)
+     import pops
+     from pops._native_selector import select_native_dimension
+     from pops.codegen.abi import module_header_signature
+@@ -57,6 +103,8 @@
+     assert package.is_relative_to(Path(sys.prefix).resolve()) and not package.is_relative_to(checkout)
+     native = select_native_dimension(2)
+     assert sha(native.__file__) == NATIVE
++    assert Path(native.__file__).resolve() == Path(build_admission['installed_native']['path']).resolve()
++    assert package / '__init__.py' == Path(build_admission['packaging']['package_file']).resolve()
+     assert module_header_signature() == SDK == pops_header_signature(package / "include")
+     origin = verify_installed_native(expect_dimension=2, expect_mpi=bool(native.__has_mpi__),
+                                     expect_parallel_hdf5=bool(native.__has_parallel_hdf5__))
+@@ -73,7 +121,8 @@
+             "core_fingerprint": core_hash, "tracked_core_rows": len(core_rows),
+             "package": str(package), "native_origin": str(origin), "native_path": native.__file__,
+             "authenticated_payload_files": len(files), "build_receipt": str(build_receipt),
+-            "build_receipt_sha256": sha(build_receipt), "actual_runtime_environment": native.runtime_environment_report()}
++            "build_receipt_sha256": sha(build_receipt), "build_result_sha256": sha(build_result_path),
++            "actual_build_exit": build_status['exit'], "actual_runtime_environment": native.runtime_environment_report()}
+ 
+ 
+ def run_case(kind, method, out):

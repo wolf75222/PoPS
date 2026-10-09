@@ -1,0 +1,13 @@
+{
+  "Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "exit": 1,
+  "seconds": 67.05085866599984,
+  "counts": {
+    "tests": 3,
+    "failures": 1,
+    "errors": 0,
+    "skipped": 0
+  },
+  "log_sha256": "8170fb09b39963b4a338157505a4191f8dca324f590d651f81848d6f10e9553f",
+  "scope": "Author public Native tests using frozen independent oracle after separate representative math acceptance; not independent reception or GitHub CI."
+}

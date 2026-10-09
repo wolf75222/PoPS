@@ -8,7 +8,8 @@ void AmrSystem<Dim>::publish_program_field_components(
   std::lock_guard<std::recursive_mutex> execution_lock(hierarchy.execution_mutex);
   using transaction_type = typename ExactAuxiliaryRegistry<Dim>::PublicationTransaction;
   const std::size_t depth = p_->engine->hierarchy().num_levels();
-  std::vector<std::string> providers, remaining_dirty;
+  std::vector<std::string> providers;
+  typename Impl::AuxiliaryInvalidations source_invalidations, next_invalidations;
   std::vector<AuxiliaryEvaluationPoint> points;
   std::string contract;
   std::exception_ptr error;
@@ -30,7 +31,7 @@ void AmrSystem<Dim>::publish_program_field_components(
           "AMR field publication has an incomplete current evaluation point");
     ExactContractBuilder exact;
     exact.text("pops.amr.program-field-publication")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
         .text(publication_identity)
         .scalar(p_->engine->topology_epoch())
         .scalar(p_->engine->materialization_generation())
@@ -118,17 +119,13 @@ void AmrSystem<Dim>::publish_program_field_components(
           .bytes(component_contract);
       point.serialize_exact(exact);
     }
-    remaining_dirty = p_->dirty_auxiliary_providers;
-    for (const auto& registry : hierarchy.auxiliary_registries)
-      for (const auto& identity : registry.dependent_provider_identities(providers))
-        if (std::find(remaining_dirty.begin(), remaining_dirty.end(), identity) ==
-            remaining_dirty.end())
-          remaining_dirty.push_back(identity);
-    std::erase_if(remaining_dirty, [&](const auto& identity) {
-      return std::find(providers.begin(), providers.end(), identity) != providers.end();
-    });
-    exact.sequence(remaining_dirty,
-                   [](ExactContractBuilder& out, const std::string& id) { out.text(id); });
+    // These are private source/candidate images, not an acknowledgement of the
+    // supplied component labels. Actual complete per-level transactions below
+    // establish which sealed providers really publish and which revisions they satisfy.
+    source_invalidations = p_->auxiliary_invalidations;
+    next_invalidations = p_->bound_auxiliary_invalidations();
+    source_invalidations.serialize_exact(exact);
+    next_invalidations.serialize_exact(exact);
     contract = std::move(exact).release();
   } catch (...) {
     error = std::current_exception();
@@ -143,16 +140,20 @@ void AmrSystem<Dim>::publish_program_field_components(
   // Full snapshots include ghosts, provider points and dirty dependencies, matching step rollback.
   std::vector<AuxiliaryStorageGroups<Dim>> accepted;
   std::vector<ExactAuxiliaryRegistry<Dim>> accepted_registries;
-  std::vector<std::string> accepted_dirty;
+  typename Impl::AuxiliaryInvalidations accepted_invalidations;
   std::vector<std::optional<transaction_type>> transactions;
+  std::vector<std::map<std::string, std::uint64_t>> captured_obligations;
   error = nullptr;
   try {
+    if (p_->auxiliary_invalidations != source_invalidations)
+      throw std::logic_error("AMR Program field invalidation source changed before staging");
     accepted.reserve(depth);
     for (const auto& groups : hierarchy.provider_storage)
       accepted.push_back(*groups);
     accepted_registries = hierarchy.auxiliary_registries;
-    accepted_dirty = p_->dirty_auxiliary_providers;
+    accepted_invalidations = p_->auxiliary_invalidations;
     transactions.resize(depth);
+    captured_obligations.resize(depth);
   } catch (...) {
     error = std::current_exception();
   }
@@ -171,7 +172,7 @@ void AmrSystem<Dim>::publish_program_field_components(
                                        *hierarchy.provider_candidate_storage[level]);
       }
       hierarchy.auxiliary_registries.swap(accepted_registries);
-      p_->dirty_auxiliary_providers.swap(accepted_dirty);
+      p_->auxiliary_invalidations.swap(accepted_invalidations);
     } catch (...) {
       restore_error = std::current_exception();
     }
@@ -190,6 +191,12 @@ void AmrSystem<Dim>::publish_program_field_components(
       try {
         copy_auxiliary_groups_in_place(*hierarchy.provider_storage[level], candidate);
         transactions[level].emplace(registry.begin_external_publication(points[level], providers));
+        for (const auto index : registry.topological_order()) {
+          const auto& identity = registry.provider(index).identity();
+          if (transactions[level]->requires_staging(identity))
+            captured_obligations[level].emplace(identity,
+                next_invalidations.obligation(level, identity));
+        }
         for (const auto& item : levels[level].components) {
           const auto address = registry.address_of(item.key);
           auto& destination = *candidate.find(address.group);
@@ -219,18 +226,32 @@ void AmrSystem<Dim>::publish_program_field_components(
         hierarchy.provider_candidate_physical_boundaries[level]->execute(candidate);
       };
       refresh_ghosts();
+      const auto auxiliary_geometry = prepared_amr_level_geometry(static_cast<int>(level));
       transactions[level]->launch_ready_native(
-          {hierarchy.provider_storage[level].get(), &candidate},
+          {hierarchy.provider_storage[level].get(), &candidate, &auxiliary_geometry},
           [&](const auto&, std::exception_ptr provider_error) {
             auxiliary_ghost_detail::rethrow_collective_failure(
                 provider_error, &lane, "AMR Program field prerequisite launch failed collectively");
             refresh_ghosts();
           });
+      std::exception_ptr fence_error;
+      try { Kokkos::fence(); } catch (...) { fence_error = std::current_exception(); }
+      auxiliary_ghost_detail::rethrow_collective_failure(
+          fence_error, &lane, "AMR Program field prerequisite fence failed collectively");
       require_finite_auxiliary_groups(candidate, &lane,
                                       "AMR Program field observation publication");
       std::exception_ptr completion_error;
       try {
         transactions[level]->validate_complete();
+        std::vector<std::string> published;
+        for (const auto index : registry.topological_order()) {
+          const auto& identity = registry.provider(index).identity();
+          if (transactions[level]->requires_staging(identity)) published.push_back(identity);
+        }
+        // Fine transport obligations opened by this real parent candidate are
+        // visible only in the private candidate until every level is accepted.
+        p_->record_auxiliary_publication(next_invalidations, level, published,
+                                         captured_obligations[level]);
       } catch (...) {
         completion_error = std::current_exception();
       }
@@ -242,6 +263,28 @@ void AmrSystem<Dim>::publish_program_field_components(
   }
   if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
     rollback(error, "AMR Program field hierarchy preparation failed collectively");
+    return;
+  }
+  std::string accepted_incidence_contract;
+  error = nullptr;
+  try {
+    if (p_->auxiliary_invalidations != source_invalidations)
+      throw std::logic_error("AMR Program field invalidation source changed during production");
+    ExactContractBuilder exact;
+    exact.text("pops.amr.program-field-publication-incidence").scalar(std::uint32_t{1})
+        .text(publication_identity);
+    next_invalidations.serialize_exact(exact);
+    accepted_incidence_contract = std::move(exact).release();
+  } catch (...) { error = std::current_exception(); }
+  if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+    rollback(error, "AMR Program field incidence preparation failed collectively");
+    return;
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"amr-program-field-accepted-incidence", accepted_incidence_contract}}, lane)) {
+    try { throw std::invalid_argument("AMR Program field accepted incidence differs across ranks"); }
+    catch (...) { error = std::current_exception(); }
+    rollback(error, "AMR Program field accepted incidence differs collectively");
     return;
   }
   error = nullptr;
@@ -258,5 +301,5 @@ void AmrSystem<Dim>::publish_program_field_components(
     rollback(error, "AMR Program field hierarchy commit failed collectively");
     return;
   }
-  p_->dirty_auxiliary_providers.swap(remaining_dirty);
+  p_->auxiliary_invalidations.swap(next_invalidations);
 }

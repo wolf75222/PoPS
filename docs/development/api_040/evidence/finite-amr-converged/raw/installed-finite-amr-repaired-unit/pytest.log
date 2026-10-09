@@ -1,0 +1,31 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/work/PoPS
+configfile: pyproject.toml
+collecting ... collected 21 items
+
+tests/python/unit/codegen/test_finite_m09_full_program.py::test_every_finite_output_and_status_use_the_explicit_template[False] PASSED [  4%]
+tests/python/unit/codegen/test_finite_m09_full_program.py::test_every_finite_output_and_status_use_the_explicit_template[True] PASSED [  9%]
+tests/python/unit/codegen/test_finite_m09_full_program.py::test_complete_generated_program_compiles_with_real_kokkos_headers[False] PASSED [ 14%]
+tests/python/unit/codegen/test_finite_m09_full_program.py::test_complete_generated_program_compiles_with_real_kokkos_headers[True] PASSED [ 19%]
+tests/python/unit/codegen/test_finite_m09_source.py::test_true_finite_w06_routes_to_existing_native_provider[False-False] PASSED [ 23%]
+tests/python/unit/codegen/test_finite_m09_source.py::test_true_finite_w06_routes_to_existing_native_provider[False-True] PASSED [ 28%]
+tests/python/unit/codegen/test_finite_m09_source.py::test_true_finite_w06_routes_to_existing_native_provider[True-False] PASSED [ 33%]
+tests/python/unit/codegen/test_finite_m09_source.py::test_true_finite_w06_routes_to_existing_native_provider[True-True] PASSED [ 38%]
+tests/python/unit/codegen/test_finite_m09_source.py::test_finite_materialization_requires_exact_output_and_owned_captures PASSED [ 42%]
+tests/python/unit/codegen/test_finite_m09_source.py::test_native_materialization_votes_before_any_fab_access PASSED [ 47%]
+tests/python/unit/codegen/test_finite_m09_admission.py::test_two_seeds_preserve_the_original_equation_and_frozen_captures[False] PASSED [ 52%]
+tests/python/unit/codegen/test_finite_m09_admission.py::test_two_seeds_preserve_the_original_equation_and_frozen_captures[True] PASSED [ 57%]
+tests/python/unit/codegen/test_finite_m09_admission.py::test_distinct_spatial_batches_cannot_silently_supply_finite_map_operands PASSED [ 61%]
+tests/python/unit/numerics/test_finite_linear_native_shapes.py::test_rectangular_native_shapes_and_joint_failure PASSED [ 66%]
+tests/python/unit/amr/test_local_state_storage_amr.py::test_local_affine_product_resolves_full_amr_authorities[1] PASSED [ 71%]
+tests/python/unit/amr/test_local_state_storage_amr.py::test_local_affine_product_resolves_full_amr_authorities[2] PASSED [ 76%]
+tests/python/unit/amr/test_local_state_storage_amr.py::test_local_storage_authority_rejects_another_resolved_state PASSED [ 80%]
+tests/python/unit/amr/test_local_state_storage_amr.py::test_impossible_original_residual_still_resolves_and_emits PASSED [ 85%]
+tests/python/unit/amr/test_local_state_storage_amr.py::test_independent_particle_oracle_has_exact_amr_cell_axes PASSED [ 90%]
+tests/python/unit/amr/test_local_state_storage_amr.py::test_authored_density_tag_selects_only_half_the_coarse_columns PASSED [ 95%]
+tests/python/unit/amr/test_local_state_storage_amr.py::test_transfer_does_not_reduce_a_deeper_exact_storage_halo PASSED [100%]
+
+- generated xml file: /Users/romaindespoulain/Documents/Codex/2026-09-28/dans-le-d-p-t-pops/outputs/installed-finite-amr-repaired-unit/pytest.xml -
+============================= 21 passed in 21.77s ==============================

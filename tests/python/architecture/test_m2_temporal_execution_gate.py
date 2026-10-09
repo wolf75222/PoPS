@@ -241,3 +241,32 @@ def test_m2_restart_hierarchy_and_program_only_routes_use_real_exact_proofs():
         "tests/python/architecture/test_program_only_temporal_facades.py"
         "::test_ssprk_semantics_have_only_typed_python_program_authority",
     }
+
+
+@pytest.mark.parametrize("selected_body,selector,refused", [
+    ("ASSERT_TRUE(true);", r"^Proof\.Required$", False),
+    ("GTEST_SKIP();", r"^Proof\.Required$", True),
+    ("if (true) { GTEST_SKIP(); }", r"^Proof\.Required$", True),
+    ("ASSERT_TRUE(true);", r"^Proof\.Missing$", True),
+    ("ASSERT_TRUE(true);", "[", True),
+    ("ASSERT_TRUE(true);", r"^Proof\..*$", True),
+])
+def test_m2_scopes_mandatory_markers_to_the_exact_selected_proof(tmp_path, monkeypatch, selected_body, selector, refused):
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    source = tmp_path / "proof.cpp"
+    source.write_text("TEST(Proof, Required) { " + selected_body + " }\n"
+                      "TEST(Proof, Other) { GTEST_SKIP(); }\n")
+    errors = runner._ctest_proof_errors({"sources": ["proof.cpp"]}, selector)
+    assert bool(errors) is refused
+
+
+def test_m2_refuses_disabled_duplicate_and_missing_exact_proofs(tmp_path, monkeypatch):
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    source = tmp_path / "proof.cpp"
+    source.write_text("TEST(Proof, DISABLED_Required) { ASSERT_TRUE(true); }\n")
+    assert runner._ctest_proof_errors({"sources": ["proof.cpp"]}, r"^Proof\.DISABLED_Required$")
+    source.write_text("TEST(Proof, Required) {}\nTEST(Proof, Required) {}\n")
+    assert runner._ctest_proof_errors({"sources": ["proof.cpp"]}, r"^Proof\.Required$")
+    assert runner._ctest_proof_errors({"sources": ["absent.cpp"]}, r"^Proof\.Required$")

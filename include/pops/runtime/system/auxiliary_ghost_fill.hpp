@@ -13,6 +13,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/collective_exception.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
 #include <pops/runtime/system/exact_aux_registry.hpp>
 #include <pops/runtime/system/exact_field_marshaling.hpp>
@@ -36,14 +37,8 @@ namespace auxiliary_ghost_detail {
 
 inline void rethrow_collective_failure(std::exception_ptr local_error, const ExecutionLane* lane,
                                        const char* message) {
-  const long failed = local_error ? 1L : 0L;
-  const long collective =
-      lane ? all_reduce_max(failed, lane->communicator()) : all_reduce_max(failed);
-  if (collective == 0)
-    return;
-  if ((!lane || lane->size() == 1) && local_error)
-    std::rethrow_exception(local_error);
-  throw std::runtime_error(message);
+  collectively_rethrow_exception(
+      local_error, lane ? lane->communicator() : world_communicator_view(), message);
 }
 
 inline std::size_t checked_multiply(std::size_t left, std::size_t right, const char* message) {

@@ -1,0 +1,198 @@
+{
+  "R5_Native": null,
+  "R5_actual_execution": null,
+  "R5_numerical_qualification": null,
+  "Root_GO": false,
+  "SDK": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+  "Source": "98804c6849c9966e05b5397126bab983a5fa0227",
+  "accepted_RPATH_helper_bytes_unchanged": true,
+  "actual_R4_evidence": {
+    "actual-r4-failed-dependency-cancellation.json": {
+      "bytes": 639,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r4-failed-dependency-cancellation.json",
+      "sha256": "46924d2bedb24e526ad287053787ce6e06ea43e2563739983b4f9f8534409397"
+    },
+    "actual-r4-job-progress-20261009T010802Z.json": {
+      "bytes": 23303,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/actual-r4-job-progress-20261009T010802Z.json",
+      "sha256": "6644324758c204d104b75ea2cc3c6821e0f783d8a4923a546bc1a84e74e86fc2"
+    }
+  },
+  "base_R4_unchanged": true,
+  "base_files": {
+    "build_native_r4.sh": {
+      "bytes": 3584,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r4/build_native_r4.sh",
+      "sha256": "dc485158ab821ed68465961c59c1af650d12549953fe193a8683541a1fd1aa28"
+    },
+    "build_phase_r4.sbatch": {
+      "bytes": 772,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r4/build_phase_r4.sbatch",
+      "sha256": "5b633ffe1468dec2f27d947791bc8e8cf57342310c6474a57b236c99e99c8f29"
+    },
+    "capture_gpu_native_r4.py": {
+      "bytes": 9854,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r4/capture_gpu_native_r4.py",
+      "sha256": "ce0eb01ada4cbabad54f42f4ae93352987f299ed319574244684b95e96229746"
+    },
+    "capture_kokkos_profile_r4.py": {
+      "bytes": 1925,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r4/capture_kokkos_profile_r4.py",
+      "sha256": "cf25fea18892cd3cca914b98d4b4e045f6a56ffa2286c28802ae1c1ec22049d5"
+    },
+    "launch_phase_r4.py": {
+      "bytes": 3748,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r4/launch_phase_r4.py",
+      "sha256": "1e642bc84a16c8220d78b6c376d84d3058c8521bcda371e18fdab75fbbe4952e"
+    },
+    "native_install_rpath_r4.py": {
+      "bytes": 14253,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r4/native_install_rpath_r4.py",
+      "sha256": "e88c78f30aa832e53811ca864261a96ce858fde03a2faf296ef4b7467ca59c70"
+    },
+    "phase_quota_r4.py": {
+      "bytes": 510,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r4/phase_quota_r4.py",
+      "sha256": "c2d970518130db10f0bbef07d1f83844ef87551d15a92d41361536ba225b0294"
+    },
+    "phase_rank_runner_r4.py": {
+      "bytes": 6818,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r4/phase_rank_runner_r4.py",
+      "sha256": "0a47c48f9d2401da488d70f38ac2fe4a6d79059735effed74aa7c62af2e92ca5"
+    },
+    "r4-admission.json": {
+      "bytes": 6651,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r4/r4-admission.json",
+      "sha256": "ef3f7b2338340a2330463f3158367431727e839516edbe7d9512ba4fd1232573"
+    },
+    "read-r4-pins.py": {
+      "bytes": 1903,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r4/read-r4-pins.py",
+      "sha256": "98505bbafda028c9a97362fbbede4afa3b97a92c262e0e30a7f9f996d9049296"
+    },
+    "resume_probe_r4.sh": {
+      "bytes": 2059,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r4/resume_probe_r4.sh",
+      "sha256": "80e13991d14863a55a4fc2ac2dc6bbe88e8fde2ab481388bea3af1914d4f09bb"
+    },
+    "run_campaign_r4.sh": {
+      "bytes": 2822,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r4/run_campaign_r4.sh",
+      "sha256": "f4be3ce74eceaadaca98ed7316cd3779139037a692c94cba835dbd4c5094a261"
+    },
+    "runtime_context_r4.sh": {
+      "bytes": 832,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r4/runtime_context_r4.sh",
+      "sha256": "d10f17a90f4a262ac374db958f99be62d14063bba50a5f837fc016d807241c7b"
+    },
+    "runtime_phase_r4.sbatch": {
+      "bytes": 1075,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r4/runtime_phase_r4.sbatch",
+      "sha256": "5e286235825e355d1254dcaa15b745c5fbb6f4affaaa1c5f5b9efcbe3242b097"
+    },
+    "test_native_install_rpath_r4.py": {
+      "bytes": 10854,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-gh200-um-runtime-preparation-98804c68-20261009/root-reviewed-resume-r4/test_native_install_rpath_r4.py",
+      "sha256": "f8844228c628f1adb99a6e4e334a0f4a73a8264eb45d2c94db9d9a35627f3016"
+    }
+  },
+  "checks": "21static parser checks plus5local synthetic shell-snippet cases; no operationalR5/probe/native/MPI/SSH/source/env/install execution",
+  "core": "b756f21226ad09e2108026bc9c3bfce9a251d1480e8a81e0e733db0c0845871a",
+  "files": {
+    "README.md": {
+      "bytes": 4249,
+      "sha256": "da9abdab12b1f98e04a83a6c30edfa4161ba1781de6b844c66f5537790d2f072"
+    },
+    "build_native_r5.sh": {
+      "bytes": 3639,
+      "sha256": "f586b80503e8f00f05928bf37d834fe03de0e78a6a736e8f6f769d5aadc086be"
+    },
+    "build_phase_r5.sbatch": {
+      "bytes": 772,
+      "sha256": "0bfa12b5516f6d537c417e87956cf1d9a9aa4687986f49be0423579ae9bd1c08"
+    },
+    "capture_gpu_native_r5.py": {
+      "bytes": 9854,
+      "sha256": "e91de487a476e58d83e30d38f253280500ac55253c005448779d5a197a364f17"
+    },
+    "capture_kokkos_profile_r5.py": {
+      "bytes": 1925,
+      "sha256": "b33a1e9f7350f1acbbc2336f9747750236d6a1234f78c8fd26ef5087bd4e4602"
+    },
+    "launch_phase_r5.py": {
+      "bytes": 3748,
+      "sha256": "a7bc9ad6ff2e44c2b183a78d26766650f94f271baf628b522a4da63a31612678"
+    },
+    "native_install_rpath_r5.py": {
+      "bytes": 14253,
+      "sha256": "e88c78f30aa832e53811ca864261a96ce858fde03a2faf296ef4b7467ca59c70"
+    },
+    "phase_quota_r5.py": {
+      "bytes": 510,
+      "sha256": "ea534f527ae56483240cf074a9a4492111e0aac16ea3580eee018d6b3189f20b"
+    },
+    "phase_rank_runner_r5.py": {
+      "bytes": 6818,
+      "sha256": "cb7115f637f889d5e90bed17c0345fc0614c9bdf94d6ccc9357095b9e9e04ca6"
+    },
+    "r5-additive-files.patch": {
+      "bytes": 70109,
+      "sha256": "697d97b020aa837a676a957278bfd9f2d159858038c4f641e3515ebbd3c4b66f"
+    },
+    "r5-admission.template.json": {
+      "bytes": 6939,
+      "sha256": "3a21bf6da8947b49cb692137cfc10de19b4c85211cf4277bde42f4a3ba712d72"
+    },
+    "r5-comparison-from-root-reviewed-r4.patch": {
+      "bytes": 28440,
+      "sha256": "eb0711c1a4c1ce7d66a33de95c7a02b34fc4a4cbaa0fcc93f5d8d52451c7f1ed"
+    },
+    "r5-minimal-semantic-delta.patch": {
+      "bytes": 453,
+      "sha256": "a696ace1f8dde9822b0ff3e58e0746d61dfb50aa446de5d8c489a49ea14ad647"
+    },
+    "r5-namespace-and-base-provenance.json": {
+      "bytes": 24085,
+      "sha256": "241be28f14ec092729c6cec71d7a048d987e97b4c1dc44c153e0bac0a2cb0ca5"
+    },
+    "r5-static-validation.json": {
+      "bytes": 2365,
+      "sha256": "2b193ac084873712d270dc14db360ce08154fbf31297c16c75901ac063418372"
+    },
+    "read-r5-pins.py": {
+      "bytes": 1966,
+      "sha256": "e1d58390fadbf172463b5a4eea2ea48d41e33a4a0ee42eb458919f55854ca8db"
+    },
+    "resume_probe_r5.sh": {
+      "bytes": 2059,
+      "sha256": "4ca7f56bfd07da245c1d2dfc4b6f2fd376f2db509140acbfaeab7826ddade50c"
+    },
+    "run_campaign_r5.sh": {
+      "bytes": 2822,
+      "sha256": "d55fe5543c917bee59757dcb8dcc96324c1ba84c19b940d74861737eb71f5f47"
+    },
+    "runtime_context_r5.sh": {
+      "bytes": 921,
+      "sha256": "1378875b47aaf16fd1222d9b0f509d6dd9e9578d0e92895e439940c2d89c6a72"
+    },
+    "runtime_phase_r5.sbatch": {
+      "bytes": 1075,
+      "sha256": "cfe85ee73b81e8ed308a9e8c0a4c884f9869d5c1a767964e39e0125d698c351c"
+    },
+    "synthetic-kokkos-environment-proof.json": {
+      "bytes": 1980,
+      "sha256": "04ace143db49d1cb1b10e4f766fde233a0d4e4231bf543616dccd001fdd564d3"
+    },
+    "synthetic_kokkos_environment.py": {
+      "bytes": 2776,
+      "sha256": "eda55b7c0e9cef5159ee28807844ae3d91cff6a36a4f355d969734b3f20c93fc"
+    },
+    "test_native_install_rpath_r5.py": {
+      "bytes": 10854,
+      "sha256": "5ce05f8b60e3c834006a829941df920be94f0197e3dc59732a192ef79a0911f6"
+    }
+  },
+  "mechanical_delta": "R5newfilenames/result/cache/admission/marker; oldglobal/R4entryguardpreserved plusR5 guard",
+  "scope": "Source988SDKde2coreb756 only. PriorrealR4CUDAmicroprobe PASS remains priorR4 evidence. No actualR5/Native/science claim and no CPU4017 inheritance.",
+  "semantic_delta": "Exact two own-prefix Kokkos_ROOT/POPS_KOKKOS_ROOT exports before guards/child launches; CMake flags unchanged"
+}

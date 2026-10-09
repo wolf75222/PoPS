@@ -1,0 +1,11 @@
+{
+  "utc": "2026-10-09T01:33:29.526118+00:00",
+  "argv": [
+    "ssh",
+    "romeo",
+    "/usr/bin/python3 -"
+  ],
+  "exit": 0,
+  "stdout": "{\"utc\": \"2026-10-09T01:33:29.550145+00:00\", \"commands\": [{\"argv\": [\"sacct\", \"-j\", \"738183\", \"-n\", \"-X\", \"-P\", \"-o\", \"JobID,State,ExitCode,Elapsed,NodeList\"], \"exit\": 0, \"stdout\": \"738183|FAILED|1:0|00:00:29|romeo-a043\\n\", \"stderr\": \"\"}, {\"argv\": [\"squeue\", \"-j\", \"738184\", \"-h\", \"-o\", \"%i|%j|%T|%R|%u\"], \"exit\": 0, \"stdout\": \"738184|pops988-r5-runtime|PENDING|(DependencyNeverSatisfied)|rmdraux\\n\", \"stderr\": \"\"}, {\"argv\": [\"scancel\", \"738184\"], \"exit\": 0, \"stdout\": \"\", \"stderr\": \"\"}, {\"argv\": [\"sacct\", \"-j\", \"738183,738184\", \"-n\", \"-X\", \"-P\", \"-o\", \"JobID,State,ExitCode,Elapsed,NodeList\"], \"exit\": 0, \"stdout\": \"738183|FAILED|1:0|00:00:29|romeo-a043\\n738184|CANCELLED by 100267|0:0|00:00:00|None assigned\\n\", \"stderr\": \"\"}], \"scope\": \"Cancel only the explicitly identified R5 runtime dependency after actual closed R5 build failure; no other job touched, no Native/science success inferred.\"}\n",
+  "stderr": "** WARNING: connection is not using a post-quantum key exchange algorithm.\n** This session may be vulnerable to \"store now, decrypt later\" attacks.\n** The server may need to be upgraded. See https://openssh.com/pq.html\n"
+}

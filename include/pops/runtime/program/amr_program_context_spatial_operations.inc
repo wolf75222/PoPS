@@ -282,7 +282,12 @@ Real norm2(int program_block, const field_type& field) const {
     for_each_owner_active_level_(
         program_block, field, nullptr,
         [&](const field_type& level_field, const field_type*, const field_type* active) {
-          local += pops::dot_active_local(level_field, level_field, 0, active);
+          const Real contribution = pops::dot_active_local(level_field, level_field, 0, active);
+          // Evaluate every copy, but count finite replicated storage once on its owned lane.
+          // Retain nonfinite contributions so the original norm/guard failure path is not hidden.
+          if (!level_field.distribution().replicated() || lane.rank() == 0 ||
+              !std::isfinite(contribution))
+            local += contribution;
         });
   } catch (...) {
     local_error = std::current_exception();
@@ -324,6 +329,56 @@ Real dot(int program_block, const field_type& left, const field_type& right) con
   }
   converge_owner_reduction_(local_error, lane, "AMR Program dot reduction");
   return static_cast<Real>(all_reduce_sum(static_cast<double>(local), lane));
+}
+
+private:
+// Reuse the authenticated owner traversal without changing its legacy users.
+// A resolved field's identity carries its actual level, including State/history;
+// callback order cannot identify a level because Scratch/Direct may skip levels.
+template <class Visitor>
+void for_each_owner_finest_active_level_(int program_block, const field_type& left,
+                                         const field_type& right, Visitor&& visitor) const {
+  for_each_owner_active_level_(
+      program_block, left, &right,
+      [&](const field_type& level_left, const field_type* level_right,
+          const field_type* active) {
+        const int owner = sys_block(program_block);
+        const Identity identity = classify_owner_field_(owner, level_left, "AMR dot_all coverage");
+        const field_type& coverage =
+            facade_->prepared_amr_block_level_coverage_mask(owner, identity.direct_level);
+        require_same_layout_(coverage, level_left, "AMR dot_all coverage mask");
+        visitor(level_left, level_right, active, &coverage);
+      });
+}
+
+public:
+/// pops.program.dot-all@1: every component, on exact finest-owner active levels.
+Real dot_all(int program_block, const field_type& left, const field_type& right) const {
+  const ExecutionLane& lane = prepared_execution_lane();
+  std::exception_ptr local_error;
+  FiniteCompensatedSum accumulated;
+  try {
+    for_each_owner_finest_active_level_(
+        program_block, left, right,
+        [&](const field_type& left_field, const field_type* right_field,
+            const field_type* active, const field_type* coverage) {
+          if (right_field == nullptr)
+            throw std::logic_error("AMR Program dot_all is missing its right owner field");
+          require_same_field_contract_(left_field, *right_field, "AMR Program dot_all");
+          if (left_field.ghosts() != right_field->ghosts())
+            throw std::invalid_argument("AMR Program dot_all ghost count differs");
+          const auto checked =
+              pops::dot_owned_active_all_finite_sum_local(left_field, *right_field, active, coverage);
+          if (!left_field.distribution().replicated() || lane.rank() == 0)
+            accumulated.join(checked);
+          if (!accumulated.finite())
+            throw std::overflow_error("AMR Program dot_all level accumulation is nonfinite");
+        });
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  converge_owner_reduction_(local_error, lane, "AMR Program dot-all reduction");
+  return pops::collective_finite_compensated_sum(accumulated, lane.communicator());
 }
 
 Geometry<Dim> geometry() const {
@@ -455,6 +510,86 @@ void fill_boundary(field_type& field, const ExecutionLane& lane) const {
   session->fill(field);
   if (profile.active())
     Kokkos::fence();
+}
+
+/// Source assembly is allowed on one exact active level of the prepared hierarchy. This is
+/// distinct from an independent sparse-level Krylov solve: parent ghosts have already been
+/// supplied by prepare_condensed_prior or the provider's composite solution.
+std::shared_ptr<tensor_boundary_session_type> prepare_condensed_boundary_session(
+    int program_block, field_type& prototype) const {
+  const ExecutionLane& lane = prepared_execution_lane();
+  const field_type* owner = nullptr;
+  const HierarchyTensorLevelBoundary* boundary = nullptr;
+  const int runtime_block = sys_block(program_block);
+  const auto point = boundary_evaluation_point(0);
+  prepare_spatial_collectively([&] {
+    if (!hierarchy_tensor_selection_ || !hierarchy_tensor_solver_ ||
+        hierarchy_tensor_selection_->program_block != program_block ||
+        hierarchy_tensor_selection_->components != 1 ||
+        hierarchy_tensor_topology_epoch_ != runtime_->topology_epoch() ||
+        hierarchy_tensor_materialization_generation_ != runtime_->materialization_generation() ||
+        hierarchy_tensor_boundaries_.size() != static_cast<std::size_t>(nlev()) ||
+        active_level_ < 0 || active_level_ >= nlev())
+      throw std::logic_error("condensed source requires the live tensor hierarchy boundary");
+    require_current_boundary_point_exact_(point, "AMR condensed source boundary");
+    owner = &facade_->prepared_amr_block_state(runtime_block, active_level_);
+    require_same_layout_(prototype, *owner, "AMR condensed source boundary owner");
+    if (prototype.ncomp() != 1)
+      throw std::invalid_argument("AMR condensed potential must have one component");
+    for (int axis = 0; axis < Dim; ++axis)
+      if (prototype.ghosts()[axis] != 1)
+        throw std::invalid_argument("AMR condensed potential requires exactly one ghost cell");
+    if (facade_->prepared_amr_block_level_active_mask(runtime_block, active_level_) != nullptr)
+      throw std::logic_error("Cartesian condensed source has no embedded cut-face authority");
+    boundary = &hierarchy_tensor_boundaries_[static_cast<std::size_t>(active_level_)];
+    if (boundary->geometry != geometry())
+      throw std::logic_error("AMR condensed source boundary geometry is stale");
+  });
+  return tensor_boundary_session_type::prepare(
+      boundary->geometry, boundary->conditions, prototype, lane, next_boundary_generation_(),
+      PreparedTensorBoundaryAuthority{
+          this, runtime_, reinterpret_cast<std::uintptr_t>(owner), std::string(lane.identity()),
+          program_block, runtime_block, active_level_, runtime_->topology_epoch(),
+          runtime_->materialization_generation()},
+      point, active_level_ == 0 ? HaloLayoutCoverage::full_domain : HaloLayoutCoverage::sparse_level);
+}
+
+elliptic::nd::CartesianTensorStencilOptions condensed_stencil_options(int program_block) const {
+  if (!hierarchy_tensor_selection_ || hierarchy_tensor_selection_->program_block != program_block)
+    throw std::logic_error("condensed stencil has no owner-qualified tensor provider");
+  if (hierarchy_tensor_selection_->options.schema_identity != tensor_elliptic_detail::kCompositeTensorOptionSchema)
+    return {};
+  return tensor_elliptic_detail::decode_controls(hierarchy_tensor_selection_->options).stencil_options;
+}
+
+void fill_condensed_potential(int program_block, field_type& field) const {
+  prepare_condensed_boundary_session(program_block, field)->fill(field);
+}
+
+void condensed_tensor_laplacian(int program_block, field_type& output, field_type& input,
+                                const field_type& tensor) const {
+  const auto boundary = prepare_condensed_boundary_session(program_block, input);
+  prepare_spatial_collectively([&] {
+    require_scalar_stencil_(output, input, 1, "AMR condensed tensor divergence");
+    require_same_layout_(input, tensor, "AMR condensed tensor coefficients");
+    if (tensor.ncomp() != Dim * Dim || tensor.ghosts() != input.ghosts())
+      throw std::invalid_argument("AMR condensed metric requires one row-major tensor with one ghost");
+  });
+  boundary->fill(input);
+  const auto options = condensed_stencil_options(program_block);
+  const Geometry<Dim> geom = geometry();
+  for (std::size_t local = 0; local < output.local_size(); ++local) {
+    const FieldView<Real, Dim> result = output.fab(local).view();
+    const auto tensor_operator = elliptic::nd::make_cartesian_tensor_operator<
+        elliptic::nd::CartesianTensorDivergenceSign::positive_divergence>(
+        std::as_const(input.fab(local)).view(),
+        elliptic::nd::packed_cartesian_tensor_coefficients<Dim>(std::as_const(tensor.fab(local)).view()),
+        geom, options);
+    for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+      result(cell, 0) = tensor_operator.image(cell);
+    });
+  }
+  count_kernel_();
 }
 
 template <int Count>
@@ -739,7 +874,7 @@ void tensor_laplacian(field_type& output, field_type& input, const field_type& t
         std::as_const(input.fab(local)).view(),
         elliptic::nd::packed_cartesian_tensor_coefficients<Dim>(
             std::as_const(tensor.fab(local)).view()),
-        geom);
+        geom, condensed_stencil_options(hierarchy_tensor_selection_->program_block));
     for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
       result(cell, 0) = tensor_operator.image(cell);
     });

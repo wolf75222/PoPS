@@ -64,7 +64,7 @@ class PreparedHierarchyNativeLowering:
 
     def to_data(self) -> dict[str, Any]:
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "provider": dict(self.provider),
             "dimension": self.dimension,
             "level_count": self.level_count,
@@ -205,7 +205,7 @@ def _lower_shared_n_level(
 
 
 register_prepared_hierarchy_native_provider(
-    PreparedHierarchyNativeProvider("shared_n_level", 3, _lower_shared_n_level)
+    PreparedHierarchyNativeProvider("shared_n_level", 4, _lower_shared_n_level)
 )
 
 
