@@ -1,0 +1,515 @@
+{
+  "core_revision": "620ac6b6d2ad532a7616652d1bdaac9ca507287a",
+  "core_source_files": 1274,
+  "core_unchanged": true,
+  "installed_files": 1177,
+  "installed_fingerprint": "ba1e1a5eb04b0a8404a4b90ba1fecae8958687b74edbc243d2060f956f517765",
+  "library_files": {
+    ".romeo-mcp-files.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "__init__.py": "f4ed4797294a3a2cbf13583ccb8b8994146d70f0d05c276e3f9fc1f6b624faa7",
+    "author.py": "ac74a642d8630c2ad6bb4f5ad4f9348a12437634ed18ced104c267b6713d2250",
+    "capture.py": "25cc888b1b1335815950bcbc3fdab4f9e7f2998ca64a1ad3b459960631621c65",
+    "check.py": "997e0c151692d42cd2b9f0fb8f0424bd8cd1fb7de1ca84e2f8215ad4e3885014",
+    "compiler_relay.py": "8a71c794dcd0188236beb4eedc23589cbf299f7c6d646cceab0c8dd5709c68b1",
+    "provenance.py": "38f48b5e5cafc5a7900ab121ceb20fde7e904189c19e9783dc4ffa0e590cccf2",
+    "reference.py": "243fcf058cbd05717659b1cfccaeebfe881d7096f55cdbfab3fc97d8f931fe25"
+  },
+  "native_abi": "compiler=14.2.0;std=202002L;headers=087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626;kokkos=1;stdlib=libstdc++_20240801;mpi=0;mpi_abi=off;dim=2",
+  "native_sha256": "a96d95355709d4d75e7f16a9c486028a5a552df27c09572ed508eab2164b0b62",
+  "pairs": {
+    "baseline->linear": {
+      "bound": 4.927434535724498e-13,
+      "max_final_gap": 0.000002818743741528351
+    },
+    "cosine_20": {
+      "analytic": -1.1307020207527317e-7,
+      "bound": 6.061295170246945e-13,
+      "observed": -1.1307020207973311e-7
+    },
+    "linear->cubic": {
+      "bound": 4.937896617353065e-13,
+      "max_final_gap": 0.00004738371638923766
+    }
+  },
+  "scope": "Independent discrete mathematical acceptance + integrity relative to execution records.",
+  "source_fingerprint": "7b30f78aebc10559dd1d88120cef37455e9c8173d0271d0ae863df7f8faf47df",
+  "variants": {
+    "baseline": {
+      "capture_sha256": "d7eaf9ed57766f56b5d8118ef7312a45513ba78bc4b71e43bc4ffdc030b869af",
+      "compiler_inputs_digest": "cbd3c57bacd53b29fe67665e1ed4590422d987b4e0ace0f2d271c8d4e7a34dec",
+      "cpp_sources": [],
+      "execution_sha256": "b63c82121b0b5b799dafac916ed1b9ecefe8ab07777326768a8b657e07b269bd",
+      "final_error": {
+        "bound": 2.458583115919689e-13,
+        "error": 6.661338147750939e-16
+      },
+      "hostname": "romeo-c040",
+      "job_id": "738890",
+      "loaded_binaries": [
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/venv/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so",
+          "original_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/venv/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so",
+          "retained": "binaries/a96d95355709d4d75e7f16a9c486028a5a552df27c09572ed508eab2164b0b62.so",
+          "role": "core",
+          "sealed_copy": false,
+          "sha256": "a96d95355709d4d75e7f16a9c486028a5a552df27c09572ed508eab2164b0b62"
+        },
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/baseline/cache/b497d280112918d91f45424ed37f678997099a219fa72aa36d5c1786f868a554.so",
+          "original_path": "/tmp/pops-native-oYKZHZ/image-DdLOxY.so",
+          "retained": "binaries/b5fe719509a7999c024437fa6b5515073cf59a9f294081a4e33ccfcda2266266.so",
+          "role": "model",
+          "sealed_copy": true,
+          "sha256": "b5fe719509a7999c024437fa6b5515073cf59a9f294081a4e33ccfcda2266266"
+        },
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/baseline/cache/89c33e9e51adecf11fe5d555fbf7b38b783c6548f5b71facb155869c6d758130.so",
+          "original_path": "/tmp/pops-native-L5nTBv/image-KATIvt.so",
+          "retained": "binaries/29e32682828537acef590a35c1206e3e03355883e5343a717e4603db51655e0c.so",
+          "role": "model",
+          "sealed_copy": true,
+          "sha256": "29e32682828537acef590a35c1206e3e03355883e5343a717e4603db51655e0c"
+        },
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/baseline/generated/4695ceb80970d614730d32ba33ae3c6806ec14b0b999e093abb305fa25b29c88.so",
+          "original_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/baseline/generated/4695ceb80970d614730d32ba33ae3c6806ec14b0b999e093abb305fa25b29c88.so",
+          "retained": "binaries/2d769795ad4f1b2e1fa0c8c18cd3e3b16a0ed7d99cb96a05fb6a0bf95b43d57c.so",
+          "role": "program",
+          "sealed_copy": false,
+          "sha256": "2d769795ad4f1b2e1fa0c8c18cd3e3b16a0ed7d99cb96a05fb6a0bf95b43d57c"
+        }
+      ],
+      "max_field_residual": 5.089706434091568e-12,
+      "output_sha256": "0297b5c2e119f43ac65b3d5ec9f7c8a97a8edc41546ad1ea66fba9455cd9182b",
+      "parameters": {
+        "beta": 0,
+        "epsilon": 0
+      },
+      "pid": 3779152,
+      "q_maxima": {
+        "q0": 2.1163218149826304,
+        "q1": 2.1161581164935335,
+        "q2": 2.1162399702660326,
+        "qfinal": 2.1161581255488824
+      }
+    },
+    "beta-zero": {
+      "capture_sha256": "3bb9e173b686966cfbf638c9c5646c530887009a2206e4190464f156c6d41180",
+      "compiler_inputs_digest": "133ef9e57150c68a40f6a9cedc34b46ca2eb779e2efb2a9f40b9df563e7fa68d",
+      "cpp_sources": [
+        {
+          "formula_lines": [
+            {
+              "line": 567,
+              "text": "        outA(index, 0) = (((0.25 * screened_first) + (0.35 * screened_second)) - (0.8 * q));"
+            },
+            {
+              "line": 752,
+              "text": "        outA(index, 0) = (((0.25 * screened_first) + (0.35 * screened_second)) - (0.8 * q));"
+            },
+            {
+              "line": 938,
+              "text": "        outA(index, 0) = (((0.25 * screened_first) + (0.35 * screened_second)) - (0.8 * q));"
+            }
+          ],
+          "path": "beta-zero/compiler/0260dae13d5d40d4836ae39314d54d37/inputs/0/problem.cpp",
+          "sha256": "c3e895f5c1e28b14264b1ce3e14902804710285b9768ba4139aedb78ae644528"
+        }
+      ],
+      "execution_sha256": "adb4df0f037159fe28f022750454b50132f6ef1881c623092c0cfa849d965f88",
+      "final_error": {
+        "bound": 2.46885141980481e-13,
+        "error": 4.440892098500626e-16
+      },
+      "hostname": "romeo-c040",
+      "job_id": "738891",
+      "loaded_binaries": [
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/venv/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so",
+          "original_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/venv/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so",
+          "retained": "binaries/a96d95355709d4d75e7f16a9c486028a5a552df27c09572ed508eab2164b0b62.so",
+          "role": "core",
+          "sealed_copy": false,
+          "sha256": "a96d95355709d4d75e7f16a9c486028a5a552df27c09572ed508eab2164b0b62"
+        },
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/beta-zero/cache/b497d280112918d91f45424ed37f678997099a219fa72aa36d5c1786f868a554.so",
+          "original_path": "/tmp/pops-native-gPp1q9/image-9f4Cch.so",
+          "retained": "binaries/b5fe719509a7999c024437fa6b5515073cf59a9f294081a4e33ccfcda2266266.so",
+          "role": "model",
+          "sealed_copy": true,
+          "sha256": "b5fe719509a7999c024437fa6b5515073cf59a9f294081a4e33ccfcda2266266"
+        },
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/beta-zero/cache/6bcb27d299570638e354eb589c6058b196b6dfe96ec497b5ccecd6f6594f2370.so",
+          "original_path": "/tmp/pops-native-roAsRn/image-ETGwcH.so",
+          "retained": "binaries/d819120e3aef0ffa374b0d78145853c979abb020a9d3f501ca57a79702b2bded.so",
+          "role": "model",
+          "sealed_copy": true,
+          "sha256": "d819120e3aef0ffa374b0d78145853c979abb020a9d3f501ca57a79702b2bded"
+        },
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/beta-zero/generated/c489ddd4ffc6dab7a17d846cd412be836a8b122be91b7e89c0cb4aab709358ad.so",
+          "original_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/beta-zero/generated/c489ddd4ffc6dab7a17d846cd412be836a8b122be91b7e89c0cb4aab709358ad.so",
+          "retained": "binaries/34a0bf2233a1ebfbf7a8bf041ebcf909391cdd3f8a1794ffee680fe13858a207.so",
+          "role": "program",
+          "sealed_copy": false,
+          "sha256": "34a0bf2233a1ebfbf7a8bf041ebcf909391cdd3f8a1794ffee680fe13858a207"
+        }
+      ],
+      "max_field_residual": 6.091127602303459e-12,
+      "output_sha256": "64d8cee4b9169485e0b95dfdaf2fba8737aed59b3dfaa9bc59def2fe4e319ac4",
+      "parameters": {
+        "beta": 0,
+        "epsilon": 0.05
+      },
+      "pid": 3779680,
+      "q_maxima": {
+        "q0": 2.1163218149826304,
+        "q1": 2.1161609353763073,
+        "q2": 2.116241379637901,
+        "qfinal": 2.116160944292624
+      }
+    },
+    "cubic": {
+      "capture_sha256": "8d0e12c63db3091750decbe0abb3d9da0e9f1861ed16a424b991f2bc286a15c0",
+      "compiler_inputs_digest": "50e914c7f98bdc03b154480b19cdb7862b9f247f74bb4cfe6f5ea154b76418b5",
+      "cpp_sources": [
+        {
+          "formula_lines": [
+            {
+              "line": 567,
+              "text": "        outA(index, 0) = ((((0.25 * screened_first) + (0.35 * screened_second)) - (0.8 * q)) - (((0.05 * q) * q) * q));"
+            },
+            {
+              "line": 752,
+              "text": "        outA(index, 0) = ((((0.25 * screened_first) + (0.35 * screened_second)) - (0.8 * q)) - (((0.05 * q) * q) * q));"
+            },
+            {
+              "line": 938,
+              "text": "        outA(index, 0) = ((((0.25 * screened_first) + (0.35 * screened_second)) - (0.8 * q)) - (((0.05 * q) * q) * q));"
+            }
+          ],
+          "path": "cubic/compiler/41c0b3ae54574b9da67f3c7edad3e938/inputs/0/problem.cpp",
+          "sha256": "4689e54bfddf54fa63a910c61b33fc744df65c6dce92e15cc5a0430bf0a84317"
+        }
+      ],
+      "execution_sha256": "731c4c77ea9629f34439d181a1fbd737e22e005553e1b45a327c80a5d1f4b571",
+      "final_error": {
+        "bound": 2.469045197548255e-13,
+        "error": 4.440892098500626e-16
+      },
+      "hostname": "romeo-c040",
+      "job_id": "738891",
+      "loaded_binaries": [
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/venv/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so",
+          "original_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/venv/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so",
+          "retained": "binaries/a96d95355709d4d75e7f16a9c486028a5a552df27c09572ed508eab2164b0b62.so",
+          "role": "core",
+          "sealed_copy": false,
+          "sha256": "a96d95355709d4d75e7f16a9c486028a5a552df27c09572ed508eab2164b0b62"
+        },
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/cubic/cache/b497d280112918d91f45424ed37f678997099a219fa72aa36d5c1786f868a554.so",
+          "original_path": "/tmp/pops-native-xVbfn8/image-0S2QZq.so",
+          "retained": "binaries/b5fe719509a7999c024437fa6b5515073cf59a9f294081a4e33ccfcda2266266.so",
+          "role": "model",
+          "sealed_copy": true,
+          "sha256": "b5fe719509a7999c024437fa6b5515073cf59a9f294081a4e33ccfcda2266266"
+        },
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/cubic/cache/8e5fe486d1d9c090acbf4999cea280d800d8cea2544e51389325edd6dc7a6cd8.so",
+          "original_path": "/tmp/pops-native-pGwB4S/image-8qCan9.so",
+          "retained": "binaries/e685e92f744d781a1322429c360f4ca143bbe9a18998caa46d4929b1fe501b30.so",
+          "role": "model",
+          "sealed_copy": true,
+          "sha256": "e685e92f744d781a1322429c360f4ca143bbe9a18998caa46d4929b1fe501b30"
+        },
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/cubic/generated/3ac250728e845ba745c200bc39385e9319714c4d0ffc43cdf09f21adc9bb66e3.so",
+          "original_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/cubic/generated/3ac250728e845ba745c200bc39385e9319714c4d0ffc43cdf09f21adc9bb66e3.so",
+          "retained": "binaries/a87251eb3ea4754e508b77bee7bb49150092ecaf15f3497dc6909690ff2f3f7c.so",
+          "role": "program",
+          "sealed_copy": false,
+          "sha256": "a87251eb3ea4754e508b77bee7bb49150092ecaf15f3497dc6909690ff2f3f7c"
+        }
+      ],
+      "max_field_residual": 5.217160037318536e-12,
+      "output_sha256": "787d5d4b7ba6b35f14bd7da63f2fc7ee10d9378d119e44bb317884435ba382e1",
+      "parameters": {
+        "beta": 0.05,
+        "epsilon": 0.05
+      },
+      "pid": 3779527,
+      "q_maxima": {
+        "q0": 2.1163218149826304,
+        "q1": 2.116113542274854,
+        "q2": 2.116217687780023,
+        "qfinal": 2.1161135605762347
+      }
+    },
+    "cubic-renamed": {
+      "capture_sha256": "09a8c8f3c74f12e317e3d37b2ec6ad09fd7a0491dda20385038ee5460f91b457",
+      "compiler_inputs_digest": "7d100005a9fd1d24d271fc3612b42d62e9fc0ee7fea1a87dc205b5452a66430a",
+      "cpp_sources": [
+        {
+          "formula_lines": [
+            {
+              "line": 567,
+              "text": "        outA(index, 0) = ((((0.25 * witness_renamed_phi_input) + (0.35 * witness_renamed_psi_input)) - (0.8 * q)) - (((0.05 * q) * q) * q));"
+            },
+            {
+              "line": 752,
+              "text": "        outA(index, 0) = ((((0.25 * witness_renamed_phi_input) + (0.35 * witness_renamed_psi_input)) - (0.8 * q)) - (((0.05 * q) * q) * q));"
+            },
+            {
+              "line": 938,
+              "text": "        outA(index, 0) = ((((0.25 * witness_renamed_phi_input) + (0.35 * witness_renamed_psi_input)) - (0.8 * q)) - (((0.05 * q) * q) * q));"
+            }
+          ],
+          "path": "cubic-renamed/compiler/d38313fca0e54c2193521b17f6962142/inputs/0/problem.cpp",
+          "sha256": "6fd1a1006e7c62afecc62fd7e88fdd029a7b978d67fd3a546342815a4fbb6950"
+        }
+      ],
+      "execution_sha256": "7d8e5549f9bcd130de9de496de568230bc8938d878f1ae95c72420a098387fc0",
+      "final_error": {
+        "bound": 2.469045197548255e-13,
+        "error": 4.440892098500626e-16
+      },
+      "hostname": "romeo-c040",
+      "job_id": "738891",
+      "loaded_binaries": [
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/venv/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so",
+          "original_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/venv/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so",
+          "retained": "binaries/a96d95355709d4d75e7f16a9c486028a5a552df27c09572ed508eab2164b0b62.so",
+          "role": "core",
+          "sealed_copy": false,
+          "sha256": "a96d95355709d4d75e7f16a9c486028a5a552df27c09572ed508eab2164b0b62"
+        },
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/cubic-renamed/cache/6c33b95540cbbbf5774ccb12d0cc68fe7493155b9e7736028d2ef4f72b36196b.so",
+          "original_path": "/tmp/pops-native-k1IDYn/image-WvPq3u.so",
+          "retained": "binaries/d233e834dac4432abc2862893c322b52b1ddbc70b77447bc6d54c4a6e889277f.so",
+          "role": "model",
+          "sealed_copy": true,
+          "sha256": "d233e834dac4432abc2862893c322b52b1ddbc70b77447bc6d54c4a6e889277f"
+        },
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/cubic-renamed/cache/be21403142a0111210ea0c4125707b9b5217d7d9b38df18c047a3c659dbec907.so",
+          "original_path": "/tmp/pops-native-YscV3b/image-DJR8Js.so",
+          "retained": "binaries/73897e540454459897c61629b2bcf037e9f9c016cdb07f2b637f4866b0c2823c.so",
+          "role": "model",
+          "sealed_copy": true,
+          "sha256": "73897e540454459897c61629b2bcf037e9f9c016cdb07f2b637f4866b0c2823c"
+        },
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/cubic-renamed/generated/6ffc3f642aab99a3c1fd17b79e4522891cb59499e97cfd166823ab282c07206b.so",
+          "original_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/cubic-renamed/generated/6ffc3f642aab99a3c1fd17b79e4522891cb59499e97cfd166823ab282c07206b.so",
+          "retained": "binaries/d852433d650aa6cc9110cf30a1721691e744271ea18d9b57fc19909e74207fbf.so",
+          "role": "program",
+          "sealed_copy": false,
+          "sha256": "d852433d650aa6cc9110cf30a1721691e744271ea18d9b57fc19909e74207fbf"
+        }
+      ],
+      "max_field_residual": 5.217160037318536e-12,
+      "output_sha256": "787d5d4b7ba6b35f14bd7da63f2fc7ee10d9378d119e44bb317884435ba382e1",
+      "parameters": {
+        "beta": 0.05,
+        "epsilon": 0.05
+      },
+      "pid": 3779625,
+      "q_maxima": {
+        "q0": 2.1163218149826304,
+        "q1": 2.116113542274854,
+        "q2": 2.116217687780023,
+        "qfinal": 2.1161135605762347
+      }
+    },
+    "linear": {
+      "capture_sha256": "84a69489889092ca9335c70aaf2baafe5b7b497a3e284fa28d0de9c645877436",
+      "compiler_inputs_digest": "133ef9e57150c68a40f6a9cedc34b46ca2eb779e2efb2a9f40b9df563e7fa68d",
+      "cpp_sources": [
+        {
+          "formula_lines": [
+            {
+              "line": 567,
+              "text": "        outA(index, 0) = (((0.25 * screened_first) + (0.35 * screened_second)) - (0.8 * q));"
+            },
+            {
+              "line": 752,
+              "text": "        outA(index, 0) = (((0.25 * screened_first) + (0.35 * screened_second)) - (0.8 * q));"
+            },
+            {
+              "line": 938,
+              "text": "        outA(index, 0) = (((0.25 * screened_first) + (0.35 * screened_second)) - (0.8 * q));"
+            }
+          ],
+          "path": "linear/compiler/7466d2cd12244a859e68ee2cec457efa/inputs/0/problem.cpp",
+          "sha256": "c3e895f5c1e28b14264b1ce3e14902804710285b9768ba4139aedb78ae644528"
+        }
+      ],
+      "execution_sha256": "d907a2739b8c22fb3428e2ee50ceda05c82a40274d94e01791d0b860b62c989f",
+      "final_error": {
+        "bound": 2.46885141980481e-13,
+        "error": 4.440892098500626e-16
+      },
+      "hostname": "romeo-c040",
+      "job_id": "738891",
+      "loaded_binaries": [
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/venv/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so",
+          "original_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/venv/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so",
+          "retained": "binaries/a96d95355709d4d75e7f16a9c486028a5a552df27c09572ed508eab2164b0b62.so",
+          "role": "core",
+          "sealed_copy": false,
+          "sha256": "a96d95355709d4d75e7f16a9c486028a5a552df27c09572ed508eab2164b0b62"
+        },
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/linear/cache/b497d280112918d91f45424ed37f678997099a219fa72aa36d5c1786f868a554.so",
+          "original_path": "/tmp/pops-native-RuKxSn/image-Kpdh7P.so",
+          "retained": "binaries/b5fe719509a7999c024437fa6b5515073cf59a9f294081a4e33ccfcda2266266.so",
+          "role": "model",
+          "sealed_copy": true,
+          "sha256": "b5fe719509a7999c024437fa6b5515073cf59a9f294081a4e33ccfcda2266266"
+        },
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/linear/cache/6bcb27d299570638e354eb589c6058b196b6dfe96ec497b5ccecd6f6594f2370.so",
+          "original_path": "/tmp/pops-native-NV5XCo/image-ZKPsQo.so",
+          "retained": "binaries/d819120e3aef0ffa374b0d78145853c979abb020a9d3f501ca57a79702b2bded.so",
+          "role": "model",
+          "sealed_copy": true,
+          "sha256": "d819120e3aef0ffa374b0d78145853c979abb020a9d3f501ca57a79702b2bded"
+        },
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/linear/generated/c489ddd4ffc6dab7a17d846cd412be836a8b122be91b7e89c0cb4aab709358ad.so",
+          "original_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/linear/generated/c489ddd4ffc6dab7a17d846cd412be836a8b122be91b7e89c0cb4aab709358ad.so",
+          "retained": "binaries/34a0bf2233a1ebfbf7a8bf041ebcf909391cdd3f8a1794ffee680fe13858a207.so",
+          "role": "program",
+          "sealed_copy": false,
+          "sha256": "34a0bf2233a1ebfbf7a8bf041ebcf909391cdd3f8a1794ffee680fe13858a207"
+        }
+      ],
+      "max_field_residual": 6.091127602303459e-12,
+      "output_sha256": "64d8cee4b9169485e0b95dfdaf2fba8737aed59b3dfaa9bc59def2fe4e319ac4",
+      "parameters": {
+        "beta": 0,
+        "epsilon": 0.05
+      },
+      "pid": 3779370,
+      "q_maxima": {
+        "q0": 2.1163218149826304,
+        "q1": 2.1161609353763073,
+        "q2": 2.116241379637901,
+        "qfinal": 2.116160944292624
+      }
+    },
+    "linear-renamed": {
+      "capture_sha256": "b555b7090251a688433ba1e14c0cdc5531f342150029b582970e3a6067f1e41c",
+      "compiler_inputs_digest": "b502cdead6d8c3fcf7abba6fd0485c7687375afb9b4544fb40f96741b9ed6406",
+      "cpp_sources": [
+        {
+          "formula_lines": [
+            {
+              "line": 567,
+              "text": "        outA(index, 0) = (((0.25 * witness_renamed_phi_input) + (0.35 * witness_renamed_psi_input)) - (0.8 * q));"
+            },
+            {
+              "line": 752,
+              "text": "        outA(index, 0) = (((0.25 * witness_renamed_phi_input) + (0.35 * witness_renamed_psi_input)) - (0.8 * q));"
+            },
+            {
+              "line": 938,
+              "text": "        outA(index, 0) = (((0.25 * witness_renamed_phi_input) + (0.35 * witness_renamed_psi_input)) - (0.8 * q));"
+            }
+          ],
+          "path": "linear-renamed/compiler/8d0a4843d6eb41c89d82991c70308dc6/inputs/0/problem.cpp",
+          "sha256": "b63122d5c2fe4c4b2c8d49e45c018a094e424548824141577b05ec274c95959d"
+        }
+      ],
+      "execution_sha256": "606c59de4a70194a8be01d51ddc09f24cc495d49d546af6ff06eb095cee310ef",
+      "final_error": {
+        "bound": 2.46885141980481e-13,
+        "error": 4.440892098500626e-16
+      },
+      "hostname": "romeo-c040",
+      "job_id": "738891",
+      "loaded_binaries": [
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/venv/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so",
+          "original_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/venv/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-x86_64-linux-gnu.so",
+          "retained": "binaries/a96d95355709d4d75e7f16a9c486028a5a552df27c09572ed508eab2164b0b62.so",
+          "role": "core",
+          "sealed_copy": false,
+          "sha256": "a96d95355709d4d75e7f16a9c486028a5a552df27c09572ed508eab2164b0b62"
+        },
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/linear-renamed/cache/6c33b95540cbbbf5774ccb12d0cc68fe7493155b9e7736028d2ef4f72b36196b.so",
+          "original_path": "/tmp/pops-native-faA2uB/image-9wvC6Y.so",
+          "retained": "binaries/d233e834dac4432abc2862893c322b52b1ddbc70b77447bc6d54c4a6e889277f.so",
+          "role": "model",
+          "sealed_copy": true,
+          "sha256": "d233e834dac4432abc2862893c322b52b1ddbc70b77447bc6d54c4a6e889277f"
+        },
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/linear-renamed/cache/8357f9daf00685f0de41e8e40c83cb7ff7bec39068bd5a3a9ac376f9172e6f3e.so",
+          "original_path": "/tmp/pops-native-R7YH9E/image-It2ot4.so",
+          "retained": "binaries/b62b7c3b6b607c3524defc45945c1e2d69a70e56314033a35ffa1e3e0f77c2a0.so",
+          "role": "model",
+          "sealed_copy": true,
+          "sha256": "b62b7c3b6b607c3524defc45945c1e2d69a70e56314033a35ffa1e3e0f77c2a0"
+        },
+        {
+          "artifact_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/linear-renamed/generated/e477e9ff7ad77a5fe0142ced5ac2a53de1fb90efc1a7b6da8aeae44b93e73015.so",
+          "original_path": "/gpfs/scratch/nimarano/pops-witnesses-620ac6b6/campaign-7/linear-renamed/generated/e477e9ff7ad77a5fe0142ced5ac2a53de1fb90efc1a7b6da8aeae44b93e73015.so",
+          "retained": "binaries/a322f5c1d2db36fd452ed1329120d162ea9b2c390aee9b4103883fabfe33dbfb.so",
+          "role": "program",
+          "sealed_copy": false,
+          "sha256": "a322f5c1d2db36fd452ed1329120d162ea9b2c390aee9b4103883fabfe33dbfb"
+        }
+      ],
+      "max_field_residual": 6.091127602303459e-12,
+      "output_sha256": "64d8cee4b9169485e0b95dfdaf2fba8737aed59b3dfaa9bc59def2fe4e319ac4",
+      "parameters": {
+        "beta": 0,
+        "epsilon": 0.05
+      },
+      "pid": 3779427,
+      "q_maxima": {
+        "q0": 2.1163218149826304,
+        "q1": 2.1161609353763073,
+        "q2": 2.116241379637901,
+        "qfinal": 2.116160944292624
+      }
+    }
+  },
+  "wheel_sha256": "4ae8e2f139ff6e5b1faa1f43cd771d0fb74bd01da3a0ad1f573d73180b847ca3",
+  "record_kind": "Mirror of ROMEO collected observations; original capture journals are authoritative.",
+  "date": "2026-10-09",
+  "campaign_path": "/scratch_p/nimarano/pops-witnesses-620ac6b6/campaign-7",
+  "evidence_archive": "/home/nimarano/pops-witnesses-620ac6b6-evidence.tar.gz",
+  "jobs": {
+    "core_build": "738859",
+    "baseline": "738890",
+    "other_variants_and_reader": "738891",
+    "quality": "738899",
+    "summary": "738902"
+  },
+  "validation": {
+    "unit_tests": {
+      "passed": 34,
+      "seconds": 18.28
+    },
+    "ruff": "passed",
+    "format": "12 files already formatted",
+    "packaging": "passed",
+    "docs": {
+      "exit_code": 0,
+      "existing_freshness_warnings": 4
+    },
+    "root_suites": "not run",
+    "github_ci": "not claimed"
+  },
+  "aggregate_hash_encoding": "SHA256(UTF8(json.dumps(per_file_mapping, sort_keys=True))) with Python default separators"
+}

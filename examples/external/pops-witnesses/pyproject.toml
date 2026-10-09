@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pops-external-witnesses"
+version = "0.1.0"
+description = "External linear and cubic witnesses for the PoPS public composition API"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "pops"]
+
+[project.scripts]
+pops-witness-capture = "pops_witnesses.capture:main"
+pops-witness-check = "pops_witnesses.check:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
