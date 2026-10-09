@@ -336,7 +336,13 @@ def fault_provider(requirement, directory):
             raise ValueError("exact generated integral callback not found")
         body = r"""  const int code = pops::component::apply_physical_support_integral(operation, request->source, request->destination, status, &request->execution);
   if (code != 0) return code;
-  int rank=0; MPI_Comm_rank(MPI_Comm_f2c(static_cast<MPI_Fint>(request->execution.communicator_f_handle)), &rank);
+  int rank=0;
+#ifdef POPS_HAS_MPI
+  if (std::strcmp(request->execution.communicator_identity, "serial") != 0 &&
+      std::strcmp(request->execution.communicator_identity, POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1) != 0) {
+    MPI_Comm_rank(MPI_Comm_f2c(static_cast<MPI_Fint>(request->execution.communicator_f_handle)), &rank);
+  }
+#endif
   if (const char* trace=std::getenv("POPS_AMR_FIELD_MAP_TRACE")) { if (auto* file=std::fopen(trace,"a")) { std::fprintf(file,"%d\n",rank);std::fclose(file); } }
   if (const char* target=std::getenv("POPS_AMR_FIELD_MAP_FAULT")) {
     char* end=nullptr;errno=0;long parsed=std::strtol(target,&end,10);
@@ -361,7 +367,7 @@ def fault_provider(requirement, directory):
   return 0;"""
         cpp = cpp.replace(needle, body).replace(
             "#include <cstring>",
-            "#include <cstring>\n#include <mpi.h>\n#include <cstdlib>\n#include <cstdio>\n#include <cerrno>\n#include <climits>\n#include <limits>\n"
+            "#include <cstring>\n#ifdef POPS_HAS_MPI\n#include <mpi.h>\n#endif\n#include <cstdlib>\n#include <cstdio>\n#include <cerrno>\n#include <climits>\n#include <limits>\n"
             "struct AmrTestNonfiniteDestination {\n"
             "  double* destination;\n"
             "  double invalid;\n"

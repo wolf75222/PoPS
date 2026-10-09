@@ -1139,6 +1139,9 @@ if(POPS_HAS_MPI)
         COMPILE_DEFINITIONS ${_compile_definitions})
     endif()
   endforeach()
+  # Runtime-generated Kokkos components resolve symbols from their authenticated host.
+  # Static Kokkos requires the same export contract as the other native-loader fixtures.
+  set_target_properties(test_mpi_system_layout_transfer PROPERTIES ENABLE_EXPORTS ON)
   set_tests_properties(test_mpi_system_layout_transfer_np2 PROPERTIES
     ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
     RESOURCE_LOCK native_loader

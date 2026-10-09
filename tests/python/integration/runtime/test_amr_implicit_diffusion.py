@@ -229,9 +229,9 @@ def build(
         tagging=AMRTagging(
             rules=(
                 Tag((ValueExpr(block[state]) if components == 1 else ValueExpr(block[state])["energy"]) > case.value(threshold)),
-                # Existing transfer contributes one lookahead cell. Scale the authored buffer
-                # to keep its total physical padding exactly 3/16 at every N.
-                Buffer(cells=3 * n // 16 - 1 if periodic_witness else 1),
+                # The tag buffer itself supplies the physical padding of 3/16.
+                # State transfer does not contribute an additional tagged cell.
+                Buffer(cells=3 * n // 16 if periodic_witness else 1),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,

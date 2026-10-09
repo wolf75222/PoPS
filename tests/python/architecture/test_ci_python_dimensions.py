@@ -12,7 +12,10 @@ def test_selected_files_are_partitioned_exactly_by_the_explicit_contract():
     contract = json.loads(runner.CONTRACT.read_text())
     drift = "tests/python/integration/runtime/test_public_drift_diffusion_matrix.py"
     ordinary = "tests/python/integration/runtime/test_public_tensor_diffusion.py"
-    assert runner.partition([ordinary, drift], contract) == {1: [drift], 2: [ordinary]}
+    mixed = "tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py"
+    assert runner.partition([ordinary, drift, mixed], contract) == {
+        1: [drift, mixed], 2: [ordinary]}
+    assert contract["files"][mixed] == 1
     for path in contract["files"]:
         assert (runner.ROOT / path).is_file()
     with pytest.raises(ValueError, match="duplicated"):

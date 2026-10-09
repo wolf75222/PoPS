@@ -6,6 +6,7 @@
     "tests/python/integration/runtime/test_m10_self_consistent_sg.py": 1,
     "tests/python/integration/runtime/test_public_drift_diffusion_matrix.py": 1,
     "tests/python/integration/runtime/test_uniform_cp9_dim1_runtime.py": 1,
-    "tests/python/integration/runtime/test_uniform_cp9_dim3_runtime.py": 3
+    "tests/python/integration/runtime/test_uniform_cp9_dim3_runtime.py": 3,
+    "tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py": 1
   }
 }

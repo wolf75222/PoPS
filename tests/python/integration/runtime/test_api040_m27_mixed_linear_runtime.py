@@ -26,7 +26,7 @@ def test_mixed_linear_three_grids_and_permutation_from_saved_c_and_mu(tmp_path, 
     native = select_native_dimension(1)
     witness = _witness(monkeypatch)
     records = witness.run_and_archive(tmp_path)
-    world = native.mpi_world()
+    world = witness._native_world(native)
     with collective_check(world):
         assert [(row["cells"], row["permuted"]) for row in records] == [
             (16, False), (32, False), (64, False), (16, True)]
@@ -36,13 +36,13 @@ def test_mixed_linear_three_grids_and_permutation_from_saved_c_and_mu(tmp_path, 
             "original_chemical_residual"] for row in records)
         assert all(row["final_energy"] < row["initial_energy"] for row in records)
     failure = b""
-    if world.rank == 0:
+    if witness._rank(world) == 0:
         try:
             assert (tmp_path / "receipt.json").is_file()
             assert len(tuple(tmp_path.glob("state_*.npz"))) == 4
         except Exception as exception:
             failure = (type(exception).__name__ + ": " + str(exception)).encode()
-    failure = world.broadcast_bytes(failure, root=0)
+    failure = witness._broadcast_bytes(world, failure)
     if failure:
         raise AssertionError(failure.decode())
 
@@ -50,15 +50,14 @@ def test_mixed_linear_three_grids_and_permutation_from_saved_c_and_mu(tmp_path, 
 def test_one_iteration_gmres_collectively_refuses_without_accepted_publication(
         monkeypatch):
     from pops._native_selector import select_native_dimension
-    from pops.codegen._native_mpi import native_mpi_communicator
 
     native = select_native_dimension(1)
-    world = native.mpi_world()
     witness = _witness(monkeypatch)
+    world = witness._native_world(native)
     initial, subject, resolved = witness._collective_call(
         world, "one-iteration case", lambda: witness._prepared_case(
             16, False, solver_iterations=1))
-    if native_mpi_communicator(native) == "MPI_COMM_WORLD":
+    if world is not None:
         from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 
         artifact = compile_resolved_plan_once(
@@ -66,12 +65,12 @@ def test_one_iteration_gmres_collectively_refuses_without_accepted_publication(
             compile_artifact=pops.compile)
     else:
         artifact = pops.compile(resolved)
-    execution = witness._collective_call(
-        world, "execution context", lambda: pops.ExecutionContext.mpi_world(artifact))
+    resources = witness._collective_call(
+        world, "execution resources", lambda: witness._execution_resources(artifact))
     runtime = witness._collective_call(
         world, "bind", lambda: pops.bind(
             artifact, initial_values={subject: initial},
-            resources={"execution_context": execution}))
+            resources=resources))
     before = witness._collective_call(world, "before state", lambda: runtime.state_global(
         "concentration"))
     before_report = witness._collective_call(
@@ -81,7 +80,7 @@ def test_one_iteration_gmres_collectively_refuses_without_accepted_publication(
         pops.run(runtime, t_end=witness.STEP, max_steps=1, console=False)
     except Exception as exception:
         rejected = (type(exception).__name__ + ": " + str(exception)).encode()
-    failures = world.allgather_bytes(rejected)
+    failures = witness._allgather_bytes(world, rejected)
     after = witness._collective_call(world, "after state", lambda: runtime.state_global(
         "concentration"))
     status = witness._collective_call(world, "after status", lambda: (
@@ -93,6 +92,6 @@ def test_one_iteration_gmres_collectively_refuses_without_accepted_publication(
         assert status[0] == 0. and status[1] == 0
         assert status[2].histories == before_report.histories
         assert status[2].diagnostics == before_report.diagnostics
-        if world.rank == 0:
+        if witness._rank(world) == 0:
             np.testing.assert_array_equal(np.asarray(after), np.asarray(before))
             np.testing.assert_array_equal(np.asarray(after).reshape(initial.shape), initial)

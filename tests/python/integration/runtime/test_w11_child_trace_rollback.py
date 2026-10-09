@@ -25,10 +25,10 @@ def _history(world, runtime, directory, phase):
             for slot in range(row["depth"]):
                 value = collective_call(world, lambda: runtime.history_global(row["name"], slot))
                 with collective_check(world):
-                    if world.rank == 0:
+                    if world is None or world.rank == 0:
                         images[row["name"]+"/"+str(slot)] = np.asarray(value).copy()
     with collective_check(world):
-        if world.rank == 0:
+        if world is None or world.rank == 0:
             np.savez(directory/(phase+"-history.npz"), **images)
             (directory/(phase+"-history.json")).write_text(json.dumps(rows, sort_keys=True, indent=2)+"\n")
     return rows, images
@@ -39,18 +39,21 @@ def test_public_child_current_is_provisional_until_parent_accepts(
         tmp_path, ssprk2, isolated_native_cache, native_cxx, kokkos_root):
     del isolated_native_cache, native_cxx, kokkos_root
     from pops._native_selector import select_native_dimension
+    from pops.codegen._native_mpi import native_mpi_communicator
     from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 
     native = select_native_dimension(2)
-    world = native.mpi_world()
+    world = native.mpi_world() if native_mpi_communicator(native) == "MPI_COMM_WORLD" else None
+    rank = 0 if world is None else int(world.rank)
     directory = collective_directory(world, tmp_path/"w11-current")
     case, layout, initial, quantity = collective_call(world, lambda: build_case(
         ssprk2=ssprk2, guard_parent=True))
     validated = collective_call(world, lambda: pops.validate(case))
     resolved = collective_call(world, lambda: pops.resolve(validated, layout=layout))
-    artifact = compile_resolved_plan_once(world, resolved, route="W11 child current",
-                                          compile_artifact=pops.compile)
-    collective_call(world, lambda: retain_v_provenance(artifact, native, directory, world.rank))
+    artifact = (pops.compile(resolved) if world is None else
+                compile_resolved_plan_once(world, resolved, route="W11 child current",
+                                           compile_artifact=pops.compile))
+    collective_call(world, lambda: retain_v_provenance(artifact, native, directory, rank))
     subject = artifact.plan.initial_condition_plan.bindings[0].subject
     runtime = collective_call(world, lambda: pops.bind(
         artifact, initial_values={subject: initial},
@@ -69,7 +72,7 @@ def test_public_child_current_is_provisional_until_parent_accepts(
     rejected_history, rejected_images = _history(world, runtime, directory, "rejected")
     with collective_check(world):
         assert rejected_history == before_history
-        if world.rank == 0:
+        if world is None or world.rank == 0:
             np.testing.assert_array_equal(rejected[0], before[0])
             assert rejected[1] == before[1]  # Whole accepted exchange image, including consumption keys.
             assert set(rejected_images) == set(before_images)
@@ -86,7 +89,7 @@ def test_public_child_current_is_provisional_until_parent_accepts(
     accepted_history, accepted_images = _history(world, runtime, directory, "accepted")
     with collective_check(world):
         assert all(row["initialized"] and row["fill_count"] == 2 for row in accepted_history)
-        if world.rank == 0:
+        if world is None or world.rank == 0:
             np.testing.assert_allclose(accepted[0].reshape(initial.shape), expected, rtol=0, atol=TOL)
             assert np.max(np.abs(expected-initial)) > .001
             assert accepted_images

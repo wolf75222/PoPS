@@ -37,6 +37,7 @@ from api040_m27_mixed_oracle import (
     original_residuals, quadratic_energy,
 )
 from api040_receipts import receipt_json
+from runtime import _execution_resources
 
 
 RESOLUTIONS = (16, 32, 64)
@@ -99,6 +100,28 @@ def build_case(cells: int, *, permuted: bool = False, solver_iterations: int = 4
     return case, layout, subject
 
 
+def _native_world(native):
+    from pops.codegen._native_mpi import native_mpi_communicator
+
+    return native.mpi_world() if native_mpi_communicator(native) == 'MPI_COMM_WORLD' else None
+
+
+def _rank(world):
+    return 0 if world is None else int(world.rank)
+
+
+def _size(world):
+    return 1 if world is None else int(world.size)
+
+
+def _allgather_bytes(world, value):
+    return (value,) if world is None else world.allgather_bytes(value)
+
+
+def _broadcast_bytes(world, value):
+    return value if world is None else world.broadcast_bytes(value, root=0)
+
+
 def _collective_call(world, label, operation):
     value = None
     failure = b""
@@ -106,7 +129,7 @@ def _collective_call(world, label, operation):
         value = operation()
     except Exception as exception:
         failure = (label + ": " + type(exception).__name__ + ": " + str(exception)).encode()
-    failures = world.allgather_bytes(failure)
+    failures = _allgather_bytes(world, failure)
     if any(failures):
         raise RuntimeError("; ".join(row.decode() for row in failures if row))
     return value
@@ -174,7 +197,7 @@ def run_and_archive(destination: Path) -> list[dict]:
     from pops._native_selector import select_native_dimension
 
     native = select_native_dimension(1)
-    bootstrap_world = native.mpi_world()
+    bootstrap_world = _native_world(native)
 
     def authenticate_installation():
         package = Path(pops.__file__).resolve()
@@ -188,7 +211,7 @@ def run_and_archive(destination: Path) -> list[dict]:
     from pops.codegen._native_mpi import native_mpi_communicator
     mpi_route = _collective_call(
         bootstrap_world, "MPI route", lambda: native_mpi_communicator(native))
-    if len(set(bootstrap_world.allgather_bytes(mpi_route.encode()))) != 1:
+    if len(set(_allgather_bytes(bootstrap_world, mpi_route.encode()))) != 1:
         raise RuntimeError("M27 MPI route differs across ranks")
     compile_once = None
     if mpi_route == "MPI_COMM_WORLD":
@@ -221,20 +244,23 @@ def run_and_archive(destination: Path) -> list[dict]:
             return True
 
         _collective_call(bootstrap_world, "Dim1 artifact", require_dim1_artifact)
-        execution = _collective_call(
-            bootstrap_world, "execution context", lambda artifact=artifact:
-            pops.ExecutionContext.mpi_world(artifact))
-        world = _collective_call(
-            bootstrap_world, "execution communicator", lambda execution=execution:
-            execution.communicator.handle)
-        mismatch = world.rank != bootstrap_world.rank or world.size != bootstrap_world.size
-        if any(row == b"different" for row in bootstrap_world.allgather_bytes(
-                b"different" if mismatch else b"same")):
-            raise RuntimeError("M27 bound world differs from its preflight world")
-        simulation = _collective_call(world, "bind", lambda artifact=artifact,
-                initial=initial, subject=subject, execution=execution: pops.bind(
-                    artifact, initial_values={subject: initial},
-                    resources={"execution_context": execution}))
+        resources = _collective_call(
+            bootstrap_world, 'execution resources', lambda artifact=artifact:
+            _execution_resources(artifact))
+        execution = resources.get('execution_context')
+        world = None if execution is None else execution.communicator.handle
+        mismatch = ((world is None) != (bootstrap_world is None)
+                    or (_rank(world), _size(world)) != (_rank(bootstrap_world), _size(bootstrap_world)))
+        if any(row == b'different' for row in _allgather_bytes(
+                bootstrap_world, b'different' if mismatch else b'same')):
+            raise RuntimeError('M27 bound world differs from its preflight world')
+        simulation = _collective_call(world, 'bind', lambda artifact=artifact,
+                initial=initial, subject=subject, resources=resources: pops.bind(
+                    artifact, initial_values={subject: initial}, resources=resources))
+        execution_data = _collective_call(world, 'bound execution context',
+            lambda simulation=simulation: simulation.inspect().to_dict()['instance']['execution_context'])
+        if execution_data['communicator']['identity'] != mpi_route:
+            raise RuntimeError('M27 bound context differs from the authenticated native communicator')
         c_global = [_collective_call(world, "initial gather", lambda simulation=simulation:
                                      simulation.state_global("concentration"))]
         mu_global = []
@@ -259,10 +285,10 @@ def run_and_archive(destination: Path) -> list[dict]:
             world, "run status", lambda simulation=simulation, reports=reports:
             json.dumps((simulation.macro_step(), simulation.time(),
                         tuple((row.accepted_steps, row.rejected_steps) for row in reports))).encode())
-        if len(set(world.allgather_bytes(status))) != 1:
+        if len(set(_allgather_bytes(world, status))) != 1:
             raise RuntimeError("M27 accepted status differs across ranks")
         failure = b""
-        if world.rank == 0:
+        if _rank(world) == 0:
             try:
                 destination.mkdir(parents=True, exist_ok=True)
                 saved = destination / f"state_{cells}_{'permuted' if permuted else 'canonical'}.npz"
@@ -275,10 +301,10 @@ def run_and_archive(destination: Path) -> list[dict]:
                 if any(row.accepted_steps != 1 or row.rejected_steps != 0 for row in reports):
                     raise AssertionError("M27 native run must accept exactly ten BE steps")
                 metrics.update({
-                    "permuted": permuted, "mpi_ranks": world.size,
+                    "permuted": permuted, "mpi_ranks": _size(world),
                     "artifact_identity": artifact.artifact_identity.token,
                     "artifact_abi_key": artifact.abi_key,
-                    "execution_context": execution.to_data(),
+                    "execution_context": execution_data,
                     "saved_state": saved.name,
                     "saved_state_sha256": hashlib.sha256(saved.read_bytes()).hexdigest(),
                     "run_reports": [row.to_data() for row in reports],
@@ -286,12 +312,12 @@ def run_and_archive(destination: Path) -> list[dict]:
                 records.append(metrics)
             except Exception as exception:
                 failure = (type(exception).__name__ + ": " + str(exception)).encode()
-        failure = world.broadcast_bytes(failure, root=0)
+        failure = _broadcast_bytes(world, failure)
         if failure:
             raise RuntimeError(failure.decode())
     payload = b""
     failure = b""
-    if world.rank == 0:
+    if _rank(world) == 0:
         try:
             payload = (receipt_json({
                 "schema_version": 1, "case": "M27_mixed_linear_periodic",
@@ -299,7 +325,7 @@ def run_and_archive(destination: Path) -> list[dict]:
                 "scope": "two original linear mixed equations; genuine Dim1 periodic Uniform",
                 "nonlinear_double_well_qualified": False,
                 "native_sha256": hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest(),
-                "mpi_ranks": world.size,
+                "mpi_ranks": _size(world),
                 "threads_requested": int(os.environ.get("POPS_THREADS", "1")),
                 "example_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                 "oracle_sha256": hashlib.sha256(
@@ -308,10 +334,10 @@ def run_and_archive(destination: Path) -> list[dict]:
             (destination / "receipt.json").write_bytes(payload)
         except Exception as exception:
             failure = (type(exception).__name__ + ": " + str(exception)).encode()
-    failure = world.broadcast_bytes(failure, root=0)
+    failure = _broadcast_bytes(world, failure)
     if failure:
         raise RuntimeError(failure.decode())
-    return json.loads(world.broadcast_bytes(payload, root=0))["records"]
+    return json.loads(_broadcast_bytes(world, payload))["records"]
 
 
 if __name__ == "__main__":

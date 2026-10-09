@@ -247,3 +247,145 @@ def test_each_consumer_checks_its_own_weight_even_when_the_rate_is_reused():
         (state, Fraction(1), ((diffusion, Fraction(2)),)),)
     assert any("partition_frequency_21_0" in line and "diffusion" in line for line in lines)
     require_deferred_partition_bounds(var)
+
+
+# Real public SSA: Program.value retains State-shaped storage for a rate sum.
+# Consumption role, rather than a synthetic vtype rewrite, owns its CFL budget.
+def _public_rate_program():
+    import pops
+    from pops import math
+    from pops.domain import Rectangle
+    from pops.frames import Cartesian2D
+    frame = Rectangle("role_domain", (0., 0.), (1., 1.)).frame(Cartesian2D())
+    model = pops.Model("independent_rate_algebra", frame=frame)
+    state = model.state("material", components=("q",))
+    x, y = frame.axes
+    first_flux = model.flux("first_flux", state=state, frame=frame,
+                            components={x: (state[0],), y: (0 * state[0],)})
+    second_flux = model.flux("second_flux", state=state, frame=frame,
+                             components={x: (2 * state[0],), y: (0 * state[0],)})
+    first = model.rate("first_balance", equation=math.ddt(state) == -math.div(first_flux))
+    second = model.rate("second_balance", equation=math.ddt(state) == -math.div(second_flux))
+    case = pops.Case("independent_consumer_case")
+    block = case.block("material", model)
+    program = pops.Program("independent_consumer_composition")
+    temporal = program.state(block[state])
+    return program, temporal, first, second
+
+
+@pytest.mark.parametrize("weights", [(Fraction(1, 2), Fraction(3, 4)),
+                                      (Fraction(2, 3), Fraction(1, 5))])
+def test_real_public_rate_sum_consumes_one_state_budget(weights):
+    p, t, first, second = _public_rate_program()
+    a, b = first(t.n), second(t.n)
+    observed = p.value("observed_rates", weights[0] * a + weights[1] * b, at=t.n.point)
+    update = p.value("accepted", t.n + p.dt * observed, at=t.next.point)
+    p.commit(t.next, update)
+    before = p._serialize()
+    assert observed.vtype == "state"  # Actual storage type, never hand-retagged rhs.
+    assert explicit_update_consumers(p) == frozenset({update.id})
+    assert partition_stability_groups(update, include_transport=True) == (
+        (t.n, Fraction(1), ((a, weights[0]), (b, weights[1]))),)
+    lines = []
+    emit_user_face_stability(update,
+        {("user_face_frequency", a.id): "fa", ("user_face_frequency", b.id): "fb",
+         ("partition_frequency", a.id): "fa", ("partition_frequency", b.id): "fb"},
+        lines, block_index=0)
+    assert any("numerical_face_courant()" in line and "503" in line for line in lines)
+    assert p._serialize() == before
+
+
+@pytest.mark.parametrize("damage", ["negative_rate", "quadratic_dt", "state_weight"])
+def test_real_observation_coefficients_never_relax_consuming_budget(damage):
+    p, t, first, second = _public_rate_program()
+    a, b = first(t.n), second(t.n)
+    observed = p.value("observed", a - b if damage == "negative_rate" else a + b, at=t.n.point)
+    if damage == "quadratic_dt":
+        expression = t.n + p.dt * p.dt * observed
+    elif damage == "state_weight":
+        expression = 2 * t.n + p.dt * observed
+    else:
+        expression = t.n + p.dt * observed
+    update = p.value("accepted", expression, at=t.next.point)
+    p.commit(t.next, update)
+    assert explicit_update_consumers(p) == frozenset({update.id})
+    with pytest.raises(ValueError, match="convex affine stability certificate"):
+        partition_stability_groups(update, include_transport=True)
+
+
+def test_real_observed_history_does_not_add_a_diagnostic_state_budget():
+    p, t, first, second = _public_rate_program()
+    a, b = first(t.n), second(t.n)
+    diagnostic = p.value("diagnostic_rates", a + 7 * b, at=t.n.point)
+    p.store_history("actual_rate_observation", diagnostic, depth=1)
+    observed = p.value("accepted_rates", a + b, at=t.n.point)
+    update = p.value("accepted", t.n + p.dt * observed, at=t.next.point)
+    p.commit(t.next, update)
+    assert diagnostic.vtype == observed.vtype == "state"
+    assert explicit_update_consumers(p) == frozenset({update.id})
+    assert partition_stability_groups(update, include_transport=True)[0][2] == ((a, 1), (b, 1))
+
+
+@pytest.mark.parametrize("scaled", [False, True])
+def test_real_committed_rate_only_state_still_refuses_no_base(scaled):
+    p, t, first, second = _public_rate_program()
+    a, b = first(t.n), second(t.n)
+    expression = p.dt * (a + b) if scaled else a + b
+    invalid = p.value("unanchored_state", expression, at=t.next.point)
+    p.commit(t.next, invalid)
+    assert invalid.id in explicit_update_consumers(p)
+    with pytest.raises(ValueError, match="explicit state consumer has no state weight"):
+        partition_stability_groups(invalid, include_transport=True)
+
+
+def test_real_shared_rate_observation_later_sampled_as_state_requires_budget():
+    p, t, first, second = _public_rate_program()
+    a, b = first(t.n), second(t.n)
+    observed = p.value("observed", a + b, at=t.n.point)
+    # Traversal reaches observed first as a contribution, then as this rate's State input.
+    sampled = first(observed)
+    update = p.value("accepted", t.n + p.dt * observed + p.dt * sampled, at=t.next.point)
+    p.commit(t.next, update)
+    assert explicit_update_consumers(p) == frozenset({observed.id, update.id})
+    with pytest.raises(ValueError, match="explicit state consumer has no state weight"):
+        partition_stability_groups(observed, include_transport=True)
+
+
+def test_real_nested_stage_sum_keeps_each_sampled_predictor_budget():
+    p, t, first, second = _public_rate_program()
+    a, b = first(t.n), second(t.n)
+    observed = p.value("first_rates", a + b, at=t.n.point)
+    point = p.stage("sampled_predictor", c=1)
+    predictor = p.value("predictor", t.n + p.dt * observed, at=point)
+    c, d = first(predictor), second(predictor)
+    last = p.value("last_rates", c + d, at=point)
+    accepted = p.value("accepted", (t.n + predictor + p.dt * last) / 2, at=t.next.point)
+    p.commit(t.next, accepted)
+    assert explicit_update_consumers(p) == frozenset({predictor.id, accepted.id})
+    assert partition_stability_groups(predictor, include_transport=True)[0][2] == ((a, 1), (b, 1))
+    assert partition_stability_groups(accepted, include_transport=True) == (
+        (predictor, Fraction(1, 2), ((c, Fraction(1, 2)), (d, Fraction(1, 2)))),)
+
+
+def test_actual_atomic_forward_euler_rhs_alias_keeps_equations_and_guard():
+    import pops
+    from pops.codegen import Production
+    from pops.codegen._orchestration_compile import build_program_model_graph
+    from pops.codegen.program_codegen import emit_cpp_program
+    from tests.python.support.atomic_cubature_path_case import make_case
+    from tests.python.support.atomic_cubature_fv_oracle import DT
+    case, layout, _ = make_case(nonconservative=True, amr=True, fixed_dt=DT, scale_parameter=True)
+    resolved = pops.resolve(pops.validate(case), layout=layout, backend=Production())
+    program = resolved.time
+    before = program._serialize()
+    (accepted,) = program._commits.values()
+    observed = next(value for value in accepted.inputs if value.op == "linear_combine")
+    assert observed.vtype == "state" and all(value.op == "rhs" for value in observed.inputs)
+    assert explicit_update_consumers(program) == frozenset({accepted.id})
+    code = emit_cpp_program(program, model_graph=build_program_model_graph(resolved), target="amr_system")
+    assert code.count('"user_face_numerical_stability",503') == 1
+    assert 'user_face_update_frequency_%d_0' % accepted.id in code
+    assert 'user_face_update_frequency_%d_0' % observed.id not in code
+    assert "ctx.numerical_face_courant()" in code and "32 * std::numeric_limits<pops::Real>::epsilon()" in code
+    assert "ctx.axpy(" in code and "ctx.commit_many(" in code
+    assert program._serialize() == before

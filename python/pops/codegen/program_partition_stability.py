@@ -88,16 +88,31 @@ def explicit_update_consumers(program):
     interpret a nonlinear solver's residual or predictor as an explicit step.
     """
     updates, seen = set(), set()
+    observed_rates = {}
 
-    def walk(node):
-        if node.id in seen:
+    def only_rate_observations(node):
+        node = _unguarded(node)
+        if node.id not in observed_rates:
+            # Issued SSA is acyclic. A repeated unfinished node cannot certify a rate sum.
+            observed_rates[node.id] = False
+            observed_rates[node.id] = (_is_rate(node) or (
+                node.op == "linear_combine" and bool(node.inputs)
+                and all(only_rate_observations(child) for child in node.inputs)))
+        return observed_rates[node.id]
+
+    def walk(node, *, state_consumer=True):
+        # The same scratch can first contribute to a state sum and later be sampled
+        # as a State. Its actual State consumption must still receive a budget.
+        role = (node.id, state_consumer)
+        if role in seen:
             return
-        seen.add(node.id)
+        seen.add(role)
         if node.op == "linear_combine":
-            if node.vtype == "state":
+            if node.vtype == "state" and (
+                    state_consumer or not only_rate_observations(node)):
                 updates.add(node.id)
             for child in node.inputs:
-                walk(child)
+                walk(child, state_consumer=False)
         elif node.op == "principal_rate":
             # Coupled groups may sample a predictor from another block while
             # advancing the target block; each sampled explicit stage matters.
@@ -126,9 +141,9 @@ def explicit_update_consumers(program):
                          "solve_implicit_source"}:
             return
         elif node.op == "acceptance_guard":
-            walk(node.inputs[0])
+            walk(node.inputs[0], state_consumer=state_consumer)
         elif node.vtype == "state" and len(node.inputs) == 1:
-            walk(node.inputs[0])
+            walk(node.inputs[0], state_consumer=state_consumer)
 
     for value in program._commits.values():
         walk(value)
