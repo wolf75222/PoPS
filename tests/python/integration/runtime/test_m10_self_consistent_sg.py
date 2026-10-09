@@ -187,14 +187,14 @@ def _case(n=N, dt=DT):
 def test_m10_source_has_one_joint_face_construction_and_live_poisson_dependencies():
     from pops.codegen.module_lowering import lower_and_validate
     from pops.codegen.program_codegen import emit_cpp_program
-    from pops.codegen.program_models import ProgramModelGraph
+    from pops.codegen._orchestration_compile import build_program_model_graph
 
     case, layout, model, rate, program, problem = _case()
     resolved = pops.resolve(pops.validate(case), layout=layout, backend=Production())
     view = model.balance_contract(rate)
     assert [(row.kind, row.coefficient) for row in view.occurrences] == [
         ("drift", -1), ("diffusion", 1)]
-    graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    graph = build_program_model_graph(resolved)
     code = emit_cpp_program(program, model_graph=graph)
     assert ".apply_fitted(" in code
     assert code.count(".stage_accepted_exchanges(") == 1

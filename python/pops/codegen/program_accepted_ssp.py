@@ -290,10 +290,14 @@ def prove_accepted_update_ssp(program: Any, *, model_authority: Any = None) -> t
                     if constitutive_reads and len(value.inputs)==1:
                         raise ValueError("forward-Euler premise lacks closed constitutive reads")
                     from .program_static_provider_proof import prove_static_provider_read
+                    from .program_stage_provider_proof import prove_stage_provider_read
                     if any(not (prove_static_provider_read(
                             program, extra, value, constitutive_reads, model_authority, issued)
                             if extra.op == "input_fields" else
-                            frozen_read(extra, constitutive_reads, value.block))
+                            (frozen_read(extra, constitutive_reads, value.block) or
+                             prove_stage_provider_read(program, extra, value, constitutive_reads,
+                                                       model_authority, issued,
+                                                       frozen_read)))
                            for extra in value.inputs[1:]):
                         raise ValueError("forward-Euler premise unproved for dependent Field/evaluation inputs")
                     visit(value.inputs[0]);rates[value.id] = value

@@ -5092,5 +5092,6 @@
   "tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py": 600,
   "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py": 600,
   "tests/python/unit/time/test_temporal_tau_program_authority.py": 5.0,
-  "tests/python/unit/codegen/test_static_provider_ssp_proof.py": 5.0
+  "tests/python/unit/codegen/test_static_provider_ssp_proof.py": 5.0,
+  "tests/python/integration/runtime/test_public_three_stage_screened_fields.py": 600
 }

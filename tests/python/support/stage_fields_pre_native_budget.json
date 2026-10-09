@@ -1,0 +1,35 @@
+{
+  "schema": "stage-fields-pre-Native-budget@1",
+  "CG": {
+    "max_iter": 2000,
+    "rtol": 1e-12,
+    "atol": 1e-14
+  },
+  "joint_unknowns": 384,
+  "rhs_ceiling": 4.0,
+  "physical_cell_volume": 0.03125,
+  "joint_residual_bound": 1.5363200000000001e-09,
+  "independent_residual_bound": 1.6102164445190505e-09,
+  "point_roundoff_allowance": 1.1368683772161603e-13,
+  "absolute_bounds": {
+    "q0": 1.4210854715202004e-14,
+    "q1": 1.5050694438145373e-13,
+    "q2": 1.677908088212615e-13,
+    "qfinal": 2.458583115919689e-13,
+    "d_initial": 1.4210854715202004e-14,
+    "phi0": 5.122298274075318e-10,
+    "psi0": 3.0738266063687193e-10,
+    "phi1": 5.122752594374205e-10,
+    "psi1": 3.0740991985480523e-10,
+    "phi2": 5.122810207255672e-10,
+    "psi2": 3.0741337662769315e-10,
+    "resident_phi": 5.122810207255672e-10,
+    "resident_psi": 3.0741337662769315e-10
+  },
+  "donor_final": "byte-exact equality to actual saved initial donor, not approximate oraclebits",
+  "premises": [
+    "Existing screened operator is periodic positive SPD/M-matrix with sigma_min>=3.",
+    "CG success/residual controls and max2000 unchanged; bounded RHS<=4, zero/valid prior-field initial guess and supported density/integral/norm normalization.",
+    "If actual solver/residual metric contradicts these premises, report mismatch; never increase these budgets from observed errors."
+  ]
+}

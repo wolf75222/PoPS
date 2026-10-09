@@ -43,6 +43,7 @@ class ProgramModelGraph:
         "_rhs_coherence_neighbours",
         "_numerics_by_block",
         "_resolved_provider_sources",
+        "_resolved_program_field_sources",
     )
 
     def __init__(
@@ -56,6 +57,7 @@ class ProgramModelGraph:
         rhs_coherence_neighbours: Mapping[str, frozenset[str]] | None = None,
         numerics_by_block: Mapping[str, Any] | None = None,
         resolved_provider_sources: Mapping[str, Any] | None = None,
+        program_field_plans: Mapping[str, Any] | None = None,
     ) -> None:
         if not models_by_owner:
             raise ValueError("ProgramModelGraph requires at least one model owner")
@@ -91,6 +93,14 @@ class ProgramModelGraph:
             raise ValueError("ProgramModelGraph block model routes must match owner block routes")
         self._models_by_block = MappingProxyType(routed_models)
         self._resolved_provider_sources = MappingProxyType(dict(resolved_provider_sources or {}))
+        from .program_field_plan import ResolvedProgramFieldPlan
+        field_sources = {}
+        for name, plan in (program_field_plans or {}).items():
+            if type(plan) is not ResolvedProgramFieldPlan or name != plan.name:
+                raise TypeError("Program Field authority requires exact resolved Field plans")
+            plan.__post_init__()
+            field_sources[name] = (plan, plan.identity.token)
+        self._resolved_program_field_sources = MappingProxyType(field_sources)
         self._numerics_by_block = MappingProxyType(dict(numerics_by_block or {}))
         if self._numerics_by_block and set(self._numerics_by_block) != set(owners_by_block):
             raise ValueError("ProgramModelGraph numerical routes must cover exactly its block owners")
@@ -104,7 +114,7 @@ class ProgramModelGraph:
             MappingProxyType({name: frozenset(peers) for name, peers in rhs_coherence_neighbours.items()}))
 
     @classmethod
-    def from_resolved_blocks(cls, blocks: Any) -> ProgramModelGraph:
+    def from_resolved_blocks(cls, blocks: Any, *, program_field_plans: Mapping[str, Any] | None = None) -> ProgramModelGraph:
         """Lower every distinct exact ``ResolvedBlock`` model and capture total owner routing."""
         from pops.codegen._plans import ResolvedBlock
         from pops.codegen.module_lowering import lower_and_validate
@@ -173,6 +183,7 @@ class ProgramModelGraph:
             block_models[block.name] = emit_model
         from pops.codegen._rhs_coherence import resolved_rhs_neighbours
         return cls(
+            program_field_plans=program_field_plans,
             models_by_owner=models,
             source_modules_by_owner=modules,
             owners_by_block=routes,
@@ -211,6 +222,22 @@ class ProgramModelGraph:
                 or canonical_bytes(actual.to_data()) != canonical_bytes(emitted.to_data()):
             raise ValueError("static provider source differs from the actual emitted ProviderPack")
         return actual
+
+    def resolved_program_field_plan(self, handle: Any, program: Any) -> Any:
+        """stageproviderread@1: issued registered equation authority, never a recipe key."""
+        from .program_field_plan import _canonical
+        expected = _canonical(handle._resolved().canonical_identity())
+        matches = [(plan, token) for plan, token in self._resolved_program_field_sources.values()
+                   if _canonical(plan.handle.canonical_identity()) == expected]
+        if len(matches) != 1:
+            raise ValueError("stage provider read needs exact resolved physical Field authority")
+        plan, issued_identity = matches[0]
+        if plan.identity.token != issued_identity:
+            raise ValueError("stage provider physical Field plan changed its issued identity")
+        plan.validate_program(program)  # rehashes current payload and checks the actual solve graph
+        if plan.identity.token != issued_identity:
+            raise ValueError("stage provider physical Field plan changed after authentication")
+        return plan
 
     def numerics_for_block(self, block: Any) -> Any:
         self.owner_for_block(block)

@@ -139,6 +139,62 @@ bool contains(const FieldView<Real, Dim>& view, const Box<Dim>& region, int ncom
   return true;
 }
 
+template <int Dim>
+struct RegionKernelJob {
+  using execution_index_type = std::int64_t;
+  int source_lower[Dim]{};
+  int destination_lower[Dim]{};
+  execution_index_type extent[Dim]{};
+  execution_index_type cells = 0;
+  execution_index_type offset = 0;
+  execution_index_type elements = 0;
+};
+
+template <int Dim, class MemorySpace>
+struct RegionPackKernel {
+  using device_buffer_type = Kokkos::View<Real*, MemorySpace>;
+  using execution_index_type = std::int64_t;
+  using KernelJob = RegionKernelJob<Dim>;
+  device_buffer_type buffer{};
+  FieldView<const Real, Dim> source{};
+  KernelJob job{};
+
+  POPS_HD void operator()(execution_index_type element) const {
+    const int component = static_cast<int>(element / job.cells);
+    execution_index_type cell = element % job.cells;
+    Index<Dim> index{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      index[axis] = static_cast<int>(static_cast<execution_index_type>(job.source_lower[axis]) +
+                                     cell % job.extent[axis]);
+      cell /= job.extent[axis];
+    }
+    buffer(job.offset + element) = source(index, component);
+  }
+};
+
+template <int Dim, class MemorySpace>
+struct RegionUnpackKernel {
+  using device_buffer_type = Kokkos::View<Real*, MemorySpace>;
+  using execution_index_type = std::int64_t;
+  using KernelJob = RegionKernelJob<Dim>;
+  device_buffer_type buffer{};
+  FieldView<Real, Dim> destination{};
+  KernelJob job{};
+
+  POPS_HD void operator()(execution_index_type element) const {
+    const int component = static_cast<int>(element / job.cells);
+    execution_index_type cell = element % job.cells;
+    Index<Dim> index{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      index[axis] =
+          static_cast<int>(static_cast<execution_index_type>(job.destination_lower[axis]) +
+                           cell % job.extent[axis]);
+      cell /= job.extent[axis];
+    }
+    destination(index, component) = buffer(job.offset + element);
+  }
+};
+
 }  // namespace detail
 
 /// Immutable globally canonical region schedule classified for one exact process coordinate.
@@ -384,51 +440,9 @@ class RegionTransport {
     pinned_buffer_type host_receive{};
   };
 
-  struct KernelJob {
-    int source_lower[Dim]{};
-    int destination_lower[Dim]{};
-    execution_index_type extent[Dim]{};
-    execution_index_type cells = 0;
-    execution_index_type offset = 0;
-    execution_index_type elements = 0;
-  };
-
-  struct PackKernel {
-    device_buffer_type buffer{};
-    FieldView<const Real, Dim> source{};
-    KernelJob job{};
-
-    POPS_HD void operator()(execution_index_type element) const {
-      const int component = static_cast<int>(element / job.cells);
-      execution_index_type cell = element % job.cells;
-      Index<Dim> index{};
-      for (int axis = 0; axis < Dim; ++axis) {
-        index[axis] = static_cast<int>(static_cast<execution_index_type>(job.source_lower[axis]) +
-                                       cell % job.extent[axis]);
-        cell /= job.extent[axis];
-      }
-      buffer(job.offset + element) = source(index, component);
-    }
-  };
-
-  struct UnpackKernel {
-    device_buffer_type buffer{};
-    FieldView<Real, Dim> destination{};
-    KernelJob job{};
-
-    POPS_HD void operator()(execution_index_type element) const {
-      const int component = static_cast<int>(element / job.cells);
-      execution_index_type cell = element % job.cells;
-      Index<Dim> index{};
-      for (int axis = 0; axis < Dim; ++axis) {
-        index[axis] =
-            static_cast<int>(static_cast<execution_index_type>(job.destination_lower[axis]) +
-                             cell % job.extent[axis]);
-        cell /= job.extent[axis];
-      }
-      destination(index, component) = buffer(job.offset + element);
-    }
-  };
+  using KernelJob = detail::RegionKernelJob<Dim>;
+  using PackKernel = detail::RegionPackKernel<Dim, MemorySpace>;
+  using UnpackKernel = detail::RegionUnpackKernel<Dim, MemorySpace>;
 
   KernelJob lower_(const job_type& job) const {
     const std::size_t execution_max =

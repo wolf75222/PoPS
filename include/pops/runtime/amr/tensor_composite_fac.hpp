@@ -216,6 +216,40 @@ Box<Dim> interpolation_growth(const Box<Dim>& valid, const Box<Dim>& domain,
   return grown;
 }
 
+// Named kernel types keep device entry points outside private enclosing classes/functions.
+template <class Storage>
+struct NonFiniteStorageKernel {
+  Storage values{};
+  POPS_HD void operator()(const std::size_t index, long& flag) const {
+    constexpr Real infinity = std::numeric_limits<Real>::infinity();
+    const Real value = values(index);
+    if (value != value || value == infinity || value == -infinity)
+      flag = 1;
+  }
+};
+
+template <int Dim, class Storage>
+struct TensorEllipticityKernel {
+  std::array<Storage, static_cast<std::size_t>(Dim * Dim)> coefficients{};
+  POPS_HD void operator()(const std::size_t index, long& invalid) const {
+    constexpr Real infinity = std::numeric_limits<Real>::infinity();
+    for (int row = 0; row < Dim; ++row) {
+      const Real diagonal =
+          coefficients[static_cast<std::size_t>(row * Dim + row)](index);
+      Real off_diagonal = Real(0);
+      bool finite = diagonal == diagonal && diagonal != infinity && diagonal != -infinity;
+      for (int column = 0; column < Dim; ++column) {
+        const Real a = coefficients[static_cast<std::size_t>(row * Dim + column)](index);
+        finite = finite && a == a && a != infinity && a != -infinity;
+        if (column != row)
+          off_diagonal += a < Real(0) ? -a : a;
+      }
+      if (!finite || !(diagonal > off_diagonal))
+        invalid = 1;
+    }
+  }
+};
+
 template <int Dim, class Value>
 struct SetKernel {
   FieldView<Value, Dim> field{};
@@ -1197,12 +1231,8 @@ class FullTensorCompositeFac {
       Kokkos::parallel_reduce(
           "pops_tensor_interface_finite",
           Kokkos::RangePolicy<Kokkos::IndexType<std::size_t>>(0, values.extent(0)),
-          KOKKOS_LAMBDA(const std::size_t index, long& flag) {
-            constexpr Real infinity = std::numeric_limits<Real>::infinity();
-            const Real value = values(index);
-            if (value != value || value == infinity || value == -infinity)
-              flag = 1;
-          }, Kokkos::Max<long>(invalid));
+          detail::NonFiniteStorageKernel<std::remove_cvref_t<decltype(values)>>{values},
+          Kokkos::Max<long>(invalid));
       return invalid;
     }
 
@@ -1720,23 +1750,7 @@ class FullTensorCompositeFac {
         long patch_invalid = 0;
         Kokkos::parallel_reduce(
             "pops_nd_tensor_ellipticity", Kokkos::RangePolicy<>(0, count),
-            KOKKOS_LAMBDA(const std::size_t index, long& invalid) {
-              constexpr Real infinity = std::numeric_limits<Real>::infinity();
-              for (int row = 0; row < Dim; ++row) {
-                const Real diagonal =
-                    coefficients[static_cast<std::size_t>(row * Dim + row)](index);
-                Real off_diagonal = Real(0);
-                bool finite = diagonal == diagonal && diagonal != infinity && diagonal != -infinity;
-                for (int column = 0; column < Dim; ++column) {
-                  const Real a = coefficients[static_cast<std::size_t>(row * Dim + column)](index);
-                  finite = finite && a == a && a != infinity && a != -infinity;
-                  if (column != row)
-                    off_diagonal += a < Real(0) ? -a : a;
-                }
-                if (!finite || !(diagonal > off_diagonal))
-                  invalid = 1;
-              }
-            },
+            detail::TensorEllipticityKernel<Dim, storage_type>{coefficients},
             Kokkos::Max<long>(patch_invalid));
         local_invalid = std::max(local_invalid, patch_invalid);
       }

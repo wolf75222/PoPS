@@ -1,6 +1,7 @@
 {
   "default": 2,
   "files": {
+    "tests/python/integration/runtime/test_public_three_stage_screened_fields.py": 2,
     "tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py": 1,
     "tests/python/integration/runtime/test_m10_self_consistent_sg.py": 1,
     "tests/python/integration/runtime/test_public_drift_diffusion_matrix.py": 1,

@@ -1916,6 +1916,23 @@ void authenticate_generated_block_point(std::string_view route, int runtime_bloc
 }
 
 template <int Dim>
+struct ZeroScalarComponentKernel {
+  FieldView<Real, Dim> values{};
+  POPS_HD void operator()(const Index<Dim>& cell) const { values(cell, 0) = Real(0); }
+};
+
+template <int Dim>
+struct CopyScalarComponentKernel {
+  FieldView<const Real, Dim> input{};
+  FieldView<Real, Dim> output{};
+  int source_component = 0;
+  int destination_component = 0;
+  POPS_HD void operator()(const Index<Dim>& cell) const {
+    output(cell, destination_component) = input(cell, source_component);
+  }
+};
+
+template <int Dim>
 struct CopyValidFieldKernel {
   FieldView<const Real, Dim> source{};
   FieldView<Real, Dim> destination{};
@@ -5725,8 +5742,7 @@ struct AmrSystem<Dim>::Impl {
           if (overlap.empty())
             continue;
           const auto values = parent.fab(local).view();
-          for_each_cell(overlap,
-                        [=] POPS_HD(const Index<Dim>& cell) { values(cell, 0) = Real(0); });
+          for_each_cell(overlap, ZeroScalarComponentKernel<Dim>{values});
         }
       }
     }
@@ -5766,9 +5782,8 @@ struct AmrSystem<Dim>::Impl {
     for (std::size_t local = 0; local < source.local_size(); ++local) {
       const auto input = source.fab(local).view();
       const auto output = destination.fab(local).view();
-      for_each_cell(source.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-        output(cell, destination_component) = input(cell, source_component);
-      });
+      for_each_cell(source.box(local), CopyScalarComponentKernel<Dim>{
+          input, output, source_component, destination_component});
     }
     Kokkos::fence();
   }
