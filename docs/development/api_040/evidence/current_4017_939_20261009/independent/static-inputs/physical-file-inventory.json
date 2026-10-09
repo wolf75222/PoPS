@@ -1,0 +1,298 @@
+{
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/run-receipt.json": {
+    "bytes": 14762,
+    "sha256": "f8c3b5a6e9df95bcb7284878c0df993b241aad20fe17a4870b4a6916202ee361"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/variable-euler/actual-state.npz": {
+    "bytes": 2314,
+    "sha256": "08d8f0c1183ef0e01c8bc5580cde61596d10de7b11f9ee6b27aa0161ecb525c6"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/variable-euler/independent-input-and-reference.npz": {
+    "bytes": 9220,
+    "sha256": "591b7d1a95fda80ec5e3c3abd1ac2110377ebbfc4c750c74476a94301a88772e"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/variable-euler/case-receipt.json": {
+    "bytes": 10469,
+    "sha256": "7da3b805cc49ac7cd61fab88288421f01481a0c63725030b840b68a8ca52112b"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/variable-euler/actual-exchanges.json": {
+    "bytes": 1015339,
+    "sha256": "39e1fc09958f59bcc0dab3229f178be46125334e8bbc2f2751b5e1e05f6aa1e0"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/variable-euler/precompile-ssp-proof.json": {
+    "bytes": 278,
+    "sha256": "0e754b5a8cbfeeb4c767c570f154fca3803be7b33388078d047b6ed3e4a14550"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/jit/f77371de1780a7eb1b3422251a2642458d3b37a277af4a17fdc38e929c5a62db.so.pops-cache.lock": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/jit/f77371de1780a7eb1b3422251a2642458d3b37a277af4a17fdc38e929c5a62db.so": {
+    "bytes": 510128,
+    "sha256": "5e112be81a09165080b4432a6501496b334fb7844bacd766941e6b9168d3c0d0"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/jit/26674d21cefd059b584e7d8acfa8bfc288e5d00ea17ec5408b8fbd5551fbad2e.so": {
+    "bytes": 380568,
+    "sha256": "392d0d5ef605e745fdc72bf4d8701864e8c006e22a98d95b87b0887a94dff9c0"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/jit/f77371de1780a7eb1b3422251a2642458d3b37a277af4a17fdc38e929c5a62db.so.pops-artifact.json": {
+    "bytes": 490,
+    "sha256": "526ddfaecf61b612bf3f325dda59773d5e4778addf5ad414cc71bd986cabd72a"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/jit/26674d21cefd059b584e7d8acfa8bfc288e5d00ea17ec5408b8fbd5551fbad2e.so.pops-cache.lock": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/jit/26674d21cefd059b584e7d8acfa8bfc288e5d00ea17ec5408b8fbd5551fbad2e.so.pops-artifact.json": {
+    "bytes": 591,
+    "sha256": "db9ab90905fdd294d7044b20df7c1b60ef75f0f540564dffd7779bc36ab1968c"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/jit/26674d21cefd059b584e7d8acfa8bfc288e5d00ea17ec5408b8fbd5551fbad2e.so.pops-model-compile.json": {
+    "bytes": 2292,
+    "sha256": "4a8b92a001ecbad57274f86cbd2bf39dd7a15bedcd6def5139e407b052d607d7"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/jit/26674d21cefd059b584e7d8acfa8bfc288e5d00ea17ec5408b8fbd5551fbad2e.so.pops-model.cpp": {
+    "bytes": 15776,
+    "sha256": "4a052752b7feddf765d2346ed8e1198368bcf4ab97eb7b0bd157d3c8b9dc1ea7"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/jit/.26674d21cefd059b584e7d8acfa8bfc288e5d00ea17ec5408b8fbd5551fbad2e.pops-stage-w7el7fnh.so.pops-cache.lock": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/run-receipt.json": {
+    "bytes": 60813,
+    "sha256": "711d87dd4a9beadf6584e20f44e109a6257ab09531ca0b7e4c558d5d9636c11a"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/variable-ssprk2/actual-state.npz": {
+    "bytes": 2314,
+    "sha256": "d1479e5e235f4a5c2569f7a08134efb58fb286c2ad464238bd18e8b1fa83f438"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/variable-ssprk2/independent-input-and-reference.npz": {
+    "bytes": 9220,
+    "sha256": "c1aec9e6c8b8493f35359433cf7251e586999aa063a67072396bec46f2a14034"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/variable-ssprk2/case-receipt.json": {
+    "bytes": 10489,
+    "sha256": "a167c3d9e12b149c6e429044d2f66af9983c89381259d40376699af0874a7f13"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/variable-ssprk2/actual-exchanges.json": {
+    "bytes": 2030561,
+    "sha256": "102ef00338155662de814e494cdf16bc08d411b69c4c1ccce3dad819ee14c0ce"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/variable-ssprk2/precompile-ssp-proof.json": {
+    "bytes": 292,
+    "sha256": "175d8eda0b8df7868719eaa01a5097b5b8ac45151df6600d7f4581b4567bc0a5"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_smooth-ssprk2/actual-state.npz": {
+    "bytes": 2314,
+    "sha256": "45e1e921699a8c891cce98bd019dd423f537d03f8f18cf0a7a5cab43329bf5e8"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_smooth-ssprk2/independent-input-and-reference.npz": {
+    "bytes": 11478,
+    "sha256": "aecf3c68ffefa07c90976842abac092e9188d5a5d3fa7aa00ef0dc726c7986ce"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_smooth-ssprk2/case-receipt.json": {
+    "bytes": 10503,
+    "sha256": "51db90dfe8a6d485711108a6cad7512ea4591aa9dcddd98591c90c0cef6b4675"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_smooth-ssprk2/actual-exchanges.json": {
+    "bytes": 2031044,
+    "sha256": "4d94823a9616625755abc5ff9232f6e6de86d1c9d46558ddd4713e54fd6032f2"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_smooth-ssprk2/precompile-ssp-proof.json": {
+    "bytes": 299,
+    "sha256": "3694053fd0b159da41c09f4dce168f44bc199db0080027f2c8bbae047184fa5b"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_smooth-euler/actual-state.npz": {
+    "bytes": 2314,
+    "sha256": "3dafc47687edff429608bd490f11ced4b3587f617dce798b83152c0713cf9873"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_smooth-euler/independent-input-and-reference.npz": {
+    "bytes": 11478,
+    "sha256": "5247bd9307ed1c03a3530ecffcf3dfee2a56e081ab5ff1fbcd82cf7c69b5c8cd"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_smooth-euler/case-receipt.json": {
+    "bytes": 10471,
+    "sha256": "e1da6caf3ec0d962c0bc18c3f1a49244cd69ec605ea03f838050c830f998cf32"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_smooth-euler/actual-exchanges.json": {
+    "bytes": 1015514,
+    "sha256": "4da8bf980da8239ddc8fe92c736afe7df398cb68cc65de8cba617626bd794ed6"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_smooth-euler/precompile-ssp-proof.json": {
+    "bytes": 285,
+    "sha256": "d17c1fec15d8519521ca077802198b920f28d61c970f6b6ffd32ef410da0f347"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_linear-euler/actual-state.npz": {
+    "bytes": 2314,
+    "sha256": "fa0d83ea6d21cbeea55ffaaa104b4a4c8de01d5cd7c4311611e97b734b373dc5"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_linear-euler/independent-input-and-reference.npz": {
+    "bytes": 11478,
+    "sha256": "ac2baa80e7169e5eab1f576fe8466c458cd482339e008bc6fa60cb26d4ff335c"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_linear-euler/case-receipt.json": {
+    "bytes": 10471,
+    "sha256": "38f595e455098d5c39b2f00eb793d80d8cace1d654c7013162ef4b523be86317"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_linear-euler/actual-exchanges.json": {
+    "bytes": 1010938,
+    "sha256": "fd14a9adece1809b2ce7cb661422fd503db4ae8f50df6304692f3e39e04097b1"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_linear-euler/precompile-ssp-proof.json": {
+    "bytes": 285,
+    "sha256": "81c66a958e63b3b88b7fa97bc4776a647e5c88b1118b2421ebaf3d98dea20412"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/5b0dcbeca780e81486ae82f6fb15fd16fd312df8a79b9513d817cf04f07b9c08.so.pops-model.cpp": {
+    "bytes": 18791,
+    "sha256": "3fa7709e0fad35c080e83860df2f3ebc49b8a43d8190cb08ca55a759bc80014d"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/29a54873b2d73772e3a162ce6b5606f7c6d30c53f15025e14e710a6aa0d71e0c.so.pops-cache.lock": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/842b83fe59df6bebd3d8de1f74338dfe020178b62d290355e2fdac593cb9ae8e.so": {
+    "bytes": 552400,
+    "sha256": "470c9ffd6db2901ed47a60a43c89bbb2a82e2812a85effee99d7d3a3f8c2337f"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/5b0dcbeca780e81486ae82f6fb15fd16fd312df8a79b9513d817cf04f07b9c08.so.pops-artifact.json": {
+    "bytes": 591,
+    "sha256": "e507421ecb728ccc3d1b9d7af1d2118b1f5a1c7b19b4348e46368f464bb7c67c"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/29a54873b2d73772e3a162ce6b5606f7c6d30c53f15025e14e710a6aa0d71e0c.so": {
+    "bytes": 510128,
+    "sha256": "ce786c1fcb8dc17205c70e0118e9367fea013a98c4392208c878dece4012e96f"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/6d29d1ed725b94fc0ba57825651b6bbf29fa326c84605eb9112f2108fb3b0c14.so.pops-artifact.json": {
+    "bytes": 591,
+    "sha256": "106b18bc0be99293b3f5a7e348c49b9f6a73fe0890e0de6b26914044f32a40af"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/842b83fe59df6bebd3d8de1f74338dfe020178b62d290355e2fdac593cb9ae8e.so.pops-artifact.json": {
+    "bytes": 490,
+    "sha256": "4f1096b58326acdbc6b6e0ea296f63b9c6bf4e09c7bd171caaaef76db191952b"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/6d29d1ed725b94fc0ba57825651b6bbf29fa326c84605eb9112f2108fb3b0c14.so.pops-model-compile.json": {
+    "bytes": 2276,
+    "sha256": "9f006112221964e90574cdc4d6a54b3b6b3d417dbd9502152b3815c8052693ed"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/29a54873b2d73772e3a162ce6b5606f7c6d30c53f15025e14e710a6aa0d71e0c.so.pops-artifact.json": {
+    "bytes": 490,
+    "sha256": "7f1658c4d53a6fb966a15fa0db309b6c1341f7abd86da3a40abc1df48c1b3b71"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/26674d21cefd059b584e7d8acfa8bfc288e5d00ea17ec5408b8fbd5551fbad2e.so": {
+    "bytes": 380568,
+    "sha256": "392d0d5ef605e745fdc72bf4d8701864e8c006e22a98d95b87b0887a94dff9c0"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/67cbb93bd1cc20eb08e5576a3859a843efd60744479bf64eb86185eedca30ee8.so.pops-cache.lock": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/c078228b10b8e68f9f40f642d5bf4ecfdfd7909348e1c7ae9b0cb61d1c643b81.so": {
+    "bytes": 510128,
+    "sha256": "fcefbe742abb89550d2e8e2bb3dc4dabd1a869e8aff924887eb9921804271f71"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/.26674d21cefd059b584e7d8acfa8bfc288e5d00ea17ec5408b8fbd5551fbad2e.pops-stage-wo9iaoob.so.pops-cache.lock": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/67cbb93bd1cc20eb08e5576a3859a843efd60744479bf64eb86185eedca30ee8.so": {
+    "bytes": 552400,
+    "sha256": "fc7a3e6e24eaa6161c2cba1ec5a4b8ff533ad4ce91d95360a362b07b8e155313"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/26674d21cefd059b584e7d8acfa8bfc288e5d00ea17ec5408b8fbd5551fbad2e.so.pops-cache.lock": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/540486c19dab943db717c73f6e6b8cf9130ce564f9207de700a97ffe3dc3d635.so.pops-artifact.json": {
+    "bytes": 490,
+    "sha256": "809ca2fbee2431ec10f612e88561897b7f8b6ffcc3c66c0f56ae97fc99c548fb"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/26674d21cefd059b584e7d8acfa8bfc288e5d00ea17ec5408b8fbd5551fbad2e.so.pops-artifact.json": {
+    "bytes": 591,
+    "sha256": "45c222871e62fbaebf764131962660a1adf48452f32cb24a7c70bbaf8f8426a2"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/842b83fe59df6bebd3d8de1f74338dfe020178b62d290355e2fdac593cb9ae8e.so.pops-cache.lock": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/6d29d1ed725b94fc0ba57825651b6bbf29fa326c84605eb9112f2108fb3b0c14.so.pops-model.cpp": {
+    "bytes": 18791,
+    "sha256": "62ab101de9589bc1df9fdd8fe78382438fe5508f04a64622cbdc9209d707a3fc"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/5b0dcbeca780e81486ae82f6fb15fd16fd312df8a79b9513d817cf04f07b9c08.so.pops-model-compile.json": {
+    "bytes": 2276,
+    "sha256": "1287bdd5ba600b2f08f597a0d76b497872acad09f50e5a7adaaaea419f8d51f4"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/c078228b10b8e68f9f40f642d5bf4ecfdfd7909348e1c7ae9b0cb61d1c643b81.so.pops-artifact.json": {
+    "bytes": 490,
+    "sha256": "61b2ef9c25d3bae11a6e9223f219693b4d8d24315f32f9439d01c01de194c891"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/5b0dcbeca780e81486ae82f6fb15fd16fd312df8a79b9513d817cf04f07b9c08.so": {
+    "bytes": 380568,
+    "sha256": "2c43a63c301099b8ddf003cfb3dece4333b9221dc7e2204f34e5659bfed912ca"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/6d29d1ed725b94fc0ba57825651b6bbf29fa326c84605eb9112f2108fb3b0c14.so": {
+    "bytes": 380568,
+    "sha256": "c3484d462f02b348ae81ec98c9dd1ca588393b87284e58f04013130e261f09f7"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/26674d21cefd059b584e7d8acfa8bfc288e5d00ea17ec5408b8fbd5551fbad2e.so.pops-model-compile.json": {
+    "bytes": 2276,
+    "sha256": "58e463721b1841456e826180785cc82b57f1cf8f4fe1356daf774c48c5364cfa"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/6d29d1ed725b94fc0ba57825651b6bbf29fa326c84605eb9112f2108fb3b0c14.so.pops-cache.lock": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/540486c19dab943db717c73f6e6b8cf9130ce564f9207de700a97ffe3dc3d635.so.pops-cache.lock": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/67cbb93bd1cc20eb08e5576a3859a843efd60744479bf64eb86185eedca30ee8.so.pops-artifact.json": {
+    "bytes": 490,
+    "sha256": "bccf6c795bac6d47662632ccbba437b21c89376d20530b13a6f37d3b4f0d445a"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/540486c19dab943db717c73f6e6b8cf9130ce564f9207de700a97ffe3dc3d635.so": {
+    "bytes": 552400,
+    "sha256": "ea5bf73da13984fc9a08e4dc619898c2ef57001c399f6c0111374664d94bee5c"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/26674d21cefd059b584e7d8acfa8bfc288e5d00ea17ec5408b8fbd5551fbad2e.so.pops-model.cpp": {
+    "bytes": 15776,
+    "sha256": "4a052752b7feddf765d2346ed8e1198368bcf4ab97eb7b0bd157d3c8b9dc1ea7"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/.6d29d1ed725b94fc0ba57825651b6bbf29fa326c84605eb9112f2108fb3b0c14.pops-stage-xu8z_0yf.so.pops-cache.lock": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/c078228b10b8e68f9f40f642d5bf4ecfdfd7909348e1c7ae9b0cb61d1c643b81.so.pops-cache.lock": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/5b0dcbeca780e81486ae82f6fb15fd16fd312df8a79b9513d817cf04f07b9c08.so.pops-cache.lock": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/.5b0dcbeca780e81486ae82f6fb15fd16fd312df8a79b9513d817cf04f07b9c08.pops-stage-oa_l05gj.so.pops-cache.lock": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_linear-ssprk2/actual-state.npz": {
+    "bytes": 2314,
+    "sha256": "fa0d83ea6d21cbeea55ffaaa104b4a4c8de01d5cd7c4311611e97b734b373dc5"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_linear-ssprk2/independent-input-and-reference.npz": {
+    "bytes": 11478,
+    "sha256": "ac2baa80e7169e5eab1f576fe8466c458cd482339e008bc6fa60cb26d4ff335c"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_linear-ssprk2/case-receipt.json": {
+    "bytes": 10485,
+    "sha256": "b08beccfc1e2a9f4440747c4112e1792b6b1657c28a855c4df2d1fdd0b83030e"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_linear-ssprk2/actual-exchanges.json": {
+    "bytes": 2021929,
+    "sha256": "304dd4fc1aefcb4a8ff155f1c4a688411b523398fd316a6921d4e023bf1c5c9c"
+  },
+  "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/diagonal_linear-ssprk2/precompile-ssp-proof.json": {
+    "bytes": 299,
+    "sha256": "89083e9d021292866adb4054f0fe12dd0f2638e22f5a2f9da93dadedd84cca0b"
+  }
+}

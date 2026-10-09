@@ -1,0 +1,20 @@
+{
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "/Users/romaindespoulain/dev/tmp/PoPS-root-static-inputs-reviewed-runner-r2-4017-20261009/run_native_reception.py",
+    "--checkout",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+    "--build-receipt",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/native-build-admission.json",
+    "--out",
+    "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009",
+    "--stage",
+    "remaining5",
+    "--representative-receipt",
+    "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/run-receipt.json",
+    "--authorize-native-execution"
+  ],
+  "runner_sha256": "fa0296b91640c368535d92ea1d6d971727d34b1b8a5ed242ad301a35dd33619c",
+  "positive_representative_sha256": "f8c3b5a6e9df95bcb7284878c0df993b241aad20fe17a4870b4a6916202ee361",
+  "scope": "Actual remaining5, authorized by positive same-code same-Source/Native/SDK representative; stop on first failure."
+}

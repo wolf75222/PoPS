@@ -1,0 +1,41 @@
+{
+  "rows": [
+    {
+      "case": "R4 unset Kokkos_ROOT refuses at unchanged guard",
+      "actual_local_exit": 1,
+      "snippet": "[[ \"$Kokkos_ROOT\" == $ROOT/kokkos-unified-install ]]",
+      "stdout": "",
+      "stderr": "bash: line 1: Kokkos_ROOT: unbound variable\n"
+    },
+    {
+      "case": "R5 exports then unchanged exact own-root guard",
+      "actual_local_exit": 0,
+      "snippet": "export Kokkos_ROOT=\"$ROOT/kokkos-unified-install\"\nexport POPS_KOKKOS_ROOT=\"$Kokkos_ROOT\"\n[[ \"$Kokkos_ROOT\" == $ROOT/kokkos-unified-install ]]\n[[ \"$POPS_KOKKOS_ROOT\" == \"$Kokkos_ROOT\" ]]",
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "R5 symbols exported to child environment",
+      "actual_local_exit": 0,
+      "snippet": "export Kokkos_ROOT=\"$ROOT/kokkos-unified-install\"\nexport POPS_KOKKOS_ROOT=\"$Kokkos_ROOT\"\n[[ \"$Kokkos_ROOT\" == $ROOT/kokkos-unified-install ]]\nbash -c '[[ \"$Kokkos_ROOT\" == \"$ROOT/kokkos-unified-install\" && \"$POPS_KOKKOS_ROOT\" == \"$Kokkos_ROOT\" ]]'",
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "Foreign Kokkos root cannot pass unchanged own-root guard",
+      "actual_local_exit": 1,
+      "snippet": "export Kokkos_ROOT=\"$ROOT/kokkos-unified-install\"\nexport POPS_KOKKOS_ROOT=\"$Kokkos_ROOT\"\nKokkos_ROOT=/LOCAL_SYNTHETIC_FOREIGN_NAMESPACE/kokkos\n[[ \"$Kokkos_ROOT\" == $ROOT/kokkos-unified-install ]]",
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "Inherited foreign discovery values are explicitly replaced by own-root exports",
+      "actual_local_exit": 0,
+      "snippet": "export Kokkos_ROOT=\"$ROOT/kokkos-unified-install\"\nexport POPS_KOKKOS_ROOT=\"$Kokkos_ROOT\"\n[[ \"$Kokkos_ROOT\" == $ROOT/kokkos-unified-install ]]\n[[ \"$POPS_KOKKOS_ROOT\" == \"$Kokkos_ROOT\" ]]",
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "scope": "Local shell snippets only; no operational R5, Kokkos, CUDA, Native or MPI execution.",
+  "guard_unchanged": true
+}

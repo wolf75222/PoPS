@@ -1,0 +1,308 @@
+{
+  "Native": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+  "SDK": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "admission": {
+    "Native": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+    "SDK": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+    "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+    "actual_build_exit": 0,
+    "actual_runtime_environment": {
+      "allocator_lifetime": "process-lifetime ManagedArena; blocks are released by a Kokkos finalize hook, the arena tables are intentionally never destroyed",
+      "allocator_mode": "kokkos_shared_space_managed_arena",
+      "amr_refinement_ratio": null,
+      "amr_refinement_ratio_rank": 2,
+      "amr_refinement_ratio_selection": "hierarchy_exact_rank",
+      "comm_allocator_mode": "kokkos_shared_host_pinned_space",
+      "communicator": "MPI_COMM_WORLD",
+      "dimension": 2,
+      "field_memory_space": "host",
+      "has_kokkos": true,
+      "kokkos_atexit_finalize_registered": false,
+      "kokkos_backend": "OpenMP",
+      "kokkos_concurrency": 0,
+      "kokkos_device": "cpu",
+      "kokkos_finalized": false,
+      "kokkos_initialized": false,
+      "kokkos_initialized_by_pops": false,
+      "kokkos_lifecycle": "PoPS will lazily initialize Kokkos on first allocation or kernel launch",
+      "kokkos_ownership": "lazy",
+      "kokkos_shared_space": "Host",
+      "kokkos_stream": "Kokkos::OpenMP::synchronous",
+      "kokkos_stream_synchronous": true,
+      "mpi_active": true,
+      "mpi_atexit_finalize_registered": true,
+      "mpi_compiled": true,
+      "mpi_initialized_by_pops": true,
+      "mpi_ownership": "pops-owned",
+      "mpi_rank": 0,
+      "mpi_ranks": 1,
+      "mpi_thread_level": 3,
+      "precision": "double",
+      "real_bytes": 8,
+      "supports_custom_communicator": false,
+      "supports_mixed_precision": false,
+      "supports_single_precision": false
+    },
+    "authenticated_payload_files": 1174,
+    "build_receipt": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/native-build-admission.json",
+    "build_receipt_sha256": "05f27f6c68525b852d517cfff476c715ca3aa78fbc7013311896510ca64beb68",
+    "build_result_sha256": "14b56ec61fc729a4092379652cbae21373279225e5510adbec2bac63095d5420",
+    "core_fingerprint": "743bc354455285b4828e6d80039949317c31f63ac6fc3c5432ae2897487594a8",
+    "native_origin": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "native_path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "package": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops",
+    "tracked_core_rows": 1220
+  },
+  "cases": [
+    {
+      "ABI": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa|/usr/bin/clang++|c++20|dim=2",
+      "Linf_discrete_defect": 0.0,
+      "accepted_steps": 1,
+      "accepted_weights": [
+        "1"
+      ],
+      "actual_exchange_count": 1024,
+      "artifact_identity": "pops.artifact.v1:sha256:edb4e17e1d8c7af4a6ab14c7b511092a9c34dc14d4935287f266930d9d40351c",
+      "atol": 2e-13,
+      "authored_serialization_unchanged": true,
+      "coefficient": "1",
+      "compiled_programs": {
+        "model:heat": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/jit/26674d21cefd059b584e7d8acfa8bfc288e5d00ea17ec5408b8fbd5551fbad2e.so",
+          "sha256": "392d0d5ef605e745fdc72bf4d8701864e8c006e22a98d95b87b0887a94dff9c0"
+        },
+        "pops.handle.v1::case:explicit_diffusion_variable::layout::default": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/jit/f77371de1780a7eb1b3422251a2642458d3b37a277af4a17fdc38e929c5a62db.so",
+          "sha256": "5e112be81a09165080b4432a6501496b334fb7844bacd766941e6b9168d3c0d0"
+        },
+        "program": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/jit/f77371de1780a7eb1b3422251a2642458d3b37a277af4a17fdc38e929c5a62db.so",
+          "sha256": "5e112be81a09165080b4432a6501496b334fb7844bacd766941e6b9168d3c0d0"
+        }
+      },
+      "dt": 0.0001,
+      "execution_backend": {
+        "abi": {
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+          "value": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584;dim=2"
+        },
+        "backend": {
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+          "value": "production"
+        },
+        "capabilities": {
+          "centerings": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": [
+              "cell"
+            ]
+          },
+          "execution_backend": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": "OpenMP"
+          },
+          "generic_field_view": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": true
+          },
+          "layouts": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": [
+              "right",
+              "left",
+              "strided"
+            ]
+          },
+          "ownership": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": [
+              "borrowed",
+              "owned",
+              "shared"
+            ]
+          },
+          "scalars": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": [
+              "float64"
+            ]
+          },
+          "shared_space": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": "Host"
+          },
+          "stream_identity": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": "Kokkos::OpenMP::synchronous"
+          },
+          "supported_dimensions": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": [
+              2
+            ]
+          }
+        },
+        "communicator": {
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+          "value": "MPI_COMM_WORLD"
+        },
+        "device": {
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+          "value": "cpu"
+        },
+        "memory_spaces": {
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+          "value": [
+            "host"
+          ]
+        },
+        "precision": {
+          "accumulation": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": "float64"
+          },
+          "compute": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": "float64"
+          },
+          "reduction": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": "float64"
+          },
+          "storage": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": "float64"
+          }
+        },
+        "schema_version": 1,
+        "target": {
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+          "value": "system"
+        }
+      },
+      "field_publication_count": 0,
+      "input_slots": {
+        "diffusivity": 0,
+        "source_factor": 1
+      },
+      "kind": "variable",
+      "method": "euler",
+      "n": 16,
+      "platform_manifest": {
+        "abi": {
+          "evidence": "pops.compiled-component-metadata.v1",
+          "value": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa|/usr/bin/clang++|c++20|dim=2"
+        },
+        "backend": {
+          "evidence": "pops.compiled-component-metadata.v1",
+          "value": "production"
+        },
+        "capabilities": {
+          "centerings": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": [
+              "cell"
+            ]
+          },
+          "execution_backend": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": "OpenMP"
+          },
+          "generic_field_view": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": true
+          },
+          "layouts": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": [
+              "right",
+              "left",
+              "strided"
+            ]
+          },
+          "ownership": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": [
+              "borrowed",
+              "owned",
+              "shared"
+            ]
+          },
+          "scalars": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": [
+              "float64"
+            ]
+          },
+          "shared_space": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": "Host"
+          },
+          "stream_identity": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": "Kokkos::OpenMP::synchronous"
+          },
+          "supported_dimensions": {
+            "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+            "value": [
+              2
+            ]
+          }
+        },
+        "communicator": {
+          "evidence": "pops.compiled-component-metadata.v1",
+          "value": "MPI_COMM_WORLD"
+        },
+        "device": {
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+          "value": "cpu"
+        },
+        "memory_spaces": {
+          "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+          "value": [
+            "host"
+          ]
+        },
+        "precision": {
+          "accumulation": {
+            "evidence": "pops.compiled-component-metadata.v1",
+            "value": "float64"
+          },
+          "compute": {
+            "evidence": "pops.compiled-component-metadata.v1",
+            "value": "float64"
+          },
+          "reduction": {
+            "evidence": "pops.compiled-component-metadata.v1",
+            "value": "float64"
+          },
+          "storage": {
+            "evidence": "pops.compiled-component-metadata.v1",
+            "value": "float64"
+          }
+        },
+        "schema_version": 1,
+        "target": {
+          "evidence": "pops.compiled-component-metadata.v1",
+          "value": "system"
+        }
+      },
+      "program_serialization_sha256": "5db0716f68ddd15403d71aa0b8f97a9d84bd659f940b50c2d6ebbd75750ac9dc",
+      "result": "PASS",
+      "rtol": 2e-12,
+      "scope": "World1 installed CPU numerical reception of one static Input authored composition; not convergence, AMR, MPI2, or GPU",
+      "time": 0.0001
+    }
+  ],
+  "current_case": {
+    "kind": "variable",
+    "method": "euler"
+  },
+  "exit": 0,
+  "reference_sha256": "a11c7d3dab64918203f51371d2627ac267b4cd5b86e9bb133ad1f2423454e982",
+  "scope": "Author native-test preparation/run; independent reader reception remains separate",
+  "script_sha256": "fa0296b91640c368535d92ea1d6d971727d34b1b8a5ed242ad301a35dd33619c",
+  "seconds": 17.274293374997796,
+  "stage": "representative"
+}

@@ -1,0 +1,14 @@
+{
+  "stage": "pytest fixture setup",
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "Native": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+  "counts": {
+    "tests": 1,
+    "errors": 1,
+    "failures": 0,
+    "skips": 0
+  },
+  "reason": "Kokkos root was not exported in caller; actual true package identity passed, no model compiled/run",
+  "correction": "Explicit genuine environment Kokkos_ROOT/POPS_KOKKOS_ROOT plus Source/include and measured source/native pins; new output preserves old refusal",
+  "scope": "Harness configuration error, no PDE or product defect inferred"
+}

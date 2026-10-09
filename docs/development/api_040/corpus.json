@@ -1,4 +1,237 @@
 {
+  "current_native_reception_4017_20261009": {
+    "schema": 1,
+    "date": "2026-10-09",
+    "scope": "New closed current4017/939 scientific and physical reception. Subsequent docs/workflow/metadata commits do not relabel these runs.",
+    "genericity_contract": "New article physics and method are Python equations/compositions translated themselves to native C++; frozen core never knows a model identity; identities authorize provenance/cache only.",
+    "full_94_obligations_closed": false,
+    "historical_rows_equations_mappings_preserved": true,
+    "source_commit": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+    "native_sha256": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+    "sdk_sha256": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+    "core_fingerprint_schema": 2,
+    "core_fingerprint": "743bc354455285b4828e6d80039949317c31f63ac6fc3c5432ae2897487594a8",
+    "core_files": 1220,
+    "wheel_sha256": "0d3c66b61ce95291dcd59c23d183a06b058d8fdcf473bf8ec58a69f16e32f696",
+    "build": {
+      "seconds": 96.03899862500111,
+      "object_count": 24,
+      "observed_ninja_output_actions": 24,
+      "qualified_reuse_count": 0,
+      "frontend_execution_count": "UNDETERMINED",
+      "source_installed_wheel_files": 1174,
+      "wheel_payloads": 1179
+    },
+    "backend": "AppleClang21/Kokkos5.2 OpenMP+Serial/MPICH4.1.2/Dim2 double/HDF5parallel1.14.3; OMP2 configured, no measured throughput claim",
+    "source_only": {
+      "tests": 904,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "native_imports_blocked": true
+    },
+    "scientific_phases": [
+      {
+        "phase": "guarded-baseline-admitted",
+        "ranks": 1,
+        "counts_per_rank": [
+          {
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        ],
+        "result": "science/guarded-baseline-admitted/result.json",
+        "raw_outputs": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted"
+      },
+      {
+        "phase": "guarded-variants",
+        "ranks": 1,
+        "counts_per_rank": [
+          {
+            "tests": 2,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        ],
+        "result": "science/guarded-variants/result.json",
+        "raw_outputs": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run"
+      },
+      {
+        "phase": "original-pde",
+        "ranks": 1,
+        "counts_per_rank": [
+          {
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        ],
+        "result": "science/original-pde/result.json",
+        "raw_outputs": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/original-pde/run"
+      },
+      {
+        "phase": "public10",
+        "ranks": 1,
+        "counts_per_rank": [
+          {
+            "tests": 10,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        ],
+        "result": "science/public10/result.json",
+        "raw_outputs": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/public10/run"
+      },
+      {
+        "phase": "retry-and-native8",
+        "ranks": 1,
+        "counts_per_rank": [
+          {
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        ],
+        "result": "science/retry-and-native8/result.json",
+        "raw_outputs": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run"
+      },
+      {
+        "phase": "coupled-matched-world1",
+        "ranks": 1,
+        "counts_per_rank": [
+          {
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        ],
+        "result": "science/coupled-matched-world1/result.json",
+        "raw_outputs": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/coupled-matched-world1/run"
+      },
+      {
+        "phase": "mpi2-representative",
+        "ranks": 2,
+        "counts_per_rank": [
+          {
+            "tests": 2,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "tests": 2,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        ],
+        "result": "science/mpi2-representative/result.json",
+        "raw_outputs": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-representative/run"
+      },
+      {
+        "phase": "mpi2-all",
+        "ranks": 2,
+        "counts_per_rank": [
+          {
+            "tests": 13,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "tests": 13,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        ],
+        "result": "science/mpi2-all/result.json",
+        "raw_outputs": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-all/run"
+      }
+    ],
+    "world1": {
+      "science_baseline_pass": 23,
+      "extra_matched_coupled_pass": 1,
+      "static_inputs_pass": 6,
+      "compile_cache_route_pass": 1,
+      "distinct_scopes_not_one_monolithic_suite": true
+    },
+    "mpi2": {
+      "representative_pass_per_rank": 2,
+      "full_selected_pass_per_rank": 13,
+      "unchanged_original_guards": true,
+      "matched_coupled_state_pairs_bitwise": 24,
+      "matched_coupled_cp_numeric_pairs_bitwise": 48,
+      "whole_cp_archive_equal_claimed": false
+    },
+    "norm2_contract": "component0 active EB samples summed per level; replicated finite samples counted once, nonfinite copies all guarded; covered coarse samples retained; dot_all is a distinct operation",
+    "static_inputs": {
+      "kinds": [
+        "variable",
+        "diagonal_linear",
+        "diagonal_smooth"
+      ],
+      "methods": [
+        "Euler",
+        "SSPRK2"
+      ],
+      "saved_states": 6,
+      "saved_face_exchange_rows": 9216,
+      "maximum_independent_state_defect": 1.7763568394002505e-15,
+      "portable_full_program_cpp_ir_retained": false
+    },
+    "ci": {
+      "exact_4017_remote_failures_retained": true,
+      "compile_cache_installed_wheel_route": "reviewed and applied; actual local installedMPI world1 onePASS, LinuxSerialCI pending",
+      "two_dim1_file_routes": "reviewed and applied from actual1Dgeometry; NativeDim1 reception pending",
+      "dynamic_stage_provider_ssp": "generic Source candidate being implemented outsideMain; no Native reception or theorem claimed",
+      "required_aggregate_green_claimed": false,
+      "focused_source_validation": {
+        "tests": 60,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "native_loaded": 0,
+        "remote_ci_qualification": false,
+        "source_diff_sha256": "bd85286c7381e3e20642118cb6dfdbc5bea5b31f9cc64bbe6865f906b2b74b56"
+      },
+      "remote_4017_snapshot": {
+        "utc": "2026-10-09T01:28:49.452314+00:00",
+        "success": 63,
+        "failure": 65,
+        "in_progress": 2,
+        "required_aggregate_green": false
+      }
+    },
+    "gpu": {
+      "source_commit": "98804c6849c9966e05b5397126bab983a5fa0227",
+      "sdk_sha256": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+      "R4": "738173 failed before officialNativeentry: Kokkos_ROOT unset; real managedCuda allocation+kernel microprobePASS;738174cancelled neverran",
+      "R5": "738183actualFAILED1:0/29s afterofficialcommandentry but beforeCXX: defaultcondanamepopsmissing;738184actuallycancelledneverran; newmanagedCudamicroprobePASS; productionNative/sciencenotreceived",
+      "production_native_or_science_gpu_received": false,
+      "qualification_of_4017": false,
+      "R6": "Source preparation required: explicitownenvironmentselection and authenticatedpriorclosedfailure, no marker deletion or setup/clone/Kokkosrepeat"
+    },
+    "remaining": [
+      "dynamic stage-provider authority through public compiler",
+      "required exact finalHEAD CI",
+      "rebuilt NativeDim1/3",
+      "new O3C++ full affected non-regression",
+      "GPU productionPDE",
+      "multilevel AMR/EB/refinement/restart/convergence per corpus",
+      "comparable-cost measurements",
+      "full T1-T6/C01-C40/M01-M28/W01-W12 and eightprinciples reception"
+    ],
+    "evidence_manifest": "evidence/current_4017_939_20261009/manifest.json",
+    "additional_evidence_manifest": "evidence/current_4017_939_20261009/addendum-manifest.json"
+  },
   "current_scoped_summary_20261009": {
     "schema": 1,
     "date": "2026-10-09",

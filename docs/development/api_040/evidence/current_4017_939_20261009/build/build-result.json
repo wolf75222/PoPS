@@ -1,0 +1,40 @@
+{
+  "SDK": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "cache_after": {
+    ".ninja_log": {
+      "bytes": 6754,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/.ninja_log",
+      "sha256": "1e4d7719051c712222ac3c16c4ca79fd635093d8a4db05d5fe4ec4dc80d92ca8"
+    },
+    "CMakeCache.txt": {
+      "bytes": 31983,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/CMakeCache.txt",
+      "sha256": "48067bf4388cbbb79a48131fc44a52d5cdf28f10e82c64942c2b45784dc308fd"
+    },
+    "build.ninja": {
+      "bytes": 93554,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/build.ninja",
+      "sha256": "a0ca57855259e0bf7f4d03a5faa8709d1d8309d584c15fe72595b200999d721e"
+    },
+    "compile_commands.json": {
+      "bytes": 49480,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2/compile_commands.json",
+      "sha256": "9e43944daf1b3eabc574c16c39c74d33b30b68ed99207f4858e39da5fc87a062"
+    }
+  },
+  "command": [
+    "rtk",
+    "proxy",
+    "bash",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/actual-official-invocation.sh"
+  ],
+  "disk_after": {
+    "free": 844009472,
+    "total": 494384795648,
+    "used": 493540786176
+  },
+  "exit": 0,
+  "log_sha256": "14e0a1d67fd91db797c2cf1bcec2deb2389f8fdebaa931af37a7ab56388e8736",
+  "seconds": 96.03899862500111
+}

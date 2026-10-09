@@ -1,0 +1,53 @@
+{
+  "status": "PASS",
+  "stage_step_controls": [
+    {
+      "kind": "variable",
+      "method": "euler",
+      "actual_logical_steps": [
+        0
+      ]
+    },
+    {
+      "kind": "variable",
+      "method": "ssprk2",
+      "actual_logical_steps": [
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "diagonal_linear",
+      "method": "euler",
+      "actual_logical_steps": [
+        0
+      ]
+    },
+    {
+      "kind": "diagonal_linear",
+      "method": "ssprk2",
+      "actual_logical_steps": [
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "diagonal_smooth",
+      "method": "euler",
+      "actual_logical_steps": [
+        0
+      ]
+    },
+    {
+      "kind": "diagonal_smooth",
+      "method": "ssprk2",
+      "actual_logical_steps": [
+        0,
+        1
+      ]
+    }
+  ],
+  "analytic_face_integral_vs_saved_Gauss5_Linf": 3.552713678800501e-15,
+  "scope": "Static NumPy/string parsing only; noPops/Native",
+  "pops_modules_loaded": []
+}

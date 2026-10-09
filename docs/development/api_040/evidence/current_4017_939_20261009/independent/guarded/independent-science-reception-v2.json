@@ -1,0 +1,375 @@
+{
+  "verdict": "ACCEPT independent scientific counter-reception of actualthreeguardedcases",
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "Native": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+  "SDK": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+  "source_equation_authentication": {
+    "initial_equations": [
+      "1 + 0.08 * np.sinc(1 / nx) * np.cos(np.pi * x)[None, :]",
+      "q0 + 0.03 * np.sinc(1 / ny) * np.cos(2 * np.pi * y / 3)[:, None]"
+    ],
+    "helper_sha256": "63725bd7a6a528a65b30ae5fb3cf497f3cc81a4817623a913601805461e4dc6e",
+    "test_sha256": "ff3e07e66d2fa02a25b959371a51c5e096561cb0d96b5ed747f08cec35561c0c",
+    "lengths": [
+      2,
+      3
+    ],
+    "equations": {
+      "field": "(-math.laplacian(phi) + math.Reaction(phi, reaction) == driving[0],)",
+      "flux": "(diffusion_offset + mobility ** 2) * math.grad(density[0])",
+      "update": "q.n + p.dt * rate(q.n, fields)"
+    }
+  },
+  "derivation": "Constantforcing d implies (-L_h+rI)phi=d, r>0 periodic uniquephi=d/r. K=offset+phi\u00b2. Initialcosinemodes integratedovercells; periodicdifferenceeigenvalues -4sin\u00b2(pi/N)/h\u00b2 yield independentoneEulerstep q_next=q_initial+dtK(lambda_x A_x+lambda_y A_y). No execution/import ofauthororacle orproductionoperators.",
+  "run_proofs": {
+    "baseline": {
+      "result_sha256": "2e6630e297f987ad1882b97c815805557f543d7900c025d6b348623c4df52e69",
+      "XML_sha256": "c40458c7c99a0c64811fadfb3a6774a9d9a8d1c2bd59ab7ef1e38d950168a308",
+      "log_sha256": "0701fa2801126861b1aae6e78b75a7fb14440326b32263746ec20b6e0414b6a6",
+      "identity_sha256": "a4d385377e2e0dbe4dcb99a4b635ef2d236fd56dbb40a34548dee44979c42beb",
+      "case_ids": [
+        "test_public_guarded_field_coefficient_diffusion[baseline]"
+      ]
+    },
+    "variants": {
+      "result_sha256": "2f0a3abd320d6076343383ead641f1956f9cf9b8a374e3d735b5c823610e7d0b",
+      "XML_sha256": "fa78a3ba77e01e6399b6e9f19f57694b4061e5430c0c640f95b07eebc816a0b1",
+      "log_sha256": "1c90a1f6af1c7aaad8cedd281ce404d21ade4599651bc0bb08dca523401aaf26",
+      "identity_sha256": "a4d385377e2e0dbe4dcb99a4b635ef2d236fd56dbb40a34548dee44979c42beb",
+      "case_ids": [
+        "test_public_guarded_field_coefficient_diffusion[renamed]",
+        "test_public_guarded_field_coefficient_diffusion[changed_expression]"
+      ]
+    }
+  },
+  "cases": {
+    "baseline": {
+      "phi_exact": "1/5",
+      "coefficient_exact": "57/175",
+      "coefficient_inferred_from_actual_state": 0.3257142857144013,
+      "original_state_bound": 1.0913936421275138e-12,
+      "original_field_bound": 3.9501393642127516e-11,
+      "independent_oracle_errors": {
+        "donor": 0.0,
+        "phi": 0.0,
+        "receiver": 0.0
+      },
+      "actual_elliptic_residual_inf": 1.1102230246251565e-16,
+      "sufficient_FE_dt_frequency": 0.005211428571428572,
+      "omit_published_field_square_wrong_oracle_error": 3.5296490217273657e-06,
+      "stencil_modes": {
+        "x_stencil_eigenvalue": -9.743419838555294,
+        "y_stencil_eigenvalue": -4.287187078897962
+      },
+      "actual_checkpoint_sha256": "0fffea0a1ae87938e11af52ee62bb41f81fdbd9fe436108e4dda22ea857976fa",
+      "cpp_and_private_manifests": {
+        "program_sha256": "c3cf79d980fbdaddd42ef264d13da11829a716a06959eec360cc000bc5eb404a",
+        "models_sha256": [
+          "1a521c559cab5812f442619df68e53140268a2d7494d50faf95b83473b5da112",
+          "b8b0c29b0269e9a23a488ad874cb83e4e862cdfd2b348e4090f93ba5f8216bb1"
+        ],
+        "actual_provider_pack": {
+          "capacity": 1,
+          "entries": [
+            {
+              "contract": {
+                "centering": "cell",
+                "layout": "cell",
+                "representation": "field",
+                "unit": null,
+                "value_kind": null
+              },
+              "key": {
+                "component": "mobility",
+                "owner_qid": "model_definition:conducting-material@pops.module%3Asha256%3A280535b8f6a77911435d9d51f163e8d48927101f72854d9f71be28cc0a1284e3",
+                "space_kind": "field",
+                "space_name": "fields"
+              },
+              "provider": {
+                "availability": true,
+                "producer": "pops.field-problem.v1:sha256:d51d9d013ac9550f8cdaca296a999cc516c027928cfea34a3249c3d68cbeb358",
+                "slot": 0
+              }
+            }
+          ],
+          "schema_version": 1
+        },
+        "private_JIT_artifacts": [
+          {
+            "sidecar": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/pytest-tmp/test_public_guarded_field_coef0/pops-native-cache/28355c3fb22278aeb0994b96c04970fc593fbba48e78741b734305a4b246d11e.so.pops-artifact.json",
+            "sha256": "2783df7b7bc1c147b948031229534e686261ff612f1741e93726046fc679d1cf",
+            "binary_sha256": "9fac02fff73905468d94d8cc852c5c5e20ab393c340ae9196d17e32c57650b7c",
+            "protocol": "pops.artifact-sidecar.v2"
+          },
+          {
+            "sidecar": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/pytest-tmp/test_public_guarded_field_coef0/pops-native-cache/b0497cfc80c8287ff846cac84f3710527d928b6a05b11b8f250b3c07dea87d20.so.pops-artifact.json",
+            "sha256": "4dfc19dc1682c1690f49096ec00afd5b6c01e96a17b0edcf4ed7a3c0e1f4eee1",
+            "binary_sha256": "b4a6719f47d8200dbfb3c1fe208b892d8d72c4a4e890dbdb5b0fdb0f756ad67b",
+            "protocol": "pops.artifact-sidecar.v1"
+          },
+          {
+            "sidecar": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/pytest-tmp/test_public_guarded_field_coef0/pops-native-cache/4084e22cda93ab284b819a64eef4682c3b03dd3a239db5e2379e1cd080d6758d.so.pops-artifact.json",
+            "sha256": "679785bec0322b709bc3367b15841176a6106897aea0f8db94cec06e5c4c0369",
+            "binary_sha256": "037c6a554b998eae198330661e2cbe281a73b4cdaef30e4350db8ef77dc66866",
+            "protocol": "pops.artifact-sidecar.v2"
+          }
+        ],
+        "actual_Model_compile_rows": [
+          {
+            "sidecar_sha256": "07f7e7518c8a609b9a91b4ad63289991243d30e75f77c067a346834aa268fe6f",
+            "source_sha256": "b8b0c29b0269e9a23a488ad874cb83e4e862cdfd2b348e4090f93ba5f8216bb1",
+            "binary_sha256": "037c6a554b998eae198330661e2cbe281a73b4cdaef30e4350db8ef77dc66866",
+            "compiler_to_binary_graph_proof": false
+          },
+          {
+            "sidecar_sha256": "9a1fa0ef39900ebab8594ab6b9de7af07691d18fcbf957d7bb12fa22d613c46e",
+            "source_sha256": "1a521c559cab5812f442619df68e53140268a2d7494d50faf95b83473b5da112",
+            "binary_sha256": "9fac02fff73905468d94d8cc852c5c5e20ab393c340ae9196d17e32c57650b7c",
+            "compiler_to_binary_graph_proof": false
+          }
+        ],
+        "arithmetic_kernel_lines": [
+          "const pops::Real cse0_ = std::pow(mobility, pops::Real(2));",
+          "const pops::Real cse1_ = ((pops::Real(2) / pops::Real(7)) + cse0_);",
+          "const pops::Real cse2_ = (cse1_ * 1.0);"
+        ]
+      }
+    },
+    "changed_expression": {
+      "phi_exact": "3/25",
+      "coefficient_exact": "1974/6875",
+      "coefficient_inferred_from_actual_state": 0.28712727272733196,
+      "original_state_bound": 1.0913936421275138e-12,
+      "original_field_bound": 2.414139364212751e-11,
+      "independent_oracle_errors": {
+        "donor": 0.0,
+        "phi": 1.3877787807814457e-17,
+        "receiver": 0.0
+      },
+      "actual_elliptic_residual_inf": 1.1102230246251565e-16,
+      "sufficient_FE_dt_frequency": 0.004594036363636363,
+      "omit_published_field_square_wrong_oracle_error": 1.2706736478573788e-06,
+      "stencil_modes": {
+        "x_stencil_eigenvalue": -9.743419838555294,
+        "y_stencil_eigenvalue": -4.287187078897962
+      },
+      "actual_checkpoint_sha256": "b0f5061b5dafc05c2502370660327e6a1802b5b814945a4a5a97a624a10b95c0",
+      "cpp_and_private_manifests": {
+        "program_sha256": "ff1c8e3a2609fdb1572dfe8079318baf2f6e836dfba301400c539fc9ff4106e8",
+        "models_sha256": [
+          "1a521c559cab5812f442619df68e53140268a2d7494d50faf95b83473b5da112",
+          "7c41d427487c811e90124411ebf50d520daefb678a8316622a6e2df582572abb"
+        ],
+        "actual_provider_pack": {
+          "capacity": 1,
+          "entries": [
+            {
+              "contract": {
+                "centering": "cell",
+                "layout": "cell",
+                "representation": "field",
+                "unit": null,
+                "value_kind": null
+              },
+              "key": {
+                "component": "mobility",
+                "owner_qid": "model_definition:conducting-material@pops.module%3Asha256%3A58f68e36fc7d0b90abfa457be9cc013eb122ce1d2581ba1ff7c74a0524be8960",
+                "space_kind": "field",
+                "space_name": "fields"
+              },
+              "provider": {
+                "availability": true,
+                "producer": "pops.field-problem.v1:sha256:33ec54bf9caa92ab6d0e0a6087ac35be04ae759bda6575ad7cb8e5a282c27597",
+                "slot": 0
+              }
+            }
+          ],
+          "schema_version": 1
+        },
+        "private_JIT_artifacts": [
+          {
+            "sidecar": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef1/pops-native-cache/28355c3fb22278aeb0994b96c04970fc593fbba48e78741b734305a4b246d11e.so.pops-artifact.json",
+            "sha256": "765b4115aa0c6fe5e34595c890c65780d640cf21a6921a6673a90f25c0db152c",
+            "binary_sha256": "9fac02fff73905468d94d8cc852c5c5e20ab393c340ae9196d17e32c57650b7c",
+            "protocol": "pops.artifact-sidecar.v2"
+          },
+          {
+            "sidecar": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef1/pops-native-cache/295719cd752b5e60c36569d90a59c0064de2766a7d571fb308f41f80aa0767e4.so.pops-artifact.json",
+            "sha256": "9ff627206d21a59b07d20f056cffd1d06afabc11cd84d4eb9a3973b4f6f629cc",
+            "binary_sha256": "48c9662529f7b037d771efe65e3cbf8f1a1ffb2ea8e7626efe7d47a0b2ed4182",
+            "protocol": "pops.artifact-sidecar.v1"
+          },
+          {
+            "sidecar": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef1/pops-native-cache/ba05872cb81285dfd778cc7ef41a366828f50c1a44e913219796a0156f2be2bd.so.pops-artifact.json",
+            "sha256": "38d224f4bc2d973f8b30c8240ded384e174c94e156b427b5c302dd450cd7c947",
+            "binary_sha256": "78e19b58e6ce53905618431a9f2113853b3bc15931d0bf1d966cfb5e2a83f65e",
+            "protocol": "pops.artifact-sidecar.v2"
+          }
+        ],
+        "actual_Model_compile_rows": [
+          {
+            "sidecar_sha256": "328addf08c721b12e36a3f1707a40f76ba37904136afe9d336c60beb77632eb9",
+            "source_sha256": "7c41d427487c811e90124411ebf50d520daefb678a8316622a6e2df582572abb",
+            "binary_sha256": "78e19b58e6ce53905618431a9f2113853b3bc15931d0bf1d966cfb5e2a83f65e",
+            "compiler_to_binary_graph_proof": false
+          },
+          {
+            "sidecar_sha256": "d1f42ec0b04154b6916c979850d9c99007eb00d2de684c8d42f358ba47eed194",
+            "source_sha256": "1a521c559cab5812f442619df68e53140268a2d7494d50faf95b83473b5da112",
+            "binary_sha256": "9fac02fff73905468d94d8cc852c5c5e20ab393c340ae9196d17e32c57650b7c",
+            "compiler_to_binary_graph_proof": false
+          }
+        ],
+        "arithmetic_kernel_lines": [
+          "const pops::Real cse0_ = std::pow(mobility, pops::Real(2));",
+          "const pops::Real cse1_ = ((pops::Real(3) / pops::Real(11)) + cse0_);",
+          "const pops::Real cse2_ = (cse1_ * 1.0);"
+        ]
+      }
+    },
+    "renamed": {
+      "phi_exact": "1/5",
+      "coefficient_exact": "57/175",
+      "coefficient_inferred_from_actual_state": 0.3257142857144013,
+      "original_state_bound": 1.0913936421275138e-12,
+      "original_field_bound": 3.9501393642127516e-11,
+      "independent_oracle_errors": {
+        "donor": 0.0,
+        "phi": 0.0,
+        "receiver": 0.0
+      },
+      "actual_elliptic_residual_inf": 1.1102230246251565e-16,
+      "sufficient_FE_dt_frequency": 0.005211428571428572,
+      "omit_published_field_square_wrong_oracle_error": 3.5296490217273657e-06,
+      "stencil_modes": {
+        "x_stencil_eigenvalue": -9.743419838555294,
+        "y_stencil_eigenvalue": -4.287187078897962
+      },
+      "actual_checkpoint_sha256": "2d2aa7ab188f649a1e87f5d146495d369ceef2b6725c9166ff8d816765d78c20",
+      "cpp_and_private_manifests": {
+        "program_sha256": "6dd658a679a4e0df144d97a1312d9434538e2853c551cea00a2b565bb5d87d27",
+        "models_sha256": [
+          "775a1cc4b454205365522b6eceb9795b3bbaacd8f835a73c1f8534c3cbc94f3d",
+          "bea1c146959bf0fd2b0450368e0f8e15dc0f6bbb75f2e3c9d71c1d98f314f567"
+        ],
+        "actual_provider_pack": {
+          "capacity": 1,
+          "entries": [
+            {
+              "contract": {
+                "centering": "cell",
+                "layout": "cell",
+                "representation": "field",
+                "unit": null,
+                "value_kind": null
+              },
+              "key": {
+                "component": "mobility_renamed",
+                "owner_qid": "model_definition:conducting-material_renamed@pops.module%3Asha256%3A57387a3f73016e2d9b3b20ba55a8b61b1fce27ee143d3431b68b68457d9b9e86",
+                "space_kind": "field",
+                "space_name": "fields"
+              },
+              "provider": {
+                "availability": true,
+                "producer": "pops.field-problem.v1:sha256:09f557e73d9bd8e37ae1c6c4d7720c26fedae36a77c6b3ac038013ce28a041e9",
+                "slot": 0
+              }
+            }
+          ],
+          "schema_version": 1
+        },
+        "private_JIT_artifacts": [
+          {
+            "sidecar": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef0/pops-native-cache/3f9ab08fedce99fb2d9593c07cac3b4a76cf4c2dbef1b41d228f7fcda082a75a.so.pops-artifact.json",
+            "sha256": "d041e5251f5e6a62bccf3e83b7cc0ffca431079313bfc82b8732a91dc767a9b7",
+            "binary_sha256": "24db569a7778573a27c30533f6abe814f4a76b3d7d743d12f4f832d91767a522",
+            "protocol": "pops.artifact-sidecar.v1"
+          },
+          {
+            "sidecar": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef0/pops-native-cache/39468e7fee27cd012579df5087a03d3e17d9ed86ee46a4c21a0066038b80e1ba.so.pops-artifact.json",
+            "sha256": "b50a104b7a334da82646af40a97cd5c637a5ddfe0786a35d15007e5dac18a8e5",
+            "binary_sha256": "0621a0e72a01c3a47123360c222dd94c27056f45d14a362ce50055607c1ff657",
+            "protocol": "pops.artifact-sidecar.v2"
+          },
+          {
+            "sidecar": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef0/pops-native-cache/225f0f505b4a709c4218112768703c7817d5adc30c3b99e3a3c77e1cfda88584.so.pops-artifact.json",
+            "sha256": "e3e2746561399c3f0eb8ca1859fc8336868e8cf30c4a5a3f699e7870a79954dc",
+            "binary_sha256": "a8f3dabdcd412c8f058b924b635295c20c164aca4b652347477eb9aa2554db3f",
+            "protocol": "pops.artifact-sidecar.v2"
+          }
+        ],
+        "actual_Model_compile_rows": [
+          {
+            "sidecar_sha256": "fb7688c0d953234fa14d7c59fedf63a9bd60e5574086e019b5fe1f68b7c32c3e",
+            "source_sha256": "bea1c146959bf0fd2b0450368e0f8e15dc0f6bbb75f2e3c9d71c1d98f314f567",
+            "binary_sha256": "a8f3dabdcd412c8f058b924b635295c20c164aca4b652347477eb9aa2554db3f",
+            "compiler_to_binary_graph_proof": false
+          },
+          {
+            "sidecar_sha256": "969ecde70629eb545ba0ddc80c08d5ad650fefb5684700af3330308dbbb71bf6",
+            "source_sha256": "775a1cc4b454205365522b6eceb9795b3bbaacd8f835a73c1f8534c3cbc94f3d",
+            "binary_sha256": "0621a0e72a01c3a47123360c222dd94c27056f45d14a362ce50055607c1ff657",
+            "compiler_to_binary_graph_proof": false
+          }
+        ],
+        "arithmetic_kernel_lines": [
+          "const pops::Real cse0_ = std::pow(mobility, pops::Real(2));",
+          "const pops::Real cse1_ = ((pops::Real(2) / pops::Real(7)) + cse0_);",
+          "const pops::Real cse2_ = (cse1_ * 1.0);"
+        ]
+      }
+    }
+  },
+  "rename_actual_bit_equal_per192_values": {
+    "donor": true,
+    "receiver": true,
+    "phi": true
+  },
+  "changed_expression_actual_receiver_difference_inf": 3.4049653159229365e-06,
+  "physical_artifact_pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/accepted-checkpoint-receipt.json": "868e5c99c727d50ab7d239fdbb4fa541516154a208dc6483d8d50a40a7da97a6",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/expected-donor.npy": "5e240ab667b1b7c69d8775cbfa25b93d14e6fa06ce6f2d0de312c6bfd921339e",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/actual-donor.npy": "5e240ab667b1b7c69d8775cbfa25b93d14e6fa06ce6f2d0de312c6bfd921339e",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/expected-receiver.npy": "a435d0acbb95b86a5ded17b8fe3986754c0e0a5b64dd28c55dc510c13548ec61",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/program0.cpp": "c3cf79d980fbdaddd42ef264d13da11829a716a06959eec360cc000bc5eb404a",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/accepted-run-report.json": "a3fbd6e235796b1099164b6a1bc8de0228806f5dcdb1e6d1f947bdfe32502532",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/actual-receipt.json": "ddca31b516bbdc29a8bb72eea7222a4baaba879253f6e7a22e1be9ac276a474e",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/expected-phi.npy": "bed9b15d8324e1bcefaa1ab71c6dcb4509cb6173e9c187793e8d23bfbefa9a18",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/model1.cpp": "b8b0c29b0269e9a23a488ad874cb83e4e862cdfd2b348e4090f93ba5f8216bb1",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/declared-inputs.json": "855df0906782fdd580bf6e41a0d7a7fcf9e139e8e0feeecc7dcc3749c8c172b2",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/model0.cpp": "1a521c559cab5812f442619df68e53140268a2d7494d50faf95b83473b5da112",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/actual-receiver.npy": "a435d0acbb95b86a5ded17b8fe3986754c0e0a5b64dd28c55dc510c13548ec61",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/rank0/actual-phi.npy": "bed9b15d8324e1bcefaa1ab71c6dcb4509cb6173e9c187793e8d23bfbefa9a18",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-baseline-admitted/pytest-tmp/test_public_guarded_field_coef0/guarded-field-baseline/accepted-checkpoint.npz": "0fffea0a1ae87938e11af52ee62bb41f81fdbd9fe436108e4dda22ea857976fa",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef1/guarded-field-changed_expression/rank0/accepted-checkpoint-receipt.json": "ad231d22ed35f39a2476cd85e602fcfca84f65135d2fa7a242436e0252016809",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef1/guarded-field-changed_expression/rank0/expected-donor.npy": "5e240ab667b1b7c69d8775cbfa25b93d14e6fa06ce6f2d0de312c6bfd921339e",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef1/guarded-field-changed_expression/rank0/actual-donor.npy": "5e240ab667b1b7c69d8775cbfa25b93d14e6fa06ce6f2d0de312c6bfd921339e",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef1/guarded-field-changed_expression/rank0/expected-receiver.npy": "6dfc346a7c76a0d2a92e5409198c2e69cc5f1a9a4b7d4bb4fce2eaa3fd505e75",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef1/guarded-field-changed_expression/rank0/program0.cpp": "ff1c8e3a2609fdb1572dfe8079318baf2f6e836dfba301400c539fc9ff4106e8",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef1/guarded-field-changed_expression/rank0/accepted-run-report.json": "7ef2b95a7b97e7143bcfc8653e85aedc60a38d03a43d1c14fe342cf82b7fb0e3",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef1/guarded-field-changed_expression/rank0/actual-receipt.json": "0fe34a81ff75b5fb473ab4f8c8e3e85a7db1cafc07a55203c468d46825e3bd87",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef1/guarded-field-changed_expression/rank0/expected-phi.npy": "da2b8665b5eecc4faef029378ea500f3995ff3b5cbe0d911f7f71b8e4ad624d7",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef1/guarded-field-changed_expression/rank0/model1.cpp": "7c41d427487c811e90124411ebf50d520daefb678a8316622a6e2df582572abb",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef1/guarded-field-changed_expression/rank0/declared-inputs.json": "831152babf13eb6e1a0d2c8960f9f1b156932721cf9579c8ab835a398b114536",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef1/guarded-field-changed_expression/rank0/model0.cpp": "1a521c559cab5812f442619df68e53140268a2d7494d50faf95b83473b5da112",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef1/guarded-field-changed_expression/rank0/actual-receiver.npy": "6dfc346a7c76a0d2a92e5409198c2e69cc5f1a9a4b7d4bb4fce2eaa3fd505e75",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef1/guarded-field-changed_expression/rank0/actual-phi.npy": "c90521120a25b62351191482870a9ae8be1ef6ceaa7ea25051a11cac15f443b1",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef1/guarded-field-changed_expression/accepted-checkpoint.npz": "b0f5061b5dafc05c2502370660327e6a1802b5b814945a4a5a97a624a10b95c0",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef0/guarded-field-renamed/rank0/accepted-checkpoint-receipt.json": "9acf08074037ac9171bd830aca9d078dee29d51e74a33458a6ca6b6e05169727",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef0/guarded-field-renamed/rank0/expected-donor.npy": "5e240ab667b1b7c69d8775cbfa25b93d14e6fa06ce6f2d0de312c6bfd921339e",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef0/guarded-field-renamed/rank0/actual-donor.npy": "5e240ab667b1b7c69d8775cbfa25b93d14e6fa06ce6f2d0de312c6bfd921339e",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef0/guarded-field-renamed/rank0/expected-receiver.npy": "a435d0acbb95b86a5ded17b8fe3986754c0e0a5b64dd28c55dc510c13548ec61",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef0/guarded-field-renamed/rank0/program0.cpp": "6dd658a679a4e0df144d97a1312d9434538e2853c551cea00a2b565bb5d87d27",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef0/guarded-field-renamed/rank0/accepted-run-report.json": "9413db8c5276e0b0edd791d242cdc76857f5222efe69128b040607e4160b4b9b",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef0/guarded-field-renamed/rank0/actual-receipt.json": "0ce64c593b84805efd614f068c6095917b46946984b6d986dd10dbc8205e50a5",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef0/guarded-field-renamed/rank0/expected-phi.npy": "bed9b15d8324e1bcefaa1ab71c6dcb4509cb6173e9c187793e8d23bfbefa9a18",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef0/guarded-field-renamed/rank0/model1.cpp": "bea1c146959bf0fd2b0450368e0f8e15dc0f6bbb75f2e3c9d71c1d98f314f567",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef0/guarded-field-renamed/rank0/declared-inputs.json": "05a2af064f5ba42b86e03adad2b780f8e6b18f8eb3521e28b60772f64786c723",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef0/guarded-field-renamed/rank0/model0.cpp": "775a1cc4b454205365522b6eceb9795b3bbaacd8f835a73c1f8534c3cbc94f3d",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef0/guarded-field-renamed/rank0/actual-receiver.npy": "a435d0acbb95b86a5ded17b8fe3986754c0e0a5b64dd28c55dc510c13548ec61",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef0/guarded-field-renamed/rank0/actual-phi.npy": "bed9b15d8324e1bcefaa1ab71c6dcb4509cb6173e9c187793e8d23bfbefa9a18",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp/test_public_guarded_field_coef0/guarded-field-renamed/accepted-checkpoint.npz": "2d2aa7ab188f649a1e87f5d146495d369ceef2b6725c9166ff8d816765d78c20"
+  },
+  "Native_import_run_or_Main_environment_write": false,
+  "scope": "CPUdoubleMPIcompiledworld1,periodic16x12,onelevel,twoowners,onestepdt1e-4,threeguardedvariants. NoMPI2/coarsefine/GPU/3D/longtime/scientificgeneralityclaim. Model actualcompile receipts explicitlycompiler_to_binary_graph_proof=false retained aslimit; actualdumpedModelCPP sourcehashes,rawfinalprivatebinarysidecars andmeasuredarrays areindependentlyauthenticated. No old984numbers adopted: exactFractions recomputedfromcurrentSourceAST."
+}

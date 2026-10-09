@@ -1,0 +1,44 @@
+{
+  "verdict": "ACCEPT independent physical Native build-and-installed-payload reception only",
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "SDK": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+  "core_fingerprint": "743bc354455285b4828e6d80039949317c31f63ac6fc3c5432ae2897487594a8",
+  "core_files": 1220,
+  "installed_header_rows": 384,
+  "actual_build_seconds": 96.03899862500111,
+  "actual_object_count": 24,
+  "observed_Ninja_CXX_output_actions": 24,
+  "qualified_reuse_count": 0,
+  "frontend_count": "UNDETERMINED: not inferred from Ninja actions/ccache aggregate or bytes",
+  "installed_native": {
+    "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "bytes": 14468728,
+    "sha256": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941"
+  },
+  "wheel": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/wheel/pops-1.1.0-cp312-cp312-macosx_26_0_arm64.whl",
+    "bytes": 9361977,
+    "sha256": "0d3c66b61ce95291dcd59c23d183a06b058d8fdcf473bf8ec58a69f16e32f696"
+  },
+  "full_wheel_immutable_payload_count": 1179,
+  "current_source_installed_wheel_source_header_file_count": 1174,
+  "actual_module_link_recipe_count": 1,
+  "actual_module_link_physical_inputs": 40,
+  "cache_vs_installed": "17actual sections incltext/constants/data plusUUID exact; allremaining bytes outside loadmetadata/signature unchanged;111changedbytes19ranges; cachedRPATHenvlib removed in installed; signatures differ; nonRPATH dependencies unchanged",
+  "raw_admission_sha256": "05f27f6c68525b852d517cfff476c715ca3aa78fbc7013311896510ca64beb68",
+  "reader_sha256": "7ff5da42186313883e3428ecdf5e296c76a1e87365290d1c05e39a3cb06a4394",
+  "independent_full_report_sha256": "6aff1c431789a91e5356f27d519fd0daa943bbecbf7609e52675298b01321f51",
+  "physical_delta_report_sha256": "372cd65ae8d89f3fcbccfc6d35b8e512474d006eef0efc6ed9979dddfb71e73b",
+  "Root_helper_fourth_delta": "Only absolute selectedenv ccache aggregate statistics +explicit unavailableobservation; actualofficialscript/command AST unchanged. Physically pinned run-build.pyc738e2b548532e7442e98aeb23b70e8c1edd6691e392bcd9fa1c3cc4777ef307 and actualmanifestv2; originalhelper/failureretained.",
+  "reader_representation_correction": "Immutable originalpreparedreaderc03e and initialv2failure retained. CMakecompile_commands omits onlyphysicallyauthenticated prefixccache launcher and dependency-outputbookkeeping; actualNinja commandhash/currentSDK/compiler/mathflags/source/output preserved. Definitions/compiler/optimization contrast refusals checked.",
+  "Native_import_or_execution_by_review": false,
+  "Main_environment_modified_by_review": false,
+  "science_CI_GPU_3D_qualification": false,
+  "physical_files_to_keep": {
+    "reader": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-native-reader-20261009/read_native_reception_v3.py",
+    "full_report": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-native-reader-20261009/actual-closed-native-reception-4017-v3-final.json",
+    "physical_delta": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-native-reader-20261009/actual-cache-installed-physical-delta.json",
+    "Root_actual_admission": "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/native-build-admission.json"
+  },
+  "limits": "Actualsource/SDK/object andinstalledpayload admission only. Reader never invokesNative/Ninja/build/install/doctor; actualauthoridentity/doctor arepinnedrecordedevidence. Scientificbaseline remainsRoot separateprivateoutput. No old984/988 identity reusedasnewNative."
+}

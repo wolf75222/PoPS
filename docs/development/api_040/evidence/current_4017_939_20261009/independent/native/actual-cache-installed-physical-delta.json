@@ -1,0 +1,34 @@
+{
+  "status": "PASS_PHYSICAL_DIFFERENCE_LIMITED_TO_LOAD_METADATA_AND_CODE_SIGNATURE",
+  "cached_sha256": "5ceb1b41f2f9caa321531e678c6f518d3175ec8eb6a372cb7d5836b32f227132",
+  "installed_sha256": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+  "file_bytes": 14468728,
+  "same_non_RPATH_dependency_commands": true,
+  "same_17_code_constant_data_section_payloads_UUID": true,
+  "same_fixed_MachO_header_fields": true,
+  "cached_load_command_count": 28,
+  "installed_load_command_count": 27,
+  "cached_RPATH": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/lib"
+  ],
+  "installed_RPATH": [],
+  "allowed_load_metadata_and_signature_ranges": [
+    [
+      0,
+      2744
+    ],
+    [
+      14356432,
+      14468728
+    ],
+    [
+      14356432,
+      14468728
+    ]
+  ],
+  "changed_byte_count": 111,
+  "changed_ranges_count": 19,
+  "outside_allowed_ranges_count": 0,
+  "unchanged_other_bytes_including_non_signature_LINKEDIT": true,
+  "Native_import_or_execution": false
+}

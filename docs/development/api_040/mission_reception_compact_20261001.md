@@ -1,3 +1,21 @@
+# Réception native actuelle 4017/939 du 9 octobre 2026
+
+L’[état de la PR brouillon](STATUS_DRAFT_PR_20261009.md) et les [reçus4017](evidence/current_4017_939_20261009/manifest.json) rapportent le nouveau build réellement installé : Source4017d29d, Native939d331c, SDKacf0eeca, cœur743bc354 (schéma2,1220 fichiers), wheel0d3c66b6. Ce gel reçoit ses propres runs et oracles indépendants ; aucun PASS988 n’est transféré. Les équations et la méthode d’un nouvel article doivent devenir leur propre traduction C++ depuis les compositions Python, avec un cœur figé ignorant l’identité du modèle. Les 94 obligations, équations et mappings restent ouverts et préservés.
+
+| Domaine | Réception actuelle exactement bornée | Prochaine réception |
+|---|---|---|
+| Native CPU4017/939/acf0 | Build officiel96,04 s ; 24 sorties objetNinja, frontendcount indéterminé ; 1174 fichiers Source/install/wheel et1179 payloads physiquement reçus | Nouveau code scientifique suivant : nouvelle identité construite/installée, références et non-régression |
+| Science/refus/reprise world1 | 23 PASS actuels ; oracles indépendants, rollback/restart et23 checkpoints/1121 payloads du lot9 reçus | États intermédiaires/finals manquants et preuves graph→binaire, convergence/multilevel/EB selon ligne |
+| MPI2 | 2 représentatifs et13 sélectionnés PASS par rang sous mêmes gardes ; deux anciens échecs norm2 corrigés après rebuild | Contributions distribuées/rangs vides/nonfinies et C++ complet O3 ; ni norme composite ni contrat modifié par modèle |
+| Couplé world1↔MPI2 | Un world1 supplémentaire PASS ; addendum24 paires d’états/48 membres numériques CP bit identiques sur trois phases, clocks égales | Freshreload et diagnostics/rankframing complets restent distincts ; archives CP complètes pas déclarées égales |
+| Inputs statiques | Six constructions Euler/SSPRK2 natives PASS ; six états et9216 échanges reçus indépendamment, défautmax1,78e-15 | C++Program/IR complet portable et backends/AMR/convergence complémentaires |
+| Architecture/CI | Source4017 :904 PASS avec Native bloqué. Deux corrections CI après run : route wheelinstall et metadataDim1 ;60 contrôles Source ciblés PASS et un vrai testcache installéMPIworld1 PASS | GitHub requis exact nouveauSHA/LinuxSerial ; NativeDim1/3 ; autorité générique SSP des publications depuis l’état du stade en préparation |
+| ROMEO GPU988/de2 | R4/R5 vrais microkernelsCUDA Managed PASS ; R4 failKokkosRootunset avantbuild, R5 failnomConda par défaut aprèsentréecommandeavantCXX ; dépendants annulés | R6 additive : sélectionner propreenvironnement et authentifier refus antérieur, puis vraiNative/scienceGPU ; aucunequalification4017 niPDEGPU reçue |
+
+Les manifests historiques988 et les revues d’intégration précédentes restent immuables. Les mentions « actuel » dans les sections suivantes désignent les dates historiques de ces sections. Les corrections documentaires/CI après4017 ne réétiquettent pas ses runs.
+
+## Historique préservé avant la réception native4017
+
 # Réception bornée du 9 octobre 2026
 
 L’[état courant de la PR brouillon](STATUS_DRAFT_PR_20261009.md) distingue le Source intégré et le dernier Native réellement construit Source988/f8d/de2. Le contrat du cœur fixe exige que les équations et méthodes Python deviennent leur traduction C++ sans traitement par identité de modèle. Les 94 obligations, leurs équations, mappings et critères restent ouverts et inchangés dans les tableaux historiques ci-dessous et dans `corpus.json`.

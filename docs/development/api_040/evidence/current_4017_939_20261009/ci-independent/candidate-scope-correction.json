@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "utc": "2026-10-09T00:45:58.799447+00:00",
+  "actual_failure_log": "/Users/romaindespoulain/dev/tmp/PoPS-root-exact-4017-ci-reception-20261009/actual-compile-cache-job-api.log",
+  "before_sha256": "824973ccf565eb541e848fb351cd96f934577767346e6046bcf1c8697d569680",
+  "candidate_sha256": "fa348eb051c5a30319961f1ea2c6f81bf142c8418527dfc875f906c8a2cddb3f",
+  "patch_sha256": "3b41a1a7f7c4e11741a2768a53439c812590bee7a44d78c29d17769e0b958f9f",
+  "scope": "Candidate CI route only, not applied or executed. The unchanged compile-cache test file is selected through installed wheel authentication before execution; failure exits and debug upload retained. Counts must be derived from actual XML, not historical CI comments.",
+  "origin_receipt_sha256": "d333bd11e318c7400d8eff577f986ff29e6ee8de93033664e045de0317c464e2"
+}

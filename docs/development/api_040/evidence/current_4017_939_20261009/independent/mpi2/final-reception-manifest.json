@@ -1,0 +1,73 @@
+{
+  "MPI_all_counts_per_rank": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 13
+  },
+  "MPI_representative_counts_per_rank": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 2
+  },
+  "Native": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+  "Native_PoPS_modules_loaded": [],
+  "SDK": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "all_pair_defects_zero": true,
+  "core": "743bc354455285b4828e6d80039949317c31f63ac6fc3c5432ae2897487594a8",
+  "files": {
+    "REPORT.md": {
+      "bytes": 9304,
+      "sha256": "b78c956aad3516ec54cbd91afed7581c690f26473caac663c2f66c7b1174d42f"
+    },
+    "first-reader-error.json": {
+      "bytes": 450,
+      "sha256": "f035e78d109cacb4a1b703059cea85e37629673c02f20d52bf5e948b9976ec27"
+    },
+    "norm2-and-unchanged-python-fixture.diff": {
+      "bytes": 1208,
+      "sha256": "86d45595adda7a1ad6151b72c38fd570da1ea40152cad58c3f3eae03ae7e1a94"
+    },
+    "offline-reception-final.json": {
+      "bytes": 824661,
+      "sha256": "28413164ce570c960f24b3a469bf273afdf804ab0d11110758ff874c11fb769e"
+    },
+    "offline-reception-initial-success.json": {
+      "bytes": 823145,
+      "sha256": "79658052a312b9da7159d96b0cc7859cec7a391d1aa5304ff3918cf847c96ecd"
+    },
+    "offline-reception.json": {
+      "bytes": 823145,
+      "sha256": "79658052a312b9da7159d96b0cc7859cec7a391d1aa5304ff3918cf847c96ecd"
+    },
+    "offline_reception-first-reader-version.py": {
+      "bytes": 24903,
+      "sha256": "114ecebd460b5cdc26c696db541974318b205d1bf1387e4d757ec1cf8217bdc7"
+    },
+    "offline_reception-initial-success-reader.py": {
+      "bytes": 29400,
+      "sha256": "d5c9f2683fae30511ba87f27b1e5ee6c798a4bd18c88d20750c43f3e064ad374"
+    },
+    "offline_reception.py": {
+      "bytes": 30733,
+      "sha256": "74ab7e80217cb68f44c3776d7089b256df9a499900d18809a078e6caad466247"
+    },
+    "prefix-authentication.json": {
+      "bytes": 839,
+      "sha256": "847935306d283de1d7f47098832e4168b63d527a80cbbb426d30102f8e4d1519"
+    },
+    "unchanged-guard-fixture-proof.json": {
+      "bytes": 472,
+      "sha256": "f56098d319f90655bd4726f843a8d1b7158465cb974ab39f37de0c4c477eba1f"
+    }
+  },
+  "gaps": [
+    "Adaptive retry retains arrays for both physical history slots; initialization/fill assertions executed in fixture but final Native ring fill metadata is declared, not separately journaled in this receipt.",
+    "No provided world1 matched three-instance output; no world1 equivalence claimed for that case.",
+    "No new checkpoint reload, multilevel/EB/AMR transport, convergence, GPU, 3D or broader instance variation qualification."
+  ],
+  "rank_world1_bitwise_pairs": 97,
+  "scope": "Independent offline physical and mathematical MPI2 saved-evidence reception; receiver neither MPI-test nor Norm2-fix author; no Native/Pops imports or new product run. Own earlier CI/authority author status confers no independent review on those patches."
+}

@@ -1,0 +1,188 @@
+{
+  "verdict": "FOCUSED_SOURCE_ACCEPT_CURRENT_DIRTY_WORKINGTREE",
+  "HEAD": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "tracked_dirty_scope": [
+    ".github/workflows/ci.yml",
+    "tests/python/native_dimensions.json"
+  ],
+  "status_before_after": " M .github/workflows/ci.yml\n M tests/python/native_dimensions.json\n?? PoPS_Codex_handoff_0.4.0/\n",
+  "diff_sha256": "bd85286c7381e3e20642118cb6dfdbc5bea5b31f9cc64bbe6865f906b2b74b56",
+  "change_size": "11 insertions,10 deletions; no PoPS code change",
+  "actual_command": [
+    "rtk",
+    "proxy",
+    "env",
+    "-u",
+    "PYTHONPATH",
+    "-u",
+    "PYTHONOPTIMIZE",
+    "PYTHONDONTWRITEBYTECODE=1",
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-current-ci-route-source-validation-20261009/run_focused_source.py"
+  ],
+  "counts": {
+    "tests": 60,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "seconds": 17.560090667000622,
+  "families": {
+    "tests.python.architecture.test_ci_python_dimensions": 8,
+    "tests.python.architecture.test_native_dimension_build_contract": 7,
+    "tests.python.architecture.test_ci_plan": 30,
+    "tests.python.architecture.test_ci_python_module_objects": 2,
+    "tests.python.architecture.test_installed_native_verifier": 9,
+    "tests.python.architecture.test_native_variant_manifest": 4
+  },
+  "exact_cases": [
+    "tests.python.architecture.test_ci_python_dimensions::test_selected_files_are_partitioned_exactly_by_the_explicit_contract",
+    "tests.python.architecture.test_ci_python_dimensions::test_true_install_stages_unset_source_paths_and_preserve_groups",
+    "tests.python.architecture.test_ci_python_dimensions::test_missing_duplicate_wheel_and_checkout_prefix_refused",
+    "tests.python.architecture.test_ci_python_dimensions::test_install_auth_failure_stops_pytest_and_stays_red",
+    "tests.python.architecture.test_ci_python_dimensions::test_ci_builds_and_downloads_each_declared_dimension",
+    "tests.python.architecture.test_ci_python_dimensions::test_installed_process_mode_never_adds_source_package_or_pythonpath",
+    "tests.python.architecture.test_ci_python_dimensions::test_dim1_stage_failure_remains_red_and_dim2_still_executes[wheel-proof]",
+    "tests.python.architecture.test_ci_python_dimensions::test_dim1_stage_failure_remains_red_and_dim2_still_executes[pytest]",
+    "tests.python.architecture.test_native_dimension_build_contract::test_python_build_fails_closed_before_environment_or_compilation[arguments0-None-native dimension is required]",
+    "tests.python.architecture.test_native_dimension_build_contract::test_python_build_fails_closed_before_environment_or_compilation[arguments1-0-invalid native dimension '0']",
+    "tests.python.architecture.test_native_dimension_build_contract::test_python_build_fails_closed_before_environment_or_compilation[arguments2-None-invalid native dimension '4']",
+    "tests.python.architecture.test_native_dimension_build_contract::test_python_build_fails_closed_before_environment_or_compilation[arguments3-3-conflicting native dimensions]",
+    "tests.python.architecture.test_native_dimension_build_contract::test_python_build_propagates_the_exact_dimension_to_cmake_and_proofs",
+    "tests.python.architecture.test_native_dimension_build_contract::test_live_and_release_entry_points_require_explicit_dimension_sets",
+    "tests.python.architecture.test_native_dimension_build_contract::test_every_checked_in_preset_inherits_an_explicit_dimension",
+    "tests.python.architecture.test_ci_plan::test_diff_uses_merge_base_and_preserves_renames_and_deletions",
+    "tests.python.architecture.test_ci_plan::test_shared_build_unknown_and_deleted_changes_have_explicit_fallback[CMakeLists.txt]",
+    "tests.python.architecture.test_ci_plan::test_shared_build_unknown_and_deleted_changes_have_explicit_fallback[python/CMakeLists.txt]",
+    "tests.python.architecture.test_ci_plan::test_shared_build_unknown_and_deleted_changes_have_explicit_fallback[cmake/PoPSConfig.cmake.in]",
+    "tests.python.architecture.test_ci_plan::test_shared_build_unknown_and_deleted_changes_have_explicit_fallback[include/pops/core/array.hpp]",
+    "tests.python.architecture.test_ci_plan::test_shared_build_unknown_and_deleted_changes_have_explicit_fallback[include/pops/parallel/mpi.hpp]",
+    "tests.python.architecture.test_ci_plan::test_shared_build_unknown_and_deleted_changes_have_explicit_fallback[.github/workflows/ci.yml]",
+    "tests.python.architecture.test_ci_plan::test_shared_build_unknown_and_deleted_changes_have_explicit_fallback[.github/workflows/new_unmapped_lane.yml]",
+    "tests.python.architecture.test_ci_plan::test_shared_build_unknown_and_deleted_changes_have_explicit_fallback[scripts/ci_components.toml]",
+    "tests.python.architecture.test_ci_plan::test_shared_build_unknown_and_deleted_changes_have_explicit_fallback[scripts/build_python.sh]",
+    "tests.python.architecture.test_ci_plan::test_shared_build_unknown_and_deleted_changes_have_explicit_fallback[docs/tutorials/scalar_advection/08_mpi_amr_explicit_ssprk2.py]",
+    "tests.python.architecture.test_ci_plan::test_shared_build_unknown_and_deleted_changes_have_explicit_fallback[tests/python/support/new_helper.py]",
+    "tests.python.architecture.test_ci_plan::test_shared_build_unknown_and_deleted_changes_have_explicit_fallback[new_unmapped_module/input.dat]",
+    "tests.python.architecture.test_ci_plan::test_shared_build_unknown_and_deleted_changes_have_explicit_fallback[python/pops/removed_module.py]",
+    "tests.python.architecture.test_ci_plan::test_missing_pr_history_emits_full_fallback_input",
+    "tests.python.architecture.test_ci_plan::test_collective_solver_contracts_keep_mpi_but_local_operator_does_not",
+    "tests.python.architecture.test_ci_plan::test_scheduled_release_and_explicit_full_overrides[schedule-options0]",
+    "tests.python.architecture.test_ci_plan::test_scheduled_release_and_explicit_full_overrides[pull_request-options1]",
+    "tests.python.architecture.test_ci_plan::test_scheduled_release_and_explicit_full_overrides[pull_request-options2]",
+    "tests.python.architecture.test_ci_plan::test_scheduled_release_and_explicit_full_overrides[workflow_call-options3]",
+    "tests.python.architecture.test_ci_plan::test_test_only_and_metadata_changes_do_not_run_unrelated_components[docs-cpp0-python0-architecture0]",
+    "tests.python.architecture.test_ci_plan::test_test_only_and_metadata_changes_do_not_run_unrelated_components[docs-workflow-cpp1-python1-architecture1]",
+    "tests.python.architecture.test_ci_plan::test_test_only_and_metadata_changes_do_not_run_unrelated_components[docs-entrypoint-cpp2-python2-architecture2]",
+    "tests.python.architecture.test_ci_plan::test_test_only_and_metadata_changes_do_not_run_unrelated_components[python-test-cpp3-python3-architecture3]",
+    "tests.python.architecture.test_ci_plan::test_test_only_and_metadata_changes_do_not_run_unrelated_components[cpp-test-cpp4-python4-architecture4]",
+    "tests.python.architecture.test_ci_plan::test_test_only_and_metadata_changes_do_not_run_unrelated_components[architecture-test-cpp5-python5-architecture5]",
+    "tests.python.architecture.test_ci_plan::test_leaf_operator_has_bounded_native_coverage_without_unrelated_lanes",
+    "tests.python.architecture.test_ci_plan::test_compile_cache_runs_only_in_its_dedicated_job",
+    "tests.python.architecture.test_ci_plan::test_unknown_change_in_a_mixed_pr_keeps_full_required_coverage",
+    "tests.python.architecture.test_ci_plan::test_dynamic_matrices_cover_each_selected_test_once",
+    "tests.python.architecture.test_ci_python_module_objects::test_runtime_object_prewarm_lanes_are_an_exact_disjoint_cover",
+    "tests.python.architecture.test_ci_python_module_objects::test_runtime_object_prewarm_rejects_an_empty_lane",
+    "tests.python.architecture.test_installed_native_verifier::test_mpi_hdf5_verification_selects_and_exercises_exact_installed_leaf",
+    "tests.python.architecture.test_installed_native_verifier::test_verifier_rejects_a_selector_returning_the_wrong_dimension",
+    "tests.python.architecture.test_installed_native_verifier::test_serial_verification_rejects_a_stale_mpi_extension",
+    "tests.python.architecture.test_installed_native_verifier::test_requested_native_capabilities_fail_closed[native_kwargs0-native MPI backend]",
+    "tests.python.architecture.test_installed_native_verifier::test_requested_native_capabilities_fail_closed[native_kwargs1-parallel HDF5 backend]",
+    "tests.python.architecture.test_installed_native_verifier::test_requested_native_capabilities_fail_closed[native_kwargs2-capability report is malformed]",
+    "tests.python.architecture.test_installed_native_verifier::test_requested_native_capabilities_fail_closed[native_kwargs3-capability is not available]",
+    "tests.python.architecture.test_installed_native_verifier::test_manifest_digest_and_compiled_facts_are_authenticated",
+    "tests.python.architecture.test_installed_native_verifier::test_verifier_cli_requires_an_explicit_dimension",
+    "tests.python.architecture.test_native_variant_manifest::test_ci_consumes_only_authenticated_explicit_native_variants",
+    "tests.python.architecture.test_native_variant_manifest::test_ctest_smokes_and_python_suites_preserve_the_exact_native_dimension",
+    "tests.python.architecture.test_native_variant_manifest::test_ctest_python_mpi_projection_matches_the_manifest_and_dim2_contract",
+    "tests.python.architecture.test_native_variant_manifest::test_wheel_proof_accepts_an_explicit_fat_set_and_rejects_a_hidden_subset"
+  ],
+  "Native_loaded": [],
+  "Native_blocked_attempts": [],
+  "Source_package_origin": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/__init__.py",
+  "harness": "Adapted existing run_integration_focused_final.py Source harness pattern, no clone/setup/build. Optional native imports refused with ModuleNotFoundError, extension-loader hook also blocks direct native loading.",
+  "workflow_route_checks": {
+    "download_retained_dim2_wheel": true,
+    "source_pythonpath_removed": true,
+    "installed_group_runner": true,
+    "explicit_selected_manifest": true,
+    "private_install_prefix": true,
+    "mandatory_native_guard": true,
+    "dim2_explicit": true,
+    "status_saved_and_propagated": true
+  },
+  "missing_wheel_backend_and_proof_guards": "Real repository unit controls executed: missing/duplicate wheel and checkout prefix refusal; wheel-proof failure prevents pytest and preserves rc; dimension failures stay red while other required groups execute; stale MPI leaf rejected for serial requirement; tampered Native manifest digest/wrong dimension/capability refusals preserved. Subprocess/Native leaf facts mocked in these Source tests, no installation or actual backend qualification.",
+  "dimension_route_geometry": {
+    "geometries": [
+      {
+        "kind": "M05",
+        "genuine_author_validate_resolve_dimension": 1,
+        "case_id": "m05_closed_periodic_shear",
+        "Native_run": false
+      },
+      {
+        "kind": "M10",
+        "genuine_author_validate_resolve_dimension": 1,
+        "case_id": "M10-self-consistent-SG",
+        "Native_run": false
+      }
+    ],
+    "added_overrides": {
+      "tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py": 1,
+      "tests/python/integration/runtime/test_m10_self_consistent_sg.py": 1
+    },
+    "old_routes_preserved": true,
+    "partition": {
+      "1": [
+        "tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py",
+        "tests/python/integration/runtime/test_m10_self_consistent_sg.py",
+        "tests/python/integration/runtime/test_public_drift_diffusion_matrix.py",
+        "tests/python/integration/runtime/test_uniform_cp9_dim1_runtime.py"
+      ],
+      "2": [
+        "tests/python/integration/runtime/test_public_tensor_diffusion.py",
+        "tests/python/integration/mpi/test_dsl_compile_cache.py"
+      ],
+      "3": [
+        "tests/python/integration/runtime/test_uniform_cp9_dim3_runtime.py"
+      ]
+    },
+    "Native_loaded": false,
+    "Native_blocked_attempts": [],
+    "scope": "Actual Source author/validate/resolve only, no compilation, binding or Native/runtime execution"
+  },
+  "Source_queries_released": true,
+  "before_after_diff_identical": true,
+  "pins": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/conftest.py": "7f073fed282bce0da226b47dd79e7523d66b1d70d100fa72a04b235e72ec60d4",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/architecture/test_ci_python_dimensions.py": "057ba7e788aa10154a5e87a54621d5d737d7796ced11987d32784b83e919a482",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/architecture/test_ci_plan.py": "c6e345a4f5efd828f659bfa7d715ea129e65714707978e7ef36f1dff462327e5",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-current-ci-route-source-validation-20261009/focused-result.json": "7d28277cddb13d70d320db193c5e2541b66787306d2dd51ea31d5ad19b3f1a96",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py": "ffaf33294531c2f46c5856937d23fe4d13f88504f4f71b859fd8193e06e13f96",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/scripts/prove_installed_wheel.py": "3aa78bc8c3648e120439ac6e90a0887b60a54f37da7b7db2b2983015be5f1a8d",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/examples/migration/scientific/api040_m05_periodic_shear.py": "d7a835ff121503082319e256344ebbf57482ab36e8aefe6f85d0a18f67d21c41",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-current-ci-route-source-validation-20261009/geometry_route_probe.py": "688e0f1cbb527413a4590fd13a70cc775f16b9f064c8136486b523b11f4a6daa",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-current-ci-route-source-validation-20261009/run_focused_source.py": "9ce52370cd2e0cb66f7eda06afabe3c4431496acb95f29e1de2dfca3f594eb21",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-current-ci-route-source-validation-20261009/geometry-probe-before-sibling-import-fix.py": "f1d815ab808ad829b3ed72136567c2eb3a6e8f23a73e443a2ee08e7815c1ad2b",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/native_dimensions.json": "408a504c559d5dc1d173f424ccee978e3091c75923964efb7eaa76ed55d82f81",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-current-ci-route-source-validation-20261009/initial-geometry-probe-error.txt": "ff460071f0c4106cb14950953075e796dd3d038e0ee68fe9160d9f5748ea6786",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-current-ci-route-source-validation-20261009/geometry-route-result.json": "9c999eb90ce968868f7993d8f98b5d1b585c7c73f1ada3f3a97014509ea0125f",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/integration/runtime/test_m10_self_consistent_sg.py": "8fd87c8254c8fb153a9ccfbc420b663fe1dad6ea173362f3bf6bd255fd9730cc",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-current-ci-route-source-validation-20261009/before.json": "d1f0e77589934ecbd895247a3fd8621fcbff93de21ac10598e1ff77957aa46ba",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/architecture/test_native_dimension_build_contract.py": "23bddb55bd6efaf3f106b899916b4b6495451b608f30f2416b034afde13f53ec",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/architecture/test_ci_python_module_objects.py": "ffd25a835f81d06c2cf153d4c02f3b3873d8ed95e63ae923626118628a78a30a",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/architecture/test_native_variant_manifest.py": "007028ec379b8f1585096947d31f8f9262ca7ba2f14d030e3e621bc6d0bf4aba",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/scripts/verify_installed_native.py": "a8026696beb13a56e449088250098fa0bccba5369d82fe8cf743aa1b0f8f351a",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/.github/workflows/ci.yml": "fa348eb051c5a30319961f1ea2c6f81bf142c8418527dfc875f906c8a2cddb3f",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/scripts/ci_python_dimensions.py": "efb685c7bb25be2e3c0d28a7c57542c67d8c9f290466982c1276b7b1dd36aaac",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-current-ci-route-source-validation-20261009/pytest.xml": "2b37d4a029dffe84627aa06825af6d9b2c8d152039e05274dc544f2477e9598f",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/architecture/test_installed_native_verifier.py": "f03255169c43a060840f3da623470775c2d5a37b0430f327f23e05e0770366cf",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-current-ci-route-source-validation-20261009/tested-working-tree.patch": "bd85286c7381e3e20642118cb6dfdbc5bea5b31f9cc64bbe6865f906b2b74b56"
+  },
+  "limits": [
+    "60 Source cases only, not all903/904 and not GitHub CI",
+    "Results apply to HEAD4017 plus the recorded working-tree diff, not cleanHEAD4017 and not a future commit",
+    "No Native/MPI/GPU execution or prefix/shared-cache/environment installation performed",
+    "Extra geometry probe initially lacked sibling import path; corrected process-only import path, failure and before-fix script preserved"
+  ]
+}

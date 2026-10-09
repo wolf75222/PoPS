@@ -1,0 +1,285 @@
+{
+  "contract": "pops.independent-original-public10-reception@1",
+  "verdict": "OFFLINE_PHYSICAL_AND_DISCRETE_MATH_ACCEPT_WITH_EXPLICIT_LIMITS",
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "Native": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+  "SDK": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+  "core_fingerprint": "743bc354455285b4828e6d80039949317c31f63ac6fc3c5432ae2897487594a8",
+  "fresh_physical_counts": {
+    "core_source_files_rehashed": 1220,
+    "installed_source_header_members_perphase": [
+      1174,
+      1174
+    ],
+    "SDK_header_rows": 384,
+    "actual_phase_files_hashed": 315,
+    "actual_phase_bytes": 36597055,
+    "cache_JIT_DSOs_authenticated": 25,
+    "cache_model_actual_source_companions": 14,
+    "retained_model_program_compilation_entries": 7,
+    "checkpoint_envelopes_closed": 9
+  },
+  "actual_XML_receipts": [
+    {
+      "phase": "original-pde",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "ids": [
+        "tests.python.integration.runtime.test_imex_nonautonomous_field::test_public_nonautonomous_imex_field_reads_explicit_time"
+      ],
+      "sha256": "cc667a7c9bce347f90ddcfe4dfccb9885fa498e811e971368a9de0a8370f8b13"
+    },
+    {
+      "phase": "public10",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "ids": [
+        "tests.python.integration.runtime.test_public_diffusion_field_predictor::test_public_diffusion_predictor_is_field_rhs[euler]",
+        "tests.python.integration.runtime.test_public_diffusion_field_predictor::test_public_diffusion_predictor_is_field_rhs[ssprk2_rates]",
+        "tests.python.integration.runtime.test_public_diffusion_field_predictor::test_public_diffusion_predictor_is_field_rhs[ssprk2_predictor]",
+        "tests.python.integration.runtime.test_public_diffusion_field_predictor::test_public_diffusion_predictor_is_field_rhs[euler_renamed]",
+        "tests.python.integration.runtime.test_public_diffusion_field_predictor::test_public_diffusion_predictor_is_field_rhs[euler_kappa0125]",
+        "tests.python.integration.runtime.test_public_diffusion_field_late_refusal::test_public_late_refusal_same_artifact_control[euler]",
+        "tests.python.integration.runtime.test_public_diffusion_field_late_refusal::test_public_late_refusal_same_artifact_control[ssprk2]",
+        "tests.python.integration.runtime.test_public_diffusion_field_late_refusal::test_public_late_refusal_automatic_retry",
+        "tests.python.integration.runtime.test_public_diffusion_field_late_refusal::test_public_late_refusal_populated_history",
+        "tests.python.integration.runtime.test_field_publication_instances_runtime::test_installed_three_instance_solved_provider_reads[cells0-False-False]"
+      ],
+      "sha256": "008224d7b292a43e2126a9baea7625f809a5d6fbf36f9e112a02bf53f97be130"
+    }
+  ],
+  "original_IMEX": {
+    "case": "originalIMEX",
+    "inputs": {
+      "U0": "3",
+      "h": "1/4",
+      "physical_origin": "1",
+      "implicit_end_coefficient": "-9/4"
+    },
+    "rational": {
+      "Y": "48/25",
+      "F": "144/25",
+      "U": "84/25",
+      "wrong_field_time_U": "87/25"
+    },
+    "arrays": {
+      "initial": {
+        "max_abs_error": 0.0,
+        "bound": 0.0
+      },
+      "accepted": {
+        "max_abs_error": 4.818367926873179e-13,
+        "bound": 1.2103610429875554e-11
+      },
+      "field": {
+        "max_abs_error": 1.9255708139098715e-12,
+        "bound": 4.113848410531879e-11
+      }
+    },
+    "clock": [
+      0.25,
+      1
+    ],
+    "Y_snapshot_limit": "StageYnotseparatelysaved; theoreticalYrecomputed andfieldF/acceptedUchecked, retainedCPPqualifiedstage inspected."
+  },
+  "public10_math": "Independentfaceintegralinitialization+periodiccentralFD andFFT screenedsolve, no authornumericoracleimport. Fiveparameterizations +same-artifactlatecontrols +automatic2accepted/1refusedretry +populatedfirst/control math reproducearrays; maxstate4.440892098500626e-16 andmaxfield5.863753926860227e-12 withinpredeclaredbudgets.",
+  "retry_guard_math": [
+    {
+      "case": "test_public_late_refusal_autom0/late-refusal-adaptive/rank0",
+      "norm_rejected_init": 0.1482084258357579,
+      "norm_accepted_retry": 0.07410421291787896,
+      "predictor_norms": [
+        28.124317480256234,
+        28.111971544591228
+      ]
+    },
+    {
+      "case": "test_public_late_refusal_popul0/late-refusal-populated-euler/rank0",
+      "norm_rejected_init": 0.1482084258357579,
+      "norm_accepted_retry": 0.07410421291787896,
+      "predictor_norms": [
+        28.124317480256234,
+        28.111971544591228
+      ]
+    }
+  ],
+  "rollback": "Threebefore/afteracceptedjournal snapshots exactlyequalincludingdecodedandSHAverifiedstate,potentials,auxiliary,Programbytes,clocksandhistory metadata/physical slots. Populatedbefore/afterU1 andfieldPhi1 andphysicalhistory1independentlymatchFD/FFT; twoacceptedcontrolU2/Phi2andolder/newer slots match. Originalguards preserved0/.1/40-2560tau; no one-rank-onlyfailureclaimoutsideworld1.",
+  "Uniform_CP9": [
+    {
+      "phase": "initial",
+      "clock": [
+        0.0,
+        0
+      ],
+      "comparisons": {
+        "z_exchange": {
+          "max_abs_error": 0.0,
+          "bound": 2e-12
+        },
+        "a_exchange": {
+          "max_abs_error": 0.0,
+          "bound": 2e-12
+        },
+        "m_catalyst": {
+          "max_abs_error": 0.0,
+          "bound": 2e-12
+        },
+        "separate_forcing": {
+          "max_abs_error": 0.0,
+          "bound": 2e-12
+        }
+      },
+      "history": [
+        {
+          "name": "candidate_field_0",
+          "fill": 0,
+          "physical_slots": 2
+        },
+        {
+          "name": "candidate_field_1",
+          "fill": 0,
+          "physical_slots": 2
+        }
+      ],
+      "auxiliary_actual_bytes": 31698,
+      "scalar_bytes": 1176,
+      "cold_future_bytes": 34984,
+      "cursors": {
+        "rows": [],
+        "schema_version": 1
+      }
+    },
+    {
+      "phase": "accepted1",
+      "clock": [
+        0.015625,
+        1
+      ],
+      "comparisons": {
+        "z_exchange": {
+          "max_abs_error": 0.0,
+          "bound": 2e-12
+        },
+        "a_exchange": {
+          "max_abs_error": 0.0,
+          "bound": 2e-12
+        },
+        "m_catalyst": {
+          "max_abs_error": 0.0,
+          "bound": 2e-12
+        },
+        "separate_forcing": {
+          "max_abs_error": 0.0,
+          "bound": 2e-12
+        }
+      },
+      "history": [
+        {
+          "name": "candidate_field_0",
+          "fill": 1,
+          "physical_slots": 2
+        },
+        {
+          "name": "candidate_field_1",
+          "fill": 1,
+          "physical_slots": 2
+        }
+      ],
+      "auxiliary_actual_bytes": 32448,
+      "scalar_bytes": 1176,
+      "cold_future_bytes": 34984,
+      "cursors": {
+        "rows": [],
+        "schema_version": 1
+      }
+    },
+    {
+      "phase": "accepted2",
+      "clock": [
+        0.03125,
+        2
+      ],
+      "comparisons": {
+        "z_exchange": {
+          "max_abs_error": 0.0,
+          "bound": 2e-12
+        },
+        "a_exchange": {
+          "max_abs_error": 0.0,
+          "bound": 2e-12
+        },
+        "m_catalyst": {
+          "max_abs_error": 0.0,
+          "bound": 2e-12
+        },
+        "separate_forcing": {
+          "max_abs_error": 0.0,
+          "bound": 2e-12
+        }
+      },
+      "history": [
+        {
+          "name": "candidate_field_0",
+          "fill": 2,
+          "physical_slots": 2
+        },
+        {
+          "name": "candidate_field_1",
+          "fill": 2,
+          "physical_slots": 2
+        }
+      ],
+      "auxiliary_actual_bytes": 32448,
+      "scalar_bytes": 1176,
+      "cold_future_bytes": 34984,
+      "cursors": {
+        "rows": [],
+        "schema_version": 1
+      }
+    }
+  ],
+  "Uniform_owned_clock_capacity": "OneUniformlayout7x3; typedownedclockmanifest@1,onecanonicalclock86UTF8bytes,7components, actualcoldfuturemetadata33808+1176scalar=34984B; acceptedwire31698\u219232448\u219232448,closedcanonicalCP9arrays/restart identities,statesbytesequalNPY,historyslots/depth/fill/clocks/readonlycatalyst+exchangeconservation/stagefieldresponse equations verified.",
+  "source_code_DSO_authentication": "RehashedSource1220files/core andphase1174Source/headerrows against currentMain+installedpackage+retainedwheel; Native939samephysicalbytes andcurrentSDKacf0. Modelcompiler-ownedC25sources/provenance andretainedDSO hashmatch; Program compiler-owned_generated_cpp prerequisite reviewed, savedcode/IR/DSOsidecars binaryidentity recomputed. BothrequestedretainedProgramcommandstringsincludeSDKbutare sanitized; nofullrawfrontendcommand proofclaimed.",
+  "limits": [
+    "CPUworld1 only; noMPI2,GPU,3D,multilevel qualification.",
+    "OriginalY stage hasno separate savedarray; independenttheoreticalY andF/U checks plusCPPstage evidence.",
+    "Refusal snapshots useexistingprivateNativejournals; no newpublicsnapshotAPI/ticketvalidator proof.",
+    "CP9 oneUniformlayout(7,3), baselineordering/publicationsonly; readonlycatalyst/exchange/history/canonicalcheckpointclosure checked; pendingattemptrollback/variablelengthclocks/subclockexecution notqualified.",
+    "RetainedDSO/code/IR/binarysidecars and embeddedSDK verified. Both requestedProgram command strings are sanitized, so no full rawProgramfrontendcommand/action proof. Model actualcompilecallback receipts explicitly lack completefrontend-to-binary graph proof.",
+    "CP9 legacyphiarrayremainszero; independentstagefieldchecks usebothcandidate_field histories, notlegacyphi. EmptyPOPSEX01 offsetschecked; no pendingexchange transaction execution inferred.",
+    "Scientifictests authoredbyrepository/team are separatefromthisnon-authoroffline reader. No rerun/producer/test-authorclaim byreader.",
+    "Five diffusionparameterizations useEuler/SSPRK2 withtwoRK2compositions,renameandkappa perturbation; thisisnotfive distinctintegrators.",
+    "Observedbuildreceipt24outputactions isnotfrontendcompilerexecutioncount; thisphase-receptiondidnotrepeatfullcacheobjectaudit."
+  ],
+  "protocol_sources_read": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/identity/encoding.py": "830e714a55f1e62b3961ff713be928ede20499f4ba9edc65a35ef192bdf4e309",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/identity/digest.py": "c9ae85d4668cd10a2fd50182eeb31da91c54a4960c5d73ada9f49c6f9567d342",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/identity/artifact.py": "0f8374154edc880bf841aa8b7420dd1a4f762d170b95b608f37f6973e958f617",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/runtime/_checkpoint_manifest.py": "cd18d55830800d1659f83e15fad31d0be7bc1939fa464464a815c3d56f7ba57d",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/support/imex_nonautonomous_field_case.py": "5643e94cac162ae4cf6cf213e6e0a86714e3e46ed827e8b3d0c9addb7856b022",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/support/diffusion_field_oracle.py": "0424379959a48076b4b89f6328d254fbedb210d6e71e45cfbea60f86edb60baf",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/support/diffusion_field_late_refusal_oracle.py": "23c6821833b3ad6b93ce6a06cae3deee49c4db8cdf6151286ae1869beba95d0f",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/support/field_publication_instance_oracle.py": "6a612425673d14d58e36f3e6edbe960113220579f4145f0632d4a514d55baa7b",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/support/field_publication_instance_case.py": "42b2cbf4dd99d169674b6515187d59cf435902c33e7864141d23892077b58f80",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/python/support/m16_explicit_native_capture.py": "0a24d89d06ccf09438da1e07e7fa6fe17751d35dafc9dad62c5b1286eddc242f"
+  },
+  "evidence_paths_sha256": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-original-public10-4017-20261009/offline_receive.py": "b87989d1af97007ad1fe708453242973af1152ab66054ef2ab66435b402160b2",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-original-public10-4017-20261009/offline-reception.json": "3f19e6974e127d2d4ef21f357fac437e9ac973014e2488a57ae24204c1c7ebce",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-original-public10-4017-20261009/offline-reception.log": "a7b29e61c28021e8140355bf080faf409c8d608eefc9e4575b535858225b4a29",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-original-public10-4017-20261009/offline_supplement.py": "df6ac166e859545b48773f638417afcdb5f2d399ac01ea557e19efe9b433e6ca",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-original-public10-4017-20261009/offline-supplement.json": "dc0c4a70bdf3c0621b4b84c706efaa7b4db89b4125a43d0de9a1b5dc4465c10d",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-original-public10-4017-20261009/offline-supplement.log": "48bff1b92616dbfcd59abc3baeb1ee79b5007f44841aa65e7d6de62079b3c4ab",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-independent-original-public10-4017-20261009/actual-phase-file-inventory.json": "703f2099b357f4f43cbe799dee80d1519e51aeee8f0a1d588ede94ae5131fe11"
+  },
+  "build_admission_receipt_sha256": "05f27f6c68525b852d517cfff476c715ca3aa78fbc7013311896510ca64beb68",
+  "no_original_output_mutation": true,
+  "Native_import_or_run": false,
+  "Main_prefix_mutations": false,
+  "ROMEO_contact": false,
+  "MPI2_GPU_3D_qualification": false
+}

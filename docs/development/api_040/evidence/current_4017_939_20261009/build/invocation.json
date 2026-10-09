@@ -1,0 +1,17 @@
+{
+  "SDK": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "command": [
+    "rtk",
+    "proxy",
+    "bash",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/actual-official-invocation.sh"
+  ],
+  "disk_before": {
+    "free": 874905600,
+    "total": 494384795648,
+    "used": 493509890048
+  },
+  "script_sha256": "cc3092bca92d0dd23a4a2def3e68ed2bbbf9869d1d11c936827dc7653429f3f8",
+  "start_utc": "2026-10-09T00:23:35.290866+00:00"
+}

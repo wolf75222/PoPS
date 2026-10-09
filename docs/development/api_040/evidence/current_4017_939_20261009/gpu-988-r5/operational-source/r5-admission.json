@@ -1,0 +1,113 @@
+{
+  "Root_GO": true,
+  "SDK": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+  "Source": "98804c6849c9966e05b5397126bab983a5fa0227",
+  "actual_readonly_preflight_sha256": "d61de4c377b0bffc8174bc131cb91c275f9599684634432d57485f7f946a1587",
+  "cuda_cudart": {
+    "bytes": 699568,
+    "cache_entry": "CUDA_CUDART:FILEPATH=/apps/2025/manual_install/cuda_eviden/12.6/lib64/libcudart.so",
+    "exists": true,
+    "resolved": "/gpfs/app/2025/manual_install/cuda_eviden/12.6/targets/sbsa-linux/lib/libcudart.so.12.6.77",
+    "sha256": "a647c8437c8fd810f781a6cd1ceb3532be9d6765f489f0d84cd15d71afcc6a13"
+  },
+  "failure_reference_sha256": "39a20c8b8adac5f69d22f1d26c01c177581c2bb9a6ed7f68d8063d4ecbe0c5c2",
+  "physical_compiler_libraries": [
+    {
+      "exists": false,
+      "library_directory": "/project/r250127/sol61-gpu-bootstrap-20261004/compiler13/lib",
+      "prefix": "/project/r250127/sol61-gpu-bootstrap-20261004/compiler13",
+      "scope": "Existing borrowed compiler read only; no execution or write to common project."
+    },
+    {
+      "exists": true,
+      "libraries": [
+        {
+          "bytes": 23589672,
+          "path": "/project/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib/libstdc++.so",
+          "resolved": "/gpfs/projet/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib/libstdc++.so.6.0.36",
+          "sha256": "666dc1e83034d949084f603e04de5934b806c3e0b7b0a105fd5c624aa1d156c6",
+          "symlink": true
+        },
+        {
+          "bytes": 23589672,
+          "path": "/project/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib/libstdc++.so.6",
+          "resolved": "/gpfs/projet/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib/libstdc++.so.6.0.36",
+          "sha256": "666dc1e83034d949084f603e04de5934b806c3e0b7b0a105fd5c624aa1d156c6",
+          "symlink": true
+        },
+        {
+          "bytes": 23589672,
+          "path": "/project/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib/libstdc++.so.6.0.36",
+          "resolved": "/gpfs/projet/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib/libstdc++.so.6.0.36",
+          "sha256": "666dc1e83034d949084f603e04de5934b806c3e0b7b0a105fd5c624aa1d156c6",
+          "symlink": false
+        },
+        {
+          "bytes": 1709752,
+          "path": "/project/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib/libgomp.so",
+          "resolved": "/gpfs/projet/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib/libgomp.so.1.0.0",
+          "sha256": "690498e741ac3921f18893da9ef865a70ac2de7d6abfe2c3042fc86378687754",
+          "symlink": true
+        },
+        {
+          "bytes": 1709752,
+          "path": "/project/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib/libgomp.so.1",
+          "resolved": "/gpfs/projet/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib/libgomp.so.1.0.0",
+          "sha256": "690498e741ac3921f18893da9ef865a70ac2de7d6abfe2c3042fc86378687754",
+          "symlink": true
+        },
+        {
+          "bytes": 1709752,
+          "path": "/project/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib/libgomp.so.1.0.0",
+          "resolved": "/gpfs/projet/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib/libgomp.so.1.0.0",
+          "sha256": "690498e741ac3921f18893da9ef865a70ac2de7d6abfe2c3042fc86378687754",
+          "symlink": false
+        },
+        {
+          "bytes": 132,
+          "path": "/project/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib/libgcc_s.so",
+          "resolved": "/gpfs/projet/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib/libgcc_s.so",
+          "sha256": "69a56a9993b7729b29b274e65016031c81f2397f176ed5ad44d59bd50425e0bd",
+          "symlink": false
+        },
+        {
+          "bytes": 737568,
+          "path": "/project/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib/libgcc_s.so.1",
+          "resolved": "/gpfs/projet/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib/libgcc_s.so.1",
+          "sha256": "48fef7ea1ce4809a10971762ee6e37959db71d4c9c46f82819eb116d77834ea0",
+          "symlink": false
+        }
+      ],
+      "library_directory": "/project/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib",
+      "prefix": "/project/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13",
+      "resolved": "/gpfs/projet/r250127/rmdraux/sol61-gpu-bootstrap-20261004/compiler13/lib",
+      "scope": "Existing borrowed compiler read only; no execution or write to common project."
+    }
+  ],
+  "previous_r3_actual_readonly_preflight_sha256": "05075e6d6b6a11ef09df62766f7340c6b5280ce904943d7bd019c5bb4f7b01e9",
+  "previous_r4_actual_readonly_preflight_sha256": "68fd1ffb555a40e3e937b69f34532364dc6344d8fe4a77d3f1915ea4fdadb561",
+  "probe_binary_sha256": "7e0eec5471ae93f8635f5b1f1dc9791f7e67c8767358571bd1358da575936e95",
+  "remaining_growth_bytes_before_native": 2147483648,
+  "remaining_growth_bytes_before_probe": 2147483648,
+  "remaining_growth_bytes_before_runtime": 805306368,
+  "remaining_growth_scope": "Forecast only, not a personal consumption cap or a measured Native allocation. Environment/setup/Kokkos/probe already exist; 2GiB estimates remaining official native objects/wheel/install, JIT and scientific outputs; 768MiB estimates the runtime portion. Administrative hard quota and actual grace checked freshly before every phase; a forecast is not a capacity guarantee.",
+  "required_existing_files": {
+    "kokkos-unified-build/CMakeCache.txt": "065512c7593af9de245f09381cc2373037b027cf4a45dec1b1f9d822fbc34e94",
+    "profile-probe-build/CMakeCache.txt": "ac7bc0036f5c1b8926edde4d18050869dc908974af4acf342ec3c0c6f46d3fd5",
+    "profile-probe-build/build.ninja": "f5d6af4b893d7835d1608724a41da3a9451d509f543b0041940f86e7245a7754",
+    "results/conda-effective-context-resume.json": "c9e38b4558986955dbefc5f020ff3c75231e4c900655d7765bbdea671e377829",
+    "results/kokkos-unified-profile-manifest-r4.json": "bdd3dd40cd4228e80c3b5669343ae8e9bd570d24bd759baef477f7c8bbd93aa3",
+    "results/managed-pointer-launch-probe-r4.json": "996efc74708a4d50c916c2f72c69f554a11f3134dc72c3940438cf1e4f07b390",
+    "results/official-setup-entered.json": "beb492c967aba88d62c2fb8140a605b8d39da1f83c9f873cbf060be9e1738191"
+  },
+  "root_source_review": {
+    "install_delta": "4a6d69485143615088fcc25572e0bd4aad921452a6d36cf38bf01cf130680fa8",
+    "install_peer": "fb22031586c27b0db2e58a3e227d3f210763773d884f4599dce492e9b7fb48d9",
+    "loader_cause": "338bbdcf203fc955e4cad665fa27e25214eb888a243e674461b8fcfd787c5f2a",
+    "loader_peer": "9fc7bd216ac3251f088fb3193dabf8ca6ff90211e45a957dd691bd7234c77149",
+    "r5_kokkos_environment_delta": "a696ace1f8dde9822b0ff3e58e0746d61dfb50aa446de5d8c489a49ea14ad647",
+    "r5_peer": "ac7955559983f9a2cc92e906c98a14b31fc3be3165f8e6d91a82117651ae39c3",
+    "shell_delta": "bb03890bb49473a983762d777511c0b9b278b966d315c711d1737f63b0d5e286"
+  },
+  "scope": "R5 preparation only; genuine R4 microprobe PASS and Kokkos profile retained as prior physical receipts, not R5 Native/science proof. SameSource988SDKde2coreb756. NewRootGO/freshpreflight/growth required. No setup/clone/sourceextract/Kokkosbuild."
+}

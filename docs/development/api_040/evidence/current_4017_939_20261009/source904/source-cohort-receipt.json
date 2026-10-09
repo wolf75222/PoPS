@@ -1,0 +1,51 @@
+{
+  "Native_extension_attempts_blocked": [],
+  "Native_import_attempts_blocked": [
+    "_pops",
+    "pops._pops",
+    "_pops",
+    "pops._pops"
+  ],
+  "Native_modules_loaded": [],
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "args": [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-q",
+    "-ra",
+    "-p",
+    "scripts.ci_pytest_timings",
+    "--confcutdir=/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+    "-o",
+    "pythonpath=",
+    "-p",
+    "no:cacheprovider",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/sol61-final-main-source-validation-4017d29d-20261009/tmp",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/sol61-final-main-source-validation-4017d29d-20261009/cohort.xml",
+    "tests/python/architecture",
+    "tests/python/unit/codegen/test_static_provider_ssp_proof.py",
+    "tests/python/unit/time/test_temporal_tau_program_authority.py"
+  ],
+  "checkout": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+  "cohort_split": {
+    "SSP_static": 25,
+    "architecture": 873,
+    "owner": 6
+  },
+  "counts": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 904
+  },
+  "exit": 0,
+  "package": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/__init__.py",
+  "scope": "Final Main author-integration Source execution, not independent review of ownCI/owner or allpatches; no Native/CXX/runtime/GPU/remoteCI qualification",
+  "seconds": 274.88683420800226,
+  "selectors": [
+    "tests/python/architecture",
+    "tests/python/unit/codegen/test_static_provider_ssp_proof.py",
+    "tests/python/unit/time/test_temporal_tau_program_authority.py"
+  ]
+}

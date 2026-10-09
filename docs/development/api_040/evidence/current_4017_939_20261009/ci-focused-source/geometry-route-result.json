@@ -1,0 +1,39 @@
+{
+  "geometries": [
+    {
+      "kind": "M05",
+      "genuine_author_validate_resolve_dimension": 1,
+      "case_id": "m05_closed_periodic_shear",
+      "Native_run": false
+    },
+    {
+      "kind": "M10",
+      "genuine_author_validate_resolve_dimension": 1,
+      "case_id": "M10-self-consistent-SG",
+      "Native_run": false
+    }
+  ],
+  "added_overrides": {
+    "tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py": 1,
+    "tests/python/integration/runtime/test_m10_self_consistent_sg.py": 1
+  },
+  "old_routes_preserved": true,
+  "partition": {
+    "1": [
+      "tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py",
+      "tests/python/integration/runtime/test_m10_self_consistent_sg.py",
+      "tests/python/integration/runtime/test_public_drift_diffusion_matrix.py",
+      "tests/python/integration/runtime/test_uniform_cp9_dim1_runtime.py"
+    ],
+    "2": [
+      "tests/python/integration/runtime/test_public_tensor_diffusion.py",
+      "tests/python/integration/mpi/test_dsl_compile_cache.py"
+    ],
+    "3": [
+      "tests/python/integration/runtime/test_uniform_cp9_dim3_runtime.py"
+    ]
+  },
+  "Native_loaded": false,
+  "Native_blocked_attempts": [],
+  "scope": "Actual Source author/validate/resolve only, no compilation, binding or Native/runtime execution"
+}

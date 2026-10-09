@@ -1,0 +1,452 @@
+{
+  "verdict": "ACCEPT CI job-only installed-wheel route with actual selection inventory correction",
+  "patch_sha256": "3b41a1a7f7c4e11741a2768a53439c812590bee7a44d78c29d17769e0b958f9f",
+  "candidate_workflow_sha256": "fa348eb051c5a30319961f1ea2c6f81bf142c8418527dfc875f906c8a2cddb3f",
+  "source_helper_sha256": "efb685c7bb25be2e3c0d28a7c57542c67d8c9f290466982c1276b7b1dd36aaac",
+  "failure_log_sha256": "3121a33d0e8b5e6371e0d5bd5d1014dd48ddac840de47aa80a400d1deb9077f1",
+  "actual_failure": "Wheel artifact downloaded; stale build-tree existence test refused before Native verifier/pytest. Candidate routes retained wheel through existing authenticated private installed environment.",
+  "only_changed_job": "gate-python-compile-cache",
+  "exact_current_selected_file": "tests/python/integration/mpi/test_dsl_compile_cache.py",
+  "actual_current_test_function_ids": [
+    "test_production_cache_hit_skips_compiler_and_semantic_change_misses"
+  ],
+  "inventory_correction": "Current selectedfile has1test function, not8; no selection/testbody change. Historical8count not admitted.",
+  "original_release_conditions_environment_debug_exit_gates_preserved": true,
+  "forward_apply_exact": true,
+  "synthetic_witnesses": [
+    {
+      "label": "happy_route",
+      "status": 0,
+      "exception": null,
+      "commands": [
+        {
+          "argv": [
+            "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+            "-m",
+            "venv",
+            "--system-site-packages",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/happy_route/install/dim2"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        },
+        {
+          "argv": [
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/happy_route/install/dim2/bin/python",
+            "-m",
+            "pip",
+            "--isolated",
+            "install",
+            "--ignore-installed",
+            "--no-deps",
+            "--prefix",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/happy_route/install/dim2",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/happy_route/install/wheel-dim2/pops-fake0.whl"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        },
+        {
+          "argv": [
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/happy_route/install/dim2/bin/python",
+            "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/scripts/prove_installed_wheel.py",
+            "--wheel",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/happy_route/install/wheel-dim2/pops-fake0.whl",
+            "--expect-dim",
+            "2"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        },
+        {
+          "argv": [
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/happy_route/install/dim2/bin/python",
+            "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/scripts/verify_installed_native.py",
+            "--expect-dim",
+            "2",
+            "--expect-serial"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        },
+        {
+          "argv": [
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/happy_route/install/dim2/bin/python",
+            "-u",
+            "-c",
+            "import sys; from pathlib import Path; sys.path[:0]=['/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/scripts','/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004']; import pops; assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()); assert not Path(pops.__file__).resolve().is_relative_to(Path('/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004')); import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+            "-v",
+            "-ra",
+            "--durations=20",
+            "-o",
+            "pythonpath=",
+            "-o",
+            "cache_dir=/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/happy_route/receipts/dim2/pytest-cache",
+            "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/happy_route/receipts/dim2/pytest-tmp",
+            "-p",
+            "ci_pytest_timings",
+            "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/happy_route/receipts/dim2/junit.xml",
+            "tests/python/integration/mpi/test_dsl_compile_cache.py"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        }
+      ],
+      "scope": "Synthetic subprocess returncodes only; no venv/pip/proof/Native/pytest command executes"
+    },
+    {
+      "label": "venv_failure",
+      "status": 11,
+      "exception": null,
+      "commands": [
+        {
+          "argv": [
+            "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+            "-m",
+            "venv",
+            "--system-site-packages",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/venv_failure/install/dim2"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        }
+      ],
+      "scope": "Synthetic subprocess returncodes only; no venv/pip/proof/Native/pytest command executes"
+    },
+    {
+      "label": "installation_failure",
+      "status": 12,
+      "exception": null,
+      "commands": [
+        {
+          "argv": [
+            "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+            "-m",
+            "venv",
+            "--system-site-packages",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/installation_failure/install/dim2"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        },
+        {
+          "argv": [
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/installation_failure/install/dim2/bin/python",
+            "-m",
+            "pip",
+            "--isolated",
+            "install",
+            "--ignore-installed",
+            "--no-deps",
+            "--prefix",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/installation_failure/install/dim2",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/installation_failure/install/wheel-dim2/pops-fake0.whl"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        }
+      ],
+      "scope": "Synthetic subprocess returncodes only; no venv/pip/proof/Native/pytest command executes"
+    },
+    {
+      "label": "wheel_proof_failure",
+      "status": 13,
+      "exception": null,
+      "commands": [
+        {
+          "argv": [
+            "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+            "-m",
+            "venv",
+            "--system-site-packages",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/wheel_proof_failure/install/dim2"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        },
+        {
+          "argv": [
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/wheel_proof_failure/install/dim2/bin/python",
+            "-m",
+            "pip",
+            "--isolated",
+            "install",
+            "--ignore-installed",
+            "--no-deps",
+            "--prefix",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/wheel_proof_failure/install/dim2",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/wheel_proof_failure/install/wheel-dim2/pops-fake0.whl"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        },
+        {
+          "argv": [
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/wheel_proof_failure/install/dim2/bin/python",
+            "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/scripts/prove_installed_wheel.py",
+            "--wheel",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/wheel_proof_failure/install/wheel-dim2/pops-fake0.whl",
+            "--expect-dim",
+            "2"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        }
+      ],
+      "scope": "Synthetic subprocess returncodes only; no venv/pip/proof/Native/pytest command executes"
+    },
+    {
+      "label": "wrong_native_backend_failure",
+      "status": 14,
+      "exception": null,
+      "commands": [
+        {
+          "argv": [
+            "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+            "-m",
+            "venv",
+            "--system-site-packages",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/wrong_native_backend_failure/install/dim2"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        },
+        {
+          "argv": [
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/wrong_native_backend_failure/install/dim2/bin/python",
+            "-m",
+            "pip",
+            "--isolated",
+            "install",
+            "--ignore-installed",
+            "--no-deps",
+            "--prefix",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/wrong_native_backend_failure/install/dim2",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/wrong_native_backend_failure/install/wheel-dim2/pops-fake0.whl"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        },
+        {
+          "argv": [
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/wrong_native_backend_failure/install/dim2/bin/python",
+            "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/scripts/prove_installed_wheel.py",
+            "--wheel",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/wrong_native_backend_failure/install/wheel-dim2/pops-fake0.whl",
+            "--expect-dim",
+            "2"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        },
+        {
+          "argv": [
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/wrong_native_backend_failure/install/dim2/bin/python",
+            "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/scripts/verify_installed_native.py",
+            "--expect-dim",
+            "2",
+            "--expect-serial"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        }
+      ],
+      "scope": "Synthetic subprocess returncodes only; no venv/pip/proof/Native/pytest command executes"
+    },
+    {
+      "label": "pytest_failure_preserved",
+      "status": 15,
+      "exception": null,
+      "commands": [
+        {
+          "argv": [
+            "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+            "-m",
+            "venv",
+            "--system-site-packages",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/pytest_failure_preserved/install/dim2"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        },
+        {
+          "argv": [
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/pytest_failure_preserved/install/dim2/bin/python",
+            "-m",
+            "pip",
+            "--isolated",
+            "install",
+            "--ignore-installed",
+            "--no-deps",
+            "--prefix",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/pytest_failure_preserved/install/dim2",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/pytest_failure_preserved/install/wheel-dim2/pops-fake0.whl"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        },
+        {
+          "argv": [
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/pytest_failure_preserved/install/dim2/bin/python",
+            "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/scripts/prove_installed_wheel.py",
+            "--wheel",
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/pytest_failure_preserved/install/wheel-dim2/pops-fake0.whl",
+            "--expect-dim",
+            "2"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        },
+        {
+          "argv": [
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/pytest_failure_preserved/install/dim2/bin/python",
+            "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/scripts/verify_installed_native.py",
+            "--expect-dim",
+            "2",
+            "--expect-serial"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        },
+        {
+          "argv": [
+            "/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/pytest_failure_preserved/install/dim2/bin/python",
+            "-u",
+            "-c",
+            "import sys; from pathlib import Path; sys.path[:0]=['/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/scripts','/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004']; import pops; assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()); assert not Path(pops.__file__).resolve().is_relative_to(Path('/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004')); import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+            "-v",
+            "-ra",
+            "--durations=20",
+            "-o",
+            "pythonpath=",
+            "-o",
+            "cache_dir=/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/pytest_failure_preserved/receipts/dim2/pytest-cache",
+            "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/pytest_failure_preserved/receipts/dim2/pytest-tmp",
+            "-p",
+            "ci_pytest_timings",
+            "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-sol61-compile-cache-wheel-route-independent-review-4017-20261009/witnesses/pytest_failure_preserved/receipts/dim2/junit.xml",
+            "tests/python/integration/mpi/test_dsl_compile_cache.py"
+          ],
+          "environment": {
+            "PYTHONPATH": null,
+            "PYTHONOPTIMIZE": null,
+            "POPS_NATIVE_DIM": "2",
+            "POPS_REQUIRE_NATIVE_TESTS": "1"
+          }
+        }
+      ],
+      "scope": "Synthetic subprocess returncodes only; no venv/pip/proof/Native/pytest command executes"
+    },
+    {
+      "label": "missing_wheel",
+      "status": null,
+      "exception": "FileNotFoundError",
+      "commands": [],
+      "scope": "Synthetic subprocess returncodes only; no venv/pip/proof/Native/pytest command executes"
+    },
+    {
+      "label": "ambiguous_wheels",
+      "status": null,
+      "exception": "FileNotFoundError",
+      "commands": [],
+      "scope": "Synthetic subprocess returncodes only; no venv/pip/proof/Native/pytest command executes"
+    },
+    {
+      "label": "reused_prefix",
+      "status": null,
+      "exception": "FileExistsError",
+      "commands": [],
+      "scope": "Synthetic subprocess returncodes only; no venv/pip/proof/Native/pytest command executes"
+    },
+    {
+      "label": "inside_checkout_prefix",
+      "status": null,
+      "exception": "ValueError",
+      "commands": [],
+      "scope": "Synthetic subprocess returncodes only; no venv/pip/proof/Native/pytest command executes"
+    }
+  ],
+  "additional_refusals": [
+    "duplicate selected file",
+    "boolean dimension"
+  ],
+  "Native_or_install_or_build_executed": false,
+  "Main_environment_modified": false,
+  "limits": "Offline Source/workflow/control-flow review only. Real wheel install/Native compile-cache/CI exact-final-head rerun remainRoot. Synthetic subprocesses authenticate stageordering/status propagation, not actual wheel validity."
+}

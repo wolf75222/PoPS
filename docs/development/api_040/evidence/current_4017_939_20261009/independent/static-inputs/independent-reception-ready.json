@@ -1,0 +1,322 @@
+{
+  "contract": "pops.independent-static-inputs-six-reception@1",
+  "verdict": "OFFLINE_CURRENT_WORLD1_PHYSICAL_DISCRETE_MATH_ACCEPT_WITH_CAPTURE_LIMITS",
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "Native": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+  "SDK": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+  "core_fingerprint": "743bc354455285b4828e6d80039949317c31f63ac6fc3c5432ae2897487594a8",
+  "core_files_rehashed": 1220,
+  "installed_source_payload_rehashed": 1174,
+  "exact_Root_property_delta": {
+    "review": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-native-independent-reception-4017-20261009/independent-property-delta-review.json",
+    "sha256": "1fa2df0f0fecf95d60d527c29120143b8876594102cdf2a8eb516ba65c65c0d4",
+    "change": "Only artifact.layout_program_paths() \u2192 artifact.layout_program_paths; matchesreal @property; restofRunner andreferencebytes unchanged. PlainPythonoldcallTypeErrornegativeandnewdictunpackverified."
+  },
+  "closed_actual_producers": [
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/run-receipt.json",
+      "sha256": "f8c3b5a6e9df95bcb7284878c0df993b241aad20fe17a4870b4a6916202ee361",
+      "cases": 1,
+      "exit": 0,
+      "producer_result": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009-producer-result.json",
+      "producer_result_sha256": "02990016982a7728a00d079ad5763200d559848ee21cc55ee91dc9309856b6c4",
+      "invocation_sha256": "f64bb5456ce4d2c577df3f8544dda725fd03f69d30b333f7f1db5ff3dedcbe40"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/run-receipt.json",
+      "sha256": "711d87dd4a9beadf6584e20f44e109a6257ab09531ca0b7e4c558d5d9636c11a",
+      "cases": 5,
+      "exit": 0,
+      "producer_result": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009-producer-result.json",
+      "producer_result_sha256": "76893bad327335924a9cee2fd44672f7588e370fa5a72bd41d735e29a682c751",
+      "invocation_sha256": "87e114955f6a1ebe12288797643a967a48b50509ef11bfcb6be281509d68ec0c"
+    }
+  ],
+  "cases": [
+    {
+      "kind": "variable",
+      "method": "euler",
+      "actual_comparison": {
+        "Linf": 1.3322676295501878e-15,
+        "max_budget_ratio": 0.0002770327908044468,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "exchange_reconstruction": {
+        "Linf": 1.3322676295501878e-15,
+        "max_budget_ratio": 0.0002770327908044468,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "max_face_flux_error": 2.4424906541753444e-14,
+      "exchange_count": 1024,
+      "movement": 0.0004891701252787151,
+      "Euler_vs_SSP_difference": 4.9050352362023375e-06,
+      "weights": [
+        "1"
+      ],
+      "slots": {
+        "diffusivity": 0,
+        "source_factor": 1
+      }
+    },
+    {
+      "kind": "variable",
+      "method": "ssprk2",
+      "actual_comparison": {
+        "Linf": 1.7763568394002505e-15,
+        "max_budget_ratio": 0.0003057452975597632,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "exchange_reconstruction": {
+        "Linf": 1.3322676295501878e-15,
+        "max_budget_ratio": 0.00033771446508128986,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "max_face_flux_error": 2.4424906541753444e-14,
+      "exchange_count": 2048,
+      "movement": 0.0004842650900425127,
+      "Euler_vs_SSP_difference": 4.9050352362023375e-06,
+      "weights": [
+        "1/2",
+        "1/2"
+      ],
+      "slots": {
+        "diffusivity": 0,
+        "source_factor": 1
+      }
+    },
+    {
+      "kind": "diagonal_linear",
+      "method": "euler",
+      "actual_comparison": {
+        "Linf": 8.881784197001252e-16,
+        "max_budget_ratio": 0.00021147105230955363,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "exchange_reconstruction": {
+        "Linf": 1.3322676295501878e-15,
+        "max_budget_ratio": 0.00031720657846433036,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "max_face_flux_error": 3.552713678800501e-14,
+      "exchange_count": 1024,
+      "movement": 0.0,
+      "Euler_vs_SSP_difference": 0.0,
+      "weights": [
+        "1"
+      ],
+      "slots": {
+        "a_x": 0,
+        "a_y": 1,
+        "forcing": 2
+      }
+    },
+    {
+      "kind": "diagonal_linear",
+      "method": "ssprk2",
+      "actual_comparison": {
+        "Linf": 8.881784197001252e-16,
+        "max_budget_ratio": 0.00021147105230955363,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "exchange_reconstruction": {
+        "Linf": 1.3322676295501878e-15,
+        "max_budget_ratio": 0.00031720657846433036,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "max_face_flux_error": 3.552713678800501e-14,
+      "exchange_count": 2048,
+      "movement": 0.0,
+      "Euler_vs_SSP_difference": 0.0,
+      "weights": [
+        "1/2",
+        "1/2"
+      ],
+      "slots": {
+        "a_x": 0,
+        "a_y": 1,
+        "forcing": 2
+      }
+    },
+    {
+      "kind": "diagonal_smooth",
+      "method": "euler",
+      "actual_comparison": {
+        "Linf": 1.3322676295501878e-15,
+        "max_budget_ratio": 0.00023368636046187978,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "exchange_reconstruction": {
+        "Linf": 1.3322676295501878e-15,
+        "max_budget_ratio": 0.0002918518476246431,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "max_face_flux_error": 5.1958437552457326e-14,
+      "exchange_count": 1024,
+      "movement": 8.157882180492848e-05,
+      "Euler_vs_SSP_difference": 4.0659463644843186e-06,
+      "weights": [
+        "1"
+      ],
+      "slots": {
+        "a_x": 0,
+        "a_y": 1,
+        "forcing": 2
+      }
+    },
+    {
+      "kind": "diagonal_smooth",
+      "method": "ssprk2",
+      "actual_comparison": {
+        "Linf": 1.7763568394002505e-15,
+        "max_budget_ratio": 0.00031158178836602785,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "exchange_reconstruction": {
+        "Linf": 1.7763568394002505e-15,
+        "max_budget_ratio": 0.00038913579735881264,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "max_face_flux_error": 5.1958437552457326e-14,
+      "exchange_count": 2048,
+      "movement": 7.751694902458084e-05,
+      "Euler_vs_SSP_difference": 4.0659463644843186e-06,
+      "weights": [
+        "1/2",
+        "1/2"
+      ],
+      "slots": {
+        "a_x": 0,
+        "a_y": 1,
+        "forcing": 2
+      }
+    }
+  ],
+  "independent_math": "Ownscalarloops withanalyticGauss5nodes/weights, analyticpolynomialforcing andclosed-form sinusoidalcellintegral check; noimport ofauthorreferences orPoPS. Periodicvariableflux usesactualcellcoeffithmeticmeanandSourceFactor*stageState; diagonaluseshalfcellDirichletdistances+linearphysicalfacecoefficientextrapolation andpositivecoordinateyflux2/2.5 foroutwardconormals-2/+2.5. ExactEuler/SSPRK2n16/h1e-4. Independentactualfacequadraturefluxes/temporalweights/signs/multiplicityallmatched; actualintegratedflux records+source reconstructacceptedarrays.",
+  "stage_and_discriminator_controls": {
+    "status": "PASS",
+    "stage_step_controls": [
+      {
+        "kind": "variable",
+        "method": "euler",
+        "actual_logical_steps": [
+          0
+        ]
+      },
+      {
+        "kind": "variable",
+        "method": "ssprk2",
+        "actual_logical_steps": [
+          0,
+          1
+        ]
+      },
+      {
+        "kind": "diagonal_linear",
+        "method": "euler",
+        "actual_logical_steps": [
+          0
+        ]
+      },
+      {
+        "kind": "diagonal_linear",
+        "method": "ssprk2",
+        "actual_logical_steps": [
+          0,
+          1
+        ]
+      },
+      {
+        "kind": "diagonal_smooth",
+        "method": "euler",
+        "actual_logical_steps": [
+          0
+        ]
+      },
+      {
+        "kind": "diagonal_smooth",
+        "method": "ssprk2",
+        "actual_logical_steps": [
+          0,
+          1
+        ]
+      }
+    ],
+    "analytic_face_integral_vs_saved_Gauss5_Linf": 3.552713678800501e-15,
+    "scope": "Static NumPy/string parsing only; noPops/Native",
+    "pops_modules_loaded": []
+  },
+  "wrong_oracles_rejected": [
+    {
+      "kind": "diagonal_smooth",
+      "method": "euler",
+      "wrong": "fullcell",
+      "defect": 0.0009992833831575787
+    },
+    {
+      "kind": "diagonal_smooth",
+      "method": "euler",
+      "wrong": "neumann-sign",
+      "defect": 0.006400000000000183
+    },
+    {
+      "kind": "diagonal_smooth",
+      "method": "ssprk2",
+      "wrong": "fullcell",
+      "defect": 0.0009674369462626675
+    },
+    {
+      "kind": "diagonal_smooth",
+      "method": "ssprk2",
+      "wrong": "neumann-sign",
+      "defect": 0.006233600000000061
+    }
+  ],
+  "actual_total_face_records": 9216,
+  "max_state_error": 1.7763568394002505e-15,
+  "original_budgets": {
+    "rtol": 2e-12,
+    "atol": 2e-13
+  },
+  "no_tolerance_or_guard_change": true,
+  "observed_source_and_DSO_scope": "Bothclosedruns pinSource4017/Native939/SDKacf0/schema2core743/buildexit0; all74producerfiles14,137,176B hashed. EachProgram/modelDSO physicalSHA+embeddedSDK+binarysidecaridentity recomputed; everyavailableModelcompiler-ownedCpp/actualcompilecompanion SourceSHA/binarySHA/SDKverified. PrecompileSSPcoeff1/weights/zero-publication/slotmaps checkedagainstsavedcaseproof andunalteredRunner assertions. Actuallogicalsteps0/1 and1024/2048faces percaseverified.",
+  "old_failed_original_receipt": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-4017-20261009/run-receipt.json",
+    "sha256": "26cc3f457344ad0e171cc297eda6c3ae4c6460dc5cfacc0179a465c7160a9f95",
+    "exit": 1,
+    "qualified_PASS": false
+  },
+  "limits": [
+    "World1CPU only; noMPI2/GPU/AMR/refinement/convergence/longtime qualification.",
+    "Diagonal-linear isstationary, methodseparation insteadprovedvariableandsmoothdata+actualstage/faceexchangecensus.",
+    "Precompilecertificate JSON/sourceRunner proofinspected; serializedProgrambeforepayload isnotretained, so noofflinerecomputeofits serializationSHA.",
+    "ActualModelCpp/compilerprovenance andallProgram/modelDSObinarysidecars/SDKauthenticated; ProgramCpp/operatorPackIRnotpersistedbythisrunner, so slotmap/zero-publication andSSPproof remainrecordedSource-assertedobservations plusindependentnumericalbehavior, notnewfullIR/code-to-binarygraph proof.",
+    "Sixone-stepworld1CPU cases aredifferentfrommathematicalconvergence/stability/positivitylongtimeclaims. StaticInputbindingdoesnotqualifysolvedFieldpublication ordynamic-providerupdates.",
+    "DeclaredprecompileprogramserializationSHA cannotbeindependentlyrecomputedwithoutserializedbeforepayload; operatorPackIRandProgramCpp areabsent, so thosepartsremainSource-assertedproducerobservations, notnewfullportablefrontendreception."
+  ],
+  "evidence_paths_sha256": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-native-independent-reception-4017-20261009/independent_receive.py": "62daa87c4c70fc0758d127c471b9f8fc3d229725a72049a982ce9ad3c5add779",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-native-independent-reception-4017-20261009/independent-reception.json": "f1739a96b6bc8030dec2767a87c2fde6d75c0430ee9c7b57056e0370c053d802",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-native-independent-reception-4017-20261009/independent-reception.log": "2e0e7198b68083287fc77ced9f801073660411dff2198511add5f0e31b100432",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-native-independent-reception-4017-20261009/independent-property-delta-review.json": "1fa2df0f0fecf95d60d527c29120143b8876594102cdf2a8eb516ba65c65c0d4",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-native-independent-reception-4017-20261009/analytic-stage-controls.json": "52490b7ea625d58d51e471ccab6088c0db5d7d80d0c786f459894a74d6be6cfa",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-static-inputs-native-independent-reception-4017-20261009/physical-file-inventory.json": "8d7c3da8824655aa15f524c6e853ff4d8beaf01dafc8fcd9d78eb433a5f8224d"
+  },
+  "no_author_math_import": true,
+  "pops_modules_loaded": [],
+  "Native_run_or_import": false,
+  "Main_prefix_cache_mutations": false,
+  "ROMEO_contact": false,
+  "first_new_current_cohort_reader_reception": true
+}

@@ -1,0 +1,11 @@
+--- a/run_native_reception.py
++++ b/run_native_reception.py
+@@ -186,7 +186,7 @@
+     assert len({row["evaluation_context"] for row in exchanges}) == stages
+     assert all(abs(row["temporal_weight"] - dt / stages) < 2e-16 for row in exchanges)
+     write_json(case_dir / "actual-exchanges.json", exchanges)
+-    jit_paths = {"program": artifact.so_path, **artifact.layout_program_paths(),
++    jit_paths = {"program": artifact.so_path, **artifact.layout_program_paths,
+                  **{"model:" + block.name: block.model.so_path for block in artifact.blocks}}
+     jit_receipts = {name: {"path": str(path), "sha256": sha(path)} for name, path in jit_paths.items()}
+     result = {**proof, "result": "PASS", "accepted_steps": report.accepted_steps,

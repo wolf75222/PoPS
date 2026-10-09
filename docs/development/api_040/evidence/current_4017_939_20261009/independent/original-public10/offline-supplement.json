@@ -1,0 +1,140 @@
+{
+  "status": "PASS",
+  "xml_receipts": [
+    {
+      "phase": "original-pde",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "ids": [
+        "tests.python.integration.runtime.test_imex_nonautonomous_field::test_public_nonautonomous_imex_field_reads_explicit_time"
+      ],
+      "sha256": "cc667a7c9bce347f90ddcfe4dfccb9885fa498e811e971368a9de0a8370f8b13"
+    },
+    {
+      "phase": "public10",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "ids": [
+        "tests.python.integration.runtime.test_public_diffusion_field_predictor::test_public_diffusion_predictor_is_field_rhs[euler]",
+        "tests.python.integration.runtime.test_public_diffusion_field_predictor::test_public_diffusion_predictor_is_field_rhs[ssprk2_rates]",
+        "tests.python.integration.runtime.test_public_diffusion_field_predictor::test_public_diffusion_predictor_is_field_rhs[ssprk2_predictor]",
+        "tests.python.integration.runtime.test_public_diffusion_field_predictor::test_public_diffusion_predictor_is_field_rhs[euler_renamed]",
+        "tests.python.integration.runtime.test_public_diffusion_field_predictor::test_public_diffusion_predictor_is_field_rhs[euler_kappa0125]",
+        "tests.python.integration.runtime.test_public_diffusion_field_late_refusal::test_public_late_refusal_same_artifact_control[euler]",
+        "tests.python.integration.runtime.test_public_diffusion_field_late_refusal::test_public_late_refusal_same_artifact_control[ssprk2]",
+        "tests.python.integration.runtime.test_public_diffusion_field_late_refusal::test_public_late_refusal_automatic_retry",
+        "tests.python.integration.runtime.test_public_diffusion_field_late_refusal::test_public_late_refusal_populated_history",
+        "tests.python.integration.runtime.test_field_publication_instances_runtime::test_installed_three_instance_solved_provider_reads[cells0-False-False]"
+      ],
+      "sha256": "008224d7b292a43e2126a9baea7625f809a5d6fbf36f9e112a02bf53f97be130"
+    }
+  ],
+  "populated_snapshot_independent_math": [
+    {
+      "snapshot": "before-populated-refusal",
+      "comparisons": [
+        {
+          "label": "state",
+          "error": 4.440892098500626e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        {
+          "label": "fieldPotential",
+          "error": 5.863753926860227e-12,
+          "bound": 1.4665873675443233e-10
+        },
+        {
+          "label": "phi_stagenewestPhysical1",
+          "error": 5.863753926860227e-12,
+          "bound": 1.4665873675443233e-10
+        },
+        {
+          "label": "predictor_YnewestPhysical1",
+          "error": 4.440892098500626e-16,
+          "bound": 2.2737367544323206e-12
+        }
+      ],
+      "clock": [
+        0.00390625,
+        1
+      ]
+    },
+    {
+      "snapshot": "after-populated-refusal",
+      "comparisons": [
+        {
+          "label": "state",
+          "error": 4.440892098500626e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        {
+          "label": "fieldPotential",
+          "error": 5.863753926860227e-12,
+          "bound": 1.4665873675443233e-10
+        },
+        {
+          "label": "phi_stagenewestPhysical1",
+          "error": 5.863753926860227e-12,
+          "bound": 1.4665873675443233e-10
+        },
+        {
+          "label": "predictor_YnewestPhysical1",
+          "error": 4.440892098500626e-16,
+          "bound": 2.2737367544323206e-12
+        }
+      ],
+      "clock": [
+        0.00390625,
+        1
+      ]
+    },
+    {
+      "snapshot": "control-two-accepted",
+      "comparisons": [
+        {
+          "label": "state",
+          "error": 4.440892098500626e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        {
+          "label": "fieldPotential",
+          "error": 1.5987211554602254e-14,
+          "bound": 1.4665873675443233e-10
+        },
+        {
+          "label": "phi_stagenewestPhysical1",
+          "error": 1.5987211554602254e-14,
+          "bound": 1.4665873675443233e-10
+        },
+        {
+          "label": "phi_stageolderPhysical0",
+          "error": 5.863753926860227e-12,
+          "bound": 1.4665873675443233e-10
+        },
+        {
+          "label": "predictor_YnewestPhysical1",
+          "error": 4.440892098500626e-16,
+          "bound": 2.2737367544323206e-12
+        },
+        {
+          "label": "predictor_YolderPhysical0",
+          "error": 4.440892098500626e-16,
+          "bound": 2.2737367544323206e-12
+        }
+      ],
+      "clock": [
+        0.0078125,
+        2
+      ]
+    }
+  ],
+  "phase_physical_file_count": 315,
+  "phase_physical_bytes": 36597055,
+  "inventory_sha256": "703f2099b357f4f43cbe799dee80d1519e51aeee8f0a1d588ede94ae5131fe11",
+  "scope": "Currentepochoffline savedfiles only; noPops/Native/APIexecution",
+  "pops_modules_loaded": []
+}

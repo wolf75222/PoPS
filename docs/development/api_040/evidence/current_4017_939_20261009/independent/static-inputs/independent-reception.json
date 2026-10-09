@@ -1,0 +1,658 @@
+{
+  "status": "PASS_WITH_LIMITS",
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "Native": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+  "SDK": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+  "core_fingerprint": "743bc354455285b4828e6d80039949317c31f63ac6fc3c5432ae2897487594a8",
+  "core_files_rehashed": 1220,
+  "payload_files_rehashed": 1174,
+  "closed_run_and_producer_receipts": [
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/run-receipt.json",
+      "sha256": "f8c3b5a6e9df95bcb7284878c0df993b241aad20fe17a4870b4a6916202ee361",
+      "cases": 1,
+      "exit": 0,
+      "producer_result": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009-producer-result.json",
+      "producer_result_sha256": "02990016982a7728a00d079ad5763200d559848ee21cc55ee91dc9309856b6c4",
+      "invocation_sha256": "f64bb5456ce4d2c577df3f8544dda725fd03f69d30b333f7f1db5ff3dedcbe40"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/run-receipt.json",
+      "sha256": "711d87dd4a9beadf6584e20f44e109a6257ab09531ca0b7e4c558d5d9636c11a",
+      "cases": 5,
+      "exit": 0,
+      "producer_result": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009-producer-result.json",
+      "producer_result_sha256": "76893bad327335924a9cee2fd44672f7588e370fa5a72bd41d735e29a682c751",
+      "invocation_sha256": "87e114955f6a1ebe12288797643a967a48b50509ef11bfcb6be281509d68ec0c"
+    }
+  ],
+  "cases": [
+    {
+      "kind": "variable",
+      "method": "euler",
+      "n": 16,
+      "dt": 0.0001,
+      "independent_inputs": {
+        "initial": {
+          "Linf": 1.3322676295501878e-15,
+          "max_budget_ratio": 0.006661338147750939,
+          "rtol": 0,
+          "atol": 2e-13
+        },
+        "diffusivity": {
+          "Linf": 0.0,
+          "max_budget_ratio": 0.0,
+          "rtol": 0,
+          "atol": 2e-13
+        },
+        "source_factor": {
+          "Linf": 1.4210854715202004e-14,
+          "max_budget_ratio": 0.07105427357601002,
+          "rtol": 0,
+          "atol": 2e-13
+        }
+      },
+      "saved_author_reference": {
+        "Linf": 1.3322676295501878e-15,
+        "max_budget_ratio": 0.0002770327908044468,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "actual": {
+        "Linf": 1.3322676295501878e-15,
+        "max_budget_ratio": 0.0002770327908044468,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "exchange_reconstruction": {
+        "Linf": 1.3322676295501878e-15,
+        "max_budget_ratio": 0.0002770327908044468,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "max_face_flux_error": 2.4424906541753444e-14,
+      "max_integrated_amount_error": 1.5246593050577406e-19,
+      "exchange_count": 1024,
+      "evaluation_contexts": [
+        "pops.exchange.frame.v1/86:pops.clock.v1::sha256:205d6ca0ce824eebdae17130427653a98240997cc2caaeb3ee2150561fe1e492/0/0/0/0/0/1/4547007122018943789/0/283:stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='explicit_external_data_euler'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:2"
+      ],
+      "face_stage_census": 1024,
+      "SSP_beforecompile_proof": {
+        "accepted_weights": [
+          "1"
+        ],
+        "authored_serialization_unchanged": true,
+        "coefficient": "1",
+        "dt": 0.0001,
+        "kind": "variable",
+        "method": "euler",
+        "n": 16,
+        "program_serialization_sha256": "5db0716f68ddd15403d71aa0b8f97a9d84bd659f940b50c2d6ebbd75750ac9dc"
+      },
+      "input_slots": {
+        "diffusivity": 0,
+        "source_factor": 1
+      },
+      "field_publications": 0,
+      "change_from_initial": 0.0004891701252787151,
+      "Euler_vs_SSP_difference": 4.9050352362023375e-06,
+      "JIT_proofs": [
+        {
+          "role": "model:heat",
+          "Cpp": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/jit/26674d21cefd059b584e7d8acfa8bfc288e5d00ea17ec5408b8fbd5551fbad2e.so.pops-model.cpp",
+          "Cpp_sha256": "4a052752b7feddf765d2346ed8e1198368bcf4ab97eb7b0bd157d3c8b9dc1ea7",
+          "actual_model_source": true
+        },
+        {
+          "role": "pops.handle.v1::case:explicit_diffusion_variable::layout::default",
+          "Program_DSO": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/jit/f77371de1780a7eb1b3422251a2642458d3b37a277af4a17fdc38e929c5a62db.so",
+          "sha256": "5e112be81a09165080b4432a6501496b334fb7844bacd766941e6b9168d3c0d0",
+          "Program_CPP_retained": false,
+          "scope": "ThisrunnerdoesnotpersistProgramCpp; noofflineCodeToDSOgraphclaim"
+        },
+        {
+          "role": "program",
+          "Program_DSO": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-r2-4017-20261009/jit/f77371de1780a7eb1b3422251a2642458d3b37a277af4a17fdc38e929c5a62db.so",
+          "sha256": "5e112be81a09165080b4432a6501496b334fb7844bacd766941e6b9168d3c0d0",
+          "Program_CPP_retained": false,
+          "scope": "ThisrunnerdoesnotpersistProgramCpp; noofflineCodeToDSOgraphclaim"
+        }
+      ]
+    },
+    {
+      "kind": "variable",
+      "method": "ssprk2",
+      "n": 16,
+      "dt": 0.0001,
+      "independent_inputs": {
+        "initial": {
+          "Linf": 1.3322676295501878e-15,
+          "max_budget_ratio": 0.006661338147750939,
+          "rtol": 0,
+          "atol": 2e-13
+        },
+        "diffusivity": {
+          "Linf": 0.0,
+          "max_budget_ratio": 0.0,
+          "rtol": 0,
+          "atol": 2e-13
+        },
+        "source_factor": {
+          "Linf": 1.4210854715202004e-14,
+          "max_budget_ratio": 0.07105427357601002,
+          "rtol": 0,
+          "atol": 2e-13
+        }
+      },
+      "saved_author_reference": {
+        "Linf": 1.7763568394002505e-15,
+        "max_budget_ratio": 0.0002912599155741146,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "actual": {
+        "Linf": 1.7763568394002505e-15,
+        "max_budget_ratio": 0.0003057452975597632,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "exchange_reconstruction": {
+        "Linf": 1.3322676295501878e-15,
+        "max_budget_ratio": 0.00033771446508128986,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "max_face_flux_error": 2.4424906541753444e-14,
+      "max_integrated_amount_error": 7.623296525288703e-20,
+      "exchange_count": 2048,
+      "evaluation_contexts": [
+        "pops.exchange.frame.v1/86:pops.clock.v1::sha256:f4a8c9e7645f172c776da3184bf94e3b8bdf6e7264f2840e809d002afb624a9b/0/0/0/0/0/1/4547007122018943789/0/284:stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='explicit_external_data_ssprk2'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:2",
+        "pops.exchange.frame.v1/86:pops.clock.v1::sha256:f4a8c9e7645f172c776da3184bf94e3b8bdf6e7264f2840e809d002afb624a9b/0/0/0/0/0/1/4547007122018943789/0/284:stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='explicit_external_data_ssprk2'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=1)/evaluation:5"
+      ],
+      "face_stage_census": 2048,
+      "SSP_beforecompile_proof": {
+        "accepted_weights": [
+          "1/2",
+          "1/2"
+        ],
+        "authored_serialization_unchanged": true,
+        "coefficient": "1",
+        "dt": 0.0001,
+        "kind": "variable",
+        "method": "ssprk2",
+        "n": 16,
+        "program_serialization_sha256": "851e29c50edaf1f3c98e9b89baac5ce76d8675e50b5439e90ea9b26370fb8d53"
+      },
+      "input_slots": {
+        "diffusivity": 0,
+        "source_factor": 1
+      },
+      "field_publications": 0,
+      "change_from_initial": 0.0004842650900425127,
+      "Euler_vs_SSP_difference": 4.9050352362023375e-06,
+      "JIT_proofs": [
+        {
+          "role": "model:heat",
+          "Cpp": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/26674d21cefd059b584e7d8acfa8bfc288e5d00ea17ec5408b8fbd5551fbad2e.so.pops-model.cpp",
+          "Cpp_sha256": "4a052752b7feddf765d2346ed8e1198368bcf4ab97eb7b0bd157d3c8b9dc1ea7",
+          "actual_model_source": true
+        },
+        {
+          "role": "pops.handle.v1::case:explicit_diffusion_variable::layout::default",
+          "Program_DSO": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/540486c19dab943db717c73f6e6b8cf9130ce564f9207de700a97ffe3dc3d635.so",
+          "sha256": "ea5bf73da13984fc9a08e4dc619898c2ef57001c399f6c0111374664d94bee5c",
+          "Program_CPP_retained": false,
+          "scope": "ThisrunnerdoesnotpersistProgramCpp; noofflineCodeToDSOgraphclaim"
+        },
+        {
+          "role": "program",
+          "Program_DSO": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/540486c19dab943db717c73f6e6b8cf9130ce564f9207de700a97ffe3dc3d635.so",
+          "sha256": "ea5bf73da13984fc9a08e4dc619898c2ef57001c399f6c0111374664d94bee5c",
+          "Program_CPP_retained": false,
+          "scope": "ThisrunnerdoesnotpersistProgramCpp; noofflineCodeToDSOgraphclaim"
+        }
+      ]
+    },
+    {
+      "kind": "diagonal_linear",
+      "method": "euler",
+      "n": 16,
+      "dt": 0.0001,
+      "independent_inputs": {
+        "initial": {
+          "Linf": 8.881784197001252e-16,
+          "max_budget_ratio": 0.004440892098500626,
+          "rtol": 0,
+          "atol": 2e-13
+        },
+        "a_x": {
+          "Linf": 0.0,
+          "max_budget_ratio": 0.0,
+          "rtol": 0,
+          "atol": 2e-13
+        },
+        "a_y": {
+          "Linf": 0.0,
+          "max_budget_ratio": 0.0,
+          "rtol": 0,
+          "atol": 2e-13
+        },
+        "forcing": {
+          "Linf": 0.0,
+          "max_budget_ratio": 0.0,
+          "rtol": 0,
+          "atol": 2e-13
+        }
+      },
+      "saved_author_reference": {
+        "Linf": 8.881784197001252e-16,
+        "max_budget_ratio": 0.00021147105230955363,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "actual": {
+        "Linf": 8.881784197001252e-16,
+        "max_budget_ratio": 0.00021147105230955363,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "exchange_reconstruction": {
+        "Linf": 1.3322676295501878e-15,
+        "max_budget_ratio": 0.00031720657846433036,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "max_face_flux_error": 3.552713678800501e-14,
+      "max_integrated_amount_error": 2.219226321806267e-19,
+      "exchange_count": 1024,
+      "evaluation_contexts": [
+        "pops.exchange.frame.v1/86:pops.clock.v1::sha256:205d6ca0ce824eebdae17130427653a98240997cc2caaeb3ee2150561fe1e492/0/0/0/0/0/1/4547007122018943789/0/283:stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='explicit_external_data_euler'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:2"
+      ],
+      "face_stage_census": 1024,
+      "SSP_beforecompile_proof": {
+        "accepted_weights": [
+          "1"
+        ],
+        "authored_serialization_unchanged": true,
+        "coefficient": "1",
+        "dt": 0.0001,
+        "kind": "diagonal_linear",
+        "method": "euler",
+        "n": 16,
+        "program_serialization_sha256": "e25f03705001e71b4c994122c3a25e7813ac46115c37f6c512de117eeb7ac5cd"
+      },
+      "input_slots": {
+        "a_x": 0,
+        "a_y": 1,
+        "forcing": 2
+      },
+      "field_publications": 0,
+      "change_from_initial": 0.0,
+      "Euler_vs_SSP_difference": 0.0,
+      "JIT_proofs": [
+        {
+          "role": "model:heat",
+          "Cpp": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/5b0dcbeca780e81486ae82f6fb15fd16fd312df8a79b9513d817cf04f07b9c08.so.pops-model.cpp",
+          "Cpp_sha256": "3fa7709e0fad35c080e83860df2f3ebc49b8a43d8190cb08ca55a759bc80014d",
+          "actual_model_source": true
+        },
+        {
+          "role": "pops.handle.v1::case:explicit_diffusion_diagonal_linear::layout::default",
+          "Program_DSO": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/29a54873b2d73772e3a162ce6b5606f7c6d30c53f15025e14e710a6aa0d71e0c.so",
+          "sha256": "ce786c1fcb8dc17205c70e0118e9367fea013a98c4392208c878dece4012e96f",
+          "Program_CPP_retained": false,
+          "scope": "ThisrunnerdoesnotpersistProgramCpp; noofflineCodeToDSOgraphclaim"
+        },
+        {
+          "role": "program",
+          "Program_DSO": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/29a54873b2d73772e3a162ce6b5606f7c6d30c53f15025e14e710a6aa0d71e0c.so",
+          "sha256": "ce786c1fcb8dc17205c70e0118e9367fea013a98c4392208c878dece4012e96f",
+          "Program_CPP_retained": false,
+          "scope": "ThisrunnerdoesnotpersistProgramCpp; noofflineCodeToDSOgraphclaim"
+        }
+      ]
+    },
+    {
+      "kind": "diagonal_linear",
+      "method": "ssprk2",
+      "n": 16,
+      "dt": 0.0001,
+      "independent_inputs": {
+        "initial": {
+          "Linf": 8.881784197001252e-16,
+          "max_budget_ratio": 0.004440892098500626,
+          "rtol": 0,
+          "atol": 2e-13
+        },
+        "a_x": {
+          "Linf": 0.0,
+          "max_budget_ratio": 0.0,
+          "rtol": 0,
+          "atol": 2e-13
+        },
+        "a_y": {
+          "Linf": 0.0,
+          "max_budget_ratio": 0.0,
+          "rtol": 0,
+          "atol": 2e-13
+        },
+        "forcing": {
+          "Linf": 0.0,
+          "max_budget_ratio": 0.0,
+          "rtol": 0,
+          "atol": 2e-13
+        }
+      },
+      "saved_author_reference": {
+        "Linf": 8.881784197001252e-16,
+        "max_budget_ratio": 0.00021147105230955363,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "actual": {
+        "Linf": 8.881784197001252e-16,
+        "max_budget_ratio": 0.00021147105230955363,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "exchange_reconstruction": {
+        "Linf": 1.3322676295501878e-15,
+        "max_budget_ratio": 0.00031720657846433036,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "max_face_flux_error": 3.552713678800501e-14,
+      "max_integrated_amount_error": 1.1096131609031334e-19,
+      "exchange_count": 2048,
+      "evaluation_contexts": [
+        "pops.exchange.frame.v1/86:pops.clock.v1::sha256:f4a8c9e7645f172c776da3184bf94e3b8bdf6e7264f2840e809d002afb624a9b/0/0/0/0/0/1/4547007122018943789/0/284:stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='explicit_external_data_ssprk2'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:2",
+        "pops.exchange.frame.v1/86:pops.clock.v1::sha256:f4a8c9e7645f172c776da3184bf94e3b8bdf6e7264f2840e809d002afb624a9b/0/0/0/0/0/1/4547007122018943789/0/284:stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='explicit_external_data_ssprk2'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=1)/evaluation:5"
+      ],
+      "face_stage_census": 2048,
+      "SSP_beforecompile_proof": {
+        "accepted_weights": [
+          "1/2",
+          "1/2"
+        ],
+        "authored_serialization_unchanged": true,
+        "coefficient": "1",
+        "dt": 0.0001,
+        "kind": "diagonal_linear",
+        "method": "ssprk2",
+        "n": 16,
+        "program_serialization_sha256": "b0fa2edcd53554979bf6bdece9fdd9d7ed9f43f31f4d0a11e443e8ba2fdbde84"
+      },
+      "input_slots": {
+        "a_x": 0,
+        "a_y": 1,
+        "forcing": 2
+      },
+      "field_publications": 0,
+      "change_from_initial": 0.0,
+      "Euler_vs_SSP_difference": 0.0,
+      "JIT_proofs": [
+        {
+          "role": "model:heat",
+          "Cpp": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/5b0dcbeca780e81486ae82f6fb15fd16fd312df8a79b9513d817cf04f07b9c08.so.pops-model.cpp",
+          "Cpp_sha256": "3fa7709e0fad35c080e83860df2f3ebc49b8a43d8190cb08ca55a759bc80014d",
+          "actual_model_source": true
+        },
+        {
+          "role": "pops.handle.v1::case:explicit_diffusion_diagonal_linear::layout::default",
+          "Program_DSO": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/842b83fe59df6bebd3d8de1f74338dfe020178b62d290355e2fdac593cb9ae8e.so",
+          "sha256": "470c9ffd6db2901ed47a60a43c89bbb2a82e2812a85effee99d7d3a3f8c2337f",
+          "Program_CPP_retained": false,
+          "scope": "ThisrunnerdoesnotpersistProgramCpp; noofflineCodeToDSOgraphclaim"
+        },
+        {
+          "role": "program",
+          "Program_DSO": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/842b83fe59df6bebd3d8de1f74338dfe020178b62d290355e2fdac593cb9ae8e.so",
+          "sha256": "470c9ffd6db2901ed47a60a43c89bbb2a82e2812a85effee99d7d3a3f8c2337f",
+          "Program_CPP_retained": false,
+          "scope": "ThisrunnerdoesnotpersistProgramCpp; noofflineCodeToDSOgraphclaim"
+        }
+      ]
+    },
+    {
+      "kind": "diagonal_smooth",
+      "method": "euler",
+      "n": 16,
+      "dt": 0.0001,
+      "independent_inputs": {
+        "initial": {
+          "Linf": 1.3322676295501878e-15,
+          "max_budget_ratio": 0.006661338147750939,
+          "rtol": 0,
+          "atol": 2e-13
+        },
+        "a_x": {
+          "Linf": 0.0,
+          "max_budget_ratio": 0.0,
+          "rtol": 0,
+          "atol": 2e-13
+        },
+        "a_y": {
+          "Linf": 0.0,
+          "max_budget_ratio": 0.0,
+          "rtol": 0,
+          "atol": 2e-13
+        },
+        "forcing": {
+          "Linf": 2.4424906541753444e-15,
+          "max_budget_ratio": 0.012212453270876722,
+          "rtol": 0,
+          "atol": 2e-13
+        }
+      },
+      "saved_author_reference": {
+        "Linf": 1.3322676295501878e-15,
+        "max_budget_ratio": 0.00023368636046187978,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "actual": {
+        "Linf": 1.3322676295501878e-15,
+        "max_budget_ratio": 0.00023368636046187978,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "exchange_reconstruction": {
+        "Linf": 1.3322676295501878e-15,
+        "max_budget_ratio": 0.0002918518476246431,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "max_face_flux_error": 5.1958437552457326e-14,
+      "max_integrated_amount_error": 3.2526065174565133e-19,
+      "exchange_count": 1024,
+      "evaluation_contexts": [
+        "pops.exchange.frame.v1/86:pops.clock.v1::sha256:205d6ca0ce824eebdae17130427653a98240997cc2caaeb3ee2150561fe1e492/0/0/0/0/0/1/4547007122018943789/0/283:stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='explicit_external_data_euler'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:2"
+      ],
+      "face_stage_census": 1024,
+      "SSP_beforecompile_proof": {
+        "accepted_weights": [
+          "1"
+        ],
+        "authored_serialization_unchanged": true,
+        "coefficient": "1",
+        "dt": 0.0001,
+        "kind": "diagonal_smooth",
+        "method": "euler",
+        "n": 16,
+        "program_serialization_sha256": "70337eefb2be4b4c5907e4f38e30078afe06564245d719cc17caec296e1f7fa4"
+      },
+      "input_slots": {
+        "a_x": 0,
+        "a_y": 1,
+        "forcing": 2
+      },
+      "field_publications": 0,
+      "change_from_initial": 8.157882180492848e-05,
+      "Euler_vs_SSP_difference": 4.0659463644843186e-06,
+      "JIT_proofs": [
+        {
+          "role": "model:heat",
+          "Cpp": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/6d29d1ed725b94fc0ba57825651b6bbf29fa326c84605eb9112f2108fb3b0c14.so.pops-model.cpp",
+          "Cpp_sha256": "62ab101de9589bc1df9fdd8fe78382438fe5508f04a64622cbdc9209d707a3fc",
+          "actual_model_source": true
+        },
+        {
+          "role": "pops.handle.v1::case:explicit_diffusion_diagonal_smooth::layout::default",
+          "Program_DSO": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/c078228b10b8e68f9f40f642d5bf4ecfdfd7909348e1c7ae9b0cb61d1c643b81.so",
+          "sha256": "fcefbe742abb89550d2e8e2bb3dc4dabd1a869e8aff924887eb9921804271f71",
+          "Program_CPP_retained": false,
+          "scope": "ThisrunnerdoesnotpersistProgramCpp; noofflineCodeToDSOgraphclaim"
+        },
+        {
+          "role": "program",
+          "Program_DSO": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/c078228b10b8e68f9f40f642d5bf4ecfdfd7909348e1c7ae9b0cb61d1c643b81.so",
+          "sha256": "fcefbe742abb89550d2e8e2bb3dc4dabd1a869e8aff924887eb9921804271f71",
+          "Program_CPP_retained": false,
+          "scope": "ThisrunnerdoesnotpersistProgramCpp; noofflineCodeToDSOgraphclaim"
+        }
+      ]
+    },
+    {
+      "kind": "diagonal_smooth",
+      "method": "ssprk2",
+      "n": 16,
+      "dt": 0.0001,
+      "independent_inputs": {
+        "initial": {
+          "Linf": 1.3322676295501878e-15,
+          "max_budget_ratio": 0.006661338147750939,
+          "rtol": 0,
+          "atol": 2e-13
+        },
+        "a_x": {
+          "Linf": 0.0,
+          "max_budget_ratio": 0.0,
+          "rtol": 0,
+          "atol": 2e-13
+        },
+        "a_y": {
+          "Linf": 0.0,
+          "max_budget_ratio": 0.0,
+          "rtol": 0,
+          "atol": 2e-13
+        },
+        "forcing": {
+          "Linf": 2.4424906541753444e-15,
+          "max_budget_ratio": 0.012212453270876722,
+          "rtol": 0,
+          "atol": 2e-13
+        }
+      },
+      "saved_author_reference": {
+        "Linf": 1.3322676295501878e-15,
+        "max_budget_ratio": 0.0002849465469535999,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "actual": {
+        "Linf": 1.7763568394002505e-15,
+        "max_budget_ratio": 0.00031158178836602785,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "exchange_reconstruction": {
+        "Linf": 1.7763568394002505e-15,
+        "max_budget_ratio": 0.00038913579735881264,
+        "rtol": 2e-12,
+        "atol": 2e-13
+      },
+      "max_face_flux_error": 5.1958437552457326e-14,
+      "max_integrated_amount_error": 1.6263032587282567e-19,
+      "exchange_count": 2048,
+      "evaluation_contexts": [
+        "pops.exchange.frame.v1/86:pops.clock.v1::sha256:f4a8c9e7645f172c776da3184bf94e3b8bdf6e7264f2840e809d002afb624a9b/0/0/0/0/0/1/4547007122018943789/0/284:stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='explicit_external_data_ssprk2'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)/evaluation:2",
+        "pops.exchange.frame.v1/86:pops.clock.v1::sha256:f4a8c9e7645f172c776da3184bf94e3b8bdf6e7264f2840e809d002afb624a9b/0/0/0/0/0/1/4547007122018943789/0/284:stage:TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='explicit_external_data_ssprk2'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=1)/evaluation:5"
+      ],
+      "face_stage_census": 2048,
+      "SSP_beforecompile_proof": {
+        "accepted_weights": [
+          "1/2",
+          "1/2"
+        ],
+        "authored_serialization_unchanged": true,
+        "coefficient": "1",
+        "dt": 0.0001,
+        "kind": "diagonal_smooth",
+        "method": "ssprk2",
+        "n": 16,
+        "program_serialization_sha256": "08c6d2e2980aafa70e1c5705a2d5bbfacf19908b0365207c26d6401bcf562613"
+      },
+      "input_slots": {
+        "a_x": 0,
+        "a_y": 1,
+        "forcing": 2
+      },
+      "field_publications": 0,
+      "change_from_initial": 7.751694902458084e-05,
+      "Euler_vs_SSP_difference": 4.0659463644843186e-06,
+      "JIT_proofs": [
+        {
+          "role": "model:heat",
+          "Cpp": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/6d29d1ed725b94fc0ba57825651b6bbf29fa326c84605eb9112f2108fb3b0c14.so.pops-model.cpp",
+          "Cpp_sha256": "62ab101de9589bc1df9fdd8fe78382438fe5508f04a64622cbdc9209d707a3fc",
+          "actual_model_source": true
+        },
+        {
+          "role": "pops.handle.v1::case:explicit_diffusion_diagonal_smooth::layout::default",
+          "Program_DSO": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/67cbb93bd1cc20eb08e5576a3859a843efd60744479bf64eb86185eedca30ee8.so",
+          "sha256": "fc7a3e6e24eaa6161c2cba1ec5a4b8ff533ad4ce91d95360a362b07b8e155313",
+          "Program_CPP_retained": false,
+          "scope": "ThisrunnerdoesnotpersistProgramCpp; noofflineCodeToDSOgraphclaim"
+        },
+        {
+          "role": "program",
+          "Program_DSO": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-remaining5-native-r2-4017-20261009/jit/67cbb93bd1cc20eb08e5576a3859a843efd60744479bf64eb86185eedca30ee8.so",
+          "sha256": "fc7a3e6e24eaa6161c2cba1ec5a4b8ff533ad4ce91d95360a362b07b8e155313",
+          "Program_CPP_retained": false,
+          "scope": "ThisrunnerdoesnotpersistProgramCpp; noofflineCodeToDSOgraphclaim"
+        }
+      ]
+    }
+  ],
+  "wrong_oracle_controls": [
+    {
+      "kind": "diagonal_smooth",
+      "method": "euler",
+      "wrong": "fullcell",
+      "defect": 0.0009992833831575787
+    },
+    {
+      "kind": "diagonal_smooth",
+      "method": "euler",
+      "wrong": "neumann-sign",
+      "defect": 0.006400000000000183
+    },
+    {
+      "kind": "diagonal_smooth",
+      "method": "ssprk2",
+      "wrong": "fullcell",
+      "defect": 0.0009674369462626675
+    },
+    {
+      "kind": "diagonal_smooth",
+      "method": "ssprk2",
+      "wrong": "neumann-sign",
+      "defect": 0.006233600000000061
+    }
+  ],
+  "old_collector_negative": {
+    "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-static-input-variable-euler-native-4017-20261009/run-receipt.json",
+    "sha256": "26cc3f457344ad0e171cc297eda6c3ae4c6460dc5cfacc0179a465c7160a9f95",
+    "exit": 1,
+    "qualified_PASS": false
+  },
+  "physical_file_count": 74,
+  "physical_bytes": 14137176,
+  "pops_modules_loaded": [],
+  "limits": [
+    "World1CPU only; noMPI2/GPU/AMR/refinement/convergence/longtime qualification.",
+    "Diagonal-linear isstationary, methodseparation insteadprovedvariableandsmoothdata+actualstage/faceexchangecensus.",
+    "Precompilecertificate JSON/sourceRunner proofinspected; serializedProgrambeforepayload isnotretained, so noofflinerecomputeofits serializationSHA.",
+    "ActualModelCpp/compilerprovenance andallProgram/modelDSObinarysidecars/SDKauthenticated; ProgramCpp/operatorPackIRnotpersistedbythisrunner, so slotmap/zero-publication andSSPproof remainrecordedSource-assertedobservations plusindependentnumericalbehavior, notnewfullIR/code-to-binarygraph proof."
+  ]
+}

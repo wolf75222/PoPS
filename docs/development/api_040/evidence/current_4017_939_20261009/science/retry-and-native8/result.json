@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/pytest.xml",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/retry-and-native8/run/pytest-tmp",
+    "tests/python/integration/runtime/test_imex_checkpoint_sealed_retry.py::test_original_imex_checkpoint_retry_replays_one_completed_seal",
+    "tests/python/integration/runtime/test_final_imex_original_reception.py::test_original_manual_state_field_restart",
+    "tests/python/integration/runtime/test_final_imex_original_reception.py::test_original_preset_parity_and_rejected_rollback",
+    "tests/python/integration/runtime/test_imex_checkpoint_publication_rollback.py::test_original_imex_final_checkpoint_failure_restores_science_and_outputs",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_system_direct_step_requires_the_installed_python_program_strategy",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_native_linear_history_uses_bracketing_slots_and_restarts_exactly",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart",
+    "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_restart_restores_default_field_onto_fresh_unmaterialized_target"
+  ],
+  "returncode": 0,
+  "pytest_base_temp": "pytest-tmp",
+  "duration_seconds": 615.0074989170025,
+  "counts": {
+    "tests": 9,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "passed",
+  "identity_sha256": "a4d385377e2e0dbe4dcb99a4b635ef2d236fd56dbb40a34548dee44979c42beb",
+  "log_sha256": "60d40c1ea5d405418af642458e80a4093428df80a17653322dab19c58ca6ce8f"
+}

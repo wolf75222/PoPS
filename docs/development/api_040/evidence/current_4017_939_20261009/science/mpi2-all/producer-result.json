@@ -1,0 +1,36 @@
+{
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "Native": {
+    "bytes": 14468728,
+    "path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "sha256": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941"
+  },
+  "SDK": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/docs/development/api_040/run_installed_mpi_checks.py",
+    "--output",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-all/run",
+    "--ranks",
+    "2",
+    "--dimension",
+    "2",
+    "--threads",
+    "2",
+    "--test",
+    "tests/python/integration/runtime/test_public_diffusion_field_predictor.py",
+    "--test",
+    "tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py",
+    "--test",
+    "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py",
+    "--test",
+    "tests/python/integration/runtime/test_field_publication_instances_runtime.py::test_installed_three_instance_solved_provider_reads[cells0-False-False]"
+  ],
+  "phase": "mpi2-all",
+  "start_utc": "2026-10-09T00:42:06.978189+00:00",
+  "scope": "Actual new installed cohort; retained Source988 commands supply test selection only, no receipt or result inheritance.",
+  "exit": 0,
+  "seconds": 586.5264295830057,
+  "log_sha256": "9adfc987d89fd3bac08ff5a4bf3b503d9e036b65f200a021ffd6d23481c7fe62",
+  "Source_after": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c"
+}

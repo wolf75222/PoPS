@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "-c",
+    "import hashlib,sys; from pathlib import Path; import pops; from pops._native_selector import select_native_dimension; native=select_native_dimension(2); assert Path(pops.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/__init__.py'); assert Path(native.__file__).resolve()==Path('/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so'); assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()=='939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941'; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))",
+    "-v",
+    "--tb=short",
+    "-o",
+    "pythonpath=",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest.xml",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/guarded-variants/run/pytest-tmp",
+    "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py::test_public_guarded_field_coefficient_diffusion[renamed]",
+    "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py::test_public_guarded_field_coefficient_diffusion[changed_expression]"
+  ],
+  "returncode": 0,
+  "pytest_base_temp": "pytest-tmp",
+  "duration_seconds": 81.5384509170035,
+  "counts": {
+    "tests": 2,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "status": "passed",
+  "identity_sha256": "a4d385377e2e0dbe4dcb99a4b635ef2d236fd56dbb40a34548dee44979c42beb",
+  "log_sha256": "1c90a1f6af1c7aaad8cedd281ce404d21ade4599651bc0bb08dca523401aaf26"
+}

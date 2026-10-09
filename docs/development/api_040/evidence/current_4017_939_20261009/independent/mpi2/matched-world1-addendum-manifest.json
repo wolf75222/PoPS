@@ -1,0 +1,41 @@
+{
+  "CP_clock_ring_pairs": 6,
+  "Native": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+  "SDK": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "actual_producer_seconds": 38.817288250000274,
+  "closed_gap": "Previously no supplied matched world1 three-instance case; now actual matched1PASS and independently recomputed state/field/CP/capacity/clock comparison.",
+  "counts": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 1
+  },
+  "files": {
+    "MATCHED_WORLD1_ADDENDUM.md": {
+      "bytes": 2640,
+      "sha256": "d0cd250ff82e9870a848269c8e251f20f7a776416e6676396b4ca012a5b56905"
+    },
+    "matched-world1-addendum.json": {
+      "bytes": 592079,
+      "sha256": "da5df2e4c55527aaf6bf0f83dfd3719acabcc02e3915cea7665a2ece1a19badc"
+    },
+    "matched-world1-journal-comparison.json": {
+      "bytes": 4147,
+      "sha256": "83716414409b7546133413d35866ecb9e1c5c6846491623489071d3559f22858"
+    },
+    "matched_world1_addendum.py": {
+      "bytes": 6809,
+      "sha256": "06dcbd7738b937082eba0a426514a37b03bd1ee10c1a3e4a02f7e039bc3d6a0b"
+    }
+  },
+  "old_receipts_unchanged": {
+    "REPORT.md": "b78c956aad3516ec54cbd91afed7581c690f26473caac663c2f66c7b1174d42f",
+    "final-reception-manifest.json": "4f24cebc3312b83d53c94603fba154426aa9a2ec8b3ade7c9c7d619fb1a3747a",
+    "offline-reception-final.json": "28413164ce570c960f24b3a469bf273afdf804ab0d11110758ff874c11fb769e",
+    "offline_reception.py": "74ab7e80217cb68f44c3776d7089b256df9a499900d18809a078e6caad466247"
+  },
+  "physical_CP_numeric_bitwise_pairs": 48,
+  "physical_state_bitwise_pairs": 24,
+  "scope": "New additive offline independent numerical/physical matchedworld1 reception; no wholeCP/raw diagnostic equivalence or Native execution; originalMPI receipts not rewritten."
+}

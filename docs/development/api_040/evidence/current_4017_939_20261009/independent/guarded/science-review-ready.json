@@ -1,0 +1,61 @@
+{
+  "verdict": "ACCEPT independent scientific counter-reception of actualthreeguardedcases",
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "Native": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+  "SDK": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+  "receipt": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-guarded-science-independent-review-4017-20261009/independent-science-reception-v2.json",
+  "receipt_sha256": "135f7e0967c0b797a2d683f2727d4e34fb366472f4ba9d083bed58f3f353cfd4",
+  "oracle_script": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-guarded-science-independent-review-4017-20261009/independent_guarded_oracle_v2.py",
+  "oracle_script_sha256": "eac6055b72bfc559bb4239a2a9a22bd8321f494f5303691f248c05115583f9c4",
+  "physical_case_file_pins_verified": 42,
+  "source_test_and_helper_pinned": {
+    "initial_equations": [
+      "1 + 0.08 * np.sinc(1 / nx) * np.cos(np.pi * x)[None, :]",
+      "q0 + 0.03 * np.sinc(1 / ny) * np.cos(2 * np.pi * y / 3)[:, None]"
+    ],
+    "helper_sha256": "63725bd7a6a528a65b30ae5fb3cf497f3cc81a4817623a913601805461e4dc6e",
+    "test_sha256": "ff3e07e66d2fa02a25b959371a51c5e096561cb0d96b5ed747f08cec35561c0c",
+    "lengths": [
+      2,
+      3
+    ],
+    "equations": {
+      "field": "(-math.laplacian(phi) + math.Reaction(phi, reaction) == driving[0],)",
+      "flux": "(diffusion_offset + mobility ** 2) * math.grad(density[0])",
+      "update": "q.n + p.dt * rate(q.n, fields)"
+    }
+  },
+  "baseline_phi_and_coefficient": [
+    "1/5",
+    "57/175"
+  ],
+  "changed_phi_and_coefficient": [
+    "3/25",
+    "1974/6875"
+  ],
+  "rename_bits_on_each192cells": {
+    "donor": true,
+    "receiver": true,
+    "phi": true
+  },
+  "actual_changed_receiver_difference_inf": 3.4049653159229365e-06,
+  "phi_changed_error": 1.3877787807814457e-17,
+  "maximum_receiver_error": 0.0,
+  "exact_coefficients_inferred_from_actual_outputs": {
+    "baseline": 0.3257142857144013,
+    "changed_expression": 0.28712727272733196,
+    "renamed": 0.3257142857144013
+  },
+  "omit_actual_published_phi_squared_errors": {
+    "baseline": 3.5296490217273657e-06,
+    "changed_expression": 1.2706736478573788e-06,
+    "renamed": 3.5296490217273657e-06
+  },
+  "original_bounds_unchanged": true,
+  "observed_checkpoints": "Allrawnpzmembers rehashed; acceptedone-step time/macro/levels/ranks validated; actualdonor/receiverbitpayloads andphysicalhistoryslot1 matchrecordedarrays foreachvariant",
+  "emitted_math_and_manifests": "Actualreaction3\u21925,offset2/7\u21923/11,squaredpublishedmobility readslot0; exactresolvedproducer/consumerpack+halo1; originalguards+stabilitybounds remain. DumpedModelCPP equalsprivateactualcompilesources, finalprivatebinarydomain-separatedCBORidentity andartifactspec+binary bindings independentlyrecomputed; no identitytoken/rawSHA conflation.",
+  "run_closure": "baseline1/variants2 actualclosedRC0/rawXML0skip;variantsproducerRC0/logSHA matched. AllSource/Native/SDK identitybindings freshlychecked.",
+  "Native_import_or_run_by_oracle": false,
+  "Main_environment_build_install_mutation": false,
+  "limits": "CPUdoubleMPIcompiledworld1,periodic16x12,onelevel,twoowners,onestepdt1e-4,threeguardedvariants. NoMPI2/coarsefine/GPU/3D/longtime/scientificgeneralityclaim. Model actualcompile receipts explicitlycompiler_to_binary_graph_proof=false retained aslimit; actualdumpedModelCPP sourcehashes,rawfinalprivatebinarysidecars andmeasuredarrays areindependentlyauthenticated. No old984numbers adopted: exactFractions recomputedfromcurrentSourceAST."
+}

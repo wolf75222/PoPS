@@ -1,0 +1,117 @@
+{
+  "checks": [
+    {
+      "file": "build_native_r5.sh",
+      "check": "bash -n only",
+      "exit": 0
+    },
+    {
+      "file": "build_native_r5.sh",
+      "embedded": "PY_STATUS",
+      "check": "Python AST",
+      "exit": 0
+    },
+    {
+      "file": "build_phase_r5.sbatch",
+      "check": "bash -n only",
+      "exit": 0
+    },
+    {
+      "file": "capture_gpu_native_r5.py",
+      "check": "Python AST",
+      "exit": 0
+    },
+    {
+      "file": "capture_kokkos_profile_r5.py",
+      "check": "Python AST",
+      "exit": 0
+    },
+    {
+      "file": "launch_phase_r5.py",
+      "check": "Python AST",
+      "exit": 0
+    },
+    {
+      "file": "native_install_rpath_r5.py",
+      "check": "Python AST",
+      "exit": 0
+    },
+    {
+      "file": "phase_quota_r5.py",
+      "check": "Python AST",
+      "exit": 0
+    },
+    {
+      "file": "phase_rank_runner_r5.py",
+      "check": "Python AST",
+      "exit": 0
+    },
+    {
+      "file": "read-r5-pins.py",
+      "check": "Python AST",
+      "exit": 0
+    },
+    {
+      "file": "resume_probe_r5.sh",
+      "check": "bash -n only",
+      "exit": 0
+    },
+    {
+      "file": "resume_probe_r5.sh",
+      "embedded": "PY_STATUS",
+      "check": "Python AST",
+      "exit": 0
+    },
+    {
+      "file": "resume_probe_r5.sh",
+      "embedded": "PY_LDD",
+      "check": "Python AST",
+      "exit": 0
+    },
+    {
+      "file": "run_campaign_r5.sh",
+      "check": "bash -n only",
+      "exit": 0
+    },
+    {
+      "file": "run_campaign_r5.sh",
+      "embedded": "PY_STATUS",
+      "check": "Python AST",
+      "exit": 0
+    },
+    {
+      "file": "run_campaign_r5.sh",
+      "embedded": "PY_PHASES",
+      "check": "Python AST",
+      "exit": 0
+    },
+    {
+      "file": "runtime_context_r5.sh",
+      "check": "bash -n only",
+      "exit": 0
+    },
+    {
+      "file": "runtime_context_r5.sh",
+      "embedded": "PY_CUDA",
+      "check": "Python AST",
+      "exit": 0
+    },
+    {
+      "file": "runtime_phase_r5.sbatch",
+      "check": "bash -n only",
+      "exit": 0
+    },
+    {
+      "file": "runtime_phase_r5.sbatch",
+      "embedded": "PY_ADMIT",
+      "check": "Python AST",
+      "exit": 0
+    },
+    {
+      "file": "test_native_install_rpath_r5.py",
+      "check": "Python AST",
+      "exit": 0
+    }
+  ],
+  "scope": "Static only; no operational script, SSH, ARM, CUDA, ldd or Native execution"
+}

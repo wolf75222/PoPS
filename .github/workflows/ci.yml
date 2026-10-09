@@ -1188,14 +1188,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: gate-python-build-kokkos-py-dim2
-          path: build-kokkos-py/python
-
-      - name: Verify Python module artifact
-        run: |
-          test -d build-kokkos-py/python/pops
-          PYTHONPATH="$PWD/build-kokkos-py/python" PYTHONNOUSERSITE=1 \
-            python3 scripts/verify_installed_native.py \
-              --expect-dim "$POPS_NATIVE_DIM" --expect-serial
+          path: .pops-ci/python-packages/dim2
 
       - name: Cache ccache (Python runtime loaders)
         uses: actions/cache@v6
@@ -1219,12 +1212,18 @@ jobs:
           POPS_KEEP_GENERATED: "1"
         run: |
           pip install --upgrade pip numpy pytest
-          export PYTHONPATH="$PWD/build-kokkos-py/python"
           export Kokkos_ROOT="${KOKKOS_PREFIX}" POPS_KOKKOS_ROOT="${KOKKOS_PREFIX}"
           mkdir -p "$COMPILE_CACHE_TMP"
+          printf '%s\n' "$COMPILE_CACHE_TEST" > "$COMPILE_CACHE_TMP/selected.txt"
           SECONDS=0
           set +e
-          python3 -m pytest -q -ra --basetemp="$COMPILE_CACHE_TMP" "$COMPILE_CACHE_TEST"
+          # The compile-cache witness consumes the same installed wheel as Python shards.
+          # Its retained proof and private environment are authenticated before pytest starts.
+          python3 scripts/ci_python_dimensions.py \
+            --selected-file "$COMPILE_CACHE_TMP/selected.txt" \
+            --packages-root "$PWD/.pops-ci/python-packages" \
+            --timings-dir "$COMPILE_CACHE_TMP/receipts" \
+            --install-root "$RUNNER_TEMP/pops-installed-compile-cache"
           rc=$?
           set -e
           test_s=$SECONDS

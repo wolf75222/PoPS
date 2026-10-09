@@ -1,0 +1,48 @@
+[
+  {
+    "argv": [
+      "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+      "-m",
+      "venv",
+      "--system-site-packages",
+      "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-installed-mpi-world1-4017-20261009/installed/dim2"
+    ],
+    "returncode": 0
+  },
+  {
+    "argv": [
+      "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-installed-mpi-world1-4017-20261009/installed/dim2/bin/python",
+      "-m",
+      "pip",
+      "--isolated",
+      "install",
+      "--ignore-installed",
+      "--no-deps",
+      "--prefix",
+      "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-installed-mpi-world1-4017-20261009/installed/dim2",
+      "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-installed-mpi-world1-4017-20261009/installed/wheel-dim2/pops-1.1.0-cp312-cp312-macosx_26_0_arm64.whl"
+    ],
+    "returncode": 0
+  },
+  {
+    "argv": [
+      "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-installed-mpi-world1-4017-20261009/installed/dim2/bin/python",
+      "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/scripts/prove_installed_wheel.py",
+      "--wheel",
+      "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-installed-mpi-world1-4017-20261009/installed/wheel-dim2/pops-1.1.0-cp312-cp312-macosx_26_0_arm64.whl",
+      "--expect-dim",
+      "2"
+    ],
+    "returncode": 0
+  },
+  {
+    "argv": [
+      "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-installed-mpi-world1-4017-20261009/installed/dim2/bin/python",
+      "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/scripts/verify_installed_native.py",
+      "--expect-dim",
+      "2",
+      "--expect-mpi"
+    ],
+    "returncode": 0
+  }
+]

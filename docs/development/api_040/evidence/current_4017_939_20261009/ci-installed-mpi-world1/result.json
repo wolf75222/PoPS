@@ -1,0 +1,22 @@
+{
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "Native": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/scripts/ci_python_dimensions.py",
+    "--selected-file",
+    "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-installed-mpi-world1-4017-20261009/selected.txt",
+    "--packages-root",
+    "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-installed-mpi-world1-4017-20261009/packages",
+    "--timings-dir",
+    "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-installed-mpi-world1-4017-20261009/receipts",
+    "--install-root",
+    "/Users/romaindespoulain/dev/tmp/PoPS-root-compile-cache-installed-mpi-world1-4017-20261009/installed",
+    "--native-backend",
+    "mpi"
+  ],
+  "scope": "Actual installed wheel route on local MPI-enabled Dim2 CPU world1. Does not claim serial GitHub backend or new-head CI result.",
+  "exit": 0,
+  "seconds": 75.78531337500317,
+  "log_sha256": "213bc2f60b5a9fbf53223a6dc09a73e91252a77ce82fbc4a9a13b515a8767f2f"
+}

@@ -1,0 +1,52 @@
+{
+  "exit": 0,
+  "counts": {
+    "tests": 60,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "seconds": 17.560090667000622,
+  "args": [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-q",
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--confcutdir=/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+    "-o",
+    "pythonpath=",
+    "-p",
+    "no:cacheprovider",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-sol61-current-ci-route-source-validation-20261009/pytest-tmp",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-sol61-current-ci-route-source-validation-20261009/pytest.xml",
+    "tests/python/architecture/test_ci_python_dimensions.py",
+    "tests/python/architecture/test_native_dimension_build_contract.py",
+    "tests/python/architecture/test_ci_plan.py",
+    "tests/python/architecture/test_ci_python_module_objects.py",
+    "tests/python/architecture/test_installed_native_verifier.py",
+    "tests/python/architecture/test_native_variant_manifest.py::test_ci_consumes_only_authenticated_explicit_native_variants",
+    "tests/python/architecture/test_native_variant_manifest.py::test_ctest_smokes_and_python_suites_preserve_the_exact_native_dimension",
+    "tests/python/architecture/test_native_variant_manifest.py::test_ctest_python_mpi_projection_matches_the_manifest_and_dim2_contract",
+    "tests/python/architecture/test_native_variant_manifest.py::test_wheel_proof_accepts_an_explicit_fat_set_and_rejects_a_hidden_subset"
+  ],
+  "selected": [
+    "tests/python/architecture/test_ci_python_dimensions.py",
+    "tests/python/architecture/test_native_dimension_build_contract.py",
+    "tests/python/architecture/test_ci_plan.py",
+    "tests/python/architecture/test_ci_python_module_objects.py",
+    "tests/python/architecture/test_installed_native_verifier.py",
+    "tests/python/architecture/test_native_variant_manifest.py::test_ci_consumes_only_authenticated_explicit_native_variants",
+    "tests/python/architecture/test_native_variant_manifest.py::test_ctest_smokes_and_python_suites_preserve_the_exact_native_dimension",
+    "tests/python/architecture/test_native_variant_manifest.py::test_ctest_python_mpi_projection_matches_the_manifest_and_dim2_contract",
+    "tests/python/architecture/test_native_variant_manifest.py::test_wheel_proof_accepts_an_explicit_fat_set_and_rejects_a_hidden_subset"
+  ],
+  "Native_blocked_attempts": [],
+  "Native_loaded": [],
+  "package": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/__init__.py",
+  "python": "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+  "failures": [],
+  "scope": "Focused Main working-tree Source validation; mocked wheel/selector/subprocess fixtures, no real installation/Native/MPI/GPU/GitHub CI. No global903/904 inference."
+}

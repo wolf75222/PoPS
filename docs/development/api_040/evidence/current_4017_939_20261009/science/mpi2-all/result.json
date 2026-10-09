@@ -1,0 +1,181 @@
+{
+  "schema_version": 3,
+  "status": "passed",
+  "pytest_base_temps": [
+    "rank0-tmp",
+    "rank1-tmp"
+  ],
+  "command": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/mpiexec",
+    "-n",
+    "2",
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/python",
+    "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/docs/development/api_040/run_installed_mpi_checks.py",
+    "--worker",
+    "--output",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-reviewed-integration-4017d29d-r2-20261009/mpi2-all/run",
+    "--ranks",
+    "2",
+    "--dimension",
+    "2",
+    "--test",
+    "tests/python/integration/runtime/test_public_diffusion_field_predictor.py",
+    "--test",
+    "tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py",
+    "--test",
+    "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py",
+    "--test",
+    "tests/python/integration/runtime/test_field_publication_instances_runtime.py::test_installed_three_instance_solved_provider_reads[cells0-False-False]"
+  ],
+  "returncode": 0,
+  "timeout": false,
+  "seconds": 584.973188416996,
+  "ranks": 2,
+  "threads": 2,
+  "dimension": 2,
+  "authentication_before": 0,
+  "authentication_after": 0,
+  "same_installation": true,
+  "test_sources_unchanged": true,
+  "rank_test_parity": true,
+  "rank_results": [
+    {
+      "rank": 0,
+      "counts": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_predictor",
+          "test_public_diffusion_predictor_is_field_rhs[euler]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_predictor",
+          "test_public_diffusion_predictor_is_field_rhs[ssprk2_rates]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_predictor",
+          "test_public_diffusion_predictor_is_field_rhs[ssprk2_predictor]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_predictor",
+          "test_public_diffusion_predictor_is_field_rhs[euler_renamed]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_predictor",
+          "test_public_diffusion_predictor_is_field_rhs[euler_kappa0125]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_late_refusal",
+          "test_public_late_refusal_same_artifact_control[euler]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_late_refusal",
+          "test_public_late_refusal_same_artifact_control[ssprk2]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_late_refusal",
+          "test_public_late_refusal_automatic_retry"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_late_refusal",
+          "test_public_late_refusal_populated_history"
+        ],
+        [
+          "tests.python.integration.runtime.test_guarded_field_diffusion_publication",
+          "test_public_guarded_field_coefficient_diffusion[baseline]"
+        ],
+        [
+          "tests.python.integration.runtime.test_guarded_field_diffusion_publication",
+          "test_public_guarded_field_coefficient_diffusion[renamed]"
+        ],
+        [
+          "tests.python.integration.runtime.test_guarded_field_diffusion_publication",
+          "test_public_guarded_field_coefficient_diffusion[changed_expression]"
+        ],
+        [
+          "tests.python.integration.runtime.test_field_publication_instances_runtime",
+          "test_installed_three_instance_solved_provider_reads[cells0-False-False]"
+        ]
+      ],
+      "xml_sha256": "27bfe721af660b4daa61a1449590c9bdc8778f21eb7e13cc24ba99a7835352ff",
+      "log_sha256": "1b105989dd78c4c1ebb225e0910db851f4ea3803ec152b2d84a45b6a06ce1bec"
+    },
+    {
+      "rank": 1,
+      "counts": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "nodes": [
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_predictor",
+          "test_public_diffusion_predictor_is_field_rhs[euler]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_predictor",
+          "test_public_diffusion_predictor_is_field_rhs[ssprk2_rates]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_predictor",
+          "test_public_diffusion_predictor_is_field_rhs[ssprk2_predictor]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_predictor",
+          "test_public_diffusion_predictor_is_field_rhs[euler_renamed]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_predictor",
+          "test_public_diffusion_predictor_is_field_rhs[euler_kappa0125]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_late_refusal",
+          "test_public_late_refusal_same_artifact_control[euler]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_late_refusal",
+          "test_public_late_refusal_same_artifact_control[ssprk2]"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_late_refusal",
+          "test_public_late_refusal_automatic_retry"
+        ],
+        [
+          "tests.python.integration.runtime.test_public_diffusion_field_late_refusal",
+          "test_public_late_refusal_populated_history"
+        ],
+        [
+          "tests.python.integration.runtime.test_guarded_field_diffusion_publication",
+          "test_public_guarded_field_coefficient_diffusion[baseline]"
+        ],
+        [
+          "tests.python.integration.runtime.test_guarded_field_diffusion_publication",
+          "test_public_guarded_field_coefficient_diffusion[renamed]"
+        ],
+        [
+          "tests.python.integration.runtime.test_guarded_field_diffusion_publication",
+          "test_public_guarded_field_coefficient_diffusion[changed_expression]"
+        ],
+        [
+          "tests.python.integration.runtime.test_field_publication_instances_runtime",
+          "test_installed_three_instance_solved_provider_reads[cells0-False-False]"
+        ]
+      ],
+      "xml_sha256": "27d6d3bd14dd209dcc6528fce4cb9f7fe93fb045c30ebaf6c9922c60791aa319",
+      "log_sha256": "24781a97bcead8b1141f21356beffa2612d0226a2d3363eda69d570a8b05666d"
+    }
+  ],
+  "native_sha256": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+  "execution_environment": {
+    "FI_PROVIDER": "tcp",
+    "FI_TCP_IFACE": null,
+    "OMP_NUM_THREADS": "2",
+    "OMP_PROC_BIND": "false",
+    "POPS_THREADS": "2"
+  }
+}

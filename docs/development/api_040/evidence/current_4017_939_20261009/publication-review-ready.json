@@ -1,0 +1,80 @@
+{
+  "contract": "pops.non-author-current-publication-review@1",
+  "verdict": "CURRENT_CPU_SOURCE_CI_SCOPED_PUBLICATION_ACCEPT; GPU_R5_NEGATIVE_UPDATED",
+  "packet": "/Users/romaindespoulain/dev/tmp/PoPS-root-current-4017-publication-20261009-r2",
+  "Source": "4017d29d9adc066e2ab64d2eed3b99f1caa8f63c",
+  "Native": "939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941",
+  "SDK": "acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa",
+  "core": "743bc354455285b4828e6d80039949317c31f63ac6fc3c5432ae2897487594a8",
+  "wheel": "0d3c66b61ce95291dcd59c23d183a06b058d8fdcf473bf8ec58a69f16e32f696",
+  "copied_raw_integrity": {
+    "original_manifest_members": 154,
+    "original_bytes": 3814113,
+    "original_copies_match_raw": true,
+    "original_manifest_unchanged_after_addendum": true,
+    "addendum_members": 11,
+    "addendum_bytes": 386527,
+    "addendum_copies_match_raw": true
+  },
+  "actual_counts": {
+    "Source4017": 904,
+    "Source_focused_CI_workingdiff_above4017": 60,
+    "science_world1_five_families": 23,
+    "extra_matched_coupled_world1": 1,
+    "static_inputs_distinct_closed_runs": 6,
+    "MPI2_representative_each_rank": 2,
+    "MPI2_selected_each_rank": 13,
+    "local_actual_installed_CI_cache_MPI_world1": 1,
+    "failures_errors_skips_in_closed_PASS_XML": 0
+  },
+  "historical_preservation": {
+    "corpus_old_topkeys": 22,
+    "all_old_nested_values_including_equations_mappings": "exactlyequal",
+    "only_added_key": "current_native_reception_4017_20261009",
+    "new_key_equals_current_summary": true,
+    "compact_prefix_bytes": 3103,
+    "whole_historical_markdown_suffix": "byteidentical",
+    "proof": "/Users/romaindespoulain/dev/tmp/PoPS-root-current-4017-publication-20261009-r2/compact-prefix-preservation.json",
+    "proof_sha256": "e7486a943d3463c6a0bcbc9a6231bf664e94a5d09ece7575327c264eb75f0c02"
+  },
+  "non_author_report_scope": "Releasednon-authorphysical/mathreceipts arecopiedbyteexact withrawsourcepaths preserved. Thisreviewchecks packaging/narrative/countintegrity, doesnotreauthoror rerunthose scientifictests. Source904 andfocused60 remainSource-only author/Sourcevalidation; compile-cache actualtest remainslocalMPIworld1, notLinuxSerialCI.",
+  "limits_accurately_preserved": [
+    "Full94obligationclosure false;86T/C/M/W+eightprinciples remainopen.",
+    "NoexactfinalHEAD GitHubaggregategreen/merge-readyclaim; actual4017CI failures andfutureLinuxSerialCI remainexplicit.",
+    "Native4017 identities belongtoobservedbuild/runs; laterCI/docs commits donotrelabel oldscience.",
+    "No fullfrontend/compilergraph\u2192binary proof inferredfrom24Ninjaactions/identicalobjectbytes/cachecounters.",
+    "CPcodec/staticInput/privatejournal/Programcommand/macrofinalarraygaps remainreported; fullCParchiveMPIbyteequality notclaimed.",
+    "GPUSource988/de2/b756 distinctfromCPU4017/939/acf0/743; directUMmicrokernelPASS isnotproductionNative/PDE/science."
+  ],
+  "latest_GPU_status": {
+    "source_commit": "98804c6849c9966e05b5397126bab983a5fa0227",
+    "sdk_sha256": "de2b5ef24a9fae48ab143d4200aab2885c9400dcd43712fa74928f5f2c4e954a",
+    "R4": "738173 failed before officialNativeentry: Kokkos_ROOT unset; real managedCuda allocation+kernel microprobePASS;738174cancelled neverran",
+    "R5": "738183actualFAILED1:0/29s afterofficialcommandentry but beforeCXX: defaultcondanamepopsmissing;738184actuallycancelledneverran; newmanagedCudamicroprobePASS; productionNative/sciencenotreceived",
+    "production_native_or_science_gpu_received": false,
+    "qualification_of_4017": false,
+    "R6": "Source preparation required: explicitownenvironmentselection and authenticatedpriorclosedfailure, no marker deletion or setup/clone/Kokkosrepeat"
+  },
+  "GPU_update_checked": "R5actual738183FAILED29s envnameguardpops;738184actuallycancelledneverran; copiedrawnegative/cancellation added. R6isSourcepreparation, nostaging/execution/scienceclaim. PriorR5pending wording removedfromfinal summary/corpuscurrentrow/status.",
+  "Source_documents_hashes": {
+    "STATUS_DRAFT_PR_20261009.md": "524e36c3abaa3e1f6634ee7429d42c4b7cadf7ce94a7ff4c83f2121b71181e73",
+    "current-reception-summary.json": "c23b62921f8b5173a956977afde5389aef90126d54d2d876630db7a14aec5c5e",
+    "corpus.json": "cdae95fe485f4678d31f8df09d225e3b605763a23d33e3422b0e97ea8e72ddf5",
+    "mission_reception_compact_20261001.md": "cbd71f0c9b6aaca69959c22c5922db77929a50026af4c483a568a40e632bdb95",
+    "compact-prefix-preservation.json": "e7486a943d3463c6a0bcbc9a6231bf664e94a5d09ece7575327c264eb75f0c02"
+  },
+  "evidence_manifest_hashes": {
+    "base154": "a11d63a3138d5229bad6c8478f879d34254079c017fa0ce35ccde4f2190ffd62",
+    "addendum11": "3678267b4ccb35b1f922bc4e24160471c77055adb5943f84b0a38c1c3334681f"
+  },
+  "review_evidence": {
+    "copied-file-rehash.json": "216b3eea50edeb5741add9de9f28a3664a9ed527f91b15b9f33d07c60bc808c0",
+    "xml-counts.json": "ab7d275299d79b77d8d8b6873b2147324cf3ac42f7044ca5135d1b3634c46d3f",
+    "corpus-preservation.json": "ce4f0fa04016800eef6699aeb55094f98afdf2f433e2a57a01753abefe833a23",
+    "final-addendum-rehash.json": "fc3e53be619d1ea4f121264b72296f9b6f2309640cb42c69507883bb85ed8c0a"
+  },
+  "required_corrections_remaining": null,
+  "no_Native_run_or_import": true,
+  "no_Main_mutation": true,
+  "no_remote_or_GPU_action": true
+}
