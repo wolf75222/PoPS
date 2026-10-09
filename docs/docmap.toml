@@ -95,3 +95,10 @@ members = 165
 "addendum-manifest.json" = "3678267b4ccb35b1f922bc4e24160471c77055adb5943f84b0a38c1c3334681f"
 [retained_evidence."docs/development/api_040/evidence/current_4017_939_20261009".metadata]
 "publication-review-ready.json" = "55e350921e5267633645bfc6a08be95591eaa27199f04a32eb60e837451d81e4"
+
+[retained_evidence."docs/development/api_040/evidence/current_8c1_cee_20261009"]
+members = 106
+[retained_evidence."docs/development/api_040/evidence/current_8c1_cee_20261009".catalogs]
+"manifest.json" = "395d897f33a4d538fc98e47925813c8c44e21e4d9ab6c5d1de8a4147dd6c659b"
+[retained_evidence."docs/development/api_040/evidence/current_8c1_cee_20261009".metadata]
+"publication.json" = "f3204a9533aea61a8937eb5006ed0aca84a7d78116b2a6f31237a8100faf7128"

@@ -1,0 +1,7 @@
+Offline non-author reception of two actual variants on Source8c1f5570 / Nativecee947c2.
+
+Rename: frozen runner R3 differs from R2 only in valid identifier construction. Thirteen raw state/field arrays plus two raw bind arrays match representative bytes; these encode fourteen canonical oracle quantities. The table and six Field histories remain numerically unchanged. All2304exchange numerical rows agree bitexact. Ninety-six checkpoint numerical members match after explicit receiver/donor role-key mapping. Two integer indexes into serialized identity-containing strings differ; identifiers, opaque byte carriers and restart envelopes are not claimed byte-identical. Both checkpoint closures are independently authenticated.
+
+Decay11/10: independent original oracle function with declared parameter is used, without author reference or Native import. Its tolerance function exactly matches saved pre-execution budget. Original XML retains code ordering (budget written before capture), and recorded mtime precedes actual arrays; no cryptographic timestamp claim. Changed Program source is an exact subset of actual expanded C++, with1.1rate at all three stages. Donor is byte-exact; state differs from baseline by6.348378589793313e-5.
+
+Original public-three remains2PASS/1Source-grammarFAIL and process exit1. Separate valid-label rename is a later closed0capture. CPUworld1 only. CGreports/publicationclock/full frontendgraph/GPU/MPI2/refinement/convergence remain distinct limits.

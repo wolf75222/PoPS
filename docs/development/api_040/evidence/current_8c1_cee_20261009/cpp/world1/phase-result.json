@@ -1,0 +1,16 @@
+{
+  "compiled_Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "current_metadata_Source": "e27d065a5eb7c086ced60b751a2468f729361ff0",
+  "exit": 0,
+  "seconds": 3.6206100000053993,
+  "counts": {
+    "tests": 26,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "log_sha256": "0ec3dab862e071c44910836324b08f373c53fb7c47a6e8a89e42a386fa3c5f6c",
+  "xml_sha256": "fb929ea8c10f383127e23fd907550a289c23bff3744451424f43f4ccf5e272b2",
+  "binaries_unchanged": true,
+  "scope": "Actual process and registered test closures. Separate from GPU, Python scientific suite and GitHub CI."
+}

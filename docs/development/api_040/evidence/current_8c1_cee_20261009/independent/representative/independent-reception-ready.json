@@ -1,0 +1,47 @@
+{
+  "contract": "pops.non-author-stage-fields-actual-offline-reception@1",
+  "verdict": "ACCEPT_REPRESENTATIVE_CPU_WORLD1_WITH_LIMITS",
+  "Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "Native": "cee947c25c771f8c5a155e5f4cb990de308de14fe77e9f55c654e3b3837dee6f",
+  "SDK": "087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626",
+  "core_fingerprint": "95d0ccaa1e7aa39f9cbb01d539c4e31a5a7e6e143207b088fd9c2730482963f5",
+  "oracle_sha256": "28ca67fc888d78ae3f57cc417759b4b9624692c9499d5d1ecacb1fc793b6b81e",
+  "budget_sha256": "bed47b146393f5b94bb37ee6a57684985951b769773ee0f956ed34dd84129cd3",
+  "receipt_sha256": "d8bd3717335983a85b3c5902a074267123af5bd4726b736f3e142e82a83f2496",
+  "reader_sha256": "56f54f803ac6586480b8c3cbda3fead7d389cc5fddf98166b7c3f6928e1a85d7",
+  "counts": {
+    "core_files": 1221,
+    "installed_source_wheel_payload": 1175,
+    "SDK_headers": 384,
+    "observed_Ninja_CXX_actions": 24,
+    "actual_content_changed_objects": 5,
+    "qualified_reused_objects": 0,
+    "face_exchanges": 2304,
+    "checkpoint_arrays": 144,
+    "populated_histories": 9,
+    "offline_negative_controls": 7
+  },
+  "max_q_error": 6.661338147750939e-16,
+  "max_field_error": 2.6978419498391304e-14,
+  "max_independent_physical_field_residual": 5.866862551329177e-12,
+  "donor_byte_exact": true,
+  "resident_fields_last_writer_stage2": true,
+  "original_build_admission_untouched": true,
+  "admission_metadata_caveat": "Five admission physical_before subrows contain after hashes; true frozen pre-build rows prove five changes. Original admission is preserved, not rewritten; no scientific failure.",
+  "files_sha256": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/strict-array-math.json": "261b347e8da973b9080f31c117fce74d81eaecd5007a78fc198a1d693ed7d31f",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/receiver-development-diagnostics.json": "a3d9721b518d4b2a6b41fea1a352ffd0533b78a3047811afbb71e1897068fc0e",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/independent-reception.json": "d8bd3717335983a85b3c5902a074267123af5bd4726b736f3e142e82a83f2496",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/validation-command.json": "33f12420b22a9e51d4c8a81373108c8ba333da907918fbbda155bcd516466137",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/receive_actual.py": "56f54f803ac6586480b8c3cbda3fead7d389cc5fddf98166b7c3f6928e1a85d7",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/PROTOCOL.md": "6663ab44ee0c2acba9f92e70def0afd8712ece7ef2e8039e1b4d4c0d5280ac83"
+  },
+  "limits": [
+    "Representative CPU MPI world1 one macro step only; no renamed/changed variant, MPI2/GPU/3D or refinement/convergence qualification.",
+    "No persisted CG iterations/status/true residual reports; independent discrete residual and pre-Native budgets verified, generated success guards inspected separately.",
+    "No persisted per-stage field publication clocks; actual Program/CPP stage offsets plus independent stage arrays/last-writer resident fields agree. History sample identity is not a stage clock.",
+    "No complete frontend-to-binary graph proof. Retained actual C++/model companion receipts/DSOs/SDK and binary identity verified.",
+    "SSP coefficient1 certificate inherits only applicable Forward Euler premises; no unconditional positivity/entropy theorem."
+  ],
+  "no_PoPS_Native_import_or_execution_Main_env_build_install_SSH": true
+}

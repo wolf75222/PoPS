@@ -1,0 +1,84 @@
+........................................................................ [  7%]
+........................................................................ [ 15%]
+........................................................................ [ 22%]
+...........................FF........................................... [ 30%]
+........................................................................ [ 38%]
+........................................................................ [ 45%]
+........................................................................ [ 53%]
+........................................................................ [ 61%]
+........................................................................ [ 68%]
+........................................................................ [ 76%]
+........................................................................ [ 84%]
+........................................................................ [ 91%]
+........................................................................ [ 99%]
+.....                                                                    [100%]
+=================================== FAILURES ===================================
+______ test_duration_catalog_exactly_matches_manifest_selection_universe _______
+
+    def test_duration_catalog_exactly_matches_manifest_selection_universe():
+        """Every selected file has an explicit weight; median fallback is emergency-only."""
+        selector = _load("ci_select_tests")
+        universe = {
+            path
+            for suite in selector.manifest_python_suites(selector.load_manifest())
+            for path in suite["files"]
+        }
+        durations = binpack.load_durations()
+>       assert set(durations) == universe, (
+            "duration catalog drift: missing=%s stale=%s"
+            % (sorted(universe - set(durations)), sorted(set(durations) - universe))
+        )
+E       AssertionError: duration catalog drift: missing=['tests/python/unit/codegen/test_stage_provider_ssp_proof.py'] stale=[]
+E       assert {'tests/pytho...lock.py', ...} == {'tests/pytho...lock.py', ...}
+E         
+E         Extra items in the right set:
+E         'tests/python/unit/codegen/test_stage_provider_ssp_proof.py'
+E         Use -v to get more diff
+
+tests/python/architecture/test_ci_shard_binpack.py:62: AssertionError
+________ test_full_manifest_pack_stays_within_python_shard_test_budget _________
+
+    def test_full_manifest_pack_stays_within_python_shard_test_budget():
+        """Ordinary jobs stay bounded; only indivisible long files reserve more time."""
+        selector = _load("ci_select_tests")
+        timing = _load("ci_pytest_timings")
+        universe = sorted({path for suite in selector.manifest_python_suites(selector.load_manifest())
+                           for path in suite["files"]})
+        durations = binpack.load_durations()
+        excluded = set(binpack.EXCLUDED_FROM_SHARDS)
+        files = [path for path in universe if path not in excluded]
+        # Full selection and deterministic partial selections must all fit the job reservations.
+        selections = [files] + [files[offset::stride] for stride in range(2, 8)
+                               for offset in range(stride)]
+        for selected in selections:
+            shards = binpack.assign_shards(selected, timing.SHARD_TOTAL, durations)
+            binpack.verify_partition(selected, shards)
+            for index, shard in enumerate(shards):
+>               minutes = timing.selected_budget(shard, durations)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/python/architecture/test_ci_shard_binpack.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+paths = ['tests/python/integration/native_loader/test_ssprk3_production.py', 'tests/python/integration/runtime/test_public_com..., 'tests/python/unit/codegen/test_matrix_free_dt_capture.py', 'tests/python/unit/codegen/test_module_manifest.py', ...]
+durations = {'tests/python/examples/final/test_hyqmom15_final_example.py': 285.0, 'tests/python/examples/final/test_imex_amr_final...t_multiphysics_core_example.py': 215.0, 'tests/python/examples/final/test_scalar_advection_final_example.py': 2.0, ...}
+
+    def selected_budget(paths: list[str], durations: dict[str, float]) -> int:
+        """Leave ten minutes beyond the model; only indivisible long files get more."""
+        missing = sorted(set(paths) - durations.keys())
+        if missing:
+            raise ValueError("Python duration catalog is missing selected files: " + ", ".join(missing))
+        weights = [durations[path] for path in paths]
+        if any(not math.isfinite(value) or value <= 0 for value in weights):
+            raise ValueError("selected Python duration weights must be finite and positive")
+        load = sum(weights)
+        if load > ORDINARY_BUDGET_SECONDS:
+            if len(paths) != 1:
+>               raise ValueError("Python shard exceeds its ordinary budget without one indivisible file")
+E               ValueError: Python shard exceeds its ordinary budget without one indivisible file
+
+scripts/ci_pytest_timings.py:32: ValueError
+=========================== short test summary info ============================
+FAILED tests/python/architecture/test_ci_shard_binpack.py::test_duration_catalog_exactly_matches_manifest_selection_universe
+FAILED tests/python/architecture/test_ci_shard_binpack.py::test_full_manifest_pack_stays_within_python_shard_test_budget
+2 failed, 939 passed in 327.68s (0:05:27)

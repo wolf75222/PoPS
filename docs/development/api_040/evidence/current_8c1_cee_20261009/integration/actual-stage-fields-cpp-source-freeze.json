@@ -1,0 +1,37 @@
+{
+  "schema": "pops.source-freeze@1",
+  "timestamp_utc": "2026-10-09T03:05:44.693291+00:00",
+  "base": "397626de9e003ab15a076319d2ee4c3d227a389c",
+  "Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "branch": "codex/api040-integrated-main-20261004",
+  "paths": [
+    "python/pops/codegen/_orchestration_compile.py",
+    "python/pops/codegen/program_accepted_ssp.py",
+    "python/pops/codegen/program_models.py",
+    "python/pops/codegen/program_stage_provider_proof.py",
+    "docs/development/api_040/stageproviderread_v1.md",
+    "tests/python/unit/codegen/test_stage_provider_ssp_proof.py",
+    "tests/python/integration/runtime/test_m10_self_consistent_sg.py",
+    "include/pops/runtime/amr/tensor_composite_fac.hpp",
+    "src/runtime/amr/amr_system.cpp",
+    "include/pops/numerics/elliptic/amr/partitioned_region_transfer.hpp",
+    "examples/migration/scientific/STAGE_FIELDS.md",
+    "examples/migration/scientific/api040_stage_fields_library.py",
+    "examples/migration/scientific/api040_three_stage_screened_fields.py",
+    "tests/python/integration/runtime/test_public_three_stage_screened_fields.py",
+    "tests/python/native_dimensions.json",
+    "tests/python/support/stage_fields_independent_reference.py",
+    "tests/python/support/stage_fields_pre_native_budget.json",
+    "tests/python/support/stage_fields_public_fixture.py",
+    "tests/python/test_durations.json"
+  ],
+  "independent_source_reviews": {
+    "stage": "5c538c960660fe3b29d0a639f8282aad249e43d3d4ca7f68227b61207e8319d5",
+    "cpp": "58018ceec923a07e23f9504dcad4d24698a770130257b692ebff7983ba937376",
+    "public": "2741652d4b89f5622b4ffa92e1ba5fa1d79376e2695002bc8c678b79f5be11fc"
+  },
+  "status": "COMMITTED_SOURCE_PENDING_OFFICIAL_NATIVE_BUILD_AND_INDEPENDENT_RECEPTION",
+  "preserved_untracked_handoff": true,
+  "global_obligations_remaining": 94,
+  "backend_acceptance_inherited": false
+}

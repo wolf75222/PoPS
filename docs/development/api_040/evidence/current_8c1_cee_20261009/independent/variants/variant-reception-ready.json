@@ -1,0 +1,39 @@
+{
+  "contract": "pops.non-author-stage-fields-variant-offline-reception@1",
+  "verdict": "ACCEPT_RENAME_AND_CHANGED_DECAY_CPU_WORLD1_WITH_LIMITS",
+  "Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "Native": "cee947c25c771f8c5a155e5f4cb990de308de14fe77e9f55c654e3b3837dee6f",
+  "SDK": "087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626",
+  "oracle_sha256": "28ca67fc888d78ae3f57cc417759b4b9624692c9499d5d1ecacb1fc793b6b81e",
+  "immutable_baseline_budget_sha256": "bed47b146393f5b94bb37ee6a57684985951b769773ee0f956ed34dd84129cd3",
+  "rename_canonical_quantities_bitexact": 14,
+  "rename_raw_states_fields_bitexact": 13,
+  "rename_raw_bind_arrays_bitexact": 2,
+  "rename_checkpoint_numeric_bitexact": 96,
+  "rename_numerical_exchanges_bitexact": 2304,
+  "decay_parameter": "11/10",
+  "decay_q_max_abs_error": 4.440892098500626e-16,
+  "decay_field_max_abs_error": 3.2307490016592055e-14,
+  "decay_qfinal_separation": 6.348378589793313e-05,
+  "decay_pre_execution_budget_sha256": "515bec429b4dec301ed8ebb339a54045249521c5225093e536ac3bfd5b8a2ff4",
+  "original_public_three_counts": {
+    "pass": 2,
+    "failure": 1,
+    "exit": 1
+  },
+  "new_valid_label_rename_exit": 0,
+  "limits": [
+    "Public-three original cohort is 2PASS/1Source-grammarFAIL with process exit1; valid-label rename is a distinct later closed0 capture, not a rewrite of original failure.",
+    "CPU MPI world1 one macro step only; no MPI2/GPU/3D/refinement/longtime result.",
+    "No persisted CG reports, stage publication clocks, complete frontend-to-binary graph or unconditional FE positivity theorem.",
+    "Rename checkpoint semantic numerical members match; renamed identifiers/envelopes and opaque carriers may differ legitimately."
+  ],
+  "files_sha256": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/variants/receive_variants.py": "f866cd08fb6702a80f861261eef357420cbe518bad42426d307636e1d6a8da18",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/variants/validation-command.json": "6190f5b2bca93420829dab9b7000551eceded03605b053c349a245823867e6a6",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/variants/variant-reception.json": "cfe3efbc6a014f608b92ca2e54cbd9d4dfbedf98f9adbd567bb02ad12bee841c",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/variants/physical_protocol.py": "ad4c0860638f721fb67df7a267b8d9d0081d70a49e972fa98d11a5b1015f49d2",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/variants/PROTOCOL.md": "b8a320b518aa5fcd40879e8c44649ccc3c89bb1865d62c376b11a0584b00cdaa"
+  },
+  "no_Native_PoPS_author_import_run_Main_env_SSH": true
+}

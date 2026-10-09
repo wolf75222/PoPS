@@ -1,4 +1,63 @@
 {
+  "current_native_stage_fields_reception_20261009": {
+    "schema": 1,
+    "scope": "Additive publication of actual bounded receptions. Full CI, stage fault injection, Dim1/3 and scientific MPI2/GPU/multilevel/EB/convergence remain separate obligations. Older archived negatives are not overwritten.",
+    "full_94_obligations_closed": false,
+    "qualified_cpu_native_build_Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+    "current_metadata_Source": "e27d065a5eb7c086ced60b751a2468f729361ff0",
+    "Native": "cee947c25c771f8c5a155e5f4cb990de308de14fe77e9f55c654e3b3837dee6f",
+    "SDK": "087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626",
+    "core_fingerprint": "95d0ccaa1e7aa39f9cbb01d539c4e31a5a7e6e143207b088fd9c2730482963f5",
+    "manifest": "evidence/current_8c1_cee_20261009/manifest.json",
+    "publication": "evidence/current_8c1_cee_20261009/publication.json",
+    "public_world1": {
+      "new_public_tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "core_files_rehashed": 1221,
+      "source_install_wheel_payload": 1175,
+      "canonical_quantities": 42,
+      "populated_histories": 27,
+      "checkpoint_arrays": 432
+    },
+    "source_original": {
+      "tests": 941,
+      "passed": 939,
+      "failures": 2,
+      "native_loaded": 0
+    },
+    "source_ci_corrected": {
+      "tests": 56,
+      "passed": 56,
+      "failures": 0,
+      "native_loaded": 0
+    },
+    "cpp": {
+      "world1_registered_tests_passed": 26,
+      "MPI2_groups_passed": 3,
+      "MPI2_gtest_cases_per_rank": 10,
+      "MPI2_case_rank_executions": 20
+    },
+    "ROMEOGPU": {
+      "Source_of_failed_build": "98804c6849c9966e05b5397126bab983a5fa0227",
+      "build_job": 738213,
+      "state": "FAILED",
+      "runtime_job": 738214,
+      "runtime_state": "CANCELLED",
+      "CUDA_new_source_e27_reception": "pending",
+      "GPU_native_or_PDE_received": false
+    },
+    "remaining": [
+      "Diagnostic third-accept fault actual execution/rollback/retry/restart",
+      "Native Dim1/3 and old affected suites on current core",
+      "Scientific new case MPI2/GPU/multilevel/EB/regrid/convergence",
+      "Persisted CG reports and per-stage publication clocks",
+      "Complete frontend-to-binary graph proof",
+      "All required CI checks on final pushed SHA",
+      "T1-T6/C01-C40/M01-M28/W01-W12 and principles 1.1-1.8 full reception"
+    ]
+  },
   "current_native_reception_4017_20261009": {
     "schema": 1,
     "date": "2026-10-09",

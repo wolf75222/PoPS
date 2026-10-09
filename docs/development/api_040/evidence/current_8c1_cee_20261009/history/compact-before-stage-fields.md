@@ -1,19 +1,3 @@
-# Réception courante : nouveau cœur StageProviderRead, 9 octobre 2026
-
-Le [document de la PR brouillon](STATUS_DRAFT_PR_20261009.md) reçoit CPU Source8c1/Nativecee947/SDK087/core95d, puis le code et les trois tests publics Sourcee27 avec les mêmes bytes du cœur. Les [reçus](evidence/current_8c1_cee_20261009/manifest.json) conservent les échecs antérieurs. Les 94 obligations et toutes les équations/mappings T/C/M/W/principes restent ouverts. Les PASS4017 et988 gardent leurs gels historiques.
-
-| Exigence transverse | Acquis exact | Reste / prochaine action |
-|---|---|---|
-| Généricité physique et méthode Python | Nouveau cas deux champs/trois stades par non-auteur, équations publiques ; renommage bit exact et coefficient modifié dans le C++ exécuté, oracle reçu CPUworld1 | Preuve complète frontend→binaire et réception de toutes les opérations du langage |
-| Autorité des publications / SSP | Contrat versionné StageProviderRead v1, plans de production transmis automatiquement ; prémisse Forward Euler conditionnelle | Rapports CG/clocks par stade ; injection réelle après troisième accept puis rollback/retry/restart |
-| Production C++/Kokkos/AMR/MPI | Build CPU Dim2 officiel100,26s ; trois correctifs de visibilité NVCC sans modification des corps mathématiques ;26testsC++world1 et trois groupesMPI2 reçus | Nouveau buildCUDAe27 puis runtime ; NativeDim1/3 et ancien corpus affecté |
-| Non-régression / CI | 939/941Source avant correction et négatifs conservés ;56Source après correction ;3/3nouveauxNative et réceptions indépendantes | Six familles CIold397 réellement diagnostiquées ; porte GitHub exacte révision finale |
-| Backend / science | Uniform Dim2 double OpenMP/MPICHworld1 du nouveau cas ; donneur exact,9historiques/cas,42grandeurs/432CParrays sur3tests | MPI2scientifique/GPU/multilevelAMR/EB/regrid/restart/convergence/performance selon chaque ligne |
-
-## Historique conservé avant ce gel
-
-Les assertions ci-dessous décrivent leurs révisions historiques. Elles ne qualifient pas le Native8c1 ni une révision ultérieure. Le texte antérieur complet est conservé byte exact dans l'archive ; les équations et les mappings ci-dessous sont maintenus.
-
 # Réception native actuelle 4017/939 du 9 octobre 2026
 
 L’[état de la PR brouillon](STATUS_DRAFT_PR_20261009.md) et les [reçus4017](evidence/current_4017_939_20261009/manifest.json) rapportent le nouveau build réellement installé : Source4017d29d, Native939d331c, SDKacf0eeca, cœur743bc354 (schéma2,1220 fichiers), wheel0d3c66b6. Ce gel reçoit ses propres runs et oracles indépendants ; aucun PASS988 n’est transféré. Les équations et la méthode d’un nouvel article doivent devenir leur propre traduction C++ depuis les compositions Python, avec un cœur figé ignorant l’identité du modèle. Les 94 obligations, équations et mappings restent ouverts et préservés.

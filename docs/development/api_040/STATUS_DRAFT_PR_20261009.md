@@ -1,102 +1,72 @@
-# PoPS 0.4.0 : état reçu du 9 octobre 2026
+# PoPS 0.4.0 : avancement reçu du 9 octobre 2026
 
-[PR681](https://github.com/wolf75222/PoPS/pull/681) reste un brouillon. Les 86 obligations T/C/M/W et les huit principes restent ouverts. Ce document rapporte les exécutions du gel **4017/939/acf0** et distingue les corrections CI suivantes. Les anciennes preuves gardent leurs identités et leurs limites.
+[PR681](https://github.com/wolf75222/PoPS/pull/681) reste un brouillon. Le nouveau code est poussé jusqu'à `e27d065a5eb7c086ced60b751a2468f729361ff0`. Les **94 obligations**, 86 lignes T/C/M/W et huit principes, restent ouvertes. Le [corpus](corpus.json) conserve toutes les équations et les mappings antérieurs.
 
-Le critère de généricité est opérationnel : la physique **et la méthode** d'un nouvel article sont écrites en équations et compositions Python du langage typé ; leur traduction devient le C++ exécuté. Le cœur figé ne choisit, remplace ou refuse aucune expression en fonction d'une identité d'article, de modèle ou de formule. Chaque opération a une définition mathématique indépendante des modèles. Les identités servent à authentifier la provenance, les propriétaires et les caches. Les dépendances et l'autorité des champs doivent découler des expressions résolues, sans second assemblage technique demandé au scientifique.
+La physique et la méthode d'un nouvel article doivent s'écrire en équations et compositions Python du langage typé, puis devenir elles-mêmes le C++ exécuté. Le cœur figé ne choisit, remplace ou refuse une expression d'après une identité de modèle, d'article ou de formule. Les identités authentifient les propriétaires, la provenance et les caches. Le témoin ci-dessous apporte une réception bornée ; la preuve complète frontend→binaire reste ouverte.
 
-## Dernier lot réellement construit et installé
+## Code intégré
 
-| Élément | Identité reçue |
+Le contrat [StageProviderRead v1](stageproviderread_v1.md) dérive l'autorité des champs du vrai Program et des plans de résolution enregistrés. La fabrique de production transmet ces plans automatiquement ; le scientifique ne recompose pas une seconde chaîne technique. La preuve SSP reste conditionnelle à la prémisse Forward Euler et aux coefficients convexes, sans theorem ajouté de positivité, entropie ou convergence.
+
+Un non-auteur a écrit une [bibliothèque Python publique](../../../examples/migration/scientific/api040_stage_fields_library.py) et un [script scientifique linéaire](../../../examples/migration/scientific/api040_three_stage_screened_fields.py). Il assemble deux champs écrantés, trois lectures/résolutions de stade, SSPRK3 et un donneur figé, sans recette de physique dans le cœur. Les tests publics couvrent le cas, le renommage et une modification de coefficient Python.
+
+Trois composants C++/Kokkos/AMR utilisent désormais des foncteurs dont le type peut être compilé par NVCC : transfert partitionné, coefficients du solveur tensoriel et copie/mise à zéro AMR. La contre-revue conserve exactement les corps mathématiques, les plages, les réductions, l'ordre flottant et les gardes. La CI conserve son budget de 35 minutes et sa couverture ; une partition supplémentaire accueille les deux nouveaux fichiers, avec renommage valide de la fixture.
+
+## Identités réellement construites
+
+| Élément | Identité |
 |---|---|
-| Source effectivement construit | `4017d29d9adc066e2ab64d2eed3b99f1caa8f63c` |
-| Native installé Dim2 | `939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941` |
-| SDK, 384 headers signés | `acf0eeca77739e7d4dd8a7da161af75667a3f898959e7464961ea243db9107fa` |
-| Cœur conservateur, schéma2, 1220 fichiers dont bindings | `743bc354455285b4828e6d80039949317c31f63ac6fc3c5432ae2897487594a8` |
-| Wheel | `0d3c66b61ce95291dcd59c23d183a06b058d8fdcf473bf8ec58a69f16e32f696` |
+| Source du build CPU Dim2 | `8c1f55701cab7c60b3519bd343e3b4c1f193570f` |
+| Source des corrections CI et du dernier test public | `e27d065a5eb7c086ced60b751a2468f729361ff0` |
+| Native CPU installé | `cee947c25c771f8c5a155e5f4cb990de308de14fe77e9f55c654e3b3837dee6f` |
+| SDK | `087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626` |
+| Cœur conservateur, schéma2, 1221 fichiers dont bindings | `95d0ccaa1e7aa39f9cbb01d539c4e31a5a7e6e143207b088fd9c2730482963f5` |
+| Wheel du build Dim2 | `f9dca3938c50a7f8541f4a4a7bd3868c05904da235ada053d0e8e757af368afb` |
 
-Le build officiel incrémental réussit en **96,04 s**. Il mesure 24 objets et 24 actions de sortie C++ Ninja, sans réemploi d'objet qualifié. Le nombre réel d'exécutions du frontend C++ reste indéterminé : ni les octets identiques ni les statistiques agrégées du cache ne suffisent à le compter. La réception physique indépendante vérifie 40 entrées du lien, 1174 fichiers Source/install/wheel, les 1179 payloads immuables de la wheel et les 384 headers. Le lien et l'installation ont les mêmes 17 sections MachO de code, constantes et données ainsi que le même UUID ; les 111 octets différents sont limités aux métadonnées de chargement et à la signature.
+Le build officiel a clos en **100,26 s**, avec 24 actions C++ Ninja observées ; le nombre de processus frontend n'est pas déterminé. La réception physique et scientifique indépendante réauthentifie 1175 fichiers Source/install/wheel et 384 headers. AppleClang21, Kokkos5.2 OpenMP/Serial, MPICH4.1.2, double et Dim2 sont les backends reçus. Les cinq changements après8c1 concernent CI et fixture ; le cœur et le SDK sont byte exacts. Le Native n'est jamais réétiqueté comme un nouveau build e27. Un défaut de métadonnées du collecteur initial est conservé : cinq lignes `physical_before` contiennent le hash d'après build, alors que les vrais hashes du gel `pre-build.json` prouvent les cinq changements.
 
-Backend exécuté : AppleClang21, Kokkos5.2 OpenMP/Serial, MPICH4.1.2, Dim2 double, HDF5 parallèle1.14.3. OMP2 est configuré ; aucun débit, occupation des threads ou facteur d'accélération n'en est déduit. Les tests chargent le vrai paquet installé dans l'environnement `pops`, sans `PYTHONPATH`, avec les identités enregistrées avant et après. Les lecteurs indépendants ne chargent pas Native.
+## Exécutions reçues
 
-## Exécutions et réceptions scientifiques actuelles
-
-| Campagne sur 4017/939/acf0 | Résultat réel | Réception indépendante et limites |
+| Exécution | Résultat réel | Limite |
 |---|---|---|
-| Publication Field gardée puis diffusion | 3/3 PASS world1 | Trois variantes, dont renommage et coefficients modifiés. Les 192 valeurs restent bit identiques après renommage ; les coefficients modifiés changent le C++ et le calcul sauvegardé. Références Fraction/FFT et 42 pins de sorties contrôlés ; pas de preuve complète graph→binaire déduite. |
-| PDE IMEX nonautonome original | 1/1 PASS, 30,90 s | `U=84/25`, `F=144/25`, tableaux et checkpoint reçus sous les bornes originales. `Y=48/25` reste une référence sans tableau intermédiaire sauvegardé. |
-| Méthodes publiques, refus tardif/retry et capacité Uniform | 10/10 PASS, 349,54 s | Euler/SSPRK2, mutation, renommage, trois journaux de rollback exact et historique peuplé reçus. Un carrier UniformCP9 dans chacun des trois états ; 315 fichiers, 25 DSO et neuf closures CP authentifiés. Aucun transfert de couverture multi-layout. |
-| Retry original et huit cas natifs de reprise | 9/9 PASS, 615,76 s | 23 checkpoints et 1121 payloads reçus, 22 NPZ scientifiques, 28 NPY et 20 DSO. Restart, presets, refus, histories et réemploi du même sceau vérifiés. Trois digest corrompus et six archives rescellées mais sémantiquement invalides caractérisés. |
-| MPI2 représentatif, PDE original et Euler | 2/2 PASS par rang, 76,10 s | Identités des deux rangs, références IMEX et égalités des sorties reçues. |
-| MPI2 méthodes/refus/capacité/publication gardée | **13/13 PASS par rang**, zéro erreur/skip, 586,53 s | Les deux gardes de norme qui échouaient sur 988 passent après reconstruction, avec les mêmes seuils. 97 comparaisons rank/world1 bit identiques dans le périmètre enregistré ; commandes et données actuelles reçues. |
-| Publication couplée, selector world1 identique à MPI2 | 1/1 PASS, 38,82 s | Addendum indépendant : 24 paires d'états, 48 paires de membres numériques CP bit identiques et six paires clock/ring égales, sur trois phases. Les archives CP complètes et le framing des diagnostics ne sont pas déclarés identiques entre un et deux rangs. |
-| Inputs statiques : variable, diagonal linéaire, diagonal lisse × Euler/SSPRK2 | **6/6 PASS** | Six états et 9216 lignes d'échanges reçus avec une référence scalaire FV indépendante ; défaut maximal `1,78e-15`. Slots/stades et absence de publication Field vérifiés. CPU world1 uniquement ; C++ Program et IR complet non conservés comme preuve portable. |
+| Architecture + SSP + StageProviderRead + propriété temporelle | 941 tests : 939 PASS et deux échecs CI de catalogue/capacité ; Native bloqué | Négatif conservé |
+| Correction ciblée CI intégrée | 56 PASS, zéro échec/erreur/skip, 18,39 s | Local Source, pas CI GitHub |
+| Cas représentatif CPU world1 | Capture réelle close0, 35,31 s ; oracle et réception non-auteur acceptés | Un pas, Uniform Dim2 |
+| Renommage valide | Quatorze grandeurs canoniques identiques bit à bit | Deux offsets sérialisés CP de chaînes diffèrent légitimement |
+| Décroissance Python 11/10 | Oracle inchangé dans sa méthode ; différence d'état final `6,3484e-5`, coefficient présent dans le C++ exécuté | Pas de convergence ou théorème global |
+| Trois tests publics corrigés | **3 PASS**, zéro échec/erreur/skip, 100,91 s ; 42 grandeurs, 27 historiques et 432 tableaux CP reçus indépendamment | Le premier cohort2PASS/1refus de grammaire reste conservé |
+| C++ Release/O3 world1 | **26 tests CTest PASS**, zéro échec/erreur/skip | Trois cibles AMR/provider/publication/nullspace |
+| C++ MPI2 | **Trois groupes PASS**, dix cas GTest par rang, vingt exécutions cas-rang | Transfert composite, nullspace et interface conservative ; pas MPI2 du nouveau cas scientifique |
 
-Les runs world1 de publication gardée, du PDE original, des méthodes publiques et des reprises totalisent **23 exécutions PASS**. Le cas couplé supplémentaire, les six Inputs statiques et le test du cache compilé ci-dessous ont des reçus distincts ; ce ne sont pas une unique suite monolithique. Les durées sont celles des invocations enregistrées, sans comparaison de performance entre campagnes différentes.
+Le cas résout `(-Delta+3)phi=q+d` et `(-Delta+5)psi=q-(3/4)d`, puis `q_t=(3/20)Delta(q)-(4/5)q+(1/5)phi+(2/5)psi`, avec `d_t=0`. Il exécute les trois stades SSPRK3 depuis leurs propres états. Le donneur reste identique bit à bit ; les deux champs résidents sont ceux du dernier stade réellement exécuté, de temps1/2, et non ceux d'un maximum de temps. L'erreur maximale de l'état est `6,67e-16`, celle des champs `2,70e-14`, et le résidu physique indépendant `5,87e-12`, sous les budgets gelés avant Native. Aucune tolérance n'a été ajustée après mesure. Sept captures volontairement fausses sont refusées par le lecteur indépendant.
 
-La norme AMR répliquée compte chaque sample fini une seule fois. Le retry donne maintenant `0,074104… < 0,1`, contre `0,104799…` avec duplication à deux rangs ; la première acceptation de l'historique peuplé donne `28,124317… < 30`, contre `39,773791…`. La seconde tentative reste refusée sous sa garde20. Le contrat `program-norm2-ownership@1` conserve la composante0, les samples actifs EB de chaque niveau, le coarse couvert par le fine et la garde nonfinie de toutes les copies. `dot_all` et une norme composite pondérée sont d'autres opérations.
+Les [reçus retenus](evidence/current_8c1_cee_20261009/manifest.json) et leur [publication](evidence/current_8c1_cee_20261009/publication.json) sont des copies byte exactes. Les fichiers binaires, tableaux et checkpoints complets restent aux chemins originaux authentifiés dans les reçus. Les anciennes [preuves4017](evidence/current_4017_939_20261009/manifest.json), leurs négatifs et le [précédent document](evidence/current_8c1_cee_20261009/history/STATUS-before-stage-fields.md) sont préservés ; aucun PASS ancien ne ferme une campagne du nouveau cœur.
 
-Les [reçus actuels et leur manifeste](evidence/current_4017_939_20261009/manifest.json) conservent commandes, XML, identités, contre-réceptions, inventaires et chemins des données brutes. Le [lot988 historique](evidence/current_988_f8d_20261009/manifest.json) reste conservé, y compris ses deux échecs MPI ; aucun ancien PASS n'est réétiqueté. La première baseline4017 a refusé le lancement du modèle parce que `Kokkos_ROOT` était absent. Le premier collecteur Input a échoué après calcul en appelant une propriété comme une fonction. Ces deux négatifs de préparation restent séparés des exécutions corrigées et reçues.
+## ROMEO et CI
 
-Les gaps sont explicites : commandes Program absentes dans le lot retry/Native8 malgré C++ et DSO conservés ; pas d'états finaux macro/adaptive/directguard sauvegardés dans certaines fixtures ; pas de reload frais des checkpoints couplés, de preuve complète graph→binaire, de résidu elliptique composite indépendant, ni de convergence multilevel/EB par ces seuls témoins. Un PASS Native/JUnit et une réception mathématique des tableaux sauvegardés sont deux faits distincts.
+Tous les travaux récents ROMEO sont dans des namespaces privés mode700 du scratch ; aucun nouveau fichier n'est placé dans le projet partagé. Le build GPU R6 **738213** a réellement exécuté NVCC puis échoué sur 16 diagnostics d'accès privé dans deux unités de traduction. Le dépendant **738214** a été annulé sans exécution. Ces logs ont motivé les trois correctifs C++ désormais intégrés et reçus CPU. Le gel GPU échoué reste Source988/SDKde2 ; il ne qualifie ni8c1 ni e27. Une ancienne sonde CUDA Managed GH200 est positive ; aucun Native PoPS ni PDE GPU n'est encore reçu.
 
-## Code intégré et corrections suivantes
+R7 est préparé pour construire Sourcee27 en réutilisant les dépendances privées R6. Son admission doit authentifier une nouvelle source, le quota réel, les dépendances et le loader CUDA ; son build sera séparé de l'admission runtime après build. Aucun job futur, résultat ou hash Native GPU n'est inventé. Home et travaux antérieurs sont conservés.
 
-La tranche intégrée modifie les véritables modules Python/C++ de PoPS. Les propriétaires bas niveau remplacent les imports circulaires ; 72 corps numériques restent identiques à l'AST. `model.expression_language@1` réexporte les mêmes objets mathématiques. La preuve SSP V2 utilise les Inputs résolus réellement consommés et leur contenu actuel, sans sélectionner une méthode par son nom. Les contrats `accepted-static-provider-read@1`, `public-library-alias@1` et `program-norm2-ownership@1` sont versionnés. ABI13 demeure inchangée ; les consommateurs du SDK modifié ont été reconstruits pour la cohorte reçue.
+La CI distante Source397 contient de vrais échecs. Deux logs de shards sont retenus : 52 reçoit8FAIL/50PASS, 53 reçoit5FAIL/167PASS. Ils montrent six familles de défauts : profils GPU sur Serial, M27 Dim1 mal routé, découverte des headers Kokkos, compilation du composant test M19 sans flags MPI, identité du communicateur W11, et prémisse SSP d'un consommateur State. Ils restent distincts des 56 contrôles locaux de catalogue. Aucun succès de la porte d'agrégation ni état merge-ready n'est revendiqué ; la CI requise doit être examinée sur le SHA final poussé.
 
-La cohorte Source du commit4017 reçoit **904 PASS**, zéro échec/erreur/skip : 873 d'architecture, 25 SSP et six de propriété temporelle. Native y est effectivement bloqué : quatre tentatives d'import refusées, aucune extension ni module chargé. Cette validation d'intégration par l'auteur ne remplace pas les contre-revues indépendantes. Le négatif903/1 du commit7da et sa correction d'inventaire strict sont conservés dans les [preuves de l'intégration précédente](evidence/reviewed_integration_20261009/source-7da-inventory-correction-manifest.json).
+## Reproduire
 
-| Correction après les runs4017 | Code et preuve actuels | Réception restante |
-|---|---|---|
-| Route CI du test de cache | La wheel téléchargée est installée dans un environnement privé, authentifiée et vérifiée avant pytest, via le même outil que les shards. Contrôles négatifs indépendants reçus ; **un test réel PASS** sur la wheel actuelle, backend MPI world1, 75,79 s. | Exécution GitHub LinuxSerial sur le SHA poussé suivant ; pas de succès CI déduit du Mac MPI. |
-| Routage des deux fichiers 1D | `native_dimensions.json` affecte dimension1 aux cas de cisaillement périodique et au cas auto-cohérent, d'après leurs limites/cells/états réellement résolus. Les six autres fichiers du shard gardent dimension2. | Vrai Native Dim1 reconstruit et science reçue ; aucune géométrie modifiée. |
-| Champs dépendant de l'état du stade et preuve SSP | Contre-exemple Source réel : le Field résolu dépend du stade courant et ne satisfait pas la prémisse des Inputs statiques. Sol prépare l'autorité générique par publication/RHS dans les vrais plans ProgramField et la factory du compilateur. | Patch versionné, cas nouveau multiFields/multistades et négatifs, revue non-auteur, intégration, reconstruction et réception native. Aucune recette dédiée au cas d'origine ni théorème d'ordre/positivité générale revendiqué. |
-| C++ M2, AMR1/8 et PendingProof | Correctifs intégrés et contre-revues ciblées CPU1/MPI2 conservées ; la fixture PendingProof vérifie la vraie identité canonique, le motif exact de refus, huit fautes et rollback. | Non-régression C++ complète pertinente sur le build final O3, avec contributions distribuées, rangs vides et copies nonfinies. Les précédentes TU ciblées O0/objets988 ne valent pas réception O3 de tout le build4017. |
-
-La validation ciblée des deux corrections CI reçoit **60/60 PASS**, zéro erreur/skip, 17,56 s, avec Native bloqué. Elle teste le diff de travail exact au-dessus de4017 ; les preuves de route, installation et backend y sont des fixtures Source et subprocess simulés. Les deux builders scientifiques réels se résolvent en dimension1 sans compilation. Cette validation ne revendique ni Native ni succès GitHub ([reçu](evidence/current_4017_939_20261009/ci-focused-source/current-ci-route-source-receipt.json)).
-
-Les commits documentaires et de routage CI suivants ne changent pas les identités des runs du tableau. Aucun inventaire, corps de test, shard ou seuil scientifique n'est supprimé pour rendre la CI positive. La CI distante4017 contient des échecs réels ; la route de cache et les deux erreurs de dimension ont été diagnostiquées sur ses logs. Aucun état merge-ready ni succès d'agrégation requis n'est revendiqué.
-
-## ROMEO et GPU
-
-Tous les nouveaux fichiers sont dans `/gpfs/scratch/rmdraux/PoPS-final-full-native-cuda-dim2-gh200-um-98804c68-20261009`, privé mode700. Le home en dépassement n'est pas utilisé pour les installations ; aucun nouveau travail n'est écrit dans l'espace projet commun. Le compilateur déjà présent dans le sous-dossier personnel projet est seulement lu. Quota réel, grâce et croissance sont contrôlés avant chaque phase. Les prévisions de croissance ne sont ni des consommations mesurées ni un plafond personnel demandé par l'utilisateur.
-
-Le GPU reste un gel distinct : **Source988 / SDKde2 / coreb756**. Les échecs de préparation738094,738116 et738155 sont conservés ; leurs jobs dépendants ont été effectivement annulés sans exécution. La reprise738173 reçoit une vraie sonde CUDA : pointeur `cudaMemoryTypeManaged`, accès Host/Cuda, lancement et synchronisation réussis, GH200 compute9.0, runtime/header12060. Elle échoue ensuite avant l'entrée du build officiel PoPS parce que `Kokkos_ROOT` n'est pas exporté ;738174 est annulé, jamais lancé. Ce PASS est une allocation et un microkernel CUDA, sans qualification de PDE ni de Native PoPS.
-
-La reprise additive R5 exporte `Kokkos_ROOT` et `POPS_KOKKOS_ROOT` vers le propre préfixe Kokkos avant les contrôles et les processus enfants. Sa revue Source indépendante préserve le loader CUDA12.6 en premier, CMake, RPATH, finally, quota, sélecteurs et équations. Après admission physique fraîche, Root a réellement soumis **738183** pour le build et **738184** avec dépendance afterok. Le build738183 échoue réellement après29 s : le script officiel cherche par défaut un environnement nommé `pops`, alors que le préfixe privé actif est `pops_final_cuda_dim2`. Le journal de commande et le marker d'entrée sont conservés ; aucune action C++/Ninja ni admission Native GPU n'est reçue. Le dépendant738184 a été effectivement annulé, jamais lancé. Une préparation additive R6 doit sélectionner explicitement l'environnement privé, vérifier le vrai CLI dans Slurm et authentifier ce refus antérieur, sans effacer le marker ni refaire le setup. Environnement, setup officiel effectué une fois, Kokkos et sonde existants sont conservés. **Aucun Native GPU, kernel PDE GPU ou résultat scientifique GPU n'est encore reçu**, et le gel988 ne qualifie pas4017.
-
-## Reproduire les périmètres reçus
-
-Dans le worktree de la révision construite, utiliser le véritable environnement `pops`. Le setup officiel a déjà été fait une fois pour le worktree actuel ; dans un autre worktree, effectuer `scripts/setup_env.sh` une fois. L'invocation de construction exacte, ses variables, commandes et wheel sont dans [le reçu du build4017](evidence/current_4017_939_20261009/build/invocation.json). Le parcours officiel est `scripts/build_python.sh --dim 2 --mpi` ; reconstruire, installer et authentifier les identités avant d'interpréter un run d'une nouvelle révision.
-
-Les commandes suivantes supposent l'environnement `pops` activé et sa vraie installation Kokkos. `POPS_INCLUDE` désigne les headers de ce checkout ; la preuve d'installation doit confirmer qu'ils correspondent au SDK du Native. Les pins ci-dessous sont ceux du build4017 reçu, pas des valeurs à conserver après changement de code. Changer de révision exige un nouveau reçu et les pins du nouveau build.
+Dans un worktree neuf, utiliser `scripts/setup_env.sh` une fois. Le worktree actuel a déjà été préparé. Activer l'environnement `pops`, conserver sa vraie installation Kokkos et utiliser les headers installés du wheel authentifié. Le [journal d'invocation](evidence/current_8c1_cee_20261009/build/actual-official-invocation.sh) donne les commandes exactes du build reçu. Le parcours officiel reste :
 
 ```sh
-env -u PYTHONPATH -u PYTHONOPTIMIZE -u PYTEST_ADDOPTS \
-  Kokkos_ROOT="$CONDA_PREFIX" POPS_KOKKOS_ROOT="$CONDA_PREFIX" \
-  POPS_INCLUDE="$PWD/include" \
-  FI_PROVIDER=tcp OMP_NUM_THREADS=2 OMP_PROC_BIND=false \
+scripts/build_python.sh --dim 2 --mpi --wheel-dir /chemin/prive/wheel-neuf -- \
+  -C build.verbose=true -C cmake.define.CMAKE_EXPORT_COMPILE_COMMANDS=ON
+env -u PYTHONPATH -u POPS_INCLUDE -u PYTHONOPTIMIZE -u PYTEST_ADDOPTS \
+  PYTHONDONTWRITEBYTECODE=1 FI_PROVIDER=tcp OMP_NUM_THREADS=2 OMP_PROC_BIND=false \
   POPS_NATIVE_DIM=2 POPS_REQUIRE_NATIVE_TESTS=1 \
-  POPS_GUARDED_FIELD_SOURCE_SHA=4017d29d9adc066e2ab64d2eed3b99f1caa8f63c \
-  POPS_GUARDED_FIELD_NATIVE_SHA=939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941 \
-  python docs/development/api_040/run_installed_checks.py \
-  --output /chemin/prive/nouveau-recu \
-  --test tests/python/integration/runtime/test_imex_nonautonomous_field.py::test_public_nonautonomous_imex_field_reads_explicit_time
+  python -m pytest -q tests/python/integration/runtime/test_public_three_stage_screened_fields.py
 ```
 
-```sh
-env -u PYTHONPATH -u PYTHONOPTIMIZE -u PYTEST_ADDOPTS \
-  Kokkos_ROOT="$CONDA_PREFIX" POPS_KOKKOS_ROOT="$CONDA_PREFIX" \
-  POPS_INCLUDE="$PWD/include" FI_PROVIDER=tcp POPS_REQUIRE_NATIVE_TESTS=1 \
-  POPS_GUARDED_FIELD_SOURCE_SHA=4017d29d9adc066e2ab64d2eed3b99f1caa8f63c \
-  POPS_GUARDED_FIELD_NATIVE_SHA=939d331c0f28150429266516e0e6b57fe84986f48d336290ec613a7c4dd85941 \
-  python docs/development/api_040/run_installed_mpi_checks.py \
-  --output /chemin/prive/nouveau-recu-mpi2 --ranks 2 --dimension 2 --threads 2 \
-  --test tests/python/integration/runtime/test_public_diffusion_field_predictor.py \
-  --test tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py \
-  --test tests/python/integration/runtime/test_guarded_field_diffusion_publication.py \
-  --test 'tests/python/integration/runtime/test_field_publication_instances_runtime.py::test_installed_three_instance_solved_provider_reads[cells0-False-False]'
-```
+La fixture authentifie le vrai `pops` installé, le Native et les headers, et conserve Program, C++, DSO, états, historiques et CP. Les [commandes C++](evidence/current_8c1_cee_20261009/cpp/actual-commands.sh) utilisent le preset du dépôt `mpi`, Release/O3, six vraies cibles et un build séparé du cache Python. Le premier filtre CTest n'a exécuté que les trois groupes MPI ; le [second](evidence/current_8c1_cee_20261009/cpp/world1/actual-commands.sh) sélectionne les labels des trois cibles restantes et reçoit26tests. Pour un autre chemin, adapter seulement les chemins de sortie et de Kokkos/Conda ; recalculer les pins, sans réutiliser les hashes ci-dessus comme preuves d'un rebuild.
 
-Les six Inputs statiques ont leurs [invocations et références de réception](evidence/current_4017_939_20261009/static-inputs/remaining5/invocation.json), leur [runner reçu](evidence/current_4017_939_20261009/static-inputs/reviewed-runner/run_native_reception.py) et leur [contre-réception indépendante](evidence/current_4017_939_20261009/independent/static-inputs/independent-reception-ready.json). Ils passent uniquement après authentification du build officiel terminé. Les scripts et l'admission ROMEO R5 sont conservés dans [le même manifeste](evidence/current_4017_939_20261009/manifest.json) ; ils conservent les chemins privés et le gel988, sans lancer de CUDA sur le nœud de connexion.
+## Travail restant et prochaine tranche
 
-La réception complète Dim1/3, GPU, multilevel AMR/EB, regrid/restart/convergence et les coûts à calcul comparable restent à établir pour chaque ligne concernée. Les tableaux T1–T6, C01–C40, M01–M28, W01–W12 et principes1.1–1.8, leurs équations et mappings sont préservés dans `mission_reception_compact_20261001.md` et `corpus.json`. Ces résultats bornés ne démontrent pas à eux seuls la généricité de toutes les opérations du langage.
+L'injection d'échec après la troisième résolution et acceptation de champ est préparée et contre-revue en Source. Sa version2 exige le hash du vrai C++ normal reçu ; son adaptation au compilateur réel reste séparée et doit être reçue avant exécution. Elle doit encore démontrer rollback, retry et restart sur tous les états, historiques, auxiliaires, clocks et checkpoints, sans whitelist masquant des différences. Aucun run de cette injection n'est déclaré ici.
+
+Il reste à construire et recevoir Dim1/3, rejouer les anciennes suites affectées sur ce cœur, qualifier le nouveau cas sous MPI2/GPU et AMR multilevel/EB/regrid/convergence, corriger et recevoir toute la CI requise, persister les rapports CG et les clocks de publication par stade, établir la preuve complète graph→binaire et mesurer les coûts à calcul comparable. Les tableaux T1–T6/C01–C40/M01–M28/W01–W12 et principes1.1–1.8 du [suivi compact](mission_reception_compact_20261001.md) gardent leurs obligations complètes. La mission demeure en cours.

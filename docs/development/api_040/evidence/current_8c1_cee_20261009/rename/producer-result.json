@@ -1,0 +1,7 @@
+{
+  "exit": 0,
+  "seconds": 38.3574241660026,
+  "producer_log_sha256": "2e426911871423a5c43078f4d185f362f522669612eba8903d755de48b00434b",
+  "variant": "rename",
+  "scope": "Actual capture process exit, not scientific or CI acceptance."
+}

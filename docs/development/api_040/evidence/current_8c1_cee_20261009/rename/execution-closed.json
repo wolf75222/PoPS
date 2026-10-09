@@ -1,0 +1,404 @@
+{
+  "ABI": "087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626|/usr/bin/clang++|c++20|dim=2",
+  "accepted_steps": 1,
+  "artifact_identity": "pops.artifact.v1:sha256:448bb1ddd29ecc3d2a42c44634313eacece980ee82d48c65d1b4eab46a77d2f0",
+  "backend": {
+    "abi": {
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+      "value": "compiler=Apple LLVM 21.0.0 (clang-2100.1.1.101);std=202002L;headers=087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626;kokkos=1;stdlib=libc++_210106;mpi=1;mpi_abi=b4a615b4a0f9fc89f66b7dfb9a21a8d4e4819db44c5f371e23818f47ce39e584;dim=2"
+    },
+    "backend": {
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+      "value": "production"
+    },
+    "capabilities": {
+      "centerings": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": [
+          "cell"
+        ]
+      },
+      "execution_backend": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": "OpenMP"
+      },
+      "generic_field_view": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": true
+      },
+      "layouts": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": [
+          "right",
+          "left",
+          "strided"
+        ]
+      },
+      "ownership": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": [
+          "borrowed",
+          "owned",
+          "shared"
+        ]
+      },
+      "scalars": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": [
+          "float64"
+        ]
+      },
+      "shared_space": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": "Host"
+      },
+      "stream_identity": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": "Kokkos::OpenMP::synchronous"
+      },
+      "supported_dimensions": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": [
+          2
+        ]
+      }
+    },
+    "communicator": {
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+      "value": "MPI_COMM_WORLD"
+    },
+    "device": {
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+      "value": "cpu"
+    },
+    "memory_spaces": {
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+      "value": [
+        "host"
+      ]
+    },
+    "precision": {
+      "accumulation": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": "float64"
+      },
+      "compute": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": "float64"
+      },
+      "reduction": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": "float64"
+      },
+      "storage": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": "float64"
+      }
+    },
+    "schema_version": 1,
+    "target": {
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+      "value": "system"
+    }
+  },
+  "binaries": {
+    "model:renamed_donor_block": {
+      "bytes": 357176,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/jit/d8a2d62c5c248117dd169a7b27231bb5991a2af78635384b64e7d1f39f5974c0.so",
+      "sha256": "fb26a1cacd1366ea298ce2038b6bc3c5702c49db21839a5c73f785103c0f5a44"
+    },
+    "model:renamed_receiver_block": {
+      "bytes": 381656,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/jit/43090e284f6b72b1fc628bc5e7ffdc81c9b45ea4a274ac8743203883be0e6d0a.so",
+      "sha256": "621d8ac9a6fd2cd76089871d61f88ae8f96dd82f8a06b79abaa93404e74cdbae"
+    },
+    "pops.handle.v1::case:renamed_case::layout::default": {
+      "bytes": 1488496,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/generated/025448b39168c9bfc59678921d643aa2329595a04900aaaf4e17842dea21bd0a.so",
+      "sha256": "4b506828e5e136bdd14916b441cf47984081509283be94b529cceec5a7382bac"
+    },
+    "program": {
+      "bytes": 1488496,
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/generated/025448b39168c9bfc59678921d643aa2329595a04900aaaf4e17842dea21bd0a.so",
+      "sha256": "4b506828e5e136bdd14916b441cf47984081509283be94b529cceec5a7382bac"
+    }
+  },
+  "case_source_sha256": "bdaee56ac52b4391ed7b5402a95c00524b5ae9a4b48dd47b44fef73799bfad42",
+  "compiler_to_binary_graph_proof": false,
+  "decay": "4/5",
+  "identity": {
+    "Native": "cee947c25c771f8c5a155e5f4cb990de308de14fe77e9f55c654e3b3837dee6f",
+    "SDK": "087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626",
+    "Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+    "build_admission_sha256": "182f374d82334398832430a146ba9516c995dd27bd827dc76a9624c0211585fb",
+    "build_result_sha256": "29e32a96c805ae99b85639c609b2f4ced72459ea7fb1fa1f1496e24f1545089f",
+    "core_fingerprint": "95d0ccaa1e7aa39f9cbb01d539c4e31a5a7e6e143207b088fd9c2730482963f5",
+    "core_rows": 1221,
+    "installed_payload_files": 1175,
+    "native_origin": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "native_path": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "package": "/Users/romaindespoulain/miniforge3/envs/pops/lib/python3.12/site-packages/pops",
+    "runtime_environment": {
+      "allocator_lifetime": "process-lifetime ManagedArena; blocks are released by a Kokkos finalize hook, the arena tables are intentionally never destroyed",
+      "allocator_mode": "kokkos_shared_space_managed_arena",
+      "amr_refinement_ratio": null,
+      "amr_refinement_ratio_rank": 2,
+      "amr_refinement_ratio_selection": "hierarchy_exact_rank",
+      "comm_allocator_mode": "kokkos_shared_host_pinned_space",
+      "communicator": "MPI_COMM_WORLD",
+      "dimension": 2,
+      "field_memory_space": "host",
+      "has_kokkos": true,
+      "kokkos_atexit_finalize_registered": false,
+      "kokkos_backend": "OpenMP",
+      "kokkos_concurrency": 0,
+      "kokkos_device": "cpu",
+      "kokkos_finalized": false,
+      "kokkos_initialized": false,
+      "kokkos_initialized_by_pops": false,
+      "kokkos_lifecycle": "PoPS will lazily initialize Kokkos on first allocation or kernel launch",
+      "kokkos_ownership": "lazy",
+      "kokkos_shared_space": "Host",
+      "kokkos_stream": "Kokkos::OpenMP::synchronous",
+      "kokkos_stream_synchronous": true,
+      "mpi_active": true,
+      "mpi_atexit_finalize_registered": true,
+      "mpi_compiled": true,
+      "mpi_initialized_by_pops": true,
+      "mpi_ownership": "pops-owned",
+      "mpi_rank": 0,
+      "mpi_ranks": 1,
+      "mpi_thread_level": 3,
+      "precision": "double",
+      "real_bytes": 8,
+      "supports_custom_communicator": false,
+      "supports_mixed_precision": false,
+      "supports_single_precision": false
+    }
+  },
+  "labels": {
+    "case": "renamed_case",
+    "domain": "renamed_domain",
+    "donor_block": "renamed_donor_block",
+    "donor_model": "renamed_donor_model",
+    "donor_state": "renamed_donor_state",
+    "field_owner": "renamed_field_owner",
+    "field_problem": "renamed_field_problem",
+    "method": "renamed_method",
+    "phi": "renamed_phi",
+    "phi_input": "renamed_phi_input",
+    "psi": "renamed_psi",
+    "psi_input": "renamed_psi_input",
+    "receiver_block": "renamed_receiver_block",
+    "receiver_model": "renamed_receiver_model",
+    "receiver_state": "renamed_receiver_state"
+  },
+  "macro_step": 1,
+  "platform_manifest": {
+    "abi": {
+      "evidence": "pops.compiled-component-metadata.v1",
+      "value": "087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626|/usr/bin/clang++|c++20|dim=2"
+    },
+    "backend": {
+      "evidence": "pops.compiled-component-metadata.v1",
+      "value": "production"
+    },
+    "capabilities": {
+      "centerings": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": [
+          "cell"
+        ]
+      },
+      "execution_backend": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": "OpenMP"
+      },
+      "generic_field_view": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": true
+      },
+      "layouts": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": [
+          "right",
+          "left",
+          "strided"
+        ]
+      },
+      "ownership": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": [
+          "borrowed",
+          "owned",
+          "shared"
+        ]
+      },
+      "scalars": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": [
+          "float64"
+        ]
+      },
+      "shared_space": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": "Host"
+      },
+      "stream_identity": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": "Kokkos::OpenMP::synchronous"
+      },
+      "supported_dimensions": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+        "value": [
+          2
+        ]
+      }
+    },
+    "communicator": {
+      "evidence": "pops.compiled-component-metadata.v1",
+      "value": "MPI_COMM_WORLD"
+    },
+    "device": {
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+      "value": "cpu"
+    },
+    "memory_spaces": {
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7910635ac19d1d3316b0a6062e67310dff5e2eb459f14c6c776fcdfff2b1a3e5",
+      "value": [
+        "host"
+      ]
+    },
+    "precision": {
+      "accumulation": {
+        "evidence": "pops.compiled-component-metadata.v1",
+        "value": "float64"
+      },
+      "compute": {
+        "evidence": "pops.compiled-component-metadata.v1",
+        "value": "float64"
+      },
+      "reduction": {
+        "evidence": "pops.compiled-component-metadata.v1",
+        "value": "float64"
+      },
+      "storage": {
+        "evidence": "pops.compiled-component-metadata.v1",
+        "value": "float64"
+      }
+    },
+    "schema_version": 1,
+    "target": {
+      "evidence": "pops.compiled-component-metadata.v1",
+      "value": "system"
+    }
+  },
+  "real_saved_arrays": {
+    "donor_final": [
+      1,
+      12,
+      16
+    ],
+    "phi_resident": [
+      12,
+      16
+    ],
+    "phi_stage0": [
+      1,
+      12,
+      16
+    ],
+    "phi_stage1": [
+      1,
+      12,
+      16
+    ],
+    "phi_stage2": [
+      1,
+      12,
+      16
+    ],
+    "psi_resident": [
+      12,
+      16
+    ],
+    "psi_stage0": [
+      1,
+      12,
+      16
+    ],
+    "psi_stage1": [
+      1,
+      12,
+      16
+    ],
+    "psi_stage2": [
+      1,
+      12,
+      16
+    ],
+    "q_final": [
+      1,
+      12,
+      16
+    ],
+    "q_stage0": [
+      1,
+      12,
+      16
+    ],
+    "q_stage1": [
+      1,
+      12,
+      16
+    ],
+    "q_stage2": [
+      1,
+      12,
+      16
+    ]
+  },
+  "retained_cpp_and_provenance": {
+    "generated/025448b39168c9bfc59678921d643aa2329595a04900aaaf4e17842dea21bd0a.cpp": {
+      "bytes": 1484169,
+      "sha256": "85df676c0701ffe3ce8d7d0f64f50ed5c50ce8746720fc6f2999428e13e5579f"
+    },
+    "generated/025448b39168c9bfc59678921d643aa2329595a04900aaaf4e17842dea21bd0a.so.pops-artifact.json": {
+      "bytes": 490,
+      "sha256": "5c05477f403958c340c09aa593786a004066b4eccc337379b7cc8a2c8a25c675"
+    },
+    "generated/renamed_method.cpp": {
+      "bytes": 99950,
+      "sha256": "6bb21498f6f0263c5ebf0b89da0ac22f5b27d0b51b8de6222945fd241c85f580"
+    },
+    "jit/43090e284f6b72b1fc628bc5e7ffdc81c9b45ea4a274ac8743203883be0e6d0a.so.pops-artifact.json": {
+      "bytes": 591,
+      "sha256": "cdcf5c6dec77930f6b4d4d87d570bf1310d5cc3e2796b364addf9815ac9644b3"
+    },
+    "jit/43090e284f6b72b1fc628bc5e7ffdc81c9b45ea4a274ac8743203883be0e6d0a.so.pops-model-compile.json": {
+      "bytes": 2332,
+      "sha256": "ea113e039b3d4587c49b45d7fd5cdde5f9a5dfdd51d009778838ed03183012dd"
+    },
+    "jit/43090e284f6b72b1fc628bc5e7ffdc81c9b45ea4a274ac8743203883be0e6d0a.so.pops-model.cpp": {
+      "bytes": 15544,
+      "sha256": "d7ea4e37f195593d5d4c232e63b36b3dc5e878fe1097c587dcebb1037712430a"
+    },
+    "jit/d8a2d62c5c248117dd169a7b27231bb5991a2af78635384b64e7d1f39f5974c0.so.pops-artifact.json": {
+      "bytes": 591,
+      "sha256": "09dc1ccc86d5234c8ce9ba9fe021c35e930d400b1bbcf3b615603651a34c350f"
+    },
+    "jit/d8a2d62c5c248117dd169a7b27231bb5991a2af78635384b64e7d1f39f5974c0.so.pops-model-compile.json": {
+      "bytes": 2332,
+      "sha256": "8368f774c660c3f38be328db64807a9a1d5daa701f42eeaa9f0975dbca401b4b"
+    },
+    "jit/d8a2d62c5c248117dd169a7b27231bb5991a2af78635384b64e7d1f39f5974c0.so.pops-model.cpp": {
+      "bytes": 10100,
+      "sha256": "40f78540351ec8e311e7087309866103aff555c621c643c45972ae4110d03ced"
+    }
+  },
+  "scope": "Installed CPU/World1 actual capture only. Separate fixed independent oracle reception required; no MPI2, AMR, convergence, GPU or global invariant theorem.",
+  "seconds": 38.245678917002806,
+  "status": "EXECUTION_CLOSED_PENDING_INDEPENDENT_MATHEMATICAL_RECEPTION",
+  "time": 0.0001,
+  "variant": "rename"
+}

@@ -1,0 +1,13 @@
+{
+  "Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "exit": 0,
+  "seconds": 593.1150089579969,
+  "disk_after": {
+    "total": 494384795648,
+    "used": 493975027712,
+    "free": 409767936
+  },
+  "log_sha256": "89e19579a370bebffeb2c2a8506774ad71ee8e7aad108faee96f10e62ebe02e2",
+  "ctest_xml_exists": true,
+  "scope": "Actual process closure; inspect test inventory/results before acceptance. No GPU/CUDA or convergence claim."
+}

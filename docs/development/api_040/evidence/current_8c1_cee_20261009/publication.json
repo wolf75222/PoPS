@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "timestamp_utc": "2026-10-09T03:56:17.785804+00:00",
+  "code_head_before_document_publication": "e27d065a5eb7c086ced60b751a2468f729361ff0",
+  "qualified_cpu_native_build_Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "Native": "cee947c25c771f8c5a155e5f4cb990de308de14fe77e9f55c654e3b3837dee6f",
+  "SDK": "087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626",
+  "core_fingerprint": "95d0ccaa1e7aa39f9cbb01d539c4e31a5a7e6e143207b088fd9c2730482963f5",
+  "core_files": 1221,
+  "retained_members": 106,
+  "retained_bytes": 4442725,
+  "manifest_sha256": "395d897f33a4d538fc98e47925813c8c44e21e4d9ab6c5d1de8a4147dd6c659b",
+  "independent_rep_verdict": "ACCEPT_REPRESENTATIVE_CPU_WORLD1_WITH_LIMITS",
+  "independent_variant_verdict": "ACCEPT_RENAME_AND_CHANGED_DECAY_CPU_WORLD1_WITH_LIMITS",
+  "independent_public_three_verdict": "ACCEPT_THREE_PUBLIC_NATIVE_TESTS_CURRENT_CAPTURE_WITH_LIMITS",
+  "independent_cpp_verdict": "ACCEPT_SELECTED_CPP_NONREGRESSION_EXECUTION_WITH_LIMITS",
+  "public_three_counts": {
+    "new_public_tests": 3,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "core_files_rehashed": 1221,
+    "source_install_wheel_payload": 1175,
+    "canonical_quantities": 42,
+    "populated_histories": 27,
+    "checkpoint_arrays": 432
+  },
+  "compiler_to_binary_graph_proof": false,
+  "GPU_native_or_PDE_received": false,
+  "full_94_obligations_closed": false,
+  "scope": "Additive publication of actual bounded receptions. Full CI, stage fault injection, Dim1/3 and scientific MPI2/GPU/multilevel/EB/convergence remain separate obligations. Older archived negatives are not overwritten."
+}

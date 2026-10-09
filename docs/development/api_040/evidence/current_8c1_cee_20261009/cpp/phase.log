@@ -1,0 +1,170 @@
+-- The CXX compiler identification is AppleClang 21.0.0.21000101
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/clang++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- PoPS native spatial specialization: Dim=2
+-- PoPS Real specialization: double
+-- ccache actif : /Users/romaindespoulain/miniforge3/envs/pops/bin/ccache (cache de compilation ; -DPOPS_USE_CCACHE=OFF pour desactiver)
+-- Kokkos trouve (install 5.2.0) : for_each_cell backend = Kokkos (OPENMP;SERIAL)
+-- Found MPI_CXX: /Users/romaindespoulain/miniforge3/envs/pops/lib/libmpicxx.dylib (found version "4.0")
+-- Found MPI: TRUE (found version "4.0") found components: CXX
+-- MPI found (/Users/romaindespoulain/miniforge3/envs/pops/bin/mpiexec) : enabling distributed comm seam
+-- The C compiler identification is AppleClang 21.0.0.21000101
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/clang - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Found MPI_C: /Users/romaindespoulain/miniforge3/envs/pops/lib/libmpi.dylib (found version "4.0")
+-- Found MPI: TRUE (found version "4.0") found components: C CXX
+-- Found HDF5: /Users/romaindespoulain/miniforge3/envs/pops/lib/libhdf5.dylib;/Users/romaindespoulain/miniforge3/envs/pops/lib/libcrypto.dylib;/Users/romaindespoulain/miniforge3/envs/pops/lib/libcurl.dylib;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libpthread.tbd;/Users/romaindespoulain/miniforge3/envs/pops/lib/libsz.dylib;/Users/romaindespoulain/miniforge3/envs/pops/lib/libz.dylib;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libdl.tbd;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libm.tbd (found version "1.14.3") found components: C
+-- Parallel HDF5 found (1.14.3) : enabling native collective DataWriter
+-- FFTW3 found (/Users/romaindespoulain/miniforge3/envs/pops) : PoissonFFT local-axis production radix backend
+-- GoogleTest not found in the environment; fetching v1.17.0
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- pops tests: 76 heavy runtime targets capped (-O0 + pops_heavy_test_tu pool)
+-- Configuring done (19.0s)
+-- Generating done (0.8s)
+-- Build files have been written to: /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build
+[0/2] Re-checking globbed directories...
+[1/35] Building CXX object src/CMakeFiles/pops_runtime_core_objects.dir/runtime/program/step_transaction.cpp.o
+[2/35] Building CXX object src/CMakeFiles/pops_runtime_core_objects.dir/runtime/prepared_embedded_boundary.cpp.o
+[3/35] Building CXX object tests/CMakeFiles/pops_gtest_main.dir/cpp/support/gtest_main.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/support/gtest_main.cpp:1:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+[4/35] Building CXX object _deps/googletest-build/googletest/CMakeFiles/gtest.dir/src/gtest-all.cc.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/src/gtest-all.cc:38:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+[5/35] Linking CXX static library src/libpops_runtime_core.a
+[6/35] Linking CXX static library tests/libpops_gtest_main.a
+[7/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system.cpp.o
+[8/35] Building CXX object tests/CMakeFiles/test_tensor_fac_conservative_interface.dir/cpp/unit/elliptic/test_tensor_fac_conservative_interface.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/unit/elliptic/test_tensor_fac_conservative_interface.cpp:1:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+[9/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_aux.cpp.o
+[10/35] Building CXX object tests/CMakeFiles/test_field_nullspace.dir/cpp/unit/elliptic/test_field_nullspace.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/unit/elliptic/test_field_nullspace.cpp:1:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+[11/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_install.cpp.o
+[12/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_fields.cpp.o
+[13/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_embedded_boundary.cpp.o
+[14/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_field_plans.cpp.o
+[15/35] Building CXX object tests/CMakeFiles/test_mpi_composite_fac_partitioned_nd.dir/cpp/integration/mpi/test_mpi_composite_fac_partitioned_nd.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/integration/mpi/test_mpi_composite_fac_partitioned_nd.cpp:1:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+[16/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_layout_transfer.cpp.o
+[17/35] Building CXX object tests/CMakeFiles/test_mpi_field_nullspace_preflight.dir/cpp/integration/mpi/test_mpi_field_nullspace_preflight.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/integration/mpi/test_mpi_field_nullspace_preflight.cpp:1:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+[18/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_io.cpp.o
+[19/35] Linking CXX static library lib/libgtest.a
+[20/35] Linking CXX executable bin/test_tensor_fac_conservative_interface
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops/lib' ignored
+[21/35] Linking CXX executable bin/test_field_nullspace
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops/lib' ignored
+[22/35] Linking CXX executable bin/test_mpi_composite_fac_partitioned_nd
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops/lib' ignored
+[23/35] Linking CXX executable bin/test_mpi_field_nullspace_preflight
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops/lib' ignored
+[24/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_profiling.cpp.o
+[25/35] Building CXX object src/CMakeFiles/pops_runtime_system.dir/runtime/system/system_program.cpp.o
+[26/35] Linking CXX static library src/libpops_runtime_system_abi.a
+[27/35] Building CXX object src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_layout_transfer.cpp.o
+[28/35] Building CXX object src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o
+[29/35] Building CXX object src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_component.cpp.o
+[30/35] Building CXX object src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o
+[31/35] Building CXX object tests/CMakeFiles/test_amr_tensor_fac_provider.dir/cpp/unit/runtime/test_amr_tensor_fac_provider.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/unit/runtime/test_amr_tensor_fac_provider.cpp:1:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+[32/35] Linking CXX executable bin/test_amr_tensor_fac_provider
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops/lib' ignored
+[33/35] Building CXX object tests/CMakeFiles/test_amr_program_field_publication.dir/cpp/integration/amr/test_amr_program_field_publication.cpp.o
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/tests/cpp/integration/amr/test_amr_program_field_publication.cpp:1:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/tests/gtest/gtest.h:2:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest.h:64:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-death-test.h:43:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/internal/gtest-death-test-internal.h:47:
+In file included from /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-matchers.h:49:
+/Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build/_deps/googletest-src/googletest/include/gtest/gtest-printers.h:528:35: warning: implicit conversion from 'char8_t' to 'char32_t' may change the meaning of the represented code unit [-Wcharacter-conversion]
+  528 |   PrintTo(ImplicitCast_<char32_t>(c), os);
+      |           ~~~~~~~~~~~~~           ^
+1 warning generated.
+[34/35] Linking CXX executable bin/test_amr_program_field_publication
+ld: warning: duplicate -rpath '/Users/romaindespoulain/miniforge3/envs/pops/lib' ignored
+Test project /Users/romaindespoulain/dev/tmp/PoPS-cpp-private-kernel-nonregression-8c1f-20261009/build
+    Start 1377: test_mpi_composite_fac_partitioned_nd_np2
+1/3 Test #1377: test_mpi_composite_fac_partitioned_nd_np2 ....   Passed  386.97 sec
+    Start 1405: test_mpi_field_nullspace_preflight_np2
+2/3 Test #1405: test_mpi_field_nullspace_preflight_np2 .......   Passed    0.70 sec
+    Start 1450: test_tensor_fac_conservative_interface_np2
+3/3 Test #1450: test_tensor_fac_conservative_interface_np2 ...   Passed    6.66 sec
+
+100% tests passed out of 3
+
+Label Time Summary:
+backend                                              = 788.65 sec*proc (3 tests)
+cpp-target:test_mpi_composite_fac_partitioned_nd     = 773.94 sec*proc (1 test)
+cpp-target:test_mpi_field_nullspace_preflight        =   1.39 sec*proc (1 test)
+cpp-target:test_tensor_fac_conservative_interface    =  13.32 sec*proc (1 test)
+medium                                               = 788.65 sec*proc (3 tests)
+mpi                                                  = 788.65 sec*proc (3 tests)
+
+Total Test time (real) = 394.39 sec

@@ -1,0 +1,176 @@
+{
+  "status": "OLD397_ACTUAL_CI_FAILURES_RECEIVED_NO_FINALHEAD_GREEN_CLAIM",
+  "run": 37874700424,
+  "observed_Source": "397626de9e003ab15a076319d2ee4c3d227a389c",
+  "current_Source_diagnosed_readonly": "e27d065a5eb7c086ced60b751a2468f729361ff0",
+  "jobs": [
+    {
+      "job": 113641077266,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 52",
+      "head": "397626de9e003ab15a076319d2ee4c3d227a389c",
+      "conclusion": "failure",
+      "summary": [
+        {
+          "line": 1236,
+          "text": "2026-10-09T02:35:44.0378978Z ============= 8 failed, 50 passed, 3 warnings in 274.81s (0:04:34) ============="
+        }
+      ],
+      "log_sha256": "96faf7235f96d3313e41544c1623129bb0ae41b8e0113eb134778646b2155ed8",
+      "api_sha256": "102713c3e1f9e0e0609c40b08bcde218340c4b3dd785d7ae2dff8cceb35338c2",
+      "first_failure": {
+        "line": 765,
+        "text": "2026-10-09T02:32:42.4748156Z tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py::test_installed_gpu_external_field_dispatch_rollback_retry[positive] FAILED [  3%]"
+      }
+    },
+    {
+      "job": 113641077493,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 53",
+      "head": "397626de9e003ab15a076319d2ee4c3d227a389c",
+      "conclusion": "failure",
+      "summary": [
+        {
+          "line": 1304,
+          "text": "2026-10-09T02:49:54.4307155Z ============ 5 failed, 167 passed, 3 warnings in 514.07s (0:08:34) ============="
+        }
+      ],
+      "log_sha256": "2fb545f7bb3759c5ab64e33cdce36f709e59e2a2ab39751c01fa9703cfbac1d4",
+      "api_sha256": "6c0944def62a8269303d20682de53494a2286a6e01f9dffc5a91aed1aa427a6a",
+      "first_failure": {
+        "line": 771,
+        "text": "2026-10-09T02:43:27.2776853Z tests/python/integration/runtime/test_atomic_cubature_parametric_refusal_runtime.py::test_installed_atomic_cubature_finite_parameter_attempt_refusal FAILED [  5%]"
+      }
+    }
+  ],
+  "no_single_common_cause": true,
+  "families": [
+    {
+      "job": 113641077266,
+      "cases": 4,
+      "cause": "GPU-specific externaldispatch test requiresactual supports_gpu+cuda/hip device+device/managedfields on KokkosSerial artifact, rejects supports_gpuFalse before scientificrun",
+      "logline": 851,
+      "possible_fix": "Profile contract should separate genuineGPUfixture selection fromCPUmandatory inventory while retaining mandatoryrealGPUlane coverage; no skip or supportsGpuTrue fabrication."
+    },
+    {
+      "job": 113641077266,
+      "cases": 2,
+      "cause": "M27 runtime explicitlyselectsNativeDimension1, Cartesian1D/cells1tuple, absentnative_dimensions file override, helperdefault2 selectsDim2first and laterrefusesdimension switch",
+      "logline": 1153,
+      "possible_fix": "Add actualDim1file override fromgeometry aftercounterreview; keep no-switch Nativeguard."
+    },
+    {
+      "job": 113641077266,
+      "cases": 2,
+      "cause": "coordinatedfacehostcompiler checks sys.prefix/include/Kokkos_MathematicalFunctions.hpp, butinstalledvenv hasKokkos configuredexternalprefix. skip becomesmandatorygate failure",
+      "logline": 1234,
+      "possible_fix": "Use authenticated configuredKokkos include/toolchainprefix, preservemandatorynativeguard and negative cases."
+    },
+    {
+      "job": 113641077493,
+      "cases": 2,
+      "cause": "M19 externalfaultcomponent CPP includesmpi.h unconditionally, compiler isSerial/usr/bin/c++ noMPIinclude route; failsbeforemath",
+      "logline": 1060,
+      "possible_fix": "Testcomponent should use exactSerial/MPI capability-aware source/compiler flags; no missingMPIheaders waiver or scientificcode changes."
+    },
+    {
+      "job": 113641077493,
+      "cases": 2,
+      "cause": "W11 unconditionalnative.mpi_world givesSerialNativeWorldCommunicator todistributedbroadcast, exactidentity guardrejectsserial",
+      "logline": 1202,
+      "possible_fix": "Choose worldNone foractualSerial byexistingnative_mpi_communicator authority, existingcollectivehelpers haveSerial branch; no weakening require_communicator."
+    },
+    {
+      "job": 113641077493,
+      "cases": 1,
+      "cause": "Atomiccubaturecompile rejected SSP beforeNativeexecution: explicitstateconsumer hasnoaffine stateweight. ExistingstageproviderFieldproofextension doesnotbyitselfprove thisconsumer",
+      "logline": 972,
+      "possible_fix": "Diagnose actual typedconsumer/effect/mathalias contract independently beforegenericproofextension; no stateconsumer unconditionalTrue or tolerance change."
+    }
+  ],
+  "current_bounded_source_pins": {
+    "tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py": "6ae84f3493802197fdb70083ecca10ff93ee23457327cef73c1b5c00378a7b2e",
+    "tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py": "0ae17bb9651465af956a506b47ee93426acc135c44949f5614b7cab9e01d61ee",
+    "tests/python/integration/runtime/test_m19_amr_consumed_runtime.py": "45e5fe551b0e4b82b9894daf24b3aabd221833b78c708aec57022248bd958089",
+    "tests/python/integration/runtime/test_w11_child_trace_rollback.py": "e40df27f7b031153659295d866ceb60d003b4c3e1a6618444427a41d832f25fd",
+    "tests/python/unit/numerics/test_coordinated_face.py": "c04acb90e67027a45bfab0722f9b17324d852fb1bd27e58425c69e6389a36978",
+    "tests/python/native_dimensions.json": "4a9dd8a32bcbb1f57f72b810610bf4b8516e15932fdaab0b1951746f38a4876b",
+    "python/pops/_native_collectives.py": "42886a62d0d0903e1675c9be42a0c6ae0318dd2e9664257999ffa5874352bc0c"
+  },
+  "scope": "Read-onlyliveGHAPIrawlogs+boundedcurrentSourceinspection; noArchitecturestatusneeded/noNative/tests/edits/skipgates; nofutureheadCIinference",
+  "source_functions": [
+    {
+      "file": "tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py",
+      "function": "test_installed_gpu_external_field_dispatch_rollback_retry",
+      "line": 29,
+      "expected": "genuine GPU Dim2 world1/2, actual Cuda/HIP device memory; currently Serialjob52 cannot supply GPU capability"
+    },
+    {
+      "file": "tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py",
+      "functions": [
+        "test_mixed_linear_three_grids_and_permutation_from_saved_c_and_mu",
+        "test_one_iteration_gmres_collectively_refuses_without_accepted_publication"
+      ],
+      "expected": "Dim1 installed backend; actualCartesian1D/cells1tuple; mandatorydimensionmetadata presentlydefault2"
+    },
+    {
+      "file": "tests/python/unit/numerics/test_coordinated_face.py",
+      "function": "test_actual_generated_composite_selects_and_executes_its_exact_policy",
+      "line": 199,
+      "expected": "ConfiguredhostKokkosSDKinclude+compiler, Dimension1coordinated/2ordinary; not venvprefixSDKassumption"
+    },
+    {
+      "file": "tests/python/integration/runtime/test_m19_amr_consumed_runtime.py",
+      "function": "test_installed_amr_consumed_field_regrid_and_nonfinite_rollback",
+      "expected": "SerialworldNone and MPIworldactual both; externaltestfaultsource mustmatchcompiledMPIcapabilities/toolchain"
+    },
+    {
+      "file": "tests/python/integration/runtime/test_w11_child_trace_rollback.py",
+      "function": "test_public_child_current_is_provisional_until_parent_accepts",
+      "line": 38,
+      "expected": "Dimension2; SerialworldNone vs genuineMPIWorldcommunicator only"
+    },
+    {
+      "file": "tests/python/integration/runtime/test_atomic_cubature_parametric_refusal_runtime.py",
+      "function": "test_installed_atomic_cubature_finite_parameter_attempt_refusal",
+      "line": 19,
+      "expected": "Generictyped acceptedStateconsumerSSP contract unresolved, not backendprofilewaiver; nativeexecute not reached"
+    }
+  ],
+  "actual_bounded_Source397_vs_e27_comparison": [
+    {
+      "file": "tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py",
+      "old397_sha256": "6ae84f3493802197fdb70083ecca10ff93ee23457327cef73c1b5c00378a7b2e",
+      "currente27_same_bytes": true
+    },
+    {
+      "file": "tests/python/integration/runtime/test_api040_m27_mixed_linear_runtime.py",
+      "old397_sha256": "0ae17bb9651465af956a506b47ee93426acc135c44949f5614b7cab9e01d61ee",
+      "currente27_same_bytes": true
+    },
+    {
+      "file": "tests/python/integration/runtime/test_m19_amr_consumed_runtime.py",
+      "old397_sha256": "45e5fe551b0e4b82b9894daf24b3aabd221833b78c708aec57022248bd958089",
+      "currente27_same_bytes": true
+    },
+    {
+      "file": "tests/python/integration/runtime/test_w11_child_trace_rollback.py",
+      "old397_sha256": "e40df27f7b031153659295d866ceb60d003b4c3e1a6618444427a41d832f25fd",
+      "currente27_same_bytes": true
+    },
+    {
+      "file": "tests/python/unit/numerics/test_coordinated_face.py",
+      "old397_sha256": "c04acb90e67027a45bfab0722f9b17324d852fb1bd27e58425c69e6389a36978",
+      "currente27_same_bytes": true
+    },
+    {
+      "file": "tests/python/native_dimensions.json",
+      "old397_sha256": "408a504c559d5dc1d173f424ccee978e3091c75923964efb7eaa76ed55d82f81",
+      "currente27_same_bytes": false
+    },
+    {
+      "file": "python/pops/_native_collectives.py",
+      "old397_sha256": "42886a62d0d0903e1675c9be42a0c6ae0318dd2e9664257999ffa5874352bc0c",
+      "currente27_same_bytes": true
+    }
+  ],
+  "prior_receipt_sha256": "91ae775a445a58fb34af6afd0c712670b25b4145a959c4bec54c49034ead26d7"
+}

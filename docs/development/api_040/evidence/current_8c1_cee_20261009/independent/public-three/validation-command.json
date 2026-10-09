@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "rtk",
+    "proxy",
+    "python3",
+    "-B",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-native-independent-reception-20261009/public-three-valid-e27d/receive_public_three.py"
+  ],
+  "observed_tool_chunk_id": "b04cc1",
+  "exit_code": 0,
+  "wall_time_seconds": 0.440238084,
+  "scope": "Independent offline reader only; no Native execution.",
+  "development_observation": {
+    "tool_chunk_id": "695b81",
+    "cause": "Initial receiver expected capture Source=compiled8c instead of actual metadatae27; corrected to independently record both identities, while all1221core/1175payload bytes remain checked.",
+    "Native_failure": false
+  }
+}

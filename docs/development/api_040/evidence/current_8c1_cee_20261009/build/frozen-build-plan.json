@@ -1,0 +1,13 @@
+{
+  "Native_result": null,
+  "SDK": "087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626",
+  "Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "authorization": "run-build requires explicit Root authorize-build-and-install after CapacityJIT review",
+  "cache": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/build/cp312-cp312-macosx_26_0_arm64-dim2",
+  "checkout": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+  "core_fingerprint": "95d0ccaa1e7aa39f9cbb01d539c4e31a5a7e6e143207b088fd9c2730482963f5",
+  "core_manifest_sha256": "5fcfc6d232566649395de58bdf6a019d1fcf35f3abce35462a92921946a7a28a",
+  "env_prefix": "/Users/romaindespoulain/miniforge3/envs/pops",
+  "scope": "Header/source counts derived semantically, no futureSHA or fixed24 assertion",
+  "setup_policy": "setup_env already ranonce onMain; not rerun"
+}

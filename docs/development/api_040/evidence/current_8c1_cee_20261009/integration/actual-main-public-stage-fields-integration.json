@@ -1,0 +1,63 @@
+{
+  "schema": "pops.actual-source-integration@1",
+  "timestamp_utc": "2026-10-09T03:05:11.724404+00:00",
+  "base_head": "397626de9e003ab15a076319d2ee4c3d227a389c",
+  "author_ready": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-public-package-20261009/public-package-ready.json",
+  "author_ready_sha256": "b338a0b6296ba5ca273c5ff02e68f92257f9c374cce4542bcad60a04a3039351",
+  "patch": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-public-package-20261009/public-three-stage-screened-fields.patch",
+  "patch_sha256": "87e45819c8514234a747edc12aea612046d9d109bc1ad444f7c201477a0e0b20",
+  "independent_review": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-public-package-independent-review-20261009/independent-public-package-source-review.json",
+  "independent_review_sha256": "2741652d4b89f5622b4ffa92e1ba5fa1d79376e2695002bc8c678b79f5be11fc",
+  "before": {
+    "examples/migration/scientific/STAGE_FIELDS.md": null,
+    "examples/migration/scientific/api040_stage_fields_library.py": null,
+    "examples/migration/scientific/api040_three_stage_screened_fields.py": null,
+    "tests/python/integration/runtime/test_public_three_stage_screened_fields.py": null,
+    "tests/python/native_dimensions.json": "408a504c559d5dc1d173f424ccee978e3091c75923964efb7eaa76ed55d82f81",
+    "tests/python/support/stage_fields_independent_reference.py": null,
+    "tests/python/support/stage_fields_pre_native_budget.json": null,
+    "tests/python/support/stage_fields_public_fixture.py": null,
+    "tests/python/test_durations.json": "8fd09c46b883aa55d6ee84ccf50f6aaf930fef77ad106eaf7354386d1004ffda"
+  },
+  "after": {
+    "examples/migration/scientific/STAGE_FIELDS.md": {
+      "bytes": 2393,
+      "sha256": "3b9d7d58546aa9782edbf8026714b2f082eb32f12163cbea30e62ed7007177de"
+    },
+    "examples/migration/scientific/api040_stage_fields_library.py": {
+      "bytes": 6788,
+      "sha256": "bdaee56ac52b4391ed7b5402a95c00524b5ae9a4b48dd47b44fef73799bfad42"
+    },
+    "examples/migration/scientific/api040_three_stage_screened_fields.py": {
+      "bytes": 2435,
+      "sha256": "ac9749edda4ec4e4e424b0ad61ee06f27962a6dd335603ce40a7c1e63d0a8ff9"
+    },
+    "tests/python/integration/runtime/test_public_three_stage_screened_fields.py": {
+      "bytes": 3649,
+      "sha256": "c655701adbb3fcdf858fd621b0b6a07d758e5ebeabe8cd1c02c7cde6cda5218a"
+    },
+    "tests/python/native_dimensions.json": {
+      "bytes": 514,
+      "sha256": "4a9dd8a32bcbb1f57f72b810610bf4b8516e15932fdaab0b1951746f38a4876b"
+    },
+    "tests/python/support/stage_fields_independent_reference.py": {
+      "bytes": 7323,
+      "sha256": "a0a5af1fae8e80030e097116dc9585d6b68e4a6de73cb32413e93224729c71c3"
+    },
+    "tests/python/support/stage_fields_pre_native_budget.json": {
+      "bytes": 1377,
+      "sha256": "bed47b146393f5b94bb37ee6a57684985951b769773ee0f956ed34dd84129cd3"
+    },
+    "tests/python/support/stage_fields_public_fixture.py": {
+      "bytes": 7630,
+      "sha256": "c98a6820327550dfb54cf5e091aea810cb44af2adee6839011b406b3bff1d01e"
+    },
+    "tests/python/test_durations.json": {
+      "bytes": 330313,
+      "sha256": "0fe236e061122994dea70aee40c6902368ae6a4a48bc78b029f249f213efc5b1"
+    }
+  },
+  "status": "INTEGRATED_PUBLIC_LIBRARY_SOURCE_PENDING_COHERENT_NATIVE_BUILD_AND_INDEPENDENT_RECEPTION",
+  "core_physics_or_method_recipe_added": false,
+  "actual_compile_or_runtime": false
+}

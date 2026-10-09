@@ -1,0 +1,7 @@
+{
+  "exit": 0,
+  "seconds": 35.30806820900034,
+  "producer_log_sha256": "7984b9b8749cb4241395e04cfe144bc3b29d40fc01d4f0eb3015a3c706fa4caa",
+  "variant": "representative",
+  "scope": "Actual capture process exit, not scientific or CI acceptance."
+}

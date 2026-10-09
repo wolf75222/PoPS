@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "rtk",
+    "proxy",
+    "python3",
+    "-B",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-cpp-private-nonregression-independent-reception-20261009/receive_cpp.py"
+  ],
+  "exec_tool_chunk_id": "6b5fe0",
+  "completion_tool_chunk_id": "71f052",
+  "exit_code": 0,
+  "scope": "Offline evidence reader only; no C++/Native executable execution.",
+  "development_observations": [
+    "Actual command-line dimension cache entry has UNINITIALIZED type and exact value2; receiver pins real typed entry instead of guessed STRING.",
+    "Compile command output paths are absolute while Ninja paths relative; receiver canonicalizes both paths before exact match.",
+    "Plain repository GoogleTest host harness does not require PoPS MPI/Kokkos numerical definitions; numerical TUs do."
+  ],
+  "Native_failure": false
+}

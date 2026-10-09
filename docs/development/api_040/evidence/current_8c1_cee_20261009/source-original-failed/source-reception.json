@@ -1,0 +1,49 @@
+{
+  "Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "counts": {
+    "tests": 941,
+    "failures": 2,
+    "errors": 0,
+    "skipped": 0
+  },
+  "exit": 1,
+  "seconds": 327.81113062499935,
+  "selectors": [
+    "tests/python/architecture",
+    "tests/python/unit/codegen/test_static_provider_ssp_proof.py",
+    "tests/python/unit/codegen/test_stage_provider_ssp_proof.py",
+    "tests/python/unit/time/test_temporal_tau_program_authority.py"
+  ],
+  "args": [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-q",
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-o",
+    "pythonpath=",
+    "-p",
+    "no:cacheprovider",
+    "--confcutdir=/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004",
+    "--basetemp=/Users/romaindespoulain/dev/tmp/PoPS-root-stage-fields-coherent-source-validation-8c1f-20261009/tmp",
+    "--junitxml=/Users/romaindespoulain/dev/tmp/PoPS-root-stage-fields-coherent-source-validation-8c1f-20261009/cohort.xml",
+    "tests/python/architecture",
+    "tests/python/unit/codegen/test_static_provider_ssp_proof.py",
+    "tests/python/unit/codegen/test_stage_provider_ssp_proof.py",
+    "tests/python/unit/time/test_temporal_tau_program_authority.py"
+  ],
+  "package": "/Users/romaindespoulain/dev/tmp/PoPS-api040-integrated-main-20261004/python/pops/__init__.py",
+  "Native_import_attempts_blocked": [
+    "_pops",
+    "pops._pops",
+    "_pops",
+    "pops._pops"
+  ],
+  "Native_extension_attempts_blocked": [],
+  "Native_modules_loaded": [],
+  "pytest_log_sha256": "fe706bb0f3a1aa72887b6a4936d11d07b7c7a8824be62d21b7e48bad801df805",
+  "junit_sha256": "95826fefe547fc133ad4ba6e99c495714933119bab2b723507c663a7efb8ee13",
+  "scope": "Root integration Source validation of complete coherent Main, not independent review, Native execution or GitHub CI."
+}

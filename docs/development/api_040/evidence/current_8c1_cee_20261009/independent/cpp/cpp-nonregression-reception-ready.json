@@ -1,0 +1,128 @@
+{
+  "contract": "pops.non-author-selected-cpp-runtime-offline-reception@1",
+  "verdict": "ACCEPT_SELECTED_CPP_NONREGRESSION_EXECUTION_WITH_LIMITS",
+  "compiled_Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "metadata_Source": "e27d065a5eb7c086ced60b751a2468f729361ff0",
+  "counts": {
+    "binary_targets": 6,
+    "observed_Ninja_output_records": 35,
+    "observed_CXX_object_outputs": 24,
+    "world1_registered_tests": 26,
+    "world1_failures": 0,
+    "world1_errors": 0,
+    "world1_skips": 0,
+    "MPI2_CTest_groups": 3,
+    "MPI2_GTest_cases_per_rank": 10,
+    "MPI2_rank_case_executions": 20
+  },
+  "world1_inventory_exact_26": [
+    "HierarchyTensorExactRank.CoarseGmresNativeOptionsKeepExactWireTypes",
+    "HierarchyTensorExactRank.PolarCoarsePreconditionerRequiresExactWireAndArithmeticGMRES",
+    "HierarchyTensorExactRank.FineFluxCouplingKeepsExactWireAndTypedContracts",
+    "HierarchyTensorExactRank.OneTwoAndThreeDimensionalRequestsPrepare",
+    "HierarchyTensorExactRank.FacAcceptsRankedAndPartiallyRefinedAxes",
+    "HierarchyTensorExactRank.OneTwoAndThreeDimensionalPublicationIsTransactional",
+    "HierarchyTensorExactRank.DirectFacUsesTheSameOperatorInOneTwoAndThreeDimensions",
+    "HierarchyTensorExactRank.ExactRankProvidesTheBuiltinFullTensorFacKernel",
+    "HierarchyTensorExactRank.ExactRankPublishesOnlyAfterSolveOutcomeAccept",
+    "HierarchyTensorExactRank.BuiltinExactRankFacSolvesARealCrossTensorMms",
+    "HierarchyTensorExactRank.ContractsAuthenticateRankGeometryAndOwnership",
+    "test_field_nullspace.canonicalizes_generic_boundary_facts_and_rejects_forged_sequences",
+    "test_field_nullspace.exact_ranked_boundary_adapter_covers_1d_2d_and_3d",
+    "test_field_nullspace.exact_ranked_nullspace_execution_covers_1d_2d_and_3d",
+    "test_field_nullspace.overlapping_independent_bases_cover_1d_2d_and_3d",
+    "test_field_nullspace.exact_ranked_level_local_contract_covers_1d_2d_and_3d",
+    "test_field_nullspace.active_mask_projects_only_marked_cells",
+    "test_field_nullspace.labelled_topology_preserves_target_component_and_rejects_bad_labels",
+    "test_field_nullspace.rejects_a_gauge_that_references_an_unknown_basis",
+    "test_field_nullspace.validates_native_collective_capacities_before_size_arithmetic",
+    "test_field_nullspace.validates_hierarchy_level_capacity_without_materializing_levels",
+    "test_field_nullspace.shared_constant_mode_preserves_individual_means",
+    "test_field_nullspace.general_fields_complete_predeclared_refinement_matrix",
+    "test_field_nullspace.general_field_preflight_refuses_rank_local_storage_before_exchange",
+    "test_field_nullspace.three_field_cross_diffusion_uses_complete_matrix_and_strict_spd",
+    "AmrProgramFieldPublication.ThreeFieldsReachPreparedSourcesAtEveryLevelAndRollback"
+  ],
+  "MPI2_inventory_exact_per_rank": [
+    {
+      "group": "test_mpi_composite_fac_partitioned_nd_np2",
+      "rank": 0,
+      "cases": [
+        "RunsPartitionedDimensionalMatrix"
+      ]
+    },
+    {
+      "group": "test_mpi_composite_fac_partitioned_nd_np2",
+      "rank": 1,
+      "cases": [
+        "RunsPartitionedDimensionalMatrix"
+      ]
+    },
+    {
+      "group": "test_mpi_field_nullspace_preflight_np2",
+      "rank": 0,
+      "cases": [
+        "ExactRankedDriftFailsCoherentlyIn1D2DAnd3D"
+      ]
+    },
+    {
+      "group": "test_mpi_field_nullspace_preflight_np2",
+      "rank": 1,
+      "cases": [
+        "ExactRankedDriftFailsCoherentlyIn1D2DAnd3D"
+      ]
+    },
+    {
+      "group": "test_tensor_fac_conservative_interface_np2",
+      "rank": 0,
+      "cases": [
+        "ClosedJumpHasTwelveLegacyImbalanceAndZeroFineFluxBalance",
+        "PeriodicOriginsAnisotropicChildrenAndMappedCrossTermsConserve",
+        "RetainsNonsymmetricCrossDerivativeAndIsLinear",
+        "ManufacturedSelectedImageIsTheSolveFixedPoint",
+        "ThreeLevelsConvergeToTheirSelectedConservativeImage",
+        "ConstructionAuthenticatesCouplingAcrossRanks",
+        "RejectsAsymmetricControlsReplicasAndInvalidCoefficientsCollectively",
+        "RepeatedResidualApplicationsReusePreparedDeviceStorage"
+      ]
+    },
+    {
+      "group": "test_tensor_fac_conservative_interface_np2",
+      "rank": 1,
+      "cases": [
+        "ClosedJumpHasTwelveLegacyImbalanceAndZeroFineFluxBalance",
+        "PeriodicOriginsAnisotropicChildrenAndMappedCrossTermsConserve",
+        "RetainsNonsymmetricCrossDerivativeAndIsLinear",
+        "ManufacturedSelectedImageIsTheSolveFixedPoint",
+        "ThreeLevelsConvergeToTheirSelectedConservativeImage",
+        "ConstructionAuthenticatesCouplingAcrossRanks",
+        "RejectsAsymmetricControlsReplicasAndInvalidCoefficientsCollectively",
+        "RepeatedResidualApplicationsReusePreparedDeviceStorage"
+      ]
+    }
+  ],
+  "six_test_bodies_and_all_actual_main_CXX_compile_inputs_unchanged_from8c": true,
+  "remaining_three_binaries_before_after_pins_unchanged": true,
+  "metadata_diff_exact_five_paths": [
+    ".github/workflows/ci.yml",
+    "scripts/ci_pytest_timings.py",
+    "tests/python/architecture/test_ci_impacted_selection.py",
+    "tests/python/support/stage_fields_public_fixture.py",
+    "tests/python/test_durations.json"
+  ],
+  "files_sha256": {
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-cpp-private-nonregression-independent-reception-20261009/cpp-nonregression-reception.json": "7630afadc1f18e6cdb467ae699357adbf75443422db2b1cc63c24c637d468b29",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-cpp-private-nonregression-independent-reception-20261009/validation-command.json": "af626754ab2710c619f207d0be46dd41f1e0323b8a9f5bd206ed0aadc45b9838",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-cpp-private-nonregression-independent-reception-20261009/exact-inventory.md": "a3b121f14f70a7400b8131e3fbcbe9309ec58f130fc9d338b3ee8be6bf1ff4b2",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-cpp-private-nonregression-independent-reception-20261009/receive_cpp.py": "0594462eda834a43f500c165768dbec8520462c196720f5821099054a4de8484",
+    "/Users/romaindespoulain/dev/tmp/PoPS-sol61-cpp-private-nonregression-independent-reception-20261009/PROTOCOL.md": "17eeccb0d7a42ac00e41d251750206bb4f6f45011c9e61945dd90cf5ea94e7bd"
+  },
+  "limits": [
+    "Six selected binary targets only, not full C++ catalog, GitHub CI or aggregate94closure.",
+    "World1 registration has26tests; MPI2 has3CTestgroups and10GoogleTestcases perrank,20rankexecutions. These distinct granularities are preserved; no invented combined36globaltest count.",
+    "Standalone C++ template tests include exact-ranked1D/2D/3D constructions as named in inventory; installed Native module remains dimension2. No new3DNative/GPU or physical PDE refinement/convergence qualification.",
+    "No fresh numerical oracle for every C++ body; actual existing assertions, source-preservation and real execution outputs authenticated.",
+    "Ninja output actions and retained objects/binaries do not prove uncached compiler frontend execution for every action."
+  ],
+  "noNative_PoPS_import_run_Main_env_build_install_SSH": true
+}

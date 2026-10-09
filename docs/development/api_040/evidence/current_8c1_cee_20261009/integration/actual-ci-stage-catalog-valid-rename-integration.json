@@ -1,0 +1,24 @@
+{
+  "schema": "pops.actual-ci-and-test-integration@1",
+  "timestamp_utc": "2026-10-09T03:32:52.559097+00:00",
+  "qualified_cpu_source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "current_source": "e27d065a5eb7c086ced60b751a2468f729361ff0",
+  "core_fingerprint_unchanged": "95d0ccaa1e7aa39f9cbb01d539c4e31a5a7e6e143207b088fd9c2730482963f5",
+  "paths": [
+    "tests/python/test_durations.json",
+    "scripts/ci_pytest_timings.py",
+    ".github/workflows/ci.yml",
+    "tests/python/architecture/test_ci_impacted_selection.py",
+    "tests/python/support/stage_fields_public_fixture.py"
+  ],
+  "patch": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-ci-catalog-candidate-20261009/ci-catalog-71-and-valid-rename-v2.patch",
+  "patch_sha256": "407be559b2478920b6db1d2b82136fbf48f2dc324dd1ae0328d7916c93071422",
+  "peer": "/Users/romaindespoulain/dev/tmp/PoPS-sol61-stage-fields-ci-weight-independent-review-20261009/independent-ci-71-valid-rename-v2-review.json",
+  "peer_sha256": "e9477796b1ca1f05efacda309292339250299806e3abcef68be0cfd562f9f937",
+  "pre_patch_source_failure_retained": "/Users/romaindespoulain/dev/tmp/PoPS-root-stage-fields-coherent-source-validation-8c1f-20261009/source-reception.json",
+  "pre_patch_native_failure_retained": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/producer-result.json",
+  "status": "INTEGRATED_METADATA_AND_VALID_RENAME_PENDING_MAIN_NONREGRESSION",
+  "old_native_acceptance_source_not_relabelled": true,
+  "ordinary_CI_budget_seconds": 2100,
+  "shards": 71
+}

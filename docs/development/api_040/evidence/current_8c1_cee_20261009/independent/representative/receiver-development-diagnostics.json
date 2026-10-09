@@ -1,0 +1,15 @@
+{
+  "internal_receiver_failures": [
+    {
+      "cause": "Initially compared admission physical_before subrows to current; five subrows contain post-build hashes. Authenticated frozen pre-build independently establishes five changes. Original admission untouched.",
+      "tool_chunk_id": "4a397b",
+      "Native_failure": false
+    },
+    {
+      "cause": "Receiver expected rel_tol field; actual serialized Program uses tol. Corrected receiver key without changing value or guard.",
+      "tool_chunk_id": "973747",
+      "Native_failure": false
+    }
+  ],
+  "scope": "Preserved receiver-development observations; actual Native producer exit0 and mathematical checks pass."
+}

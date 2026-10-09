@@ -1,0 +1,17 @@
+{
+  "SDK": "087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626",
+  "Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "command": [
+    "rtk",
+    "proxy",
+    "bash",
+    "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/actual-official-invocation.sh"
+  ],
+  "disk_before": {
+    "free": 893849600,
+    "total": 494384795648,
+    "used": 493490946048
+  },
+  "script_sha256": "b20747b05ac8ec6ac4b11b14a8cea03d2eff5053ebf8c7ba4264a00ef4b2738e",
+  "start_utc": "2026-10-09T03:05:56.458909+00:00"
+}

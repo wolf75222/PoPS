@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "/Users/romaindespoulain/miniforge3/envs/pops/bin/ccache",
+    "--show-stats",
+    "--format=json"
+  ],
+  "binary_sha256": "148c3fd94e883b5f9e2ed31129e9117368efe70d284cead34fad1b8710c5bea2",
+  "exit": 0,
+  "scope": "Actual aggregate counters from the build environment executable; no perobject/front-end attribution",
+  "stderr": "",
+  "stdout": "Cacheable calls:    2228 / 2263 (98.45%)\n  Hits:              824 / 2228 (36.98%)\n    Direct:          741 /  824 (89.93%)\n    Preprocessed:     83 /  824 (10.07%)\n  Misses:           1404 / 2228 (63.02%)\nUncacheable calls:     9 / 2263 ( 0.40%)\nErrors:               26 / 2263 ( 1.15%)\nLocal storage:\n  Cache size (GiB):  0.0 /  5.0 ( 0.47%)\n  Cleanups:          256\n  Hits:              824 / 2228 (36.98%)\n  Misses:           1404 / 2228 (63.02%)\n"
+}

@@ -1,0 +1,1345 @@
+{
+  "verdict": "ACCEPT_RENAME_AND_CHANGED_DECAY_CPU_WORLD1_WITH_LIMITS",
+  "Source": "8c1f55701cab7c60b3519bd343e3b4c1f193570f",
+  "Native": "cee947c25c771f8c5a155e5f4cb990de308de14fe77e9f55c654e3b3837dee6f",
+  "SDK": "087fead68988afda3c730e232f15b58ded9a07a1e4387b212c33248ac7661626",
+  "oracle_ready_sha256": "28ca67fc888d78ae3f57cc417759b4b9624692c9499d5d1ecacb1fc793b6b81e",
+  "unchanged_baseline_budget_sha256": "bed47b146393f5b94bb37ee6a57684985951b769773ee0f956ed34dd84129cd3",
+  "rename": {
+    "producer": {
+      "exit": 0,
+      "seconds": 38.3574241660026,
+      "producer_log_sha256": "2e426911871423a5c43078f4d185f362f522669612eba8903d755de48b00434b",
+      "variant": "rename",
+      "scope": "Actual capture process exit, not scientific or CI acceptance."
+    },
+    "runner": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-stage-fields-native-protocol-20261009/valid-label-runner-r3/run_native_capture.py",
+      "bytes": 13076,
+      "sha256": "b189d26a3e194a514c2abb4928d7de7b0a33beef75b807849c4f4f6b28a47011"
+    },
+    "canonical_oracle_quantities": 14,
+    "raw_state_field_arrays": 13,
+    "raw_bind_arrays": 2,
+    "all_raw_arrays_byte_exact": [
+      {
+        "file": "actual-states-and-fields.npz",
+        "key": "q_final",
+        "shape": [
+          1,
+          12,
+          16
+        ],
+        "byte_exact": true
+      },
+      {
+        "file": "actual-states-and-fields.npz",
+        "key": "donor_final",
+        "shape": [
+          1,
+          12,
+          16
+        ],
+        "byte_exact": true
+      },
+      {
+        "file": "actual-states-and-fields.npz",
+        "key": "q_stage0",
+        "shape": [
+          1,
+          12,
+          16
+        ],
+        "byte_exact": true
+      },
+      {
+        "file": "actual-states-and-fields.npz",
+        "key": "phi_stage0",
+        "shape": [
+          1,
+          12,
+          16
+        ],
+        "byte_exact": true
+      },
+      {
+        "file": "actual-states-and-fields.npz",
+        "key": "psi_stage0",
+        "shape": [
+          1,
+          12,
+          16
+        ],
+        "byte_exact": true
+      },
+      {
+        "file": "actual-states-and-fields.npz",
+        "key": "q_stage1",
+        "shape": [
+          1,
+          12,
+          16
+        ],
+        "byte_exact": true
+      },
+      {
+        "file": "actual-states-and-fields.npz",
+        "key": "phi_stage1",
+        "shape": [
+          1,
+          12,
+          16
+        ],
+        "byte_exact": true
+      },
+      {
+        "file": "actual-states-and-fields.npz",
+        "key": "psi_stage1",
+        "shape": [
+          1,
+          12,
+          16
+        ],
+        "byte_exact": true
+      },
+      {
+        "file": "actual-states-and-fields.npz",
+        "key": "q_stage2",
+        "shape": [
+          1,
+          12,
+          16
+        ],
+        "byte_exact": true
+      },
+      {
+        "file": "actual-states-and-fields.npz",
+        "key": "phi_stage2",
+        "shape": [
+          1,
+          12,
+          16
+        ],
+        "byte_exact": true
+      },
+      {
+        "file": "actual-states-and-fields.npz",
+        "key": "psi_stage2",
+        "shape": [
+          1,
+          12,
+          16
+        ],
+        "byte_exact": true
+      },
+      {
+        "file": "actual-states-and-fields.npz",
+        "key": "phi_resident",
+        "shape": [
+          12,
+          16
+        ],
+        "byte_exact": true
+      },
+      {
+        "file": "actual-states-and-fields.npz",
+        "key": "psi_resident",
+        "shape": [
+          12,
+          16
+        ],
+        "byte_exact": true
+      },
+      {
+        "file": "actual-bind-inputs.npz",
+        "key": "receiver",
+        "shape": [
+          1,
+          12,
+          16
+        ],
+        "byte_exact": true
+      },
+      {
+        "file": "actual-bind-inputs.npz",
+        "key": "donor",
+        "shape": [
+          1,
+          12,
+          16
+        ],
+        "byte_exact": true
+      }
+    ],
+    "math": {
+      "q0": {
+        "defect": 4.440892098500626e-16,
+        "bound": 1.4210854715202004e-14
+      },
+      "q1": {
+        "defect": 4.440892098500626e-16,
+        "bound": 1.5050694438145373e-13
+      },
+      "q2": {
+        "defect": 4.440892098500626e-16,
+        "bound": 1.677908088212615e-13
+      },
+      "qfinal": {
+        "defect": 6.661338147750939e-16,
+        "bound": 2.458583115919689e-13
+      },
+      "d_initial": {
+        "defect": 1.1102230246251565e-16,
+        "bound": 1.4210854715202004e-14
+      },
+      "phi0": {
+        "defect": 1.5432100042289676e-14,
+        "bound": 5.122298274075318e-10
+      },
+      "psi0": {
+        "defect": 1.5210055437364645e-14,
+        "bound": 3.0738266063687193e-10
+      },
+      "phi1": {
+        "defect": 2.6978419498391304e-14,
+        "bound": 5.122752594374205e-10
+      },
+      "psi1": {
+        "defect": 1.3433698597964394e-14,
+        "bound": 3.0740991985480523e-10
+      },
+      "phi2": {
+        "defect": 1.6653345369377348e-14,
+        "bound": 5.122810207255672e-10
+      },
+      "psi2": {
+        "defect": 2.1316282072803006e-14,
+        "bound": 3.0741337662769315e-10
+      },
+      "resident_phi": {
+        "defect": 1.6653345369377348e-14,
+        "bound": 5.122810207255672e-10
+      },
+      "resident_psi": {
+        "defect": 2.1316282072803006e-14,
+        "bound": 3.0741337662769315e-10
+      }
+    },
+    "binaries": [
+      {
+        "name": "model:renamed_donor_block",
+        "binary": {
+          "bytes": 357176,
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/jit/d8a2d62c5c248117dd169a7b27231bb5991a2af78635384b64e7d1f39f5974c0.so",
+          "sha256": "fb26a1cacd1366ea298ce2038b6bc3c5702c49db21839a5c73f785103c0f5a44"
+        },
+        "sidecar": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/jit/d8a2d62c5c248117dd169a7b27231bb5991a2af78635384b64e7d1f39f5974c0.so.pops-artifact.json",
+          "bytes": 591,
+          "sha256": "09dc1ccc86d5234c8ce9ba9fe021c35e930d400b1bbcf3b615603651a34c350f"
+        },
+        "model_source": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/jit/d8a2d62c5c248117dd169a7b27231bb5991a2af78635384b64e7d1f39f5974c0.so.pops-model.cpp",
+          "bytes": 10100,
+          "sha256": "40f78540351ec8e311e7087309866103aff555c621c643c45972ae4110d03ced"
+        },
+        "compile_receipt": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/jit/d8a2d62c5c248117dd169a7b27231bb5991a2af78635384b64e7d1f39f5974c0.so.pops-model-compile.json",
+          "bytes": 2332,
+          "sha256": "8368f774c660c3f38be328db64807a9a1d5daa701f42eeaa9f0975dbca401b4b"
+        },
+        "compiler": {
+          "path": "/usr/bin/clang++",
+          "bytes": 118928,
+          "sha256": "3536cca6074df2ddf6ad787eec5fe4123db17392243fcaf4651e0a3e1314a02e"
+        }
+      },
+      {
+        "name": "model:renamed_receiver_block",
+        "binary": {
+          "bytes": 381656,
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/jit/43090e284f6b72b1fc628bc5e7ffdc81c9b45ea4a274ac8743203883be0e6d0a.so",
+          "sha256": "621d8ac9a6fd2cd76089871d61f88ae8f96dd82f8a06b79abaa93404e74cdbae"
+        },
+        "sidecar": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/jit/43090e284f6b72b1fc628bc5e7ffdc81c9b45ea4a274ac8743203883be0e6d0a.so.pops-artifact.json",
+          "bytes": 591,
+          "sha256": "cdcf5c6dec77930f6b4d4d87d570bf1310d5cc3e2796b364addf9815ac9644b3"
+        },
+        "model_source": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/jit/43090e284f6b72b1fc628bc5e7ffdc81c9b45ea4a274ac8743203883be0e6d0a.so.pops-model.cpp",
+          "bytes": 15544,
+          "sha256": "d7ea4e37f195593d5d4c232e63b36b3dc5e878fe1097c587dcebb1037712430a"
+        },
+        "compile_receipt": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/jit/43090e284f6b72b1fc628bc5e7ffdc81c9b45ea4a274ac8743203883be0e6d0a.so.pops-model-compile.json",
+          "bytes": 2332,
+          "sha256": "ea113e039b3d4587c49b45d7fd5cdde5f9a5dfdd51d009778838ed03183012dd"
+        },
+        "compiler": {
+          "path": "/usr/bin/clang++",
+          "bytes": 118928,
+          "sha256": "3536cca6074df2ddf6ad787eec5fe4123db17392243fcaf4651e0a3e1314a02e"
+        }
+      },
+      {
+        "name": "pops.handle.v1::case:renamed_case::layout::default",
+        "binary": {
+          "bytes": 1488496,
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/generated/025448b39168c9bfc59678921d643aa2329595a04900aaaf4e17842dea21bd0a.so",
+          "sha256": "4b506828e5e136bdd14916b441cf47984081509283be94b529cceec5a7382bac"
+        },
+        "sidecar": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/generated/025448b39168c9bfc59678921d643aa2329595a04900aaaf4e17842dea21bd0a.so.pops-artifact.json",
+          "bytes": 490,
+          "sha256": "5c05477f403958c340c09aa593786a004066b4eccc337379b7cc8a2c8a25c675"
+        }
+      },
+      {
+        "name": "program",
+        "binary": {
+          "bytes": 1488496,
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/generated/025448b39168c9bfc59678921d643aa2329595a04900aaaf4e17842dea21bd0a.so",
+          "sha256": "4b506828e5e136bdd14916b441cf47984081509283be94b529cceec5a7382bac"
+        },
+        "sidecar": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/generated/025448b39168c9bfc59678921d643aa2329595a04900aaaf4e17842dea21bd0a.so.pops-artifact.json",
+          "bytes": 490,
+          "sha256": "5c05477f403958c340c09aa593786a004066b4eccc337379b7cc8a2c8a25c675"
+        }
+      }
+    ],
+    "checkpoint": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/actual-accepted-checkpoint.npz",
+      "bytes": 82239,
+      "sha256": "b101e42b76caa820525ef3993cca62cd21d1b932c7b0c2bef439232a960e03d1",
+      "version": 9,
+      "arrays": 144,
+      "clock": {
+        "macro_step": 1,
+        "time": "0x1.a36e2eb1c432dp-14"
+      },
+      "restart_identity": "20c249c1db4dfe65897f97512a0c1247cd9509b4492d6f607c123f68d8236b98"
+    },
+    "checkpoint_numeric_members_byte_exact": [
+      {
+        "renamed_key": "pops_checkpoint_version",
+        "representative_key": "pops_checkpoint_version",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "t",
+        "representative_key": "t",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "macro_step",
+        "representative_key": "macro_step",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "program_cadence_substeps",
+        "representative_key": "program_cadence_substeps",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "program_cadence_stride",
+        "representative_key": "program_cadence_stride",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "program_cadence_window_steps",
+        "representative_key": "program_cadence_window_steps",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "program_cadence_window_dt",
+        "representative_key": "program_cadence_window_dt",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "program_cadence_window_start_time",
+        "representative_key": "program_cadence_window_start_time",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "program_last_dt",
+        "representative_key": "program_last_dt",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "ncomp_renamed_donor_block",
+        "representative_key": "ncomp_reservoir",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "ncomp_renamed_receiver_block",
+        "representative_key": "ncomp_receiver",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "cache_nodes",
+        "representative_key": "cache_nodes",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "state_renamed_donor_block",
+        "representative_key": "state_reservoir",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "state_renamed_receiver_block",
+        "representative_key": "state_receiver",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_depth_observed-stage-0-phi",
+        "representative_key": "history_depth_observed-stage-0-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_ncomp_observed-stage-0-phi",
+        "representative_key": "history_ncomp_observed-stage-0-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_requested_stored_slots_observed-stage-0-phi",
+        "representative_key": "history_requested_stored_slots_observed-stage-0-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_stored_slots_observed-stage-0-phi",
+        "representative_key": "history_stored_slots_observed-stage-0-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_init_observed-stage-0-phi",
+        "representative_key": "history_init_observed-stage-0-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_fill_count_observed-stage-0-phi",
+        "representative_key": "history_fill_count_observed-stage-0-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_slot_dt_observed-stage-0-phi",
+        "representative_key": "history_slot_dt_observed-stage-0-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_observed-stage-0-phi_0",
+        "representative_key": "history_observed-stage-0-phi_0",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_observed-stage-0-phi_1",
+        "representative_key": "history_observed-stage-0-phi_1",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_depth_observed-stage-0-psi",
+        "representative_key": "history_depth_observed-stage-0-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_ncomp_observed-stage-0-psi",
+        "representative_key": "history_ncomp_observed-stage-0-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_requested_stored_slots_observed-stage-0-psi",
+        "representative_key": "history_requested_stored_slots_observed-stage-0-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_stored_slots_observed-stage-0-psi",
+        "representative_key": "history_stored_slots_observed-stage-0-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_init_observed-stage-0-psi",
+        "representative_key": "history_init_observed-stage-0-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_fill_count_observed-stage-0-psi",
+        "representative_key": "history_fill_count_observed-stage-0-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_slot_dt_observed-stage-0-psi",
+        "representative_key": "history_slot_dt_observed-stage-0-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_observed-stage-0-psi_0",
+        "representative_key": "history_observed-stage-0-psi_0",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_observed-stage-0-psi_1",
+        "representative_key": "history_observed-stage-0-psi_1",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_depth_observed-stage-1-phi",
+        "representative_key": "history_depth_observed-stage-1-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_ncomp_observed-stage-1-phi",
+        "representative_key": "history_ncomp_observed-stage-1-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_requested_stored_slots_observed-stage-1-phi",
+        "representative_key": "history_requested_stored_slots_observed-stage-1-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_stored_slots_observed-stage-1-phi",
+        "representative_key": "history_stored_slots_observed-stage-1-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_init_observed-stage-1-phi",
+        "representative_key": "history_init_observed-stage-1-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_fill_count_observed-stage-1-phi",
+        "representative_key": "history_fill_count_observed-stage-1-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_slot_dt_observed-stage-1-phi",
+        "representative_key": "history_slot_dt_observed-stage-1-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_observed-stage-1-phi_0",
+        "representative_key": "history_observed-stage-1-phi_0",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_observed-stage-1-phi_1",
+        "representative_key": "history_observed-stage-1-phi_1",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_depth_observed-stage-1-psi",
+        "representative_key": "history_depth_observed-stage-1-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_ncomp_observed-stage-1-psi",
+        "representative_key": "history_ncomp_observed-stage-1-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_requested_stored_slots_observed-stage-1-psi",
+        "representative_key": "history_requested_stored_slots_observed-stage-1-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_stored_slots_observed-stage-1-psi",
+        "representative_key": "history_stored_slots_observed-stage-1-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_init_observed-stage-1-psi",
+        "representative_key": "history_init_observed-stage-1-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_fill_count_observed-stage-1-psi",
+        "representative_key": "history_fill_count_observed-stage-1-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_slot_dt_observed-stage-1-psi",
+        "representative_key": "history_slot_dt_observed-stage-1-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_observed-stage-1-psi_0",
+        "representative_key": "history_observed-stage-1-psi_0",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_observed-stage-1-psi_1",
+        "representative_key": "history_observed-stage-1-psi_1",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_depth_observed-stage-2-phi",
+        "representative_key": "history_depth_observed-stage-2-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_ncomp_observed-stage-2-phi",
+        "representative_key": "history_ncomp_observed-stage-2-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_requested_stored_slots_observed-stage-2-phi",
+        "representative_key": "history_requested_stored_slots_observed-stage-2-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_stored_slots_observed-stage-2-phi",
+        "representative_key": "history_stored_slots_observed-stage-2-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_init_observed-stage-2-phi",
+        "representative_key": "history_init_observed-stage-2-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_fill_count_observed-stage-2-phi",
+        "representative_key": "history_fill_count_observed-stage-2-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_slot_dt_observed-stage-2-phi",
+        "representative_key": "history_slot_dt_observed-stage-2-phi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_observed-stage-2-phi_0",
+        "representative_key": "history_observed-stage-2-phi_0",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_observed-stage-2-phi_1",
+        "representative_key": "history_observed-stage-2-phi_1",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_depth_observed-stage-2-psi",
+        "representative_key": "history_depth_observed-stage-2-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_ncomp_observed-stage-2-psi",
+        "representative_key": "history_ncomp_observed-stage-2-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_requested_stored_slots_observed-stage-2-psi",
+        "representative_key": "history_requested_stored_slots_observed-stage-2-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_stored_slots_observed-stage-2-psi",
+        "representative_key": "history_stored_slots_observed-stage-2-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_init_observed-stage-2-psi",
+        "representative_key": "history_init_observed-stage-2-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_fill_count_observed-stage-2-psi",
+        "representative_key": "history_fill_count_observed-stage-2-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_slot_dt_observed-stage-2-psi",
+        "representative_key": "history_slot_dt_observed-stage-2-psi",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_observed-stage-2-psi_0",
+        "representative_key": "history_observed-stage-2-psi_0",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_observed-stage-2-psi_1",
+        "representative_key": "history_observed-stage-2-psi_1",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_depth_receiver-stage-0",
+        "representative_key": "history_depth_receiver-stage-0",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_ncomp_receiver-stage-0",
+        "representative_key": "history_ncomp_receiver-stage-0",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_requested_stored_slots_receiver-stage-0",
+        "representative_key": "history_requested_stored_slots_receiver-stage-0",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_stored_slots_receiver-stage-0",
+        "representative_key": "history_stored_slots_receiver-stage-0",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_init_receiver-stage-0",
+        "representative_key": "history_init_receiver-stage-0",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_fill_count_receiver-stage-0",
+        "representative_key": "history_fill_count_receiver-stage-0",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_slot_dt_receiver-stage-0",
+        "representative_key": "history_slot_dt_receiver-stage-0",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_receiver-stage-0_0",
+        "representative_key": "history_receiver-stage-0_0",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_receiver-stage-0_1",
+        "representative_key": "history_receiver-stage-0_1",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_depth_receiver-stage-1",
+        "representative_key": "history_depth_receiver-stage-1",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_ncomp_receiver-stage-1",
+        "representative_key": "history_ncomp_receiver-stage-1",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_requested_stored_slots_receiver-stage-1",
+        "representative_key": "history_requested_stored_slots_receiver-stage-1",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_stored_slots_receiver-stage-1",
+        "representative_key": "history_stored_slots_receiver-stage-1",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_init_receiver-stage-1",
+        "representative_key": "history_init_receiver-stage-1",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_fill_count_receiver-stage-1",
+        "representative_key": "history_fill_count_receiver-stage-1",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_slot_dt_receiver-stage-1",
+        "representative_key": "history_slot_dt_receiver-stage-1",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_receiver-stage-1_0",
+        "representative_key": "history_receiver-stage-1_0",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_receiver-stage-1_1",
+        "representative_key": "history_receiver-stage-1_1",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_depth_receiver-stage-2",
+        "representative_key": "history_depth_receiver-stage-2",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_ncomp_receiver-stage-2",
+        "representative_key": "history_ncomp_receiver-stage-2",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_requested_stored_slots_receiver-stage-2",
+        "representative_key": "history_requested_stored_slots_receiver-stage-2",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_stored_slots_receiver-stage-2",
+        "representative_key": "history_stored_slots_receiver-stage-2",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_init_receiver-stage-2",
+        "representative_key": "history_init_receiver-stage-2",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_fill_count_receiver-stage-2",
+        "representative_key": "history_fill_count_receiver-stage-2",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_slot_dt_receiver-stage-2",
+        "representative_key": "history_slot_dt_receiver-stage-2",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_receiver-stage-2_0",
+        "representative_key": "history_receiver-stage-2_0",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "history_receiver-stage-2_1",
+        "representative_key": "history_receiver-stage-2_1",
+        "byte_exact": true
+      },
+      {
+        "renamed_key": "phi",
+        "representative_key": "phi",
+        "byte_exact": true
+      }
+    ],
+    "checkpoint_identity_or_opaque_differences": [
+      "blocks",
+      "temporal_restart_state",
+      "pops_spatial_contract",
+      "program_hash",
+      "state_carriers_checkpoint",
+      "auxiliary_checkpoint",
+      "program_exchange_state",
+      "program_exchange_offsets",
+      "continuation_transition_plan",
+      "program_diagnostics_state",
+      "program_diagnostics_offsets",
+      "pops_checkpoint_manifest",
+      "pops_restart_identity"
+    ],
+    "checkpoint_scope": "96 numerical diagnostic members byte-exact after explicit receiver/donor role-key mapping. Two offsets index serialized identifiers and differ legitimately (program_exchange_offsets, program_diagnostics_offsets); strings/envelopes/opaque byte carriers are not claimed byte-identical.",
+    "histories": [
+      {
+        "name": "observed-stage-0-phi",
+        "depth": 2,
+        "fill": 1,
+        "all_saved_slots_match": true
+      },
+      {
+        "name": "observed-stage-0-psi",
+        "depth": 2,
+        "fill": 1,
+        "all_saved_slots_match": true
+      },
+      {
+        "name": "observed-stage-1-phi",
+        "depth": 2,
+        "fill": 1,
+        "all_saved_slots_match": true
+      },
+      {
+        "name": "observed-stage-1-psi",
+        "depth": 2,
+        "fill": 1,
+        "all_saved_slots_match": true
+      },
+      {
+        "name": "observed-stage-2-phi",
+        "depth": 2,
+        "fill": 1,
+        "all_saved_slots_match": true
+      },
+      {
+        "name": "observed-stage-2-psi",
+        "depth": 2,
+        "fill": 1,
+        "all_saved_slots_match": true
+      },
+      {
+        "name": "receiver-stage-0",
+        "depth": 2,
+        "fill": 1,
+        "all_saved_slots_match": true
+      },
+      {
+        "name": "receiver-stage-1",
+        "depth": 2,
+        "fill": 1,
+        "all_saved_slots_match": true
+      },
+      {
+        "name": "receiver-stage-2",
+        "depth": 2,
+        "fill": 1,
+        "all_saved_slots_match": true
+      }
+    ],
+    "exchange_numeric_rows_byte_exact": 2304,
+    "runner_delta_exact_valid_labels_only": {
+      "original": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-stage-fields-native-protocol-20261009/mechanically-reviewed-runner-r2/run_native_capture.py",
+        "bytes": 13093,
+        "sha256": "3c4972d8a294b9ff98370fb854fbdd1c707d12a473be1df0ac4edba17e4a8dd5"
+      },
+      "new": {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-root-stage-fields-native-protocol-20261009/valid-label-runner-r3/run_native_capture.py",
+        "bytes": 13076,
+        "sha256": "b189d26a3e194a514c2abb4928d7de7b0a33beef75b807849c4f4f6b28a47011"
+      },
+      "all_other_source_bytes_equal": true
+    },
+    "tableau_unchanged": true
+  },
+  "decay": {
+    "parameter": "11/10",
+    "budget": {
+      "schema": "stage-fields-pre-Native-budget@1",
+      "CG": {
+        "max_iter": 2000,
+        "rtol": 1e-12,
+        "atol": 1e-14
+      },
+      "joint_unknowns": 384,
+      "rhs_ceiling": 4.0,
+      "physical_cell_volume": 0.03125,
+      "joint_residual_bound": 1.5363200000000001e-09,
+      "independent_residual_bound": 1.6102164445190505e-09,
+      "point_roundoff_allowance": 1.1368683772161603e-13,
+      "absolute_bounds": {
+        "q0": 1.4210854715202004e-14,
+        "q1": 1.505073707070952e-13,
+        "q2": 1.6779204472963264e-13,
+        "qfinal": 2.4586249540468394e-13,
+        "d_initial": 1.4210854715202004e-14,
+        "phi0": 5.122298274075318e-10,
+        "psi0": 3.0738266063687193e-10,
+        "phi1": 5.122752595795291e-10,
+        "psi1": 3.0740991994007033e-10,
+        "phi2": 5.122810211375366e-10,
+        "psi2": 3.074133768748748e-10,
+        "resident_phi": 5.122810211375366e-10,
+        "resident_psi": 3.074133768748748e-10
+      },
+      "donor_final": "byte-exact equality to actual saved initial donor, not approximate oraclebits",
+      "premises": [
+        "Existing screened operator is periodic positive SPD/M-matrix with sigma_min>=3.",
+        "CG success/residual controls and max2000 unchanged; bounded RHS<=4, zero/valid prior-field initial guess and supported density/integral/norm normalization.",
+        "If actual solver/residual metric contradicts these premises, report mismatch; never increase these budgets from observed errors."
+      ]
+    },
+    "budget_pin": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/pre-execution-independent-budget.json",
+      "bytes": 1376,
+      "sha256": "515bec429b4dec301ed8ebb339a54045249521c5225093e536ac3bfd5b8a2ff4"
+    },
+    "pre_execution_evidence": "Actual test source writes independent tolerances(params) before capture; preserved file mtime precedes actual arrays. Same independent derivation was frozen before representative execution.",
+    "math": {
+      "q0": {
+        "defect": 4.440892098500626e-16,
+        "bound": 1.4210854715202004e-14
+      },
+      "q1": {
+        "defect": 4.440892098500626e-16,
+        "bound": 1.505073707070952e-13
+      },
+      "q2": {
+        "defect": 4.440892098500626e-16,
+        "bound": 1.6779204472963264e-13
+      },
+      "qfinal": {
+        "defect": 4.440892098500626e-16,
+        "bound": 2.4586249540468394e-13
+      },
+      "d_initial": {
+        "defect": 1.1102230246251565e-16,
+        "bound": 1.4210854715202004e-14
+      },
+      "phi0": {
+        "defect": 1.5432100042289676e-14,
+        "bound": 5.122298274075318e-10
+      },
+      "psi0": {
+        "defect": 1.5210055437364645e-14,
+        "bound": 3.0738266063687193e-10
+      },
+      "phi1": {
+        "defect": 2.5202062658991053e-14,
+        "bound": 5.122752595795291e-10
+      },
+      "psi1": {
+        "defect": 1.6708856520608606e-14,
+        "bound": 3.0740991994007033e-10
+      },
+      "phi2": {
+        "defect": 3.2307490016592055e-14,
+        "bound": 5.122810211375366e-10
+      },
+      "psi2": {
+        "defect": 2.7700064464397656e-14,
+        "bound": 3.074133768748748e-10
+      },
+      "resident_phi": {
+        "defect": 3.2307490016592055e-14,
+        "bound": 5.122810211375366e-10
+      },
+      "resident_psi": {
+        "defect": 2.7700064464397656e-14,
+        "bound": 3.074133768748748e-10
+      }
+    },
+    "qfinal_separation_from_representative": 6.348378589793313e-05,
+    "donor_byte_exact": true,
+    "binaries": [
+      {
+        "name": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/private/generated/bda9e094ff3d579a1ace016f5cde1e99f204196bba2646241533355e9d489834.so",
+        "binary": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/private/generated/bda9e094ff3d579a1ace016f5cde1e99f204196bba2646241533355e9d489834.so",
+          "bytes": 1488496,
+          "sha256": "6c52ded830a6cb3f9ec3e86458bbe80729f7fb10254cf4a4edeec2fbd06c9a6d"
+        },
+        "sidecar": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/private/generated/bda9e094ff3d579a1ace016f5cde1e99f204196bba2646241533355e9d489834.so.pops-artifact.json",
+          "bytes": 490,
+          "sha256": "d9f969fd1d4d789f3ba29ed5d3991140bacd7f240b6fa178b01a771b4beb51aa"
+        }
+      },
+      {
+        "name": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/private/jit/ef868915ee8cb94a220532cdbd931553ac0c35263773480c970c18aa266dbf6f.so",
+        "binary": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/private/jit/ef868915ee8cb94a220532cdbd931553ac0c35263773480c970c18aa266dbf6f.so",
+          "bytes": 356104,
+          "sha256": "39fbc4f2e1371361b544968f4133f2870514eb1fa47928f9ea19f723f7d361b1"
+        },
+        "sidecar": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/private/jit/ef868915ee8cb94a220532cdbd931553ac0c35263773480c970c18aa266dbf6f.so.pops-artifact.json",
+          "bytes": 591,
+          "sha256": "ac35de431ea964f898c30b70258adcbb45769e0dd919527ab23fcf065e16ae63"
+        },
+        "model_source": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/private/jit/ef868915ee8cb94a220532cdbd931553ac0c35263773480c970c18aa266dbf6f.so.pops-model.cpp",
+          "bytes": 10135,
+          "sha256": "adac7ffd7b24a58ef89dcdc5d439e32b2bc7cbd5356296ecad3509b8e14953c6"
+        },
+        "compile_receipt": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/private/jit/ef868915ee8cb94a220532cdbd931553ac0c35263773480c970c18aa266dbf6f.so.pops-model-compile.json",
+          "bytes": 2306,
+          "sha256": "59c38d27ec3395dcc5f8df7ff3fc17cd9bee535181fed7b8d05cbea7bd8b3f28"
+        },
+        "compiler": {
+          "path": "/usr/bin/clang++",
+          "bytes": 118928,
+          "sha256": "3536cca6074df2ddf6ad787eec5fe4123db17392243fcaf4651e0a3e1314a02e"
+        }
+      },
+      {
+        "name": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/private/jit/c184f044965405f38fb65c3dc78c48e85fabba6108bcbf1cdb155c1a7d2b6ac3.so",
+        "binary": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/private/jit/c184f044965405f38fb65c3dc78c48e85fabba6108bcbf1cdb155c1a7d2b6ac3.so",
+          "bytes": 381656,
+          "sha256": "4518e91aa823c2b192823ba868bc15dd9850182552ab98112f45f60d070167b2"
+        },
+        "sidecar": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/private/jit/c184f044965405f38fb65c3dc78c48e85fabba6108bcbf1cdb155c1a7d2b6ac3.so.pops-artifact.json",
+          "bytes": 591,
+          "sha256": "7150d988121bbdf00c1a2949e8801c6929a7f8e255fd1d8de46b7616a440947b"
+        },
+        "model_source": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/private/jit/c184f044965405f38fb65c3dc78c48e85fabba6108bcbf1cdb155c1a7d2b6ac3.so.pops-model.cpp",
+          "bytes": 15573,
+          "sha256": "f74ee7f31a3e1bcd282c3c7b8d2f51c65640df3294e2ab564d3dbe00f9eba52f"
+        },
+        "compile_receipt": {
+          "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/private/jit/c184f044965405f38fb65c3dc78c48e85fabba6108bcbf1cdb155c1a7d2b6ac3.so.pops-model-compile.json",
+          "bytes": 2306,
+          "sha256": "f1036cee5dbc8b19da410fbfffe7d7da6ccd7f4bfa12ea088946554b700148fc"
+        },
+        "compiler": {
+          "path": "/usr/bin/clang++",
+          "bytes": 118928,
+          "sha256": "3536cca6074df2ddf6ad787eec5fe4123db17392243fcaf4651e0a3e1314a02e"
+        }
+      }
+    ],
+    "checkpoint": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/decay/accepted-checkpoint.npz",
+      "bytes": 83945,
+      "sha256": "fbbbf3f9699b2a63ed0dd61d3d3abd7558e06a4077bed1ca612f4cb4405b1c89",
+      "version": 9,
+      "arrays": 144,
+      "clock": {
+        "macro_step": 1,
+        "time": "0x1.a36e2eb1c432dp-14"
+      },
+      "restart_identity": "a2af476740598e1147c2464e79e1f42627002f5c78700e26e289e9ba9f895b33"
+    },
+    "histories": [
+      {
+        "name": "observed-stage-0-phi",
+        "depth": 2,
+        "fill": 1,
+        "all_saved_slots_match": true
+      },
+      {
+        "name": "observed-stage-0-psi",
+        "depth": 2,
+        "fill": 1,
+        "all_saved_slots_match": true
+      },
+      {
+        "name": "observed-stage-1-phi",
+        "depth": 2,
+        "fill": 1,
+        "all_saved_slots_match": true
+      },
+      {
+        "name": "observed-stage-1-psi",
+        "depth": 2,
+        "fill": 1,
+        "all_saved_slots_match": true
+      },
+      {
+        "name": "observed-stage-2-phi",
+        "depth": 2,
+        "fill": 1,
+        "all_saved_slots_match": true
+      },
+      {
+        "name": "observed-stage-2-psi",
+        "depth": 2,
+        "fill": 1,
+        "all_saved_slots_match": true
+      },
+      {
+        "name": "receiver-stage-0",
+        "depth": 2,
+        "fill": 1,
+        "all_saved_slots_match": true
+      },
+      {
+        "name": "receiver-stage-1",
+        "depth": 2,
+        "fill": 1,
+        "all_saved_slots_match": true
+      },
+      {
+        "name": "receiver-stage-2",
+        "depth": 2,
+        "fill": 1,
+        "all_saved_slots_match": true
+      }
+    ],
+    "changed_CPP_rate_witness": [
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/decay/program0.cpp",
+        "lines": [
+          {
+            "line": 567,
+            "text": "outA(index, 0) = (((0.2 * screened_first) + (0.4 * screened_second)) - (1.1 * q));"
+          },
+          {
+            "line": 752,
+            "text": "outA(index, 0) = (((0.2 * screened_first) + (0.4 * screened_second)) - (1.1 * q));"
+          },
+          {
+            "line": 938,
+            "text": "outA(index, 0) = (((0.2 * screened_first) + (0.4 * screened_second)) - (1.1 * q));"
+          }
+        ]
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/decay/model0.cpp",
+        "lines": []
+      },
+      {
+        "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/decay/model1.cpp",
+        "lines": []
+      }
+    ],
+    "actual_expanded_CPP": {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/private/generated/bda9e094ff3d579a1ace016f5cde1e99f204196bba2646241533355e9d489834.cpp",
+      "bytes": 1485085,
+      "sha256": "ab9683b1af5402d9e2fc58df17b715c1d6e92f6c3260ca03c048cbb66f7f5a8d"
+    },
+    "saved_program_source_exact_subset_of_expanded_CPP": true,
+    "checkpoint_live_state_bytes_match_capture": true
+  },
+  "original_public_three_result": [
+    {
+      "name": "test_public_three_stage_screened_fields[representative]",
+      "passed": true,
+      "failure": null
+    },
+    {
+      "name": "test_public_three_stage_screened_fields[rename]",
+      "passed": false,
+      "failure": "ValueError: provider name must be a valid identifier (letters/digits/_, without a leading digit)"
+    },
+    {
+      "name": "test_public_three_stage_screened_fields[decay]",
+      "passed": true,
+      "failure": null
+    }
+  ],
+  "physical_pins": [
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/cohort.xml",
+      "bytes": 5705,
+      "sha256": "c7f88fda668dbf3b7e4ef511d35ac8c8615b0a7086a455518481fe25dc6032ea"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/invocation.json",
+      "bytes": 884,
+      "sha256": "96fd9861c50ee4077ec3feebf6f6b086e292384cdf14600f395e7a9fd9344d86"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/producer-result.json",
+      "bytes": 436,
+      "sha256": "1568c49fa458e1ce7b5c384f2019ecfe2d821f381798f8752ff12478f1b929d8"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/decay/accepted-checkpoint.npz",
+      "bytes": 83945,
+      "sha256": "fbbbf3f9699b2a63ed0dd61d3d3abd7558e06a4077bed1ca612f4cb4405b1c89"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/decay/actual-arrays.npz",
+      "bytes": 24926,
+      "sha256": "2d81629a87bdbdd0ca117ee06d019374e209ec794b12cdccb5678c1aa66f3ec7"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/decay/actual-bind-inputs.npz",
+      "bytes": 3584,
+      "sha256": "c637495c5620b1369ec8b93bf66c5fa14bf84f203ab21085dd7e1e2f653228a9"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/decay/actual-report.json",
+      "bytes": 1153,
+      "sha256": "cfcbfd5ee9b985cc13d5487e4556cd693f4cfd148e5eed9df86e10680c3eab70"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/decay/author-test-comparison.json",
+      "bytes": 3011,
+      "sha256": "7178ac4cf93a335e5344dac03097ff87a4faaaf9cbfb4204576240eb5f2c5609"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/decay/capture-receipt.json",
+      "bytes": 1598386,
+      "sha256": "004716ed632da205841632ded62acbb72b943b1aab850cfd71e5e5565f98814b"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/decay/model0.cpp",
+      "bytes": 10135,
+      "sha256": "adac7ffd7b24a58ef89dcdc5d439e32b2bc7cbd5356296ecad3509b8e14953c6"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/decay/model1.cpp",
+      "bytes": 15573,
+      "sha256": "f74ee7f31a3e1bcd282c3c7b8d2f51c65640df3294e2ab564d3dbe00f9eba52f"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/decay/program0.cpp",
+      "bytes": 99690,
+      "sha256": "0886335268b82846a3461049618e527504edab54a3b83d1a347c47e2ae00069b"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/public-three-native-tests/tmp/test_public_three_stage_screen2/pre-execution-independent-budget.json",
+      "bytes": 1376,
+      "sha256": "515bec429b4dec301ed8ebb339a54045249521c5225093e536ac3bfd5b8a2ff4"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/invocation.json",
+      "bytes": 1041,
+      "sha256": "4b450e2899532021e43dedb96c8179e44ff918c7c734707110bfa74f7f2f1385"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/producer-result.json",
+      "bytes": 239,
+      "sha256": "c0888183c56ca2682ff831bb3b016e30f0ecd9ea06aa16df80f451c369261612"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/actual-accepted-ssp.json",
+      "bytes": 437,
+      "sha256": "6c5d008dca856080964f374ea825fe81b6842e66dc84709966b6fd3f811dce72"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/actual-diffusion-exchanges.json",
+      "bytes": 2430579,
+      "sha256": "7581118f506c07d0e12db64a557dd76a654bd68e3ad70244961bd2acaee5aefb"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/actual-field-plans.json",
+      "bytes": 23589,
+      "sha256": "71fe5f4a1ab26052adbfe6c1dee7cdbcc1ef293ea213944600c7ac25c9013a21"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/actual-program.json",
+      "bytes": 1324288,
+      "sha256": "7afafcc7f23071e30942573221eba7272bbbfe1d282cfdd7d252eb857f408bb8"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/actual-provider-operations.json",
+      "bytes": 148950,
+      "sha256": "2d6cff06a370c7b423a951948e9677f8a607a57e2988ede97d714227ef3a843c"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/execution-closed.json",
+      "bytes": 16447,
+      "sha256": "d96e9304a3bba03e2de71feb88386a716e6bb58fbca5958cc5b6ea191688fbd0"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/generated/025448b39168c9bfc59678921d643aa2329595a04900aaaf4e17842dea21bd0a.so.pops-artifact.json",
+      "bytes": 490,
+      "sha256": "5c05477f403958c340c09aa593786a004066b4eccc337379b7cc8a2c8a25c675"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/generated/renamed_method.ir.json",
+      "bytes": 1324287,
+      "sha256": "73759a4a70b315fccf597e5b79455d7852f71df2729b578d3a167b9f2ee829fa"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/identity-after.json",
+      "bytes": 2393,
+      "sha256": "4970e4a618bb32585929786e9acaca1d062b2ed9d30a6abb79748be1dbc61518"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/identity-before.json",
+      "bytes": 2387,
+      "sha256": "42210b16c5a693ec2d172fe8fedffe2998554abd992b5a7467fb1fb553b5b4bb"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/jit/43090e284f6b72b1fc628bc5e7ffdc81c9b45ea4a274ac8743203883be0e6d0a.so.pops-artifact.json",
+      "bytes": 591,
+      "sha256": "cdcf5c6dec77930f6b4d4d87d570bf1310d5cc3e2796b364addf9815ac9644b3"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/jit/43090e284f6b72b1fc628bc5e7ffdc81c9b45ea4a274ac8743203883be0e6d0a.so.pops-model-compile.json",
+      "bytes": 2332,
+      "sha256": "ea113e039b3d4587c49b45d7fd5cdde5f9a5dfdd51d009778838ed03183012dd"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/jit/d8a2d62c5c248117dd169a7b27231bb5991a2af78635384b64e7d1f39f5974c0.so.pops-artifact.json",
+      "bytes": 591,
+      "sha256": "09dc1ccc86d5234c8ce9ba9fe021c35e930d400b1bbcf3b615603651a34c350f"
+    },
+    {
+      "path": "/Users/romaindespoulain/dev/tmp/PoPS-native-stage-fields-cpp-reception-20261009/stage-fields-rename/run/jit/d8a2d62c5c248117dd169a7b27231bb5991a2af78635384b64e7d1f39f5974c0.so.pops-model-compile.json",
+      "bytes": 2332,
+      "sha256": "8368f774c660c3f38be328db64807a9a1d5daa701f42eeaa9f0975dbca401b4b"
+    }
+  ],
+  "pops_modules_loaded": [],
+  "limits": [
+    "Public-three original cohort is 2PASS/1Source-grammarFAIL with process exit1; valid-label rename is a distinct later closed0 capture, not a rewrite of original failure.",
+    "CPU MPI world1 one macro step only; no MPI2/GPU/3D/refinement/longtime result.",
+    "No persisted CG reports, stage publication clocks, complete frontend-to-binary graph or unconditional FE positivity theorem.",
+    "Rename checkpoint semantic numerical members match; renamed identifiers/envelopes and opaque carriers may differ legitimately."
+  ],
+  "scope": "Non-author offline mathematical/physical reception; no Native/PoPS/case-author import or execution, no Main/env/build/install/SSH operation.",
+  "pre_execution_budget_chronology_evidence": {
+    "preserved_xml_source_snippet": "Original retained failure traceback includes budget=tolerances(physics), write pre-execution-independent-budget.json, then capture(variant,...) in that order.",
+    "budget_mtime_ns": 1791515974363196350,
+    "actual_arrays_mtime_ns": 1791516006267528037,
+    "scope": "Code ordering and retained filesystem observations support timing; no full frontend graph or cryptographic timestamp claim."
+  }
+}
