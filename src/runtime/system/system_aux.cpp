@@ -542,6 +542,8 @@ AuxiliaryPublicationStatus System<Dim>::refresh_auxiliary_(
     prepared_transaction.emplace(
         p_->auxiliary_registry_.begin_publication(point, forced, consumer_qids));
     auto& transaction = *prepared_transaction;
+    runtime::system::detail::require_stability_auxiliary_permissions(
+        p_->auxiliary_registry_, transaction, point);
     std::vector<std::string> published;
     for (std::size_t index = 0; index < p_->auxiliary_registry_.provider_count(); ++index) {
       const auto& provider = p_->auxiliary_registry_.provider(index);

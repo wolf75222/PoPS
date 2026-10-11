@@ -308,6 +308,26 @@ struct ProgramHaloAdvectionModel : AdvectionModel<Dim> {
   static constexpr int program_state_ghost_depth = 2;
 };
 
+template <int Dim>
+struct AuxiliaryCflModel : AdvectionModel<Dim> {
+  using State = typename AdvectionModel<Dim>::State;
+  static constexpr int n_providers = 1;
+
+  static pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.generated-amr.auxiliary-cfl", 1};
+  }
+  template <int Axis>
+  POPS_HD State flux(const State&, const auto&) const {
+    return {};
+  }
+  template <int Axis>
+  POPS_HD pops::Real max_wave_speed(const State&, const auto& providers) const {
+    // The unpublished zero-filled carrier cannot accidentally provide a valid bound.
+    return pops::Real(1) / providers.template provider<0>();
+  }
+  POPS_HD State source(const State&, const pops::ProviderValues<1>&) const { return {}; }
+};
+
 template <int Dim, int GhostDepth = 1>
 struct ProgramStateModel {
   using State = pops::StateVec<1>;
@@ -3530,6 +3550,157 @@ TEST(GeneratedAmrSystemBlock, CflUsesFinestExactGeometryAndPreparedModelSpeed) {
   const double expected = cfl * (1.0 / 16.0) * 2.0 / static_cast<double>(Dim);
   EXPECT_NEAR(dt, expected, 1.0e-12);
   EXPECT_EQ(system.last_dt_bound(), "transport:tracer");
+}
+
+TEST(GeneratedAmrSystemBlock, CflPublishesCoordinateAuxiliaryBeforeSpeedAndRetainsInvalidGuards) {
+  constexpr int Dim = pops::kNativeDimension;
+  using namespace pops::runtime::system;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/cfl-auxiliary");
+  system.install_block_state_route("tracer", "state/tracer");
+
+  AuxiliaryStorageShape<Dim> shape;
+  for (int axis = 0; axis < Dim; ++axis)
+    shape.halo[axis] = 1;
+  const AuxiliaryComponentKey key{"tests.cfl", "derived", "geometry", "coefficient"};
+  const AuxiliaryComponentKey control_key{"tests.cfl", "input", "controls", "invalid"};
+  const AuxiliaryComponentContract contract{"cell-average", "cell", "unitless", "cfl", "scalar"};
+  struct Probe {
+    std::vector<AuxiliaryEvaluationPoint> points;
+  };
+  auto probe = std::make_shared<Probe>();
+  system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<Dim>{
+      "tests.cfl.control", AuxiliaryProviderKind::input,
+      {std::vector<AuxiliaryEvaluationEvent>{AuxiliaryEvaluationEvent::initialization,
+                                             AuxiliaryEvaluationEvent::before_stability},
+       AuxiliaryFreshness::once},
+      {{control_key, contract, shape}}, {}});
+  system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<Dim>{
+      "tests.cfl.coordinate",
+      AuxiliaryProviderKind::derived,
+      {AuxiliaryEvaluationEvent::before_stability, AuxiliaryFreshness::evaluation},
+      {{key, contract, shape}},
+      {{control_key, contract, shape}},
+      PreparedAuxiliaryProvider<Dim>::launcher_type::trusted_extension(
+          {"tests.cfl.coordinate-launcher", 1}, "tests.cfl.coordinate",
+          [probe](const AuxiliaryKernelLaunchContext<Dim>& context) {
+            probe->points.push_back(context.point);
+            auto* group = context.storage.candidate->find(context.outputs.at(0).address.group);
+            const auto* controls =
+                context.storage.candidate->find(context.dependencies.at(0).address.group);
+            if (group == nullptr || controls == nullptr)
+              throw std::logic_error("CFL fixture is missing its coordinate carrier");
+            const auto component = context.outputs[0].address.component;
+            const auto control_component = context.dependencies[0].address.component;
+            const auto spacing = pops::Real(1) / pops::Real(8 * (1 << context.point.level));
+            const auto tick = pops::Real(context.point.accepted_step);
+            const bool inject = pops::my_rank() == 0;
+            for (std::size_t local = 0; local < group->local_size(); ++local) {
+              const auto output = group->fab(local).view();
+              const auto control = controls->fab(local).view();
+              std::size_t cells = 1;
+              for (int axis = 0; axis < Dim; ++axis)
+                cells *= static_cast<std::size_t>(output.extents[axis]);
+              Kokkos::parallel_for(
+                  "test_cfl_coordinate_auxiliary", Kokkos::RangePolicy<>(0, cells),
+                  KOKKOS_LAMBDA(const std::size_t linear) {
+                    std::size_t remainder = linear;
+                    pops::Index<Dim> index{};
+                    for (int axis = 0; axis < Dim; ++axis) {
+                      index[axis] = output.origin[axis] +
+                                    static_cast<int>(remainder % output.extents[axis]);
+                      remainder /= output.extents[axis];
+                    }
+                    const auto coordinate = (pops::Real(index[0]) + pops::Real(.5)) * spacing;
+                    const auto invalid = inject ? control(index, control_component) : pops::Real(0);
+                    output(index, component) = invalid == 1 ? pops::Real(-1) :
+                        invalid == 2 ? std::numeric_limits<pops::Real>::infinity() :
+                        pops::Real(2) + coordinate + tick;
+                  });
+            }
+          })});
+  system.install_auxiliary_consumer_plan(
+      AuxiliaryConsumerProviderPlan<Dim>{"tests.tracer/physical_flux", {{{key, contract, shape}, 0}}});
+  system.seal_auxiliary_providers();
+  pops::add_compiled_model<Dim>(system, "tracer", AuxiliaryCflModel<Dim>{});
+  const std::vector<double> initial(cell_count(config.shape), 1.);
+  system.set_conservative_state("tracer", initial);
+  system.stage_auxiliary_input(control_key, std::vector<double>(initial.size(), 0.));
+  int program_calls = 0;
+  system.install_program_step([&](double) { ++program_calls; });
+
+  constexpr double cfl = .4;
+  EXPECT_TRUE(probe->points.empty());
+  EXPECT_EQ(system.auxiliary_component(key), std::vector<double>(initial.size(), 0.));
+  // No manual refresh: the first CFL query must publish the root coordinates itself.
+  EXPECT_NEAR(system.step_cfl(cfl), cfl * (1. / 8.) * (2. + .5 / 8.), 1.e-12);
+  EXPECT_EQ(program_calls, 1);
+  ASSERT_FALSE(probe->points.empty());
+  const auto initial_generation = probe->points.front().layout_generation;
+  for (const auto& point : probe->points) {
+    EXPECT_EQ(point.event, AuxiliaryEvaluationEvent::before_stability);
+    EXPECT_EQ(point.accepted_step, 0u);
+    EXPECT_EQ(point.level, 0);
+  }
+  const auto first_coefficients = system.auxiliary_component(key);
+  ASSERT_EQ(first_coefficients.size(), initial.size());
+  for (std::size_t cell = 0; cell < first_coefficients.size(); ++cell)
+    EXPECT_EQ(first_coefficients[cell], 2. + (double(cell % 8) + .5) / 8.);
+
+  // A new sparse child needs its own geometry and the current accepted tick.
+  publish_centered_fine_level(system);
+  probe->points.clear();
+  EXPECT_NEAR(system.step_cfl(cfl), cfl * (1. / 16.) * (2. + 4.5 / 16. + 1.), 1.e-12);
+  EXPECT_EQ(program_calls, 2);
+  ASSERT_FALSE(probe->points.empty());
+  bool saw_fine = false;
+  for (const auto& point : probe->points) {
+    EXPECT_EQ(point.event, AuxiliaryEvaluationEvent::before_stability);
+    EXPECT_EQ(point.accepted_step, 1u);
+    EXPECT_GT(point.layout_generation, initial_generation);
+    saw_fine |= point.level == 1;
+  }
+  EXPECT_TRUE(saw_fine);
+
+  // Restored accepted clocks must not keep the auxiliary image from the last proposal.
+  system.set_clock(.5, system.macro_step());
+  probe->points.clear();
+  EXPECT_NEAR(system.step_cfl(cfl), cfl * (1. / 16.) * (2. + 4.5 / 16. + 2.), 1.e-12);
+  for (const auto& point : probe->points)
+    EXPECT_EQ(point.accepted_step, 2u);
+  EXPECT_EQ(program_calls, 3);
+
+  const auto before_root = system.block_level_state("tracer", 0);
+  const auto before_fine = system.block_level_state("tracer", 1);
+  const auto before_time = system.time();
+  const auto before_step = system.macro_step();
+  for (const int invalid : {1, 2}) {
+    system.stage_auxiliary_input(control_key, std::vector<double>(initial.size(), invalid));
+    // Only rank zero injects the bad coefficient. All ranks, including an empty participant,
+    // must reject before the Program callback or accepted state/clock can change.
+    std::string reason;
+    try {
+      (void)system.step_cfl(cfl);
+    } catch (const std::exception& error) {
+      reason = error.what();
+    }
+    EXPECT_FALSE(reason.empty());
+    if (invalid == 1)
+      EXPECT_NE(reason.find("invalid local maximum speed"), std::string::npos) << reason;
+    EXPECT_EQ(pops::all_reduce_sum(reason.empty() ? 0L : 1L), pops::n_ranks());
+    EXPECT_EQ(program_calls, 3);
+    EXPECT_EQ(system.time(), before_time);
+    EXPECT_EQ(system.macro_step(), before_step);
+    EXPECT_EQ(system.block_level_state("tracer", 0), before_root);
+    EXPECT_EQ(system.block_level_state("tracer", 1), before_fine);
+  }
+  system.stage_auxiliary_input(control_key, std::vector<double>(initial.size(), 0.));
+  EXPECT_NO_THROW((void)system.step_cfl(cfl));
+  EXPECT_EQ(program_calls, 4);
+  EXPECT_EQ(system.block_level_state("tracer", 0), initial);
 }
 
 TEST(GeneratedAmrSystemBlock, DiffusiveCflUsesFinestParabolicGeometryAndReportsFrequency) {

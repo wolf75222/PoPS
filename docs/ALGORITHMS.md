@@ -83,6 +83,16 @@ geometry, AMR cadence and the time method can impose additional restrictions. Th
 aggregates declared bounds and reports the limiting reason. SSP claims require the
 forward-Euler spatial step itself to satisfy the claimed stability property.
 
+Before a native CFL estimate, `System` and `AmrSystem` prepare the transport's
+required auxiliary dependency closure with the `before_stability` event at the
+current accepted Clock, tick and physical time. AMR preparation includes the
+ancestors actually used by that closure. The evaluation carries the last accepted
+duration, or zero at the initial state; it does not invent a future step interval.
+Default analytic and derived providers permit this event. Explicit permissions
+and native cache reuse still govern publication, and forced staging cannot override
+a forbidden event. Non-finite or negative speed estimates remain errors. Checkpoints
+retain the exact auxiliary publication points for continuation.
+
 ## Diffusion and fitted drift-diffusion
 
 Diffusion is a conservative face flux, for example $J=-\nu\nabla U$. The prepared

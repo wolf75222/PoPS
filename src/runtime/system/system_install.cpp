@@ -839,6 +839,8 @@ PreparedBlockInstallation<Dim, Implementation> prepare_block_installation(
   candidate.gamma = prepared.gamma;
   candidate.rhs_into = std::move(prepared.closures.rhs_into);
   candidate.max_speed = std::move(prepared.maximum_speed);
+  if (prepared.provider_components != 0)
+    candidate.stability_consumer_qid = provider_consumer_qid;
   candidate.add_poisson_rhs = std::move(prepared.poisson_rhs);
   candidate.cons_vars = std::move(prepared.conservative_variables);
   candidate.prim_vars = std::move(prepared.primitive_variables);

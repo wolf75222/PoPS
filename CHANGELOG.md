@@ -18,6 +18,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Publish required transport auxiliaries at the accepted state before native CFL speed
+  estimates, fixing first-step reads of uninitialized coordinate fields. Preserve provider
+  permissions, invalid-speed guards and exact checkpoint publication points.
 - Make the named region-transfer pack/unpack functor types accessible to NVCC host stubs,
   retaining private transport storage and unchanged kernels, offsets, guards and fences.
 - Distinguish imposed auxiliary requirements from solved Field operands when authoring

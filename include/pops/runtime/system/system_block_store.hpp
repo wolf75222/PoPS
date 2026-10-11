@@ -79,6 +79,8 @@ class SystemBlockStore {
     double gamma = 1.0;
     Residual rhs_into;
     std::function<Real(const field_type&, const ExecutionLane&)> max_speed;
+    /// Exact compact provider dependency plan also consumed by stability estimates.
+    std::string stability_consumer_qid;
     ConstResidual add_poisson_rhs;
 
     VariableSet cons_vars;

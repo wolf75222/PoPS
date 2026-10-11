@@ -806,6 +806,55 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
     typename Impl::Species& block = p_->sp[block_index];
     if (!block.evolve)
       continue;
+    if (!block.stability_consumer_qid.empty()) {
+      // CFL consumes the accepted image before the next numerical interval is known.
+      // Publish the same exact transport dependency closure without pretending that a
+      // residual or future stage has already been evaluated.
+      runtime::system::AuxiliaryEvaluationPoint auxiliary;
+      std::exception_ptr publication_point_error;
+      try {
+        runtime::multiblock::BoundaryEvaluationPoint point;
+        const auto& metadata = p_->program_.checkpoint_metadata_;
+        point.clock = metadata.primary_clock_identity;
+        const bool physical_clock = !point.clock.empty();
+        if (physical_clock &&
+            std::find(metadata.logical_clock_identities.begin(),
+                      metadata.logical_clock_identities.end(), point.clock) ==
+                metadata.logical_clock_identities.end())
+          throw std::invalid_argument("System CFL auxiliary Clock is not installed");
+        if (!physical_clock)
+          point.clock = "pops.system.accepted-stability";
+        point.tick = p_->macro_step_;
+        point.level = 0;
+        point.stage_fraction = {0, 1};
+        point.dt = static_cast<double>(p_->program_.last_dt_);
+        point.physical_time = p_->t;
+        if (point.tick < 0 || !std::isfinite(point.dt) || point.dt < 0 ||
+            (physical_clock && point.tick != 0 && point.dt == 0) ||
+            !std::isfinite(point.physical_time))
+          throw std::invalid_argument("System CFL auxiliary requires its live accepted point");
+        auxiliary.clock = point.clock;
+        auxiliary.accepted_step = static_cast<std::uint64_t>(point.tick);
+        auxiliary.layout_generation = p_->embedded_boundary_generation_;
+        auxiliary.event = runtime::system::AuxiliaryEvaluationEvent::before_stability;
+        if (physical_clock) {
+          if (point.dt > 0)
+            auxiliary.qualify_physical_evaluation(point);
+          else {
+            runtime::system::AuxiliaryPhysicalEvaluation physical(
+                point.stage_fraction, point.dt, point.physical_time);
+            physical.qualify_native_accepted_initial(point);
+            auxiliary.physical_evaluation = std::move(physical);
+          }
+        }
+        auxiliary.validate();
+      } catch (...) { publication_point_error = std::current_exception(); }
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          publication_point_error, &lane, "System CFL auxiliary point failed collectively");
+      if (refresh_auxiliary_(auxiliary, {block.stability_consumer_qid}) ==
+          runtime::system::AuxiliaryPublicationStatus::nonfinite_candidate)
+        throw std::runtime_error("System CFL auxiliary candidate contains non-finite values");
+    }
     const Real speed =
         std::max(block_max_speed_prepared_(static_cast<int>(block_index), block.U, lane),
                  static_cast<Real>(speed_floor));
