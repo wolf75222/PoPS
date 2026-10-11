@@ -113,9 +113,38 @@ class _OperatorViewMixin(_HyperbolicModel):
         Field names stay semantic only.  The provider pack assigns their native
         storage slots after the complete module has been resolved.
         """
-        return _model.FieldSpace(
-            name=name, components=tuple(self._provider_components), layout="cell"
-        )
+        components = tuple(self._provider_components)
+        declarations = tuple(space for space in getattr(self, "_declared_field_spaces", {}).values()
+                             if any(component in components for component in space.components))
+        if not declarations:
+            return _model.FieldSpace(name=name, components=components, layout="cell")
+        first = declarations[0]
+        attributes = ("layout", "representation", "centering", "frame", "clock", "support",
+                      "sampling", "domain")
+        if any(getattr(space, attribute) != getattr(first, attribute)
+               for space in declarations for attribute in attributes):
+            raise ValueError("shared field carrier requires explicitly co-located physical fields")
+        units = {}
+        for space in declarations:
+            for component, unit in zip(space.components, space.units, strict=True):
+                if component in units:
+                    raise ValueError("typed field declarations duplicate a carrier component")
+                units[component] = unit
+        return _model.FieldSpace(name=name, components=components,
+            units=tuple(units.get(component) for component in components),
+            **{attribute: getattr(first, attribute) for attribute in attributes})
+
+    def named_field_space(self, name: str, components: Any) -> Any:
+        """Project exact component metadata from the authenticated shared carrier."""
+        components = tuple(components)
+        carrier = self.field_space()
+        if any(component not in carrier.components for component in components):
+            raise ValueError("named field output is absent from its storage carrier")
+        attributes = ("layout", "representation", "centering", "frame", "clock", "support",
+                      "sampling", "domain")
+        return _model.FieldSpace(name=name, components=components,
+            units=tuple(carrier.units[carrier.components.index(component)] for component in components),
+            **{attribute: getattr(carrier, attribute) for attribute in attributes})
 
     def operator_registry(self, state_name: str | None = None) -> Any:
         """Typed :class:`pops.model.OperatorRegistry` derived from this model.
@@ -320,7 +349,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                 _model.Operator(
                     nm,
                     "field_operator",
-                    _model.Signature([state], _model.FieldSpace(nm, components=tuple(info["aux"]))),
+                    _model.Signature([state], self.named_field_space(nm, info["aux"])),
                     capabilities={"requires_solver": True, "supports_device": True},
                     requirements={"elliptic_operator": info["operator"],
                                   **self._aux_requirements((info["rhs"],))},

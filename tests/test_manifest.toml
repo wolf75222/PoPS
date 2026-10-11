@@ -618,6 +618,12 @@ sources = ["tests/cpp/unit/elliptic/test_geometric_mg_nd.cpp"]
 labels = ["unit", "elliptic", "amr", "fast", "nd"]
 
 [[cpp.suite]]
+name = "test_tensor_diagonal_mg_preconditioner"
+sources = ["tests/cpp/unit/elliptic/test_tensor_diagonal_mg_preconditioner.cpp"]
+labels = ["unit", "elliptic", "fast", "nd"]
+mpi_variants = [2]
+
+[[cpp.suite]]
 name = "test_composite_fac_eb"
 sources = ["tests/cpp/unit/elliptic/test_composite_fac_eb.cpp"]
 labels = ["unit", "elliptic", "fast"]

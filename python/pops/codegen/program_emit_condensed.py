@@ -42,12 +42,32 @@ from pops.codegen.program_emit_model_kernels import _linear_source_rows, _provid
 
 def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
                       provider_plans: Any, consumer_qid: str, program_block: int,
-                      target: str = "system") -> None:
+                      target: str = "system", field_plans: Any = None) -> None:
     """Dispatch a condensed_coeffs / condensed_rhs / condensed_reconstruct / condensed_energy op to its
     inline emitter (ADC-637), keeping program_emit_ops.py a thin router. Records the op's C++ token in
     @p var and appends its kernel to @p lines (the coefficient bundle also allocates one persistent
     row-major tensor field in @p prelude, captured by the apply lambda)."""
     mapped = v.attrs.get("gradient_map") is not None or v.attrs.get("base_tensor") is not None
+    boundary_session = None
+    if v.attrs.get("field_boundary_owner") is not None:
+        from pops.time.field_boundaries import resolved_field_boundary_route
+        slot, _plan = resolved_field_boundary_route(v.attrs["field_boundary_owner"], v.block, field_plans)
+        if target == "amr_system":
+            if not mapped:
+                raise NotImplementedError(
+                    "AMR field-boundary condensed stencils require an explicit gradient/base tensor")
+            lines.append("if (ctx.uses_prepared_krylov_fallback()) throw std::logic_error("
+                         '"installed field-boundary Schur requires a refined AMR hierarchy; use the Uniform control for one level");')
+            lines.append("ctx.require_condensed_field_boundary(%d, %s);" %
+                         (program_block, json.dumps(slot)))
+        elif target == "system":
+            boundary_session = "cond%d_field_boundary" % v.id
+            phi = v.inputs[1]
+            prelude.append("auto %s = ctx.prepare_field_boundary_session(%d, %s, "
+                           "ctx.prepared_execution_lane(), %s);" % (
+                               boundary_session, program_block, _deref(var[phi.id]), json.dumps(slot)))
+        else:
+            raise NotImplementedError("installed field-boundary condensed target is unsupported")
     if mapped and target != "amr_system":
         raise ValueError("mapped condensed operators require an AMR layout, including a one-level AMR layout")
     if v.op == "condensed_coeffs":
@@ -58,10 +78,20 @@ def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
         (state_in,) = v.inputs
         dimension = len(v.attrs["subset"])
         tensor = "cond_tensor%d" % v.id
-        prelude.append(
-            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-            "ctx.alloc_scalar_field(%d, 1));" % (tensor, dimension * dimension)
-        )
+        if target == "amr_system":
+            # This storage follows the exact active level and source SSA, including empty ranks.
+            # An install-time base-level shared_ptr cannot be sampled against a fine-level state.
+            lines.append("auto* %s = &ctx.scalar_scratch(%d, 0, %s, %d, 1);" %
+                         (tensor, v.id, _deref(var[state_in.id]), dimension * dimension))
+            template = "cond_tensor_template%d" % v.id
+            prelude.append("auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+                           "ctx.alloc_scalar_field(%d, 1));" % (template, dimension * dimension))
+            var[("amr_coefficient_template", v.id)] = template
+        else:
+            prelude.append(
+                "auto %s = ctx.alloc_shared_scalar_field_for_block(%d, %d, 1);"
+                % (tensor, program_block, dimension * dimension)
+            )
         var[v.id] = tensor
         lines += _emit_condensed_coeffs_kernel(
             v.id, model, v.attrs["linear_operator"], v.attrs["subset"], v.attrs["c"],
@@ -76,6 +106,10 @@ def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
         # that needs a ctx coefficient-BC seam, batched with the brick retirement (header change).
         lines.append("ctx.fill_boundary(*%s);" % tensor)
         if target == "amr_system":
+            # The legacy flat Krylov route retains a base-level prototype; its deep snapshot is
+            # refreshed only from the exact active coarse tensor. FAC always consumes level slots.
+            lines.append("if (ctx.level() == 0) pops::PureFieldAlgebra::copy_allocated(*%s, *%s);" %
+                         (var[("amr_coefficient_template", v.id)], tensor))
             lines.append("if (!ctx.uses_prepared_krylov_fallback()) {")
             for row in range(dimension):
                 for column in range(dimension):
@@ -97,6 +131,7 @@ def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
             v.attrs["g"], var[out_in.id], var[phi_in.id], var[state_in.id],
             gradient_map=v.attrs.get("gradient_map"), base_tensor=v.attrs.get("base_tensor"),
             charge_component=v.attrs.get("charge_component"),
+            boundary_session=boundary_session,
             provider_plans=provider_plans, consumer_qid=consumer_qid, program_block=program_block, target=target)
         var[v.id] = var[out_in.id]
     elif v.op == "condensed_reconstruct":
@@ -106,6 +141,7 @@ def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
             v.attrs["c_rho"], var[state_in.id], var[phi_in.id],
             gradient_map=v.attrs.get("gradient_map"),
             gradient_scale=v.attrs.get("gradient_scale"), target=target,
+            boundary_session=boundary_session,
             provider_plans=provider_plans, consumer_qid=consumer_qid, program_block=program_block)
         var[v.id] = var[state_in.id]
     else:  # condensed_energy
@@ -348,7 +384,8 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
                                g_coeff: Any, rhs_var: Any, phi_n_var: Any, state_var: Any,
                                *, provider_plans: Any, consumer_qid: str, program_block: int,
                                target: str = "system", gradient_map: Any = None,
-                               base_tensor: Any = None, charge_component: Any = None) -> list:
+                               base_tensor: Any = None, charge_component: Any = None,
+                               boundary_session: str | None = None) -> list:
     """Emit the conservative mapped source RHS, optionally folding in a Gauss projection."""
     impl = _model_impl(model)
     jblock = _subset_block_rows(impl, jblock_op, subset)
@@ -401,7 +438,9 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
                      "ctx.condensed_tensor_laplacian(%d, %s, %s, %s);"
                      % (program_block, lap, _deref(phi_n_var), metric)]
         else:
-            body.append("ctx.laplacian(%s, %s);" % (lap, _deref(phi_n_var)))
+            body.append(("ctx.laplacian_field(%s, %s, *%s);" %
+                         (lap, _deref(phi_n_var), boundary_session)) if boundary_session else
+                        "ctx.laplacian(%s, %s);" % (lap, _deref(phi_n_var)))
         body += [
             "pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 1, %s, 1, 0);"
             % (negl, uid, _deref(phi_n_var)),
@@ -471,7 +510,8 @@ def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, sub
                                        th_dt: Any, c_rho: Any, state_var: Any, phi_var: Any,
                                        *, provider_plans: Any, consumer_qid: str,
                                        program_block: int, gradient_map: Any = None,
-                                       gradient_scale: Any = None, target: str = "system") -> list:
+                                       gradient_scale: Any = None, target: str = "system",
+                                       boundary_session: str | None = None) -> list:
     """Emit the exact-ranked velocity reconstruction and write momentum in place."""
     impl = _model_impl(model)
     jblock = _subset_block_rows(impl, jblock_op, subset)
@@ -492,7 +532,9 @@ def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, sub
         "pops::MultiFab<pops::kNativeDimension>& %s = "
         'ctx.assembly_source(%s, "pops.tensor-elliptic.solution");'
         % (phi_read, phi),
-        ("ctx.fill_condensed_potential(%d, %s);" % (program_block, phi_read) if gradient is not None
+        ("ctx.fill_field_potential(%d, %s, *%s);" % (program_block, phi_read, boundary_session)
+         if boundary_session else
+         "ctx.fill_condensed_potential(%d, %s);" % (program_block, phi_read) if gradient is not None
          else "ctx.fill_boundary(%s);" % phi_read),
         "const pops::Geometry<pops::kNativeDimension> cond%s_geometry = ctx.geometry();" % uid,
         "pops::Real cond%s_reconstruct_status = 0;" % uid,

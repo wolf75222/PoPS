@@ -562,8 +562,10 @@ class CompositeFacPoisson {
 
   CompositeFacPoisson(request_type request, CompositeFacOptions options = {},
                       Real reaction = Real(0), const ExecutionLane* prepared_lane = nullptr,
-                      bool operator_only = false, bool guard_local_setup = false)
-      : options_(options), reaction_(reaction), operator_only_(operator_only) {
+                      bool operator_only = false, bool guard_local_setup = false,
+                      std::optional<::pops::elliptic::mg::GeometricMultigridOptions> geometric_controls = {})
+      : options_(options), reaction_(reaction), operator_only_(operator_only),
+        geometric_controls_(std::move(geometric_controls)) {
     if (guard_local_setup) {
       if (!prepared_lane) throw std::invalid_argument("guarded FAC setup requires its prepared lane");
       lane_ = prepared_lane;
@@ -589,11 +591,32 @@ class CompositeFacPoisson {
       if (!std::isfinite(static_cast<double>(reaction_)) || reaction_ < Real(0))
         throw std::invalid_argument("partitioned FAC reaction must be finite and non-negative");
       validate_request_(request, reaction_);
+      if (geometric_controls_) {
+        ::pops::elliptic::mg::detail::validate_options<Dim>(*geometric_controls_);
+        if (operator_only_ || reaction_ != Real(0))
+          throw std::invalid_argument("explicit geometric FAC controls require a static Poisson solve authority");
+        for (const auto& level : request.levels)
+          for (int axis = 0; axis < Dim; ++axis)
+            for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
+              const Face<Dim> face{axis, side};
+              if (level.boundary.topology().is_periodic(face) ||
+                  level.boundary.at(face).kind != PhysicalBoundaryKind::dirichlet ||
+                  level.boundary.at(face).value != Real(0))
+                throw std::invalid_argument("explicit geometric FAC requires zero Dirichlet physical faces");
+            }
+      }
       lane_identity_ = "pops.elliptic.amr.composite-fac.nd" + std::to_string(Dim);
       exact_contract_ = fac_detail::exact_contract(request, options_, reaction_);
       exact_contract_ += operator_only_ ? "/operator-only@1" : "/fac-solver@1";
+      if (geometric_controls_)
+        exact_contract_ += ::pops::elliptic::mg::detail::options_contract<Dim>(*geometric_controls_);
       build_levels_(request);
       build_connections_(request);
+      if (field_domain_())
+        for (auto& level : levels_)
+          for (std::size_t local = 0; local < level->active.local_size(); ++local)
+            for_each_cell(level->active.box(local), ::pops::elliptic::mg::IntersectCellCentreBallKernel<Dim>{
+                level->active.fab(local).view(), level->geometry, *field_domain_()});
       if (operator_only_) {
         for (auto& level : levels_)
           level->coefficient.emplace(level->phi.layout(), level->phi.distribution(),
@@ -709,6 +732,7 @@ class CompositeFacPoisson {
   }
 
   void install_newton(FieldNewtonOptions options) {
+    if (geometric_controls_) throw std::invalid_argument("explicit geometric FAC has no nonlinear authority");
     if (newton_workspace_)
       throw std::logic_error("partitioned FAC Newton authority is already installed");
     validate_field_newton_options(options);
@@ -721,6 +745,7 @@ class CompositeFacPoisson {
   }
 
   void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) {
+    if (geometric_controls_) throw std::invalid_argument("explicit geometric FAC has no dynamic boundary authority");
     if (boundary_kernel_)
       throw std::logic_error("partitioned FAC boundary kernel is already installed");
     kernel.validate();
@@ -890,6 +915,7 @@ class CompositeFacPoisson {
   void install_embedded_boundary(int level, const field_type& active,
                                  const field_type& inverse_volume, const field_type& aperture_lower,
                                  const field_type& aperture_upper) {
+    if (field_domain_()) throw std::invalid_argument("field-domain conductor cannot replace transport cut metrics");
     Level& target = *levels_.at(static_cast<std::size_t>(level));
     ::pops::elliptic::mg::WeightedPoissonFields<Dim, MemorySpace> probe;
     probe.inverse_volume = &inverse_volume;
@@ -927,6 +953,10 @@ class CompositeFacPoisson {
   }
 
   SolveReport solve() {
+    if (roundoff_enabled_())
+      for (const auto& level : levels_)
+        if (level->coefficient || level->inverse_volume || level->aperture_lower || level->aperture_upper)
+          throw std::invalid_argument("FAC roundoff residual policy has no weighted/cut-metric authority");
     if (operator_only_)
       throw std::logic_error("prepared composite operator has no solve authority");
     if (newton_workspace_ || boundary_kernel_)
@@ -953,7 +983,7 @@ class CompositeFacPoisson {
     }
     // The declared relative scale is R(0), the exact affine forcing. A warm
     // candidate changes the initial error, not the accuracy required of this equation.
-    const Real reference = composite_forcing_norm_();
+    Real reference = composite_forcing_norm_();
     SolveReport report;
     report.evaluations = 1;
     if (!std::isfinite(static_cast<double>(reference))) {
@@ -964,6 +994,7 @@ class CompositeFacPoisson {
     }
     compute_composite_residual_();
     const Real initial = composite_residual_norm_();
+    if (geometric_controls_) reference = initial;
     ++report.evaluations;
     if (!std::isfinite(static_cast<double>(initial))) {
       report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
@@ -974,10 +1005,18 @@ class CompositeFacPoisson {
     report.reference_residual_norm = reference;
     report.residual_norm = initial;
     report.rel_residual = relative_residual_(initial, reference);
-    const Real stop = std::max(options_.abs_tol, options_.rel_tol * reference);
+    const Real requested_stop = std::max(options_.abs_tol, options_.rel_tol * reference);
+    if (!update_roundoff_evidence_(report, requested_stop, true)) {
+      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
+                         "partitioned_fac_unsupported_or_non_finite_residual_evaluation_bound");
+      last_report_ = report;
+      return last_report_;
+    }
+    Real stop = report.residual_evaluation ? report.residual_evaluation->applied_threshold : requested_stop;
     if (initial <= stop) {
       fill_all_solution_ghosts_();
-      report.mark_solved("partitioned_fac_initial_residual");
+      report.mark_solved(report.residual_evaluation && report.residual_evaluation->roundoff_limited
+                            ? "partitioned_fac_roundoff_evaluation_limited" : "partitioned_fac_initial_residual");
       last_report_ = report;
       return last_report_;
     }
@@ -1025,9 +1064,17 @@ class CompositeFacPoisson {
         last_report_ = report;
         return last_report_;
       }
+      if (!update_roundoff_evidence_(report, requested_stop, false)) {
+        report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
+                           "partitioned_fac_unsupported_or_non_finite_residual_evaluation_bound");
+        last_report_ = report;
+        return last_report_;
+      }
+      stop = report.residual_evaluation ? report.residual_evaluation->applied_threshold : requested_stop;
       if (report.residual_norm <= stop) {
         fill_all_solution_ghosts_();
-        report.mark_solved("partitioned_fac_converged");
+        report.mark_solved(report.residual_evaluation && report.residual_evaluation->roundoff_limited
+                              ? "partitioned_fac_roundoff_evaluation_limited" : "partitioned_fac_converged");
         last_report_ = report;
         return last_report_;
       }
@@ -1719,6 +1766,7 @@ class CompositeFacPoisson {
     local_operator_phase_(local_phase_lane, [&] {
       fill_physical_boundary(
           field, homogeneous ? level.homogeneous_physical_boundary : level.physical_boundary);
+      project_field_domain_(level, field);
     });
   }
 
@@ -1758,14 +1806,14 @@ class CompositeFacPoisson {
       fields.aperture_lower = &*level.aperture_lower;
     if (level.aperture_upper)
       fields.aperture_upper = &*level.aperture_upper;
-    if (level.inverse_volume)
+    if (level.inverse_volume || field_domain_())
       fields.active = &level.active;
     fields.covered = &level.covered;
     return fields;
   }
 
   bool uses_weighted_operator_(const Level& level) const noexcept {
-    return level.coefficient.has_value() || level.inverse_volume.has_value();
+    return field_domain_() || level.coefficient.has_value() || level.inverse_volume.has_value();
   }
 
   void fill_coefficient_ghosts_(std::size_t level_index) {
@@ -1922,7 +1970,7 @@ class CompositeFacPoisson {
   void build_coarse_solver_(const EllipticBuildRequest<Dim>& coarse_request,
                             bool allow_coarsening = true) {
     coarse_request_ = coarse_request;
-    ::pops::elliptic::mg::GeometricMultigridOptions controls;
+    ::pops::elliptic::mg::GeometricMultigridOptions controls = geometric_controls_.value_or(::pops::elliptic::mg::GeometricMultigridOptions{});
     controls.relative_tolerance = options_.coarse_rel_tol;
     controls.absolute_tolerance = options_.coarse_abs_tol;
     controls.maximum_cycles = options_.coarse_cycles;
@@ -1948,6 +1996,7 @@ class CompositeFacPoisson {
   void try_prepare_fft_coarse_() {
     fft_coarse_.reset();
     used_fft_coarse_ = false;
+    if (geometric_controls_) return;
     if (!coarse_request_ || !lane_)
       return;
     const Level& coarse = *levels_.front();
@@ -2047,6 +2096,105 @@ class CompositeFacPoisson {
   void average_solution_down_() {
     for (std::size_t child = levels_.size(); child-- > 1;)
       connections_[child - 1]->restrict_into(levels_[child]->phi, levels_[child - 1]->phi);
+    if (field_domain_())
+      for (auto& level : levels_) project_field_domain_(*level, level->phi);
+  }
+
+  const std::optional<::pops::elliptic::mg::CellCentreBallDomain>& field_domain_() const {
+    static const std::optional<::pops::elliptic::mg::CellCentreBallDomain> full{};
+    return geometric_controls_ ? geometric_controls_->field_domain : full;
+  }
+
+  bool roundoff_enabled_() const noexcept {
+    return geometric_controls_ && geometric_controls_->roundoff_aware_residual;
+  }
+
+  bool update_roundoff_evidence_(SolveReport& report, Real requested, bool initial) const {
+    if (!roundoff_enabled_()) return true;
+    using Scaled = ::pops::detail::ScaledScalar;
+    Real rhs_local = Real(0), phi_local = Real(0), stencil_local = Real(0);
+    for (const auto& level : levels_)
+      for (std::size_t local = 0; local < level->phi.local_size(); ++local) {
+        const auto active = std::as_const(level->active).fab(local).view();
+        rhs_local = std::max(rhs_local, for_each_cell_reduce_max(level->rhs.box(local),
+            ::pops::elliptic::mg::roundoff::AbsoluteMagnitudeKernel<Dim>{std::as_const(level->rhs).fab(local).view(), active}));
+        phi_local = std::max(phi_local, for_each_cell_reduce_max(level->phi.box(local),
+            ::pops::elliptic::mg::roundoff::AbsoluteMagnitudeKernel<Dim>{std::as_const(level->phi).fab(local).view(), {}}));
+        ::pops::elliptic::mg::roundoff::FivePointBoundKernel<Dim> kernel{
+            std::as_const(level->phi).fab(local).view(), std::as_const(level->rhs).fab(local).view(), active, {},
+            ::pops::elliptic::mg::roundoff::stencil_gamma<Dim>()};
+        for (int axis = 0; axis < Dim; ++axis) {
+          const Real h = level->geometry.spacing(axis);
+          const Real square = h*h;
+          kernel.inverse_spacing_squared[axis] = ::pops::elliptic::mg::roundoff::normal_or_zero(square) && square > Real(0)
+              ? Real(1)/square : std::numeric_limits<Real>::infinity();
+        }
+        stencil_local = std::max(stencil_local, for_each_cell_reduce_max(level->phi.box(local), kernel));
+      }
+    const Real rhs_norm = static_cast<Real>(all_reduce_max(static_cast<double>(rhs_local), *lane_));
+    const Real phi_norm = static_cast<Real>(all_reduce_max(static_cast<double>(phi_local), *lane_));
+    Real bound = static_cast<Real>(all_reduce_max(static_cast<double>(stencil_local), *lane_));
+    if (levels_.size() > 1) {
+      // Quadratic cell-centre interpolation has l1 weight sum <=5/4 per axis. Bound
+      // chained CF extension, fine-face averaging, and flux replacement explicitly;
+      // the absolute-term sum is kept binary-scaled until gamma has been applied.
+      const std::uint64_t depth = levels_.size()-1;
+      Scaled amplification = Scaled::from(Real(1));
+      for (std::uint64_t factor = 0; factor < depth * Dim; ++factor)
+        amplification = Scaled::product(amplification, Scaled::from(Real(1.25)));
+      const Scaled extended_phi = Scaled::product(Scaled::from(phi_norm), amplification);
+      Scaled absolute_terms = Scaled::from(rhs_norm);
+      Real largest_inverse_sum = Real(0);
+      for (const auto& level : levels_) {
+        Real sum = Real(0);
+        for (int axis = 0; axis < Dim; ++axis) {
+          const Real h = level->geometry.spacing(axis);
+          sum += Real(1)/(h*h);
+        }
+        largest_inverse_sum = std::max(largest_inverse_sum, sum);
+      }
+      absolute_terms = Scaled::sum(absolute_terms, Scaled::product(extended_phi,
+          Scaled::product(Scaled::from(Real(4)), Scaled::from(largest_inverse_sum))));
+      std::uint64_t maximum_tangential = 1;
+      for (const auto& connection : connections_)
+        for (int axis = 0; axis < Dim; ++axis) {
+          std::uint64_t tangential = 1;
+          for (int other = 0; other < Dim; ++other)
+            if (other != axis) tangential *= static_cast<std::uint64_t>(connection->ratio[other]);
+          maximum_tangential = std::max(maximum_tangential, tangential);
+          const Real h = connection->parent->geometry.spacing(axis);
+          const Scaled coefficient = Scaled::product(Scaled::from(Real(4)),
+              Scaled::product(Scaled::from(Real(1) + Real(connection->ratio[axis])), Scaled::from(Real(1)/(h*h))));
+          absolute_terms = Scaled::sum(absolute_terms, Scaled::product(extended_phi, coefficient));
+        }
+      constexpr std::uint64_t points = Dim == 1 ? 3 : Dim == 2 ? 9 : 27;
+      const auto fixed = std::uint64_t{1 + 8*Dim} + depth*(12*Dim+2*points*(Dim+1)) + 32*Dim;
+      if (maximum_tangential > (std::numeric_limits<std::uint64_t>::max()-fixed)/(10*Dim)) return false;
+      const std::uint64_t evaluations = 1 + 8*Dim + 2*Dim*(16+5*maximum_tangential) +
+          depth*(12*Dim+2*points*(Dim+1));
+      const Real gamma = ::pops::elliptic::mg::roundoff::gamma_for_operations(evaluations, 3+12*Dim*(depth+1));
+      bound = std::max(bound, ::pops::elliptic::mg::roundoff::upward_materialize(
+          Scaled::product(absolute_terms, Scaled::from(gamma))));
+    }
+    if (!std::isfinite(static_cast<double>(rhs_norm)) || !std::isfinite(static_cast<double>(phi_norm)) ||
+        !std::isfinite(static_cast<double>(bound)) || !std::isfinite(static_cast<double>(requested))) return false;
+    if (initial) report.residual_evaluation = ResidualEvaluationEvidence{
+        report.residual_norm, rhs_norm, bound, bound, requested, std::max(requested, bound), false};
+    auto& evidence = *report.residual_evaluation;
+    evidence.evaluation_bound = bound;
+    evidence.applied_threshold = std::max(requested, bound);
+    evidence.roundoff_limited = report.residual_norm > requested && report.residual_norm <= evidence.applied_threshold;
+    evidence.relative_to_rhs_upper = ::pops::elliptic::mg::roundoff::relative_physical_residual_upper(report.residual_norm, bound, evidence.rhs_norm);
+    return evidence.valid();
+  }
+
+  void project_field_domain_(Level& level, field_type& field) const {
+    if (!field_domain_()) return;
+    // CF ghosts are domain cells. Physical ghosts keep their independent face extension.
+    for (std::size_t local = 0; local < field.local_size(); ++local)
+      for_each_cell(field.fab(local).grown_box().intersect(level.geometry.domain()), ::pops::elliptic::mg::ProjectCellCentreBallKernel<Dim>{
+          field.fab(local).view(), level.geometry, *field_domain_()});
+    Kokkos::fence();
   }
 
   Real global_norm_inf_(const field_type& field) const {
@@ -2324,6 +2472,7 @@ class CompositeFacPoisson {
   CompositeFacOptions options_{};
   Real reaction_ = Real(0);
   bool operator_only_ = false;
+  std::optional<::pops::elliptic::mg::GeometricMultigridOptions> geometric_controls_{};
   std::optional<ExecutionLane> owned_lane_{};
   const ExecutionLane* lane_ = nullptr;
   std::optional<ExecutionLane::ImmutableBorrow> lane_borrow_{};

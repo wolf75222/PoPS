@@ -293,6 +293,16 @@ class _AmrSystemInstall(_AmrSystem):
 
             route = validate_initial_source(source, where="AMR initial source")
             self._s._bind_bootstrap_subject(subject_id, name, route)
+            if method == "initial_program":
+                if route != "bootstrap_program" or space != "cell" or centering != "cell":
+                    raise ValueError("native initial program requires its exact cell-centred seed route")
+                from pops.runtime._analytic_expression_lowering import lower_analytic_components
+                seed = lower_analytic_components(source["seed_components"],
+                        frame_id=source["frame_id"], bindings=params)
+                self._s._stage_bootstrap_initial_program_seed(subject_id, name,
+                    [list(opcodes) for opcodes, _ in seed],
+                    [list(literals) for _, literals in seed])
+                continue
             if method == "analytic":
                 from pops.runtime._initial_source_lowering import (
                     native_binary64,
@@ -407,6 +417,7 @@ class _AmrSystemInstall(_AmrSystem):
         if bootstrap_plan is not None:
             from pops.runtime._amr_bootstrap_execution import execute_native_bootstrap
 
+            self._bootstrap_parameter_bindings = params
             self._bootstrap_execution = execute_native_bootstrap(
                 self,
                 bootstrap_plan,

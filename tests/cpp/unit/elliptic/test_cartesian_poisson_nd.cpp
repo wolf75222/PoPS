@@ -3,10 +3,12 @@
 #include <pops/numerics/elliptic/nd/cartesian_poisson.hpp>
 #include <pops/runtime/system/exact_named_field.hpp>
 #include <pops/runtime/system/exact_field_marshaling.hpp>
+#include <pops/parallel/solve_report_consensus.hpp>
 
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -342,6 +344,113 @@ TEST(test_cartesian_poisson_nd, named_provider_publishes_only_after_candidate_ac
             Real{5e-11});
   EXPECT_GT(reduce_max(provider.accepted_outputs(), 1), Real{0});
   EXPECT_GT(reduce_max(provider.accepted_outputs(), 2), Real{0});
+}
+
+TEST(test_cartesian_poisson_nd, warm_start_is_separate_from_outputs_and_refuses_nonfinite_collectively) {
+  const ExecutionLane lane = ExecutionLane::world("tests.cartesian-poisson.warm-start");
+  const Box<2> domain{Index<2>{0, 0}, Index<2>{7, 7}};
+  const auto geometry = Geometry<2>::from_bounds(domain, RealVector<2>{0, 0}, RealVector<2>{1, 1});
+  const auto layout = BoxArray<2>::from_domain(domain, Extent<2>{8, 8});
+  const RankSpace<2> ranks{Index<2>{}, Extent<2>{lane.size(), 1}};
+  const Index<2> local_rank{lane.rank(), 0};
+  const auto distribution = Distribution<2>::replicated(layout, ranks);
+  const auto topology = BoundaryTopology<2>::axis_periodic({true, true});
+  const auto options = CartesianPoissonOptions<2>::from_topology(topology);
+  runtime::field::NamedFieldOutput<2> output(3, 1);
+  runtime::system::ExactNamedField<2> field("warm", "plasma", output, geometry, layout,
+      distribution, local_rank, topology, options, 1, lane);
+  const auto before = field.accepted_state();
+  EXPECT_FALSE(field.last_accepted_solve_report().has_value());
+  MultiFab<2> seed(layout, distribution, local_rank, 1, Extent<2>{});
+  seed.set_val(Real(7));
+  field.publish_warm_start(seed, lane);
+  EXPECT_FALSE(field.last_accepted_solve_report().has_value());
+  EXPECT_DOUBLE_EQ(reduce_max_local(field.accepted_potential(), 0), Real(7));
+  EXPECT_DOUBLE_EQ(reduce_max_local(field.accepted_outputs(), 0), Real(0));
+  EXPECT_TRUE(field.warm_start_pending());
+  EXPECT_THROW(field.dependency_potential(), std::logic_error);
+  if (lane.rank() == 0)
+    seed.set_val(std::numeric_limits<Real>::quiet_NaN());
+  EXPECT_THROW(field.publish_warm_start(seed, lane), std::invalid_argument);
+  EXPECT_DOUBLE_EQ(reduce_max_local(field.accepted_potential(), 0), Real(7));
+  MultiFab<2> wrong(layout, distribution, local_rank, lane.rank() == 0 ? 2 : 1, Extent<2>{});
+  EXPECT_ANY_THROW(field.publish_warm_start(wrong, lane));
+  EXPECT_DOUBLE_EQ(reduce_max_local(field.accepted_potential(), 0), Real(7));
+  const auto pending = field.accepted_state();
+  field.restore_accepted_state(before);
+  EXPECT_FALSE(field.warm_start_pending());
+  EXPECT_NO_THROW(field.dependency_potential());
+  field.restore_accepted_state(pending);
+  EXPECT_TRUE(field.warm_start_pending());
+  EXPECT_THROW(field.dependency_potential(), std::logic_error);
+
+  PreparedFieldNullspace<2> nullspace;
+  nullspace.provider_identity = "tests.warm-start.constant-nullspace";
+  nullspace.provider_version = 1;
+  nullspace.exact_prepared_contract = "tests.warm-start.constant-nullspace@1";
+  nullspace.plan = constant_mean_zero_nullspace<2>(
+      "warm-constant-mode", "unit-test", geometry.spacing(0) * geometry.spacing(1));
+  field.install_nullspace(std::move(nullspace), PreparedVectorDistribution<2>::replicated());
+  field.add_rhs(0, [](const MultiFab<2>& source, MultiFab<2>& rhs) {
+    elliptic::nd::detail::copy_component(source, 0, rhs, 0);
+  }, Real(1));
+  seed.set_val(Real(0));
+  const std::vector<const MultiFab<2>*> states{&seed};
+  auto solved = field.solve_candidate(states, nullptr, lane);
+  ASSERT_TRUE(solved.solved_value_available()) << solved.reason;
+  EXPECT_NO_THROW(field.dependency_potential());
+  field.reject_candidate();
+  EXPECT_FALSE(field.last_accepted_solve_report().has_value());
+  EXPECT_THROW(field.dependency_potential(), std::logic_error);
+  solved = field.solve_candidate(states, nullptr, lane);
+  ASSERT_TRUE(solved.solved_value_available()) << solved.reason;
+  field.accept_candidate();
+  ASSERT_TRUE(field.last_accepted_solve_report().has_value());
+  EXPECT_TRUE(field.last_accepted_solve_report()->solved());
+  EXPECT_FALSE(field.warm_start_pending());
+  EXPECT_NO_THROW(field.dependency_potential());
+  EXPECT_DOUBLE_EQ(reduce_max_local(field.accepted_potential(), 0), Real(0));
+  const auto accepted_with_report = field.accepted_state();
+  seed.set_val(Real(7));
+  field.publish_warm_start(seed, lane);
+  EXPECT_TRUE(field.last_accepted_solve_report()->solved());
+  EXPECT_EQ(field.last_accepted_solve_report()->residual_norm, Real(0));
+  seed.set_val(std::numeric_limits<Real>::quiet_NaN());
+  const auto failed = field.solve_candidate(states, nullptr, lane);
+  EXPECT_FALSE(failed.solved());
+  EXPECT_EQ(field.last_accepted_solve_report()->residual_norm, Real(0));
+  field.reject_candidate();
+  field.restore_accepted_state(accepted_with_report);
+  EXPECT_FALSE(field.warm_start_pending());
+  EXPECT_EQ(field.last_accepted_solve_report()->residual_norm, Real(0));
+  (void)field.accepted_potential_for_restore();
+  EXPECT_FALSE(field.last_accepted_solve_report().has_value());
+}
+
+TEST(test_cartesian_poisson_nd, exact_report_consensus_authenticates_roundoff_evidence) {
+  const ExecutionLane lane = ExecutionLane::world("tests.solve-report.roundoff-consensus");
+  SolveReport report;
+  report.residual_evaluation = ResidualEvaluationEvidence{
+      Real(1), Real(2), Real(3), Real(4), Real(5), Real(6), false, Real(7)};
+  report.mark_solved("roundoff-consensus-test");
+  ExactSolveReportConsensusScratch scratch;
+  EXPECT_TRUE(scratch.agrees(report, lane));
+  if (lane.size() == 1) return;
+  const std::array<Real ResidualEvaluationEvidence::*, 6> quantities{
+      &ResidualEvaluationEvidence::initial_residual_norm, &ResidualEvaluationEvidence::rhs_norm,
+      &ResidualEvaluationEvidence::initial_evaluation_bound, &ResidualEvaluationEvidence::evaluation_bound,
+      &ResidualEvaluationEvidence::requested_threshold, &ResidualEvaluationEvidence::applied_threshold};
+  for (int difference = 0; difference < 10; ++difference) {
+    auto changed = report;
+    if (lane.rank() == 0) {
+      if (difference == 0) changed.residual_evaluation.reset();
+      else if (difference == 1) changed.residual_evaluation->roundoff_limited = true;
+      else if (difference == 2) changed.residual_evaluation->relative_to_rhs_upper.reset();
+      else if (difference == 3) changed.residual_evaluation->relative_to_rhs_upper = Real(8);
+      else (*changed.residual_evaluation).*quantities[static_cast<std::size_t>(difference-4)] += Real(1);
+    }
+    EXPECT_FALSE(scratch.agrees(changed, lane)) << "evidence field " << difference;
+  }
 }
 
 TEST(test_cartesian_poisson_nd, remote_halo_requirement_fails_before_candidate_mutation) {

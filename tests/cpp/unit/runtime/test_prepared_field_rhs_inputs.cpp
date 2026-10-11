@@ -714,7 +714,7 @@ TEST(PreparedFieldRhsInputs, ResetOfSameOwnedSlotAndNewAttemptExpireProducedValu
   EXPECT_FALSE(observed.copied.has_value());
 }
 
-TEST(PreparedFieldRhsInputs, ActualMultilevelAmrIssuesOneInputForEachLiveLevel) {
+TEST(PreparedFieldRhsInputs, ActualMultilevelAmrRefusesMissingSuccessfulStageValues) {
   ready();
   AmrSystemConfig<D> config;
   config.level_count = 2; config.regrid_every = 0; config.explicit_bootstrap = true;
@@ -775,14 +775,13 @@ TEST(PreparedFieldRhsInputs, ActualMultilevelAmrIssuesOneInputForEachLiveLevel) 
   context.configure_primary_clock("test.field-rhs-v2.clock"); context.begin_step(.25);
   context.set_stage_time(1, 2);
   auto& stage = produce_stage(context);
-  auto result = context.solve_fields_from_program_values_at(context.boundary_evaluation_point(13),
-    10, "test.field-rhs-v2.slot", {{0, &stage, 1}});
-  ASSERT_TRUE(result.report().solved_value_available()) << result.report().reason;
-  (void)result.consume(SolveConsumption::kAccept);
+  // A coarse successful-write ticket does not authorize substituting accepted fine
+  // data for the same authored SSA stage. Refuse before either level's RHS executes.
+  EXPECT_THROW((void)context.solve_fields_from_program_values_at(context.boundary_evaluation_point(13),
+    10, "test.field-rhs-v2.slot", {{0, &stage, 1}}), std::invalid_argument);
   EXPECT_EQ(system.field_provider_levels("test.field-rhs-v2.slot"), 2);
-  EXPECT_EQ(observed.levels, (std::set<int>{0, 1}));
-  ASSERT_TRUE(observed.copied.has_value());
-  EXPECT_THROW((void)observed.copied->frame(), std::logic_error);
+  EXPECT_TRUE(observed.levels.empty());
+  EXPECT_FALSE(observed.copied.has_value());
 }
 
 // A separate real two-slot composition, leaving the thirteen original witnesses intact.

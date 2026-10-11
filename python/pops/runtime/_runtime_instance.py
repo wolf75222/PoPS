@@ -897,6 +897,15 @@ class RuntimeInstance:
     def field_provider_slots(self) -> tuple[str, ...]:
         return tuple(self._executor.field_provider_slots())
 
+    def field_solve_report(self, slot: str) -> Any:
+        """Read the last accepted native solve report, or None after external restoration."""
+        engines = getattr(self._executor, "_engines", None)
+        candidates = tuple(engines.values()) if isinstance(engines, Mapping) else (self._executor,)
+        owners = [engine for engine in candidates if slot in tuple(engine.field_provider_slots())]
+        if len(owners) != 1:
+            raise ValueError("field solve report requires one installed provider-slot owner")
+        return owners[0].field_solve_report(slot)
+
     def set_field_composite_mean_neutralizing(
         self,
         slot: str,
@@ -989,6 +998,11 @@ class RuntimeInstance:
     def amr(self) -> Any:
         """Read-only AMR hierarchy/report view supplied by an adaptive executor."""
         return self._executor.amr
+
+    def initial_program_reports(self) -> dict[str, Any]:
+        """Read the two native bind-time field reports without exposing field storage."""
+        from pops.runtime._initial_program_execution import initial_program_reports_snapshot
+        return initial_program_reports_snapshot(self._executor)
 
     def inspect(self) -> Any:
         """Return one array-free report spanning the accepted runtime and its install contract."""

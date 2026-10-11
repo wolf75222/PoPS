@@ -276,6 +276,148 @@ std::vector<double> ic(int n) {
   return U;
 }
 
+namespace {
+
+void install_scalar_field_boundary_plan(NativeSystem& system, const std::string& slot,
+                                       const std::string& block, const std::string& field) {
+  PreparedProviderOptions options;
+  options.schema_identity = "pops.system.cartesian-cg-options@1";
+  options.values.emplace("rel_tol", 1e-10);
+  options.values.emplace("abs_tol", 0.0);
+  options.values.emplace("max_iterations", std::int64_t{100});
+  system.register_configured_field_solver_provider("cartesian_cg", slot, options);
+  system.set_field_solver_plan(slot, slot + "/plan", slot + "/provider", slot + "/owner", block,
+                                field, {slot + "/rhs"}, {block}, {"density"}, {1.0}, slot);
+  system.set_field_boundary_plan(slot, std::vector<std::string>(2 * kTestDimension, "dirichlet"),
+                                 std::vector<double>(2 * kTestDimension, 1.0),
+                                 std::vector<double>(2 * kTestDimension, 0.0),
+                                 std::vector<double>(2 * kTestDimension, 0.0));
+}
+
+}  // namespace
+
+TEST(ProgramContextContract, FieldPotentialUsesInstalledDirichletWhileCoefficientsKeepExtrapolation) {
+  ensure_kokkos();
+  comm_init();
+  auto config = native_config(4, Real(4));
+  config.periodicity.fill(false);
+  NativeSystem sim(config);
+  install_execution_lane(sim, "pops.test.program-context.field-potential-boundary");
+  add_gas(sim);
+  install_scalar_field_boundary_plan(sim, "field/phi", "gas", "phi");
+  sim.set_program_block_map({0});
+  NativeProgramContext context(&sim);
+  auto phi = context.alloc_scalar_field_for_block(0, 1, 1);
+  auto lap = context.alloc_scalar_field_for_block(0, 1, 1);
+  auto gradient = context.alloc_scalar_field_for_block(0, kTestDimension, 1);
+  auto tensor = context.alloc_scalar_field_for_block(0, kTestDimension * kTestDimension, 1);
+  phi.set_val(Real(1));
+  tensor.set_val(Real(0));
+  for (std::size_t local = 0; local < tensor.local_size(); ++local) {
+    const auto view = tensor.fab(local).view();
+    for_each_cell(tensor.box(local), [=] POPS_HD(const Index<kTestDimension>& cell) {
+      for (int axis = 0; axis < kTestDimension; ++axis)
+        view(cell, axis * kTestDimension + axis) = Real(2 + axis);
+    });
+  }
+  context.fill_boundary(tensor);
+  auto field_boundary = context.prepare_field_boundary_session(
+      0, phi, context.prepared_execution_lane(), "field/phi");
+  for (int axis = 0; axis < kTestDimension; ++axis) {
+    EXPECT_EQ(field_boundary->conditions().at(Face<kTestDimension>{axis, BoundarySide::lower}).kind,
+              PhysicalBoundaryKind::dirichlet);
+    EXPECT_EQ(context.field_boundary_conditions(0, "field/phi").spacing()[axis], Real(1));
+  }
+  context.laplacian(lap, phi, *field_boundary);
+  context.gradient(gradient, phi, *field_boundary);
+  device_fence();
+  for (std::size_t local = 0; local < lap.local_size(); ++local) {
+    const auto box = lap.box(local);
+    for (std::int64_t flat = 0; flat < box.numPts(); ++flat) {
+      Index<kTestDimension> cell{};
+      auto index = flat;
+      Real expected_lap = Real(0);
+      for (int axis = 0; axis < kTestDimension; ++axis) {
+        const auto extent = box.hi[axis] - box.lo[axis] + 1;
+        cell[axis] = box.lo[axis] + static_cast<int>(index % extent);
+        index /= extent;
+        if (cell[axis] == 0 || cell[axis] == 3) expected_lap -= Real(2);
+      }
+      EXPECT_EQ(lap.fab(local).view()(cell, 0), expected_lap);
+      for (int axis = 0; axis < kTestDimension; ++axis) {
+        const Real expected = cell[axis] == 0 ? Real(1) : cell[axis] == 3 ? Real(-1) : Real(0);
+        EXPECT_EQ(gradient.fab(local).view()(cell, axis), expected);
+      }
+    }
+  }
+  context.tensor_laplacian(lap, phi, tensor, *field_boundary);
+  device_fence();
+  for (std::size_t local = 0; local < lap.local_size(); ++local) {
+    const auto box = lap.box(local);
+    for (std::int64_t flat = 0; flat < box.numPts(); ++flat) {
+      Index<kTestDimension> cell{};
+      auto index = flat;
+      Real expected = Real(0);
+      for (int axis = 0; axis < kTestDimension; ++axis) {
+        const auto extent = box.hi[axis] - box.lo[axis] + 1;
+        cell[axis] = box.lo[axis] + static_cast<int>(index % extent);
+        index /= extent;
+        if (cell[axis] == 0 || cell[axis] == 3) expected -= Real(2 * (2 + axis));
+      }
+      EXPECT_EQ(lap.fab(local).view()(cell, 0), expected);
+    }
+  }
+  auto transport_boundary = context.prepare_mesh_boundary_session(phi, context.prepared_execution_lane());
+  context.laplacian(lap, phi, *transport_boundary);
+  EXPECT_EQ(::norm_inf(lap), Real(0));
+}
+
+TEST(ProgramContextContract, FieldBoundaryRefusesAmbiguousMissingAndForeignSlots) {
+  ensure_kokkos();
+  comm_init();
+  auto config = native_config(4);
+  config.periodicity.fill(false);
+  NativeSystem sim(config);
+  install_execution_lane(sim, "pops.test.program-context.field-boundary-authority");
+  add_gas(sim);
+  add_gas_block(sim, "other");
+  install_scalar_field_boundary_plan(sim, "field/phi", "gas", "phi");
+  install_scalar_field_boundary_plan(sim, "field/other", "other", "phi");
+  sim.set_program_block_map({0, 1});
+  NativeProgramContext context(&sim);
+  EXPECT_ANY_THROW((void)context.field_boundary_conditions(0));
+  EXPECT_ANY_THROW((void)context.field_boundary_conditions(0, "field/missing"));
+  EXPECT_ANY_THROW((void)context.field_boundary_conditions(0, "field/other"));
+  EXPECT_ANY_THROW((void)context.field_boundary_conditions(my_rank() == 0 ? -1 : 0, "field/phi"));
+  EXPECT_ANY_THROW((void)context.field_boundary_conditions(0, my_rank() == 0 ? "field/missing" : "field/phi"));
+  EXPECT_NO_THROW((void)context.field_boundary_conditions(0, "field/phi"));
+}
+
+TEST(ProgramContextContract, FieldBoundaryRefusesDynamicAndUnpairedPeriodicPlans) {
+  ensure_kokkos();
+  comm_init();
+  for (bool dynamic : {false, true}) {
+    auto config = native_config(4);
+    config.periodicity.fill(false);
+    NativeSystem sim(config);
+    install_execution_lane(sim, "pops.test.program-context.field-boundary-static-plan");
+    add_gas(sim);
+    install_scalar_field_boundary_plan(sim, "field/phi", "gas", "phi");
+    if (dynamic) {
+      sim.set_field_boundary_dependencies("field/phi", {"gas"}, {0}, {}, {}, {});
+    } else {
+      std::vector<std::string> kinds(2 * kTestDimension, "dirichlet");
+      kinds.front() = "periodic";
+      sim.set_field_boundary_plan("field/phi", kinds, std::vector<double>(2 * kTestDimension, 1.0),
+                                  std::vector<double>(2 * kTestDimension, 0.0),
+                                  std::vector<double>(2 * kTestDimension, 0.0));
+    }
+    sim.set_program_block_map({0});
+    NativeProgramContext context(&sim);
+    EXPECT_ANY_THROW((void)context.field_boundary_conditions(0, "field/phi"));
+  }
+}
+
 TEST(ProgramContextContract, SystemMoveTransfersPreparedExecutionLane) {
   ensure_kokkos();
   NativeSystem source(native_config(4));

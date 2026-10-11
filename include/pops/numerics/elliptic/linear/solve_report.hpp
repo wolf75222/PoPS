@@ -13,6 +13,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -116,6 +117,29 @@ inline const char* solve_action_name(SolveAction action) {
   return "reject_attempt";
 }
 
+/// Explicit evidence for an opt-in floating-point residual evaluation contract.
+/// These are physical residual units; the requested and applied thresholds remain distinct.
+struct ResidualEvaluationEvidence {
+  Real initial_residual_norm = 0;
+  Real rhs_norm = 0;
+  Real initial_evaluation_bound = 0;
+  Real evaluation_bound = 0;
+  Real requested_threshold = 0;
+  Real applied_threshold = 0;
+  bool roundoff_limited = false;
+  std::optional<Real> relative_to_rhs_upper{};
+
+  bool valid() const noexcept {
+    const auto finite_nonnegative = [](Real value) { return std::isfinite(value) && value >= Real(0); };
+    return finite_nonnegative(initial_residual_norm) && finite_nonnegative(rhs_norm) &&
+        finite_nonnegative(initial_evaluation_bound) && finite_nonnegative(evaluation_bound) &&
+        finite_nonnegative(requested_threshold) && finite_nonnegative(applied_threshold) &&
+        applied_threshold >= requested_threshold && applied_threshold >= evaluation_bound &&
+        (!relative_to_rhs_upper || finite_nonnegative(*relative_to_rhs_upper)) &&
+        (!roundoff_limited || applied_threshold > requested_threshold);
+  }
+};
+
 /// Outcome of a solve: iterations performed, the reference and final residual norms, their declared
 /// ratio, and one authoritative status/action/reason triple. Callers query `solved()`; no mutable
 /// boolean can contradict the status.
@@ -132,9 +156,11 @@ struct SolveReport {
   SolveStatus status = SolveStatus::kIterationLimit;
   SolveAction action = SolveAction::kFailRun;
   std::string reason = "iteration_limit";
+  std::optional<ResidualEvaluationEvidence> residual_evaluation{};
 
   bool valid() const {
     return !reason.empty() && failure.valid() &&
+           (!residual_evaluation || residual_evaluation->valid()) &&
            (status == SolveStatus::kSolved) == (action == SolveAction::kNone) &&
            (status != SolveStatus::kSolved || !failure.found);
   }
@@ -172,6 +198,7 @@ struct SolveReport {
       residual_norm = canonical_evidence(residual_norm);
       step_norm = canonical_evidence(step_norm);
       condition_evidence = canonical_evidence(condition_evidence);
+      if (residual_evaluation && !residual_evaluation->valid()) residual_evaluation.reset();
     }
     status = failed_status;
     action = failed_action;

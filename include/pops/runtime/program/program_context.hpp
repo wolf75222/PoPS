@@ -115,6 +115,39 @@ class ProgramContext {
 
   using block_boundary_session_type = PreparedBlockBoundarySession;
 
+  /// A scalar potential keeps the topology and physical laws of its exact installed Field slot.
+  /// Transport coefficients and fluxes deliberately retain their separate mesh-boundary session.
+  class PreparedFieldBoundarySession {
+   public:
+    const ExecutionLane& lane() const noexcept { return *lane_; }
+    const Geometry<Dim>& geometry() const noexcept { return halo_->geometry(); }
+    const PhysicalBoundaryConditions<Dim>& conditions() const noexcept {
+      return physical_.conditions();
+    }
+    void fill(field_type& potential) const {
+      halo_->fill_halo(potential);
+      fill_physical_boundary(potential, physical_);
+    }
+
+   private:
+    friend class ProgramContext;
+    PreparedFieldBoundarySession(const runtime_type* system, int program_block, int runtime_block,
+                                 std::string provider_slot, const ExecutionLane& lane,
+                                 std::shared_ptr<scalar_boundary_session_type> halo,
+                                 PreparedPhysicalBoundary<Dim> physical)
+        : system_(system), program_block_(program_block), runtime_block_(runtime_block),
+          provider_slot_(std::move(provider_slot)), lane_(&lane), halo_(std::move(halo)),
+          physical_(std::move(physical)) {}
+    const runtime_type* system_;
+    int program_block_;
+    int runtime_block_;
+    std::string provider_slot_;
+    const ExecutionLane* lane_;
+    std::shared_ptr<scalar_boundary_session_type> halo_;
+    PreparedPhysicalBoundary<Dim> physical_;
+  };
+  using field_boundary_session_type = PreparedFieldBoundarySession;
+
   struct FieldStageOverride {
     int program_block = -1;
     const field_type* state = nullptr;
@@ -1363,6 +1396,96 @@ class ProgramContext {
                                                  lane, next_scalar_boundary_generation_());
   }
 
+  PhysicalBoundaryConditions<Dim> field_boundary_conditions(
+      int program_block, std::string_view provider_slot = {}) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const int runtime_block = resolve_prepared_program_block_(
+        program_block, lane, "Program field boundary block");
+    std::optional<PhysicalBoundaryConditions<Dim>> conditions;
+    std::exception_ptr error;
+    try {
+      conditions.emplace(system_->prepared_field_boundary_conditions(runtime_block,
+                                                                      provider_slot));
+    } catch (...) { error = std::current_exception(); }
+    collectively_rethrow_exception(error, lane,
+                                   "Program field boundary authority failed collectively");
+    return std::move(*conditions);
+  }
+
+  std::shared_ptr<field_boundary_session_type> prepare_field_boundary_session(
+      int program_block, field_type& prototype, const ExecutionLane& lane,
+      std::string_view provider_slot = {}) const {
+    require_prepared_lane_(lane, "Program field boundary preparation");
+    const auto conditions = field_boundary_conditions(program_block, provider_slot);
+    int runtime_block = -1;
+    std::string contract;
+    std::exception_ptr error;
+    try {
+      runtime_block = sys_block(program_block);
+      require_same_layout_(prototype, system_->block_state(runtime_block),
+                           "Program field boundary prototype");
+      if (prototype.ncomp() != 1)
+        throw std::invalid_argument("Program field potential must have one scalar component");
+      for (int axis = 0; axis < Dim; ++axis)
+        if (prototype.ghosts()[axis] < 1)
+          throw std::invalid_argument("Program field potential requires a ghost on every axis");
+      ExactContractBuilder proof;
+      proof.text("pops.program.prepared-field-boundary-session@1")
+          .scalar(std::int32_t{Dim}).scalar(std::int32_t{program_block})
+          .scalar(std::int32_t{runtime_block}).text(provider_slot).text(lane.identity());
+      for (int axis = 0; axis < Dim; ++axis) {
+        proof.scalar(conditions.spacing()[axis]);
+        for (const auto side : {BoundarySide::lower, BoundarySide::upper}) {
+          const Face<Dim> face{axis, side};
+          const auto& law = conditions.at(face);
+          proof.presence(conditions.topology().is_periodic(face))
+              .scalar(static_cast<std::uint8_t>(law.kind)).scalar(law.alpha).scalar(law.beta)
+              .scalar(law.value);
+        }
+      }
+      contract = std::move(proof).release();
+    } catch (...) { error = std::current_exception(); }
+    collectively_rethrow_exception(error, lane,
+                                   "Program field boundary prototype failed collectively");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"program-prepared-field-boundary-session", contract}}, lane))
+      throw std::invalid_argument("Program field boundary identity differs across ranks");
+    auto halo = scalar_boundary_session_type::prepare(
+        geometry(), conditions.topology(), prototype, lane, next_scalar_boundary_generation_());
+    std::shared_ptr<field_boundary_session_type> session;
+    error = nullptr;
+    try {
+      auto physical = prepare_physical_boundary(
+          geometry().domain(), prototype.ghosts(), conditions,
+          BoundaryScheduleBudget{scalar_boundary_detail::boundary_entry_budget(
+              geometry(), prototype.ghosts(), conditions.topology())});
+      session = std::shared_ptr<field_boundary_session_type>(new field_boundary_session_type(
+          system_, program_block, runtime_block, std::string(provider_slot), lane,
+          std::move(halo), std::move(physical)));
+    } catch (...) { error = std::current_exception(); }
+    collectively_rethrow_exception(error, lane,
+                                   "Program field boundary allocation failed collectively");
+    return session;
+  }
+
+  void fill_field_potential(int program_block, field_type& potential,
+                            const field_boundary_session_type& boundary) const {
+    require_field_boundary_session_(boundary, "Program field potential fill");
+    const int runtime_block = resolve_prepared_program_block_(
+        program_block, boundary.lane(), "Program field potential owner");
+    if (all_reduce_max(runtime_block == boundary.runtime_block_ ? 0L : 1L,
+                       boundary.lane()) != 0)
+      throw std::invalid_argument("Program field potential fill lost its exact block owner");
+    boundary.fill(potential);
+  }
+
+  void fill_field_potential(int program_block, field_type& potential,
+                            std::string_view provider_slot = {}) const {
+    auto boundary = prepare_field_boundary_session(program_block, potential,
+                                                   prepared_execution_lane(), provider_slot);
+    fill_field_potential(program_block, potential, *boundary);
+  }
+
   std::shared_ptr<block_boundary_session_type> prepare_block_boundary_session(
       int program_block, field_type& prototype,
       const runtime::multiblock::BoundaryEvaluationPoint& point, const ExecutionLane& lane) const {
@@ -1475,6 +1598,19 @@ class ProgramContext {
   void laplacian(field_type& output, field_type& input,
                  const scalar_boundary_session_type& boundary) const {
     require_prepared_lane_(boundary.lane(), "Program Laplacian boundary");
+    laplacian_with_boundary_(output, input, boundary);
+  }
+
+  void laplacian(field_type& output, field_type& input,
+                 const field_boundary_session_type& boundary) const {
+    require_field_boundary_session_(boundary, "Program field Laplacian boundary");
+    laplacian_with_boundary_(output, input, boundary);
+  }
+
+ private:
+  template <class Boundary>
+  void laplacian_with_boundary_(field_type& output, field_type& input,
+                                 const Boundary& boundary) const {
     require_componentwise_stencil_(output, input, "Program Laplacian");
     boundary.fill(input);
     const Geometry<Dim> geom = boundary.geometry();
@@ -1502,10 +1638,24 @@ class ProgramContext {
     count_kernel_();
   }
 
+ public:
+
   void laplacian(field_type& output, field_type& input,
                  const scalar_boundary_session_type& boundary,
                  const runtime::multiblock::BoundaryEvaluationPoint& point) const {
     require_boundary_point_(point, "Program Laplacian");
+    laplacian(output, input, boundary);
+  }
+
+  void laplacian(field_type& output, field_type& input,
+                 const field_boundary_session_type& boundary,
+                 const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    require_boundary_point_(point, "Program field Laplacian");
+    laplacian(output, input, boundary);
+  }
+
+  void laplacian_field(field_type& output, field_type& input,
+                       const field_boundary_session_type& boundary) const {
     laplacian(output, input, boundary);
   }
 
@@ -1517,6 +1667,19 @@ class ProgramContext {
   void gradient(field_type& output, field_type& input,
                 const scalar_boundary_session_type& boundary) const {
     require_prepared_lane_(boundary.lane(), "Program gradient boundary");
+    gradient_with_boundary_(output, input, boundary);
+  }
+
+  void gradient(field_type& output, field_type& input,
+                const field_boundary_session_type& boundary) const {
+    require_field_boundary_session_(boundary, "Program field gradient boundary");
+    gradient_with_boundary_(output, input, boundary);
+  }
+
+ private:
+  template <class Boundary>
+  void gradient_with_boundary_(field_type& output, field_type& input,
+                                const Boundary& boundary) const {
     require_scalar_stencil_(output, input, Dim, "Program gradient");
     boundary.fill(input);
     const Geometry<Dim> geom = boundary.geometry();
@@ -1536,9 +1699,22 @@ class ProgramContext {
     count_kernel_();
   }
 
+ public:
+
   void gradient(field_type& output, field_type& input, const scalar_boundary_session_type& boundary,
                 const runtime::multiblock::BoundaryEvaluationPoint& point) const {
     require_boundary_point_(point, "Program gradient");
+    gradient(output, input, boundary);
+  }
+
+  void gradient(field_type& output, field_type& input, const field_boundary_session_type& boundary,
+                const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    require_boundary_point_(point, "Program field gradient");
+    gradient(output, input, boundary);
+  }
+
+  void gradient_field(field_type& output, field_type& input,
+                      const field_boundary_session_type& boundary) const {
     gradient(output, input, boundary);
   }
 
@@ -1617,6 +1793,19 @@ class ProgramContext {
   void tensor_laplacian(field_type& output, field_type& input, const field_type& tensor,
                         const scalar_boundary_session_type& boundary) const {
     require_prepared_lane_(boundary.lane(), "Program tensor Laplacian boundary");
+    tensor_laplacian_with_boundary_(output, input, tensor, boundary);
+  }
+
+  void tensor_laplacian(field_type& output, field_type& input, const field_type& tensor,
+                        const field_boundary_session_type& boundary) const {
+    require_field_boundary_session_(boundary, "Program field tensor Laplacian boundary");
+    tensor_laplacian_with_boundary_(output, input, tensor, boundary);
+  }
+
+ private:
+  template <class Boundary>
+  void tensor_laplacian_with_boundary_(field_type& output, field_type& input,
+                                        const field_type& tensor, const Boundary& boundary) const {
     require_scalar_stencil_(output, input, 1, "Program tensor Laplacian");
     require_tensor_stencil_(input, tensor, "Program tensor Laplacian");
     boundary.fill(input);
@@ -1635,10 +1824,24 @@ class ProgramContext {
     count_kernel_();
   }
 
+ public:
+
   void tensor_laplacian(field_type& output, field_type& input, const field_type& tensor,
                         const scalar_boundary_session_type& boundary,
                         const runtime::multiblock::BoundaryEvaluationPoint& point) const {
     require_boundary_point_(point, "Program tensor Laplacian");
+    tensor_laplacian(output, input, tensor, boundary);
+  }
+
+  void tensor_laplacian(field_type& output, field_type& input, const field_type& tensor,
+                        const field_boundary_session_type& boundary,
+                        const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    require_boundary_point_(point, "Program field tensor Laplacian");
+    tensor_laplacian(output, input, tensor, boundary);
+  }
+
+  void tensor_laplacian_field(field_type& output, field_type& input, const field_type& tensor,
+                              const field_boundary_session_type& boundary) const {
     tensor_laplacian(output, input, tensor, boundary);
   }
 
@@ -1993,6 +2196,24 @@ class ProgramContext {
     system_->set_field_logical_timepoint(provider_slot, point);
   }
 
+  void publish_field_warm_start(const std::string& provider_slot, int program_block,
+                               const field_type& potential, int evaluation_id,
+                               const std::string& publication_identity) const {
+    const auto& lane = prepared_execution_lane();
+    const auto point = boundary_evaluation_point(evaluation_id);
+    int runtime_block = -1;
+    std::exception_ptr error;
+    try {
+      require_boundary_point_(point, "Program field warm start");
+      runtime_block = sys_block(program_block);
+      if (point != boundary_evaluation_point(point.stage) || publication_identity.empty())
+        throw std::invalid_argument("Program field warm start lost its context-owned point");
+    } catch (...) { error = std::current_exception(); }
+    collectively_rethrow_exception(error, lane, "Program field warm-start owner failed collectively");
+    system_->publish_program_field_warm_start(point, provider_slot, runtime_block, potential,
+                                               publication_identity);
+  }
+
   void set_field_boundary_parameters(const std::string& provider_slot,
                                      const std::vector<double>& parameters) const {
     system_->set_field_boundary_parameters(provider_slot, parameters);
@@ -2187,6 +2408,20 @@ class ProgramContext {
     if (all_reduce_max(&lane == &prepared ? 0L : 1L, prepared) != 0)
       throw std::invalid_argument(std::string(operation) +
                                   " requires the context's authenticated execution lane");
+  }
+
+  void require_field_boundary_session_(const field_boundary_session_type& boundary,
+                                       const char* operation) const {
+    require_prepared_lane_(boundary.lane(), operation);
+    std::exception_ptr error;
+    try {
+      if (boundary.system_ != system_ ||
+          sys_block(boundary.program_block_) != boundary.runtime_block_)
+        throw std::invalid_argument(std::string(operation) +
+                                    " lost its installed System and exact block authority");
+    } catch (...) { error = std::current_exception(); }
+    collectively_rethrow_exception(error, boundary.lane(),
+                                   "Program prepared field session validation failed collectively");
   }
 
   static void require_same_field_contract_(const field_type& left, const field_type& right,

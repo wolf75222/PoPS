@@ -72,14 +72,15 @@ def _source(owner, role, buffer=(1, 1), lookahead=0):
     )
 
 
-def _resolved_amr_authorities(case, state, threshold):
+def _resolved_amr_authorities(case, state, threshold, *, frame=None):
     owner = case.owner_path.canonical()
     state = case.resolve(state)
     threshold = case.resolve(threshold)
 
     builder = LayoutPlanBuilder(owner)
     layout = builder.layout(
-        "adaptive", final_amr_layout(cartesian_grid(n=8), max_levels=2, ratio=2))
+        "adaptive", final_amr_layout(cartesian_grid(n=8) if frame is None else
+            CartesianGrid(frame=frame,cells=(8,8)), max_levels=2, ratio=2))
     builder.assign_state(state, layout)
     layout_plan = builder.resolve(states=(state,))
 

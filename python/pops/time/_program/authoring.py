@@ -265,7 +265,7 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
             if a.attrs.get("scalar_storage") is not None:
                 scalar_co_location(a, mask, "where mask", same_space=False)
                 scalar_attrs = {key: a.attrs[key] for key in
-                                ("scalar_storage", "scalar_owner", "scalar_sampling_contract")}
+                                ("scalar_storage", "scalar_owner", "scalar_sampling_contract", "scalar_storage_component")}
         if mask.vtype in ("state", "rhs"):
             require_compatible_spaces(a.space, mask.space, "where mask", typed_pair=True)
         na, nb, nm_ = self._ncomp(a), self._ncomp(b), self._ncomp(mask)

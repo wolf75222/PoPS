@@ -1,4 +1,5 @@
 #pragma once
+#include <pops/runtime/system/analytic_mapped_input.hpp>
 
 #include <pops/runtime/system/prepared_field_rhs_inputs.hpp>
 
@@ -15,6 +16,7 @@
 #include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 #include <pops/mesh/boundary/prepared_boundary_component.hpp>
+#include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/runtime/export.hpp>  // POPS_EXPORT (methods resolved by the native loader through dlopen)
 #include <pops/runtime/facade_options.hpp>  // CoupledSourceProgram (facade POD, ADC-214)
 #include <pops/runtime/config/model_spec.hpp>
@@ -70,49 +72,7 @@ namespace component {
 class LoadedComponent;
 }
 
-namespace runtime::system {
 
-enum class AnalyticMappedInputKind : std::uint8_t { state_component = 0, provider_component = 1 };
-
-/// One exact input to a bind-time mapped analytic state expression.
-///
-/// State components are local to the target state carrier. Provider components are addressed only
-/// by their owner-qualified key and are resolved through a sealed consumer plan. No physical name
-/// or global storage component crosses this interface.
-struct AnalyticMappedInput {
-  AnalyticMappedInputKind kind = AnalyticMappedInputKind::state_component;
-  int state_component = -1;
-  AuxiliaryComponentKey provider_key;
-
-  static AnalyticMappedInput state(int component) {
-    return {AnalyticMappedInputKind::state_component, component, {}};
-  }
-  static AnalyticMappedInput provider(AuxiliaryComponentKey key) {
-    return {AnalyticMappedInputKind::provider_component, -1, std::move(key)};
-  }
-
-  void validate() const {
-    if (kind == AnalyticMappedInputKind::state_component) {
-      if (state_component < 0)
-        throw std::invalid_argument("mapped analytic state component must be non-negative");
-      return;
-    }
-    if (kind != AnalyticMappedInputKind::provider_component)
-      throw std::invalid_argument("mapped analytic input kind is invalid");
-    provider_key.validate();
-  }
-
-  void serialize_exact(ExactContractBuilder& contract) const {
-    validate();
-    contract.scalar(static_cast<std::uint8_t>(kind));
-    if (kind == AnalyticMappedInputKind::state_component)
-      contract.scalar(state_component);
-    else
-      provider_key.serialize_exact(contract);
-  }
-};
-
-}  // namespace runtime::system
 
 /// Immutable bind-time contract for one native transfer between two Uniform System layouts.
 /// Ratios follow the native ranked axis order; the runtime validates them against the
@@ -453,6 +413,11 @@ class System {
   /// Exact axis topology captured from the resolved layout. Generated packages use it to prepare
   /// one ranked halo schedule; they never reconstruct periodicity from boundary spellings.
   POPS_EXPORT std::array<bool, Dim> prepared_block_periodicity() const;
+  /// Exact static scalar boundary of an installed field slot owned by this runtime block.
+  /// An omitted slot is admitted only for a single installed plan. Dynamic laws are refused;
+  /// callers must retain the returned value outside their stencil/Krylov hot loop.
+  POPS_EXPORT PhysicalBoundaryConditions<Dim> prepared_field_boundary_conditions(
+      int runtime_block, std::string_view provider_slot) const;
   /// Immutable-address compact provider carrier captured by prepared block kernels.  It is null
   /// exactly when the sealed graph has no provider values; callers with ``ProviderValues<0>`` must
   /// not dereference it.  A non-null carrier has exactly ``registry.slot_count()`` components.
@@ -522,6 +487,15 @@ class System {
       const runtime::multiblock::BoundaryEvaluationPoint& point,
       const std::string& publication_identity,
       const std::vector<ProgramFieldComponent>& components);
+
+  /// Compiler-qualified seed for the next installed field solve, separate from field outputs.
+  POPS_EXPORT void publish_program_field_warm_start(
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      const std::string& provider_slot, int runtime_block, const MultiFab<Dim>& potential,
+      const std::string& publication_identity);
+
+  /// Execute one exact installed named field at the accepted bind-time initial state.
+  [[nodiscard]] POPS_EXPORT SolveOutcome solve_initial_field(const std::string& provider_slot);
 
   /// Compact slot of a sealed component key and the corresponding accepted scalar field.  The key,
   /// rather than a legacy physical label or a raw component number, is the public authority.
@@ -1493,6 +1467,9 @@ class System {
   /// constructs ExactNamedField.
   std::vector<std::string> configured_field_provider_slots() const;
   void set_field_potential(const std::string& provider_slot, const std::vector<double>& phi);
+  /// Last successfully accepted report for one installed field, including physical accuracy.
+  [[nodiscard]] POPS_EXPORT std::optional<SolveReport> field_solve_report(
+      const std::string& provider_slot) const;
 
   /// @name GLOBAL accessors (MPI-safe collectives) -- outputs / multi-rank accepted-state checkpoint
   /// The System builds ONE box covering the whole domain (cf. ctor: mono-box ba, round-robin dm ->

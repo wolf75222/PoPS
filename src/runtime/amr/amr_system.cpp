@@ -36,6 +36,7 @@
 #include <pops/runtime/amr/prepared_component_providers.hpp>
 #include <pops/runtime/analytic/collective_preflight.hpp>
 #include <pops/runtime/analytic/initial_materialization.hpp>
+#include <pops/runtime/analytic/initial_derivative.hpp>
 #include <pops/runtime/builders/compiled/generated_amr_system_block.hpp>
 #include <pops/runtime/builders/compiled/native_loader.hpp>
 #include <pops/runtime/config/route_ids.hpp>
@@ -2666,7 +2667,7 @@ struct AmrSystem<Dim>::Impl {
     std::optional<analytic::GaussianCellAverageProfile<Dim>> gaussian_initial;
   };
 
-  enum class BootstrapSourceKind : std::uint8_t { unstaged, analytic, array };
+  enum class BootstrapSourceKind : std::uint8_t { unstaged, analytic, array, program_seed };
   struct BootstrapSourceAuthority {
     std::string runtime_block;
     std::string source_route;
@@ -3063,6 +3064,8 @@ struct AmrSystem<Dim>::Impl {
         const field_type* source = dependency.source;
         if (dependency.field_plan != nullptr) {
           const FieldPlan& plan = *dependency.field_plan;
+          if (plan.warm_start_pending && !plan.candidate_ready)
+            throw std::logic_error("AMR boundary dependency cannot consume an unresolved warm start");
           if (plan.topology_epoch != topology_epoch ||
               plan.materialization_generation != materialization_generation ||
               level >= plan.accepted_potential.size() || !plan.accepted_potential[level])
@@ -3166,6 +3169,8 @@ struct AmrSystem<Dim>::Impl {
         throw std::logic_error("prepared AMR dynamic boundary field table is incomplete");
       for (std::size_t index = 0; index < field_plans.size(); ++index) {
         const FieldPlan& plan = *field_plans[index];
+        if (plan.warm_start_pending && !plan.candidate_ready)
+          throw std::logic_error("AMR dynamic boundary cannot consume an unresolved warm start");
         if (level >= plan.accepted_potential.size() || !plan.accepted_potential[level])
           throw std::logic_error("prepared AMR boundary field route lost its exact level");
         fields[index] = plan.candidate_ready
@@ -3315,6 +3320,10 @@ struct AmrSystem<Dim>::Impl {
     std::optional<FieldLogicalTimePoint> boundary_point;
     // Temporary numerical producer witness, assigned only after a real successful candidate solve.
     std::optional<runtime::multiblock::BoundaryEvaluationPoint> accepted_halo_producer_point;
+    std::optional<runtime::multiblock::BoundaryEvaluationPoint> candidate_producer_point;
+    bool warm_start_pending = false;
+    std::optional<SolveReport> accepted_solve_report;
+    std::optional<SolveReport> candidate_solve_report;
     std::optional<FieldNewtonOptions> newton;
 
     std::unique_ptr<exact_field_solver_type> prepared_solver;
@@ -3345,6 +3354,10 @@ struct AmrSystem<Dim>::Impl {
 
     void discard_materialization() noexcept {
       accepted_halo_producer_point.reset();
+      candidate_producer_point.reset();
+      candidate_solve_report.reset();
+      // Losing a failed solver materialization cannot turn an unresolved iterate into
+      // accepted data. Only accepted solve publication or snapshot restore clears pending.
       prepared_solver.reset();
       accepted_potential.clear();
       for (auto& publication : candidate_provider_publications)
@@ -3706,6 +3719,11 @@ struct AmrSystem<Dim>::Impl {
   // Prepared field solvers borrow the hierarchy execution lane. Declaring their owner after the
   // hierarchy makes reverse member destruction release every borrow before the lane itself.
   mutable std::map<std::string, FieldPlan> field_plans;
+  bool has_pending_field_warm_start() const noexcept {
+    return std::any_of(field_plans.begin(),field_plans.end(),[](const auto& row) {
+      return row.second.warm_start_pending;
+    });
+  }
   // Program callbacks own the persistent AMR context, which may retain an exact hierarchy solver
   // and its lane borrow. Destroy that context before field solvers and the hierarchy lane.
   runtime::program::ProgramRuntimeState<Dim> program;
@@ -3866,6 +3884,9 @@ struct AmrSystem<Dim>::Impl {
     std::map<std::string, std::vector<field_type>> field_potentials;
     std::set<std::string> field_plan_slots;
     std::map<std::string, std::optional<FieldLogicalTimePoint>> field_boundary_points;
+    std::map<std::string, std::optional<runtime::multiblock::BoundaryEvaluationPoint>> field_producer_points;
+    std::map<std::string, bool> field_warm_start_pending;
+    std::map<std::string, std::optional<SolveReport>> field_solve_reports;
     AuxiliaryInvalidations auxiliary_invalidations;
     std::uint64_t last_topology_rematerialization_epoch = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t last_topology_rematerialization_generation =
@@ -3923,6 +3944,9 @@ struct AmrSystem<Dim>::Impl {
       for (const auto& [slot, plan] : owner.field_plans) {
         field_plan_slots.insert(slot);
         field_boundary_points.emplace(slot, plan.boundary_point);
+        field_producer_points.emplace(slot, plan.accepted_halo_producer_point);
+        field_warm_start_pending.emplace(slot, plan.warm_start_pending);
+        field_solve_reports.emplace(slot, plan.accepted_solve_report);
         if (plan.accepted_potential.empty())
           continue;
         auto& levels = field_potentials[slot];
@@ -3939,6 +3963,9 @@ struct AmrSystem<Dim>::Impl {
     struct PreparedFieldRestore {
       FieldPlan* plan = nullptr;
       std::optional<FieldLogicalTimePoint> boundary_point;
+      std::optional<runtime::multiblock::BoundaryEvaluationPoint> producer_point;
+      bool warm_start_pending = false;
+      std::optional<SolveReport> solve_report;
     };
 
     struct PreparedAcceptedRestore {
@@ -4065,7 +4092,10 @@ struct AmrSystem<Dim>::Impl {
         for (const std::string& slot : snapshot.field_plan_slots) {
           FieldPlan& plan = owner.field_plans.at(slot);
           fields.push_back(PreparedFieldRestore{
-              .plan = &plan, .boundary_point = snapshot.field_boundary_points.at(slot)});
+              .plan = &plan, .boundary_point = snapshot.field_boundary_points.at(slot),
+              .producer_point = snapshot.field_producer_points.at(slot),
+              .warm_start_pending = snapshot.field_warm_start_pending.at(slot),
+              .solve_report = snapshot.field_solve_reports.at(slot)});
         }
         if (!snapshot_materialized && !snapshot.field_potentials.empty())
           throw std::logic_error(
@@ -4107,6 +4137,10 @@ struct AmrSystem<Dim>::Impl {
         // restored hierarchy lane; rollback rematerializes the selected detached image afterward.
         field.plan->discard_materialization();
         field.plan->boundary_point.swap(field.boundary_point);
+        field.plan->accepted_halo_producer_point.swap(field.producer_point);
+        field.plan->warm_start_pending = field.warm_start_pending;
+        static_assert(std::is_nothrow_swappable_v<std::optional<SolveReport>>);
+        field.plan->accepted_solve_report.swap(field.solve_report);
       }
       owner.active_field_slot.swap(prepared.active_field_slot);
       if (prepared.program_context_restore)
@@ -4201,6 +4235,13 @@ struct AmrSystem<Dim>::Impl {
       owner.refresh_prepared_hierarchy();
       if (!field_potentials.empty())
         owner.restore_field_potential_image_atomically(field_potentials);
+      // Materialization restores numerical buffers; restore their accepted producer authority
+      // only after the complete hierarchy image has been republished.
+      for (auto& [slot, plan] : owner.field_plans) {
+        plan.accepted_halo_producer_point = field_producer_points.at(slot);
+        plan.warm_start_pending = field_warm_start_pending.at(slot);
+        plan.accepted_solve_report = field_solve_reports.at(slot);
+      }
       // Context publication discarded scratch storage, even for an identical restored generation.
       // Rebind the artifact's derived captures only after every native authority is live again.
       owner.refresh_program_resources_collectively();
@@ -4295,6 +4336,7 @@ struct AmrSystem<Dim>::Impl {
         hierarchy_tensor_solver_providers(
             std::make_shared<runtime::program::HierarchyTensorSolverProviderRegistry<Dim>>()) {
     field_solver_providers->add(runtime::amr::make_builtin_exact_amr_field_solver_provider<Dim>());
+    field_solver_providers->add(runtime::amr::make_red_black_exact_amr_field_solver_provider<Dim>());
     const FieldNullspaceProviderSelection selection = operator_topology_zero_mean_nullspace();
     default_nullspace_provider_identity = selection.provider_identity;
     default_nullspace_options = selection.options;
@@ -6329,8 +6371,12 @@ struct AmrSystem<Dim>::Impl {
     }
     runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
         preparation_error, &lane, "AMR field warm-start candidate failed collectively");
-    for (auto& candidate : candidates)
+    for (auto& candidate : candidates) {
+      FieldPlan& plan = *candidate.plan;
       publish_field_materialization(std::move(candidate));
+      // Numeric checkpoint values have no accompanying SolveReport wire authority.
+      plan.accepted_solve_report.reset();
+    }
   }
 
   static FieldDistribution field_distribution(const field_type& field) noexcept {
@@ -6546,6 +6592,8 @@ struct AmrSystem<Dim>::Impl {
             engine_authority->materialization_generation();
         auto source_at = [field_plan, expected_topology_epoch, expected_materialization_generation](
                              std::size_t source_level) -> const field_type* {
+          if (field_plan->warm_start_pending && !field_plan->candidate_ready)
+            throw std::logic_error("AMR field ghost route cannot consume an unresolved warm start");
           if (field_plan->topology_epoch != expected_topology_epoch ||
               field_plan->materialization_generation != expected_materialization_generation)
             return nullptr;
@@ -6704,6 +6752,8 @@ struct AmrSystem<Dim>::Impl {
           throw std::logic_error(
               "AMR dynamic boundary cannot name its iterate as an external field dependency");
         const FieldPlan& dependency_field = dependency_plan->second;
+        if (dependency_field.warm_start_pending)
+          throw std::logic_error("AMR field boundary cannot consume an unresolved warm start");
         if (!dependency_field.materialized_for(*engine) ||
             dependency_field.accepted_potential.size() != level_count)
           throw std::logic_error(
@@ -6751,6 +6801,10 @@ struct AmrSystem<Dim>::Impl {
         if (static_cast<int>(level) == active_level && !stage_overrides.empty() &&
             stage_overrides[block_index] != nullptr)
           state = stage_overrides[block_index];
+        if (active_field_rhs_request &&
+            (active_field_rhs_request->has_source(static_cast<int>(block_index),static_cast<int>(level)) ||
+             active_field_rhs_request->has_legacy_source(static_cast<int>(block_index),static_cast<int>(level))))
+          state = &active_field_rhs_request->selected_state(static_cast<int>(block_index),static_cast<int>(level));
         if (!same_field_contract(*state, block_state(block_index, level)))
           throw std::invalid_argument(
               "AMR dynamic boundary state invocation differs from its prepared layout");
@@ -6875,6 +6929,8 @@ struct AmrSystem<Dim>::Impl {
     plan.candidate_auxiliary_invalidations.reset();
     plan.candidate_auxiliary_invalidations_source.reset();
     plan.candidate_ready = false;
+    plan.candidate_producer_point.reset();
+    plan.candidate_solve_report.reset();
   }
 
   void rollback_active_field_candidate_collectively(const ExecutionLane& lane,
@@ -7220,6 +7276,7 @@ struct AmrSystem<Dim>::Impl {
     }
     std::exception_ptr candidate_error;
     try {
+      plan.candidate_solve_report = report;
       if (plan.output) {
         const std::size_t publication_level_count = engine->hierarchy().num_levels();
         std::vector<std::string> provider_identities;
@@ -7429,6 +7486,8 @@ struct AmrSystem<Dim>::Impl {
       }
       throw std::runtime_error(detail);
     }
+    if (evaluation_point != nullptr)
+      plan.candidate_producer_point = *evaluation_point;
     plan.candidate_ready = true;
     return report;
   }
@@ -7493,6 +7552,12 @@ struct AmrSystem<Dim>::Impl {
       plan.candidate_auxiliary_invalidations.reset();
       plan.candidate_auxiliary_invalidations_source.reset();
       plan.candidate_ready = false;
+      plan.accepted_halo_producer_point.swap(plan.candidate_producer_point);
+      plan.candidate_producer_point.reset();
+      plan.warm_start_pending = false;
+      static_assert(std::is_nothrow_move_assignable_v<std::optional<SolveReport>>);
+      plan.accepted_solve_report = std::move(plan.candidate_solve_report);
+      plan.candidate_solve_report.reset();
       active_field_slot.clear();
     } catch (...) {
       std::terminate();
@@ -10645,6 +10710,8 @@ struct AmrSystem<Dim>::Impl {
     std::string request_contract;
     std::exception_ptr request_error;
     try {
+      if (has_pending_field_warm_start())
+        throw std::logic_error("AMR regrid cannot publish an unresolved field warm start");
       if (parent_level < 0 ||
           static_cast<std::size_t>(parent_level) >= engine->hierarchy().num_levels() ||
           parent_level >= cfg.level_count - 1)
@@ -11782,8 +11849,16 @@ AmrSystem<Dim>::prepared_amr_auxiliary_consumer_plan(const std::string& consumer
   if (level < 0 ||
       static_cast<std::size_t>(level) >= p_->prepared_hierarchy->auxiliary_registries.size())
     throw std::out_of_range("AMR provider consumer-plan level lies outside the live hierarchy");
-  return p_->prepared_hierarchy->auxiliary_registries[static_cast<std::size_t>(level)]
+  const auto& consumer = p_->prepared_hierarchy->auxiliary_registries[static_cast<std::size_t>(level)]
       .consumer_plan(consumer_qid);
+  for (const auto& [slot, field] : p_->field_plans) {
+    (void)slot;
+    if (!field.warm_start_pending) continue;
+    for (const auto& value : consumer.values)
+      if (std::find(field.output_keys.begin(),field.output_keys.end(),value.key) != field.output_keys.end())
+        throw std::logic_error("AMR auxiliary consumer cannot read an unresolved field warm start");
+  }
+  return consumer;
 }
 
 #include "amr_program_field_publication.inc"
@@ -11802,6 +11877,8 @@ AmrSystem<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
   try {
     if (p_->restart_auxiliary_replacement_pending)
       throw std::logic_error("AMR auxiliary checkpoint cannot capture provisional restart storage");
+    if (p_->has_pending_field_warm_start())
+      throw std::logic_error("AMR auxiliary checkpoint cannot capture an unresolved field warm start");
 
     const auto& groups = p_->prepared_hierarchy->provider_storage;
     const auto& registries = p_->prepared_hierarchy->auxiliary_registries;
@@ -11891,7 +11968,7 @@ std::vector<std::uint8_t> AmrSystem<Dim>::checkpoint_state_carriers() const {
   std::exception_ptr error;
   try {
     if (step_transaction_depth() != 0 || p_->restart_transaction || !p_->engine ||
-        !p_->prepared_hierarchy)
+        !p_->prepared_hierarchy || p_->has_pending_field_warm_start())
       throw std::logic_error("state carrier checkpoint requires prepared accepted state");
   } catch (...) { error = std::current_exception(); }
   collectively_rethrow_exception(error, lane, "state carrier accepted capture preflight");
@@ -11906,6 +11983,8 @@ std::vector<std::uint8_t> AmrSystem<Dim>::Impl::capture_checkpoint_state_carrier
   std::exception_ptr error;
   try {
     StateCarrierArchive<Dim> image;
+    if (has_pending_field_warm_start())
+      throw std::logic_error("AMR accepted checkpoint cannot capture an unresolved field warm start");
     image.real_bits = sizeof(RealBits) * 8;
     image.ranks = lane.size(); image.shard = lane.rank();
     image.levels = engine->hierarchy().num_levels();
@@ -12000,7 +12079,7 @@ void AmrSystem<Dim>::require_checkpoint_capture_(
         p_->restart_transaction || p_->bootstrap_transaction || p_->accepted_transaction_active ||
         p_->external_step_committed != committed || lease->committed != committed ||
         p_->program.resource_refresh_pending_ || p_->program.cadence_dispatch_active_ ||
-        !lease->completed ||
+        !lease->completed || p_->has_pending_field_warm_start() ||
         lease->completed->time != state->time ||
         lease->completed->macro_step != state->macro_step ||
         lease->completed->topology_epoch != state->topology_epoch ||
@@ -12036,7 +12115,7 @@ AmrSystem<Dim>::prepare_checkpoint_capture() const {
         p_->checkpoint_capture_lease->completed->macro_step != p_->macro_step ||
         p_->checkpoint_capture_lease->completed->topology_epoch != checkpoint_topology_epoch() ||
         p_->macro_step <= p_->external_step_transaction->macro_step ||
-        p_->accepted_time <= p_->external_step_transaction->accepted_time)
+        p_->accepted_time <= p_->external_step_transaction->accepted_time || p_->has_pending_field_warm_start())
       throw std::logic_error("AMR candidate checkpoint requires one prepared outer transaction");
     state = std::make_shared<typename PreparedCheckpointCapture::State>();
     state->owner = p_.get(); state->lease = p_->checkpoint_capture_lease;
@@ -16544,6 +16623,54 @@ void AmrSystem<Dim>::unbind_program_block_hierarchy_candidates(
 }
 
 template <int Dim>
+PhysicalBoundaryConditions<Dim> AmrSystem<Dim>::prepared_amr_field_boundary_conditions(
+    int runtime_block, int level, std::string_view provider_slot) const {
+  p_->ensure_engine();
+  const auto& lane = p_->require_prepared_engine_lane("AMR installed scalar field boundary");
+  std::optional<PhysicalBoundaryConditions<Dim>> result;
+  std::string exact_contract;
+  std::exception_ptr error;
+  try {
+    if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->blocks.size() ||
+        level < 0 || static_cast<std::size_t>(level) >= p_->engine->hierarchy().num_levels() ||
+        provider_slot.empty())
+      throw std::invalid_argument("AMR field boundary requires an exact live owner/level/slot");
+    const auto found = p_->field_plans.find(std::string(provider_slot));
+    if (found == p_->field_plans.end())
+      throw std::invalid_argument("AMR field boundary names an absent installed field slot");
+    const auto& plan = found->second;
+    if (plan.output_block != p_->blocks[static_cast<std::size_t>(runtime_block)].name ||
+        plan.output_owner_identity.empty() || plan.output_key.empty() || plan.plan_identity.empty() ||
+        !plan.materialized_for(*p_->engine) || plan.boundary_kernel ||
+        !plan.boundary_state_blocks.empty() || !plan.boundary_field_blocks.empty() ||
+        !plan.boundary_parameters.empty())
+      throw std::invalid_argument("AMR scalar stencil lost its static current field authority");
+    const auto geometry = Geometry<Dim>::from_bounds(p_->engine->hierarchy().layout(level).domain(),
+                                                    p_->cfg.lower, p_->cfg.upper);
+    result.emplace(p_->field_boundary(plan, geometry));
+    ExactContractBuilder contract;
+    contract.text("pops.amr.installed-scalar-field-physical-boundary@1")
+        .text(provider_slot).text(plan.plan_identity).text(plan.output_owner_identity)
+        .scalar(runtime_block).scalar(level).scalar(p_->engine->topology_epoch())
+        .scalar(p_->engine->materialization_generation());
+    for (int axis = 0; axis < Dim; ++axis) {
+      contract.scalar(geometry.spacing(axis));
+      for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
+        const Face<Dim> face{axis, side};
+        const auto law = result->at(face);
+        contract.scalar(result->topology().is_periodic(face)).scalar(law.kind)
+            .scalar(law.value).scalar(law.alpha).scalar(law.beta);
+      }
+    }
+    exact_contract = std::move(contract).release();
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error, lane, "AMR scalar field boundary admission failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"amr-scalar-field-physical-boundary", exact_contract}}, lane))
+    throw std::invalid_argument("AMR field boundary authority differs across communicator ranks");
+  return *result;
+}
+
+template <int Dim>
 Geometry<Dim> AmrSystem<Dim>::prepared_amr_level_geometry(int level) const {
   p_->ensure_engine();
   if (level < 0 || static_cast<std::size_t>(level) >= p_->engine->hierarchy().num_levels())
@@ -17356,6 +17483,15 @@ std::vector<runtime::field::FieldTopologyReportRow> AmrSystem<Dim>::field_topolo
 }
 
 template <int Dim>
+std::optional<SolveReport> AmrSystem<Dim>::field_solve_report(
+    const std::string& provider_slot) const {
+  const auto found = p_->field_plans.find(provider_slot);
+  if (found == p_->field_plans.end())
+    throw std::out_of_range("unknown exact AMR field provider slot");
+  return found->second.accepted_solve_report;
+}
+
+template <int Dim>
 void AmrSystem<Dim>::set_field_boundary_plan(const std::string& provider_slot,
                                              const std::vector<std::string>& kind,
                                              const std::vector<double>& alpha,
@@ -18150,6 +18286,134 @@ SolveOutcome AmrSystem<Dim>::solve_program_default_field(int active_level) {
 }
 
 template <int Dim>
+void AmrSystem<Dim>::publish_program_field_warm_start(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+    int runtime_block, const std::vector<const MultiFab<Dim>*>& potentials,
+    const std::string& publication_identity) {
+  const auto& lane = p_->require_prepared_engine_lane("AMR field warm-start publication");
+  typename Impl::FieldPlan* selected = nullptr;
+  std::string contract;
+  std::exception_ptr error;
+  try {
+    if (publication_identity.empty() || provider_slot.empty() || point.level != 0 ||
+        point.tick != p_->macro_step || point.clock.empty() || point.dt <= 0.0 ||
+        !std::isfinite(point.dt) || !std::isfinite(point.physical_time) ||
+        runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->blocks.size() ||
+        !p_->active_field_slot.empty())
+      throw std::invalid_argument("AMR warm start requires an idle exact current hierarchy point");
+    const auto found = p_->field_plans.find(provider_slot);
+    if (found == p_->field_plans.end())
+      throw std::invalid_argument("AMR warm start names an absent installed field slot");
+    auto& plan = found->second;
+    const auto levels = p_->engine->hierarchy().num_levels();
+    if (plan.output_block != p_->blocks[static_cast<std::size_t>(runtime_block)].name ||
+        plan.output_owner_identity.empty() || plan.plan_identity.empty() ||
+        !plan.materialized_for(*p_->engine) || plan.candidate_ready || plan.warm_start_pending ||
+        plan.accepted_potential.size() != levels || potentials.size() != levels)
+      throw std::invalid_argument("AMR warm start lost its exact installed owner or hierarchy");
+    if (!p_->program.checkpoint_metadata_.primary_clock_identity.empty() &&
+        point.clock != p_->program.checkpoint_metadata_.primary_clock_identity)
+      throw std::invalid_argument("AMR warm start names a foreign Program clock");
+    ExactContractBuilder exact;
+    exact.text("pops.amr.program-field-warm-start@1").text(publication_identity)
+        .text(provider_slot).text(plan.plan_identity).text(plan.output_owner_identity)
+        .scalar(runtime_block).scalar(p_->engine->topology_epoch())
+        .scalar(p_->engine->materialization_generation()).text(point.clock)
+        .scalar(point.tick).scalar(point.stage).scalar(point.substep)
+        .scalar(point.stage_fraction.numerator).scalar(point.stage_fraction.denominator)
+        .scalar(point.dt).scalar(point.physical_time).scalar(levels);
+    for (std::size_t level = 0; level < levels; ++level) {
+      if (!potentials[level] || !plan.accepted_potential[level])
+        throw std::invalid_argument("AMR warm start contains an empty source level");
+      const auto& source = *potentials[level];
+      const auto& accepted = *plan.accepted_potential[level];
+      const auto& candidate = plan.prepared_solver->candidate_level(static_cast<int>(level));
+      if (source.ncomp() != 1 || source.layout() != accepted.layout() ||
+          source.distribution() != accepted.distribution() || source.local_rank() != accepted.local_rank() ||
+          source.rank_space() != accepted.rank_space() || source.local_size() != accepted.local_size() ||
+          !same_field_contract(accepted,candidate))
+        throw std::invalid_argument("AMR warm start changes its scalar level layout or distribution");
+      for (std::size_t local = 0; local < source.local_size(); ++local)
+        if (source.global_index(local) != accepted.global_index(local) || source.box(local) != accepted.box(local))
+          throw std::invalid_argument("AMR warm-start patch identities differ from the prepared level");
+      exact.scalar(level).bytes(elliptic_contract_detail::field_layout_contract(source));
+    }
+    selected = &plan;
+    contract = std::move(exact).release();
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error,lane,"AMR warm-start owner and layout admission failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"amr-field-warm-start",contract}},lane))
+    throw std::invalid_argument("AMR warm-start publication differs across ranks");
+  error = nullptr;
+  bool finite = true;
+  try {
+    for (const auto* source : potentials) finite = finite_valid_field_local(*source) && finite;
+    Kokkos::fence();
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error,lane,"AMR warm-start finite evaluation failed collectively");
+  if (all_reduce_max(finite ? 0L : 1L,lane) != 0)
+    throw std::invalid_argument("AMR warm start contains nonfinite valid cells");
+  error = nullptr;
+  try {
+    for (std::size_t level = 0; level < potentials.size(); ++level) {
+      const auto& source = *potentials[level];
+      auto& candidate = selected->prepared_solver->candidate_level(static_cast<int>(level));
+      for (std::size_t local = 0; local < source.local_size(); ++local) {
+        auto input = source.fab(local).view();
+        auto output = candidate.fab(local).view();
+        for_each_cell(source.box(local),[=] POPS_HD(const Index<Dim>& cell) { output(cell,0) = input(cell,0); });
+      }
+    }
+    Kokkos::fence();
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error,lane,"AMR warm-start candidate staging failed collectively");
+  try {
+    for (std::size_t level = 0; level < potentials.size(); ++level)
+      copy_full_field_in_place(selected->prepared_solver->candidate_level(static_cast<int>(level)),
+                               *selected->accepted_potential[level]);
+    Kokkos::fence();
+    selected->accepted_halo_producer_point.reset();
+    selected->warm_start_pending = true;
+  } catch (...) { std::terminate(); }
+}
+
+template <int Dim>
+void AmrSystem<Dim>::copy_program_solved_field_scalar_sample(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+    int runtime_block, const MultiFab<Dim>& stage_state, MultiFab<Dim>& destination) const {
+  const auto& lane = p_->require_prepared_engine_lane("AMR solved-field scalar sampling");
+  const MultiFab<Dim>* source = nullptr;
+  std::exception_ptr error;
+  try {
+    const auto found = p_->field_plans.find(provider_slot);
+    if (found == p_->field_plans.end() || runtime_block < 0 ||
+        static_cast<std::size_t>(runtime_block) >= p_->blocks.size() || point.level < 0 ||
+        static_cast<std::size_t>(point.level) >= p_->engine->hierarchy().num_levels())
+      throw std::invalid_argument("AMR scalar sample names an absent exact field/owner/level");
+    const auto& plan = found->second;
+    if (!plan.materialized_for(*p_->engine) || plan.warm_start_pending || plan.candidate_ready ||
+        !p_->active_field_slot.empty() || !plan.accepted_halo_producer_point ||
+        plan.output_block != p_->blocks[static_cast<std::size_t>(runtime_block)].name ||
+        !same_field_contract(stage_state,p_->block_state(static_cast<std::size_t>(runtime_block),point.level)) ||
+        !plan.accepted_potential[static_cast<std::size_t>(point.level)])
+      throw std::invalid_argument("AMR scalar sample lacks an accepted current solved field family");
+    auto produced = *plan.accepted_halo_producer_point;
+    produced.level = point.level;
+    produced.stage = point.stage;
+    if (produced != point)
+      throw std::invalid_argument("AMR scalar sample differs from its native solved producer point");
+    source = plan.accepted_potential[static_cast<std::size_t>(point.level)].get();
+    if (!same_field_contract(*source,destination))
+      throw std::invalid_argument("AMR scalar sample must preserve the native constrained ghost layout");
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error,lane,"AMR solved-field scalar sample admission failed collectively");
+  error = nullptr;
+  try { copy_full_field_in_place(*source,destination); Kokkos::fence(); }
+  catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error,lane,"AMR solved-field scalar sample execution failed collectively");
+}
+
+template <int Dim>
 std::vector<std::string> AmrSystem<Dim>::field_provider_slots() const {
   std::vector<std::string> result;
   result.reserve(p_->field_plans.size());
@@ -18187,6 +18451,8 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::field_provider_checkpoint_
   const std::string depth =
       p_->engine ? std::to_string(p_->engine->hierarchy().num_levels()) : std::string("0");
   for (const auto& [slot, plan] : p_->field_plans) {
+    if (plan.warm_start_pending)
+      throw std::logic_error("AMR field checkpoint cannot capture an unresolved warm start");
     std::vector<std::string> row{
         "pops.amr.field-provider-checkpoint-manifest@1",
         slot,
@@ -18257,6 +18523,7 @@ void AmrSystem<Dim>::set_field_potential_level(const std::string& provider_slot,
   write_field(*plan.accepted_potential[static_cast<std::size_t>(level)], domain, phi, 1);
   copy_full_field_in_place(*plan.accepted_potential[static_cast<std::size_t>(level)],
                            plan.prepared_solver->candidate_level(level));
+  plan.accepted_solve_report.reset();
 }
 
 template <int Dim>
@@ -18306,6 +18573,8 @@ std::vector<double> AmrSystem<Dim>::field_potential_level_global(const std::stri
         static_cast<std::size_t>(level) >= plan.accepted_potential.size() ||
         !plan.accepted_potential[static_cast<std::size_t>(level)])
       throw std::out_of_range("AMR field potential level lies outside the hierarchy");
+    if (plan.warm_start_pending)
+      throw std::logic_error("AMR field potential cannot expose an unresolved warm start");
     potential = plan.accepted_potential[static_cast<std::size_t>(level)].get();
     domain = &p_->engine->hierarchy().layout(static_cast<std::size_t>(level)).domain();
     ExactContractBuilder exact;
@@ -19224,6 +19493,26 @@ void AmrSystem<Dim>::stage_bootstrap_array(const std::string& subject_id,
 }
 
 template <int Dim>
+void AmrSystem<Dim>::stage_bootstrap_initial_program_seed(
+    const std::string& subject_id, const std::string& runtime_block,
+    const analytic::AnalyticOpcodeRows& opcodes, const analytic::AnalyticLiteralRows& literals) {
+  const auto communicator = p_->package_assembly_lane ? p_->package_assembly_lane->communicator()
+                                                     : world_communicator_view();
+  (void)analytic::collectively_prepare_exact_analytic_request(
+      "AmrSystem::stage_bootstrap_initial_program_seed", [&] {
+        const auto found=p_->bootstrap_sources.find(subject_id);
+        if(found==p_->bootstrap_sources.end() || found->second.source_route!="bootstrap_program" ||
+           found->second.runtime_block!=runtime_block)
+          throw std::invalid_argument("native initial seed lost its authenticated subject/route");
+        return true;
+      }, [&] { ExactContractBuilder contract; contract.text(subject_id).text(runtime_block);
+               return std::move(contract).release(); }, communicator);
+  stage_bootstrap_analytic_state(subject_id, runtime_block, "cell", "cell",
+                                "conservative_cell_average", opcodes, literals);
+  p_->bootstrap_sources.at(subject_id).kind = Impl::BootstrapSourceKind::program_seed;
+}
+
+template <int Dim>
 std::size_t AmrSystem<Dim>::materialize_bootstrap_action(const std::string& subject_id,
                                                          const std::string& action,
                                                          const std::string& action_route,
@@ -19255,6 +19544,11 @@ std::size_t AmrSystem<Dim>::materialize_bootstrap_action(const std::string& subj
     if (static_cast<std::size_t>(level + 1) != p_->engine->hierarchy().num_levels())
       throw std::invalid_argument(
           "AMR fine bootstrap action must target the newest live hierarchy level");
+    if (source->second.kind == Impl::BootstrapSourceKind::program_seed) {
+      if (action != "seed_initial_program" || action_route != source->second.source_route)
+        throw std::invalid_argument("AMR native program seed action changed its authenticated route");
+      return;
+    }
     if (source->second.kind == Impl::BootstrapSourceKind::analytic) {
       if (action != "analytic_reprojection" || action_route != source->second.source_route)
         throw std::invalid_argument(
@@ -19336,7 +19630,8 @@ std::size_t AmrSystem<Dim>::materialize_bootstrap_action(const std::string& subj
     (void)marker;
     if (!inserted)
       throw std::logic_error("AMR bootstrap materialization marker already exists");
-    if (source->second.kind == Impl::BootstrapSourceKind::analytic) {
+    if (source->second.kind == Impl::BootstrapSourceKind::analytic ||
+        source->second.kind == Impl::BootstrapSourceKind::program_seed) {
       candidate_storage.emplace(target.layout(), target.distribution(), target.local_rank(),
                                 target.ncomp(), target.ghosts());
       candidate = &*candidate_storage;
@@ -19345,13 +19640,18 @@ std::size_t AmrSystem<Dim>::materialize_bootstrap_action(const std::string& subj
           p_->engine->hierarchy().layout(static_cast<std::size_t>(level)).domain();
       const Geometry<Dim> geometry =
           Geometry<Dim>::from_bounds(domain, p_->cfg.lower, p_->cfg.upper);
-      analytic_materialization.emplace(
+      if (source->second.kind == Impl::BootstrapSourceKind::program_seed) {
+        materialized=checked_size_product(
+            static_cast<std::size_t>(analytic::detail::checked_layout_cell_count(candidate->layout())),
+            static_cast<std::size_t>(candidate->ncomp()),"native seed materialization exceeds size_t");
+      } else analytic_materialization.emplace(
           block->gaussian_initial
               ? analytic::prepare_cell_average_materialization(
                     *candidate, geometry, block->analytic_state, &*block->gaussian_initial)
               : analytic::prepare_cell_average_materialization(
                     *candidate, geometry, block->analytic_state, block->exact_initial_integral));
-      materialized = static_cast<std::size_t>(analytic_materialization->materialized_values);
+      if(analytic_materialization)
+        materialized = static_cast<std::size_t>(analytic_materialization->materialized_values);
     } else if (level == 0) {
       candidate_storage.emplace(target.layout(), target.distribution(), target.local_rank(),
                                 target.ncomp(), target.ghosts());
@@ -19388,7 +19688,13 @@ std::size_t AmrSystem<Dim>::materialize_bootstrap_action(const std::string& subj
 
   std::exception_ptr execution_error;
   try {
-    if (analytic_materialization)
+    if(source->second.kind == Impl::BootstrapSourceKind::program_seed) {
+      const Geometry<Dim> geometry=Geometry<Dim>::from_bounds(
+          p_->engine->hierarchy().layout(static_cast<std::size_t>(level)).domain(),p_->cfg.lower,p_->cfg.upper);
+      (void)analytic::materialize_discrete_mapped_state(*candidate,geometry,block->analytic_state,
+          std::vector<analytic::detail::AnalyticMappedInputField<Dim, typename field_type::memory_space>>{},
+          communicator);
+    } else if (analytic_materialization)
       (void)analytic::materialize_cell_average(*analytic_materialization, communicator);
     else if (transfer_materialization)
       execute_regridded_state_transfer(*transfer_materialization, communicator);
@@ -19529,6 +19835,8 @@ std::size_t AmrSystem<Dim>::recompute_bootstrap_field(const std::string& subject
   p_->discard_level_evaluations();
   return materialized;
 }
+
+#include "bootstrap_program_initialization.inc"
 
 template <int Dim>
 void AmrSystem<Dim>::synchronize_bootstrap_state(const std::string& subject_id, int fine_level) {
@@ -20220,6 +20528,8 @@ void AmrSystem<Dim>::step(double dt) {
 
 template <int Dim>
 void AmrSystem<Dim>::complete_program_step_() {
+  if (p_->has_pending_field_warm_start())
+    throw std::logic_error("AMR macro completion cannot accept an unresolved field warm start");
   p_->program.refresh_hierarchy_state("AmrSystem::step");
   // Cadence completion has advanced the owner cursor. Authenticate it separately from
   // each consumer's immutable clock/tick; no consumer tick is interpreted as a macro counter.
@@ -20869,7 +21179,7 @@ void AmrSystem<Dim>::commit_step_transaction() {
       p_->require_prepared_engine_lane("AMR commit step transaction"), 2,
       static_cast<long>(step_transaction_depth()),
       p_->external_step_transaction && !p_->external_step_committed &&
-          !p_->program.resource_refresh_pending_,
+          !p_->program.resource_refresh_pending_ && !p_->has_pending_field_warm_start(),
       "AmrSystem::commit_step_transaction");
   Kokkos::fence();
   p_->external_step_committed = true;
@@ -25132,6 +25442,8 @@ template void AmrSystem<kNativeDimension>::bind_program_block_hierarchy_candidat
     int, const std::vector<MultiFab<kNativeDimension>>*) const;
 template void AmrSystem<kNativeDimension>::unbind_program_block_hierarchy_candidates(
     int, const std::vector<MultiFab<kNativeDimension>>*) const noexcept;
+template PhysicalBoundaryConditions<kNativeDimension>
+AmrSystem<kNativeDimension>::prepared_amr_field_boundary_conditions(int, int, std::string_view) const;
 template Geometry<kNativeDimension> AmrSystem<kNativeDimension>::prepared_amr_level_geometry(
     int) const;
 template AmrSystem<kNativeDimension>::PreparedMultiBlockHierarchy&
@@ -25175,6 +25487,12 @@ template const runtime::system::ResolvedAuxiliaryConsumerPlan<kNativeDimension>&
 AmrSystem<kNativeDimension>::prepared_amr_auxiliary_consumer_plan(const std::string&, int) const;
 template void AmrSystem<kNativeDimension>::publish_program_field_components(
     const std::string&, const std::vector<AmrSystem<kNativeDimension>::ProgramFieldLevel>&);
+template void AmrSystem<kNativeDimension>::publish_program_field_warm_start(
+    const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&, int,
+    const std::vector<const MultiFab<kNativeDimension>*>&, const std::string&);
+template void AmrSystem<kNativeDimension>::copy_program_solved_field_scalar_sample(
+    const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&, int,
+    const MultiFab<kNativeDimension>&, MultiFab<kNativeDimension>&) const;
 template std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<kNativeDimension>>
 AmrSystem<kNativeDimension>::capture_auxiliary_checkpoint_accepted_state() const;
 template std::vector<std::uint8_t> AmrSystem<kNativeDimension>::checkpoint_state_carriers() const;
@@ -25252,6 +25570,8 @@ template void AmrSystem<kNativeDimension>::set_field_topology_authority(const st
                                                                         const std::string&);
 template std::vector<runtime::field::FieldTopologyReportRow>
 AmrSystem<kNativeDimension>::field_topology_report(const std::string&) const;
+template std::optional<SolveReport>
+AmrSystem<kNativeDimension>::field_solve_report(const std::string&) const;
 template void AmrSystem<kNativeDimension>::set_field_boundary_plan(const std::string&,
                                                                    const std::vector<std::string>&,
                                                                    const std::vector<double>&,
@@ -25348,6 +25668,13 @@ template std::size_t AmrSystem<kNativeDimension>::materialize_bootstrap_action(c
                                                                                const std::string&,
                                                                                const std::string&,
                                                                                int);
+template void AmrSystem<kNativeDimension>::stage_bootstrap_initial_program_seed(const std::string&,
+    const std::string&,const analytic::AnalyticOpcodeRows&,const analytic::AnalyticLiteralRows&);
+template std::pair<std::size_t, SolveReport> AmrSystem<kNativeDimension>::solve_bootstrap_initial_field(const std::string&,
+    const std::string&,int);
+template std::size_t AmrSystem<kNativeDimension>::map_bootstrap_state_hierarchy(const std::string&,
+    const analytic::AnalyticOpcodeRows&,const analytic::AnalyticLiteralRows&,
+    const std::vector<runtime::system::AnalyticMappedInput>&,const std::string&,const std::string&);
 template std::size_t AmrSystem<kNativeDimension>::recompute_bootstrap_field(const std::string&,
                                                                             const std::string&);
 template void AmrSystem<kNativeDimension>::add_dt_bound(const std::string&,

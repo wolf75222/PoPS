@@ -125,6 +125,9 @@ api pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp
 sdk-support pops/numerics/elliptic/mg/composite_fac_nlevel.hpp
 sdk-support pops/numerics/elliptic/mg/composite_fac_poisson.hpp
 sdk-support pops/numerics/elliptic/mg/geometric_mg.hpp
+sdk-support pops/numerics/elliptic/mg/residual_roundoff.hpp
+sdk-support pops/numerics/elliptic/mg/cell_centre_field_domain.hpp
+sdk-support pops/numerics/elliptic/mg/tensor_diagonal_preconditioner.hpp
 api pops/numerics/elliptic/poisson/poisson_fft.hpp
 sdk-support pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp
 sdk-support pops/numerics/elliptic/poisson/poisson_fft_1d_internal.hpp
@@ -245,6 +248,8 @@ api pops/runtime/amr_system.hpp
 api pops/runtime/amr_patch.hpp
 sdk-support pops/runtime/analytic/collective_preflight.hpp
 sdk-support pops/runtime/analytic/expression.hpp
+sdk-support pops/runtime/analytic/initial_derivative.hpp
+sdk-support pops/runtime/system/analytic_mapped_input.hpp
 sdk-support pops/runtime/analytic/initial_materialization.hpp
 sdk-support pops/runtime/analytic/level_set.hpp
 sdk-support pops/runtime/builders/block/block_builder.hpp
@@ -385,6 +390,7 @@ sdk-support pops/runtime/system/auxiliary_ghost_fill.hpp
 sdk-support pops/runtime/system/exact_aux_registry.hpp
 sdk-support pops/runtime/system/exact_field_marshaling.hpp
 sdk-support pops/runtime/system/exact_field_solver_backend.hpp
+sdk-support pops/runtime/system/red_black_geometric_mg_options.hpp
 api pops/runtime/system/field_topology_report.hpp
 sdk-support pops/runtime/system/provider_storage_binding.hpp
 sdk-support pops/runtime/system/program_field_publication.hpp

@@ -144,6 +144,21 @@ def resolve_bootstrap(
     constraint_rows = tuple(constraints)
     if any(type(constraint) is not ConstraintProvider for constraint in constraint_rows):
         raise TypeError("bootstrap constraints must contain ConstraintProvider values")
+    program_seeds = tuple(binding for binding in initial_conditions.bindings
+        if type(selection_map[binding.subject.qualified_id].method) is NativeProgramSeed)
+    if program_seeds:
+        if len(program_seeds) != 1 or len(initial_conditions.bindings) != 1:
+            raise NotImplementedError("native field initialization currently requires one complete State block")
+        from pops.runtime._initial_source_lowering import validate_initial_source
+        if validate_initial_source(program_seeds[0].source.options.to_data(),
+                where="AMR native initial program") != "bootstrap_program":
+            raise ValueError("native program seed does not authenticate its initial program route")
+        def contains_field_handle(data):
+            if isinstance(data, Mapping):
+                return data.get("kind") == "field" or any(contains_field_handle(value) for value in data.values())
+            return isinstance(data, (tuple, list)) and any(contains_field_handle(value) for value in data)
+        if contains_field_handle(tagging.graph.canonical_identity()):
+            raise NotImplementedError("field-dependent initial tagging requires an explicit pre-tagging solve")
 
     for binding in initial_conditions.bindings:
         normalized = layout_plan.normalized(binding.layout)
@@ -169,6 +184,8 @@ def resolve_bootstrap(
         native = entry.native_materialization
         provider_identity = native.provider_identity.to_data()
         if native.materialization is NativeAMRMaterializationKind.DERIVED_FIELD:
+            if program_seeds:
+                continue
             for requirement in entry.requirements:
                 identity = (DERIVED_FIELD, requirement.subject.qualified_id)
                 if identity not in materialized:
@@ -252,6 +269,9 @@ def resolve_bootstrap(
                         entry.native_materialization.to_data(),
                     )
                 )
+            elif type(selection.method) is NativeProgramSeed:
+                phase_actions["projection"].append(_action(level, "projection",
+                    "seed_initial_program", binding.subject, binding.source.canonical_identity()))
             else:
                 phase_actions["projection"].append(
                     _action(
@@ -292,6 +312,8 @@ def resolve_bootstrap(
             provider_identity = native.provider_identity.to_data()
             for requirement in entry.requirements:
                 if requirement.materialization == DERIVED_FIELD:
+                    if program_seeds:
+                        continue
                     identity = (DERIVED_FIELD, requirement.subject.qualified_id)
                     if identity not in materialized:
                         phase_actions["projection"].append(
@@ -356,6 +378,9 @@ def resolve_bootstrap(
                     restriction.native_materialization.to_data(),
                 )
             )
+    for binding in program_seeds:
+        actions.append(_action(0, "initial_program", "execute_initial_program", binding.subject,
+                               binding.source.canonical_identity()))
     return BootstrapPlan(
         layout_plan.qualified_id,
         hierarchy.identity,
@@ -371,5 +396,5 @@ def resolve_bootstrap(
 
 __all__ = [
     "AnalyticReprojection", "BootstrapAction", "BootstrapOrdering", "BootstrapPlan",
-    "BootstrapSelection", "ConstraintProvider", "ProlongFromParent", "resolve_bootstrap",
+    "BootstrapSelection", "ConstraintProvider", "ProlongFromParent", "NativeProgramSeed", "resolve_bootstrap",
 ]

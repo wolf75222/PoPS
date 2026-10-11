@@ -504,6 +504,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_poisson_smoother_cache
   test_cartesian_poisson_nd
   test_geometric_mg_nd
+  test_tensor_diagonal_mg_preconditioner
   test_elliptic_named_device_kernels
   test_geometric_mg
   test_poisson_convergence
@@ -1187,6 +1188,7 @@ if(POPS_HAS_MPI)
     test_krylov_workspace_reentrancy
     test_pure_field_algebra_extreme_dot
     test_geometric_mg
+    test_tensor_diagonal_mg_preconditioner
     # These existing tensor/polar witnesses include distributed and empty-owner contracts.
     test_tensor_coarse_gmres
     test_tensor_fac_partial_hierarchy

@@ -622,11 +622,11 @@ def bind(artifact: Any, inputs: Any) -> Any:
                 if row.source.options.to_data().get("native_route") != "bound_level_zero"
             }
         else:
-            from pops.mesh._amr import AnalyticReprojection
+            from pops.mesh._amr import AnalyticReprojection, NativeProgramSeed
             analytic = {
                 row.subject.qualified_id
                 for row in plan.bootstrap_plan.selections
-                if type(row.method) is AnalyticReprojection
+                if type(row.method) in (AnalyticReprojection, NativeProgramSeed)
             }
         expected_initial = {
             key: value for key, value in expected_initial.items() if key not in analytic

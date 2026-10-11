@@ -42,6 +42,19 @@ class ExactSolveReportConsensusScratch {
     append(std::int64_t{report.failure.component}, offset);
     append(static_cast<std::int32_t>(report.status), offset);
     append(static_cast<std::int32_t>(report.action), offset);
+    // Fixed-width canonical absence avoids rank-dependent collective payload lengths.
+    append(static_cast<std::int32_t>(report.residual_evaluation.has_value()), offset);
+    const ResidualEvaluationEvidence absent{};
+    const auto& evaluation = report.residual_evaluation ? *report.residual_evaluation : absent;
+    append(evaluation.initial_residual_norm, offset);
+    append(evaluation.rhs_norm, offset);
+    append(evaluation.initial_evaluation_bound, offset);
+    append(evaluation.evaluation_bound, offset);
+    append(evaluation.requested_threshold, offset);
+    append(evaluation.applied_threshold, offset);
+    append(static_cast<std::int32_t>(evaluation.roundoff_limited), offset);
+    append(static_cast<std::int32_t>(evaluation.relative_to_rhs_upper.has_value()), offset);
+    append(evaluation.relative_to_rhs_upper.value_or(Real(0)), offset);
     append(static_cast<std::uint64_t>(report.reason.size()), offset);
 
     fixed_maximum_ = fixed_minimum_;
@@ -78,8 +91,8 @@ class ExactSolveReportConsensusScratch {
     offset += sizeof(Value);
   }
 
-  static constexpr std::size_t kFixedPayloadBytes = 8 * sizeof(std::int64_t) + 5 * sizeof(Real) +
-                                                    3 * sizeof(std::int32_t) +
+  static constexpr std::size_t kFixedPayloadBytes = 8 * sizeof(std::int64_t) + 12 * sizeof(Real) +
+                                                    6 * sizeof(std::int32_t) +
                                                     sizeof(std::uint64_t);
   static constexpr std::size_t kReasonChunkBytes = 1024;
   std::array<char, kFixedPayloadBytes> fixed_minimum_{};

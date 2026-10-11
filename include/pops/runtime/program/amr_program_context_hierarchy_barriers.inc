@@ -4,6 +4,8 @@ enum class HierarchyBarrierKind : std::uint8_t {
   linear_solve = 1,
   field_publication = 2,
   spatial_rhs = 3,
+  named_field_solve = 4,
+  field_warm_start = 5,
 };
 
 template <class Once, class Next>
@@ -16,7 +18,8 @@ void suspend_hierarchy_barrier(HierarchyBarrierKind kind, std::int64_t operation
       static_cast<std::size_t>(active_level_) >= mapping_continuation_->ports.size())
     throw std::logic_error("AMR hierarchy barrier requires an executing level region");
   if (kind != HierarchyBarrierKind::linear_solve &&
-      kind != HierarchyBarrierKind::field_publication && kind != HierarchyBarrierKind::spatial_rhs)
+      kind != HierarchyBarrierKind::field_publication && kind != HierarchyBarrierKind::spatial_rhs &&
+      kind != HierarchyBarrierKind::named_field_solve && kind != HierarchyBarrierKind::field_warm_start)
     throw std::invalid_argument("AMR hierarchy barrier kind is unknown");
   if (operation_id < 0 || compiled_program_hash.empty() ||
       compiled_program_hash != mapping_continuation_->program_hash ||
@@ -74,14 +77,16 @@ void suspend_hierarchy_barrier(HierarchyBarrierKind kind, std::int64_t operation
   port.kind = kind == HierarchyBarrierKind::linear_solve ? MappingPortKind::linear_solve
               : kind == HierarchyBarrierKind::field_publication
                   ? MappingPortKind::field_publication
-                  : MappingPortKind::spatial_rhs;
+                  : kind == HierarchyBarrierKind::spatial_rhs ? MappingPortKind::spatial_rhs
+                  : kind == HierarchyBarrierKind::named_field_solve ? MappingPortKind::named_field_solve
+                  : MappingPortKind::field_warm_start;
   port.once = std::move(once);
   port.next = std::move(next);
 }
 
 private:
 enum class MappingPortKind : std::uint8_t {
-  complete, map, linear_solve, field_publication, spatial_rhs
+  complete, map, linear_solve, field_publication, spatial_rhs, named_field_solve, field_warm_start
 };
 
 void prepare_mapping_barrier_authority_() const {
@@ -110,7 +115,9 @@ void agree_continuation_ports_() const {
   const bool map = first.kind == MappingPortKind::map;
   const bool internal = first.kind == MappingPortKind::linear_solve ||
                         first.kind == MappingPortKind::field_publication ||
-                        first.kind == MappingPortKind::spatial_rhs;
+                        first.kind == MappingPortKind::spatial_rhs ||
+                        first.kind == MappingPortKind::named_field_solve ||
+                        first.kind == MappingPortKind::field_warm_start;
   std::exception_ptr error;
   try {
     for (std::size_t level = 0; level < frame.ports.size(); ++level) {
@@ -134,7 +141,9 @@ void agree_continuation_ports_() const {
       : internal
           ? (first.kind == MappingPortKind::linear_solve ? "linear-solve"
              : first.kind == MappingPortKind::field_publication ? "field-publication"
-                                                               : "spatial-rhs")
+             : first.kind == MappingPortKind::spatial_rhs ? "spatial-rhs"
+             : first.kind == MappingPortKind::named_field_solve ? "named-field-solve"
+                                                               : "field-warm-start")
           : "complete";
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{std::string_view("amr-continuation-contract"), first.identity},

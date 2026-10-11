@@ -605,4 +605,7 @@ class FieldMappedAnalytic:
     inspect = to_data
 
 
-__all__ = ["Analytic", "BindArray", "Constant", "FieldMappedAnalytic", "Gaussian"]
+from ._bootstrap_program import BootstrapProgram, FieldSolve, ProviderDerivative, StateMap
+
+__all__ = ["Analytic", "BindArray", "BootstrapProgram", "Constant", "FieldMappedAnalytic",
+           "FieldSolve", "Gaussian", "ProviderDerivative", "StateMap"]

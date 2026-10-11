@@ -397,7 +397,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     var = {}
     from .program_value_authority import prepare_program_value_authority
     if value_authority is None:
-        value_authority = prepare_program_value_authority(program, model, field_plans or {})
+        value_authority = prepare_program_value_authority(program, model, field_plans or {}, target=target)
     var[("program_value_authority",)] = value_authority
     from .program_emit_moving import deferred_moving_rates
     var[("moving_deferred_rates",)] = deferred_moving_rates(program)
@@ -475,13 +475,15 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     values = list(program._values)
     from pops.codegen.program_emit_hierarchy_regions import (
         hierarchy_region_solves, hierarchy_path_rhs, hierarchy_field_publications,
+        hierarchy_named_field_barriers,
         open_hierarchy_continuation,
     )
     hierarchy_solves = (hierarchy_region_solves(program) if target == "amr_system" else ())
     hierarchy_solve_ids = {value.id for value in hierarchy_solves}
     path_ids = {value.id for value in hierarchy_path_rhs(program)} if target == "amr_system" else set()
+    named_field_ids = {value.id for value in hierarchy_named_field_barriers(program)} if target == "amr_system" else set()
     hierarchy_enabled = target == "amr_system" and bool(
-        hierarchy_solves or path_ids or hierarchy_field_publications(program))
+        hierarchy_solves or path_ids or hierarchy_field_publications(program) or named_field_ids)
     legacy_path_prefix = bool(path_ids and any(
         "hierarchy_field_identity" not in value.attrs for value in hierarchy_solves))
     if legacy_path_prefix:
@@ -519,7 +521,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
             # Levels enter the same qualified barrier in order. Reset before its first gather,
             # including a retry after a prior attempt failed between two level callbacks.
             lines.append("if (ctx.level() == 0) ctx.begin_staged_field_publications();")
-        emitted = [] if hierarchy_solve else lines
+        named_field_solve = v.id in named_field_ids and v.op != "field_warm_start"
+        emitted = [] if hierarchy_solve or named_field_solve else lines
         _emit_op(program, v, base, committed_ids, var, model, emitted, prelude, block_idx,
                  target=target, field_plans=field_plans,
                  has_shared_interface_implicit_jacvec=(
@@ -536,6 +539,25 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                              else "ctx.stage_linear_initial_guess();")
             open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
                                         emitted, kind="linear_solve")
+            mapping_continuations += 1
+        elif named_field_solve:
+            from .program_value_authority import field_value_overrides_cpp
+            from .program_emit_field_routes import resolved_field_route, field_point_cpp
+            from pops.time._evaluation_point import evaluation_stage_fraction
+            field, _ = resolved_field_route(v.attrs["field"], field_plans)
+            point = evaluation_stage_fraction(v)
+            lines += ["{", "auto named_field_stage_%d = ctx.stage_evaluation_scope(%d, %d);" %
+                      (v.id, point.numerator, point.denominator)]
+            lines += field_point_cpp(program, v, field)
+            lines += ["ctx.stage_program_field_values_at(field_boundary_point_%d, %d, %s, {%s});" %
+                      (v.id, v.id, json.dumps(field), field_value_overrides_cpp(v, var, block_idx)), "}"]
+            open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
+                                        emitted, kind="named_field_solve")
+            mapping_continuations += 1
+        elif v.id in named_field_ids and v.op == "field_warm_start":
+            open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
+                                        ["ctx.publish_staged_field_warm_start(%d);" % v.id],
+                                        kind="field_warm_start")
             mapping_continuations += 1
         elif v.id in path_ids:
             open_hierarchy_continuation(program, v, values[:index + 1], var, lines,

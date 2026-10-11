@@ -20,6 +20,7 @@ from pops.fields._prepared_nullspace_registry import (
 )
 from pops.solvers._prepared_preconditioner_registry import (
     prepared_preconditioner_provider_from_attrs,
+    PreparedPreconditionerNativeContext,
 )
 from pops.solvers.krylov._prepared_method_registry import (
     prepared_krylov_method_provider_from_attrs,
@@ -372,6 +373,22 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     out_sf = v.attrs["apply_out"]
     block = v.attrs["apply_block"]
     result = v.attrs["apply_result"]
+    if target == "amr_system" and v.attrs.get("field_boundary_owner") is not None:
+        from pops.codegen.program_emit_hierarchy_regions import hierarchy_region_solves
+        selected = tuple(solve for solve in hierarchy_region_solves(program)
+                         if solve.inputs[0].id == v.id)
+        if len(selected) == 1:
+            solve = selected[0]
+            provider = prepared_hierarchy_solver_provider_from_attrs(solve.attrs)
+            provider.validate_node(solve, target=target)
+            _validated_direct_solve_components(solve, v)
+            # The complete hierarchy provider owns the tensor operator and its storage. No unused
+            # Uniform/Krylov factory may capture a base-level scalar or invent a flat direct solve.
+            # The source boundary adapter refuses a runtime one-level hierarchy explicitly.
+            var[("operator_direct_hierarchy_owner", apply_id)] = solve.id
+            return
+    if target != "system" and v.attrs.get("field_boundary_owner") is not None:
+        raise NotImplementedError("installed scalar field boundary currently requires the qualified Uniform route")
     scalar_owner_index = None
     if v.attrs.get("scalar_storage") is not None:
         if target != "system":
@@ -494,18 +511,24 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         if w.op in ("apply_laplacian_coeff", "field_problem_apply"):
             coeffs = w.inputs[2]
             sp = (var[("field_pointer", coeffs.id)] if w.op == "field_problem_apply"
-                  else var[coeffs.id])
+                  else var.get(("amr_coefficient_template", coeffs.id), var[coeffs.id]))
             if sp not in frozen_coefficients:
                 frozen = "frozen_A%d_%d" % (apply_id, len(frozen_coefficients))
-                prelude.append(
-                    "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-                    "ctx.alloc_scalar_field(%s, 1));" % (frozen,
+                prelude.append("auto %s = %s;" % (frozen, allocate_shared_scalar(
                     str(int(coeffs.attrs["ncomp"])) if w.op == "field_problem_apply"
-                    else "pops::kNativeDimension * pops::kNativeDimension"))
+                    else "pops::kNativeDimension * pops::kNativeDimension", 1)))
                 frozen_coefficients[sp] = frozen
                 freeze_pairs.append((sp, frozen))
                 captures.append(frozen)
                 session_fields.append(frozen)
+    var[("operator_tensor_captures", apply_id)] = {
+        w.inputs[2].id: (frozen_coefficients[var.get(("amr_coefficient_template", w.inputs[2].id),
+                                                   var[w.inputs[2].id])], w.inputs[2])
+        for w in block if w.op == "apply_laplacian_coeff"}
+    if v.attrs.get("field_boundary_owner") is not None:
+        from pops.time.field_boundaries import resolved_field_boundary_route
+        slot, _plan = resolved_field_boundary_route(v.attrs["field_boundary_owner"], v.block, field_plans)
+        var[("operator_field_boundary", apply_id)] = (program._block_indices()[v.block], slot)
     freeze_name = "freeze_A%d" % apply_id
     if freeze_pairs:
         freeze_captures = []
@@ -770,6 +793,13 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             name = "operator_mesh_boundary_session%d_%d" % (
                 apply_id, len(mesh_stencil_boundaries))
             mesh_stencil_boundaries[prototype] = name
+            field_boundary = var.get(("operator_field_boundary", apply_id))
+            if field_boundary is not None:
+                owner_index, provider_slot = field_boundary
+                session_dynamic.append((name, "ctx_owner->prepare_field_boundary_session("
+                    "%d, *session_%s, ctx_owner->prepared_execution_lane(), %s)" %
+                    (owner_index, prototype, json.dumps(provider_slot))))
+                return name
             session_dynamic.append(
                 (name,
                  "ctx_owner->prepare_mesh_boundary_session("
@@ -856,7 +886,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         elif w.op == "apply_laplacian_coeff":
             # out = div(A grad in), with one exact row-major Dim*Dim tensor field.
             o, i, coeffs = w.inputs
-            tensor = frozen_coefficients[var[coeffs.id]]
+            tensor = frozen_coefficients[var.get(("amr_coefficient_template", coeffs.id), var[coeffs.id])]
             sub[w.id] = sub[o.id]
             boundary = tensor_boundary or stencil_boundary_for(i)
             point = tensor_point if tensor_boundary else stencil_point
@@ -1210,7 +1240,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
 
 def _prepared_preconditioner(
         v: Any, prelude: Any, prototype: str,
-        vector_distribution_expr: str) -> str:
+        vector_distribution_expr: str, *, native_context: Any = None) -> str:
     """Dispatch through the exact authenticated provider carried by the solve IR.
 
     The dispatcher knows no provider class or provider name.  A compiler plugin registers one
@@ -1218,7 +1248,8 @@ def _prepared_preconditioner(
     fail before any C++ is emitted.  The plugin must supply its referenced native headers/C++ too.
     """
     provider = prepared_preconditioner_provider_from_attrs(v.attrs)
-    return provider.emit(v, prelude, prototype, vector_distribution_expr)
+    return provider.emit(v, prelude, prototype, vector_distribution_expr,
+                         native_context=native_context)
 
 
 def _validated_direct_solve_components(v: Any, operator: Any) -> int:
@@ -1482,8 +1513,26 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     prelude.append("const auto %s = ctx.prepared_execution_communicator();" % communicator_name)
     prelude.append("const auto& %s = ctx.program_resource_vector_distribution();"
                    % vector_distribution_expr)
+    preconditioner_provider = prepared_preconditioner_provider_from_attrs(v.attrs)
+    native_context = None
+    if preconditioner_provider.context_emitter is not None:
+        captures = var.get(("operator_tensor_captures", op_value.id))
+        boundary = var.get(("operator_field_boundary", op_value.id))
+        if not isinstance(captures, dict) or len(captures) != 1 or boundary is None:
+            raise ValueError("tensor preconditioner requires one exact coefficient snapshot and field boundary")
+        frozen, coefficients = next(iter(captures.values()))
+        owner_index, provider_slot = boundary
+        native_context = PreparedPreconditionerNativeContext(
+            operator_contract={"schema_version": 1, "program": program._ir_hash(),
+                               "operator": int(op_value.id), "coefficient": int(coefficients.id),
+                               "coefficient_shape": [len(coefficients.attrs["subset"])] * 2,
+                               "boundary_provider_slot": provider_slot},
+            coefficient_field_expr=frozen,
+            coefficient_dimension=len(coefficients.attrs["subset"]),
+            geometry_expr="ctx.geometry()",
+            boundary_expr="ctx.field_boundary_conditions(%d, %s)" % (owner_index, json.dumps(provider_slot)))
     preconditioner_expr = _prepared_preconditioner(
-        v, prelude, sol_sp, vector_distribution_expr)
+        v, prelude, sol_sp, vector_distribution_expr, native_context=native_context)
     problem_name = "prepared_problem%d" % v.id
     freeze_expr = var.get(("operator_freeze", op_value.id))
     if not isinstance(freeze_expr, str):

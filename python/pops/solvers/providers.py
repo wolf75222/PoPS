@@ -993,6 +993,14 @@ def _author_composite_tensor_fac(
     if owner not in block_indices:
         raise ValueError("hierarchy provider owner has no installed Program state")
     block_index = int(block_indices[owner])
+    scalar_attrs = {key: operator.attrs[key] for key in
+                    ("scalar_storage", "scalar_owner", "scalar_sampling_contract", "scalar_storage_component")
+                    if key in operator.attrs}
+    if scalar_attrs:
+        from pops.time.field_sampling import scalar_co_location
+        scalar_co_location(operator.attrs["apply_in"], rhs, "typed hierarchy rhs")
+        if initial_guess is not None:
+            scalar_co_location(operator.attrs["apply_in"], initial_guess, "typed hierarchy initial guess")
     relative, absolute, maximum = provider.convergence.values(
         options, where="hierarchy provider"
     )
@@ -1011,6 +1019,7 @@ def _author_composite_tensor_fac(
     )
     attrs = {
         **flat_execution,
+        **scalar_attrs,
         "tol": tolerance,
         "abs_tol": absolute_tolerance,
         "max_iter": maximum,
@@ -1039,6 +1048,7 @@ def _author_composite_tensor_fac(
         owner,
         space=rhs.space,
         point=rhs.point if problem.at is None else problem.at,
+        inherit_state_ref=not scalar_attrs,
     )
     outcome_name = name or token.name
 
@@ -1047,11 +1057,12 @@ def _author_composite_tensor_fac(
             "scalar_field",
             "solve_outcome_component",
             (outcome,),
-            {"index": 0, "ncomp": 1},
+            {"index": 0, "ncomp": 1, **scalar_attrs},
             outcome_name,
             owner,
             space=rhs.space,
             point=token.point,
+            inherit_state_ref=not scalar_attrs,
         )
 
     return SolveOutcome(program, token, project, outcome_name)

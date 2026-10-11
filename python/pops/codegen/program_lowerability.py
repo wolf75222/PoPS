@@ -190,6 +190,18 @@ def _check_amr_flux_weights(program: Any) -> None:
                 # ancestry must not be mistaken for a second conservative flux contribution.
                 # The explicit RHS still reaches the commit through its authored tableau weight.
                 current = frozenset()
+            elif value.op == "condensed_reconstruct":
+                # A qualified in-place source update adds momentum work without evaluating a
+                # new physical face flux. Keep the incoming State's existing transport ledger;
+                # the scalar elliptic solution is not a second transport contribution.
+                if (value.vtype != "state" or len(value.inputs) != 2
+                        or value.inputs[0].vtype != "state"
+                        or value.inputs[1].vtype != "scalar_field"
+                        or value.block is None or value.block != value.inputs[0].block
+                        or value.space != value.inputs[0].space
+                        or value.state_ref != value.inputs[0].state_ref):
+                    raise ValueError("AMR condensed source lost its exact incoming State authority")
+                current = powers.get(value.inputs[0].id, frozenset())
             elif value.op == "branch":
                 # The scalar predicate selects an arm but contributes no physical flux to the
                 # returned state.  Only the two state results carry the conservative ledger.

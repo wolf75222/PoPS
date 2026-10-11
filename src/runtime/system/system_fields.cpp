@@ -10,6 +10,7 @@
 #include <pops/parallel/solve_report_consensus.hpp>
 #include <pops/parallel/collective_exception.hpp>
 #include <pops/runtime/analytic/collective_preflight.hpp>
+#include <pops/runtime/analytic/initial_derivative.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
 #include <pops/runtime/system/auxiliary_ghost_fill.hpp>
 #include <pops/runtime/system/exact_field_marshaling.hpp>
@@ -1264,6 +1265,19 @@ std::vector<std::string> System<Dim>::configured_field_provider_slots() const {
 }
 
 template <int Dim>
+std::optional<SolveReport> System<Dim>::field_solve_report(const std::string& provider_slot) const {
+  if (provider_slot == "pops.system.default-field") {
+    if (p_->default_field_) return p_->default_field_->last_accepted_solve_report();
+    if (default_field_has_prepared_rhs(*p_)) return {};
+  } else {
+    const auto found = p_->named_fields_.find(provider_slot);
+    if (found != p_->named_fields_.end()) return found->second->last_accepted_solve_report();
+    if (p_->field_plans_.contains(provider_slot)) return {};
+  }
+  throw std::out_of_range("System solve report names an unknown field provider slot");
+}
+
+template <int Dim>
 void System<Dim>::set_field_potential(const std::string& provider_slot,
                                       const std::vector<double>& potential_values) {
   std::shared_ptr<runtime::system::ExactNamedField<Dim>> field;
@@ -1276,6 +1290,73 @@ void System<Dim>::set_field_potential(const std::string& provider_slot,
     field = found->second;
   }
   write_global(field->accepted_potential_for_restore(), p_->dom, potential_values, 1);
+}
+
+template <int Dim>
+void System<Dim>::publish_program_field_warm_start(
+    const runtime::multiblock::BoundaryEvaluationPoint& point,
+    const std::string& provider_slot, int runtime_block, const MultiFab<Dim>& potential,
+    const std::string& publication_identity) {
+  const auto& lane = prepared_boundary_execution_lane();
+  std::shared_ptr<runtime::system::ExactNamedField<Dim>> field;
+  std::string contract;
+  std::exception_ptr error;
+  try {
+    if (publication_identity.empty() || point.tick != p_->macro_step_ ||
+        runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->sp.size() ||
+        field_publication_transaction_active_())
+      throw std::invalid_argument("Program field warm start requires an idle exact current field point");
+    const auto& clocks = p_->program_.checkpoint_metadata_.uniform_auxiliary_clocks;
+    if (!clocks.owner_identity.empty())
+      clocks.require_owned(point.clock);
+    const auto plan = p_->field_plans_.find(provider_slot);
+    const auto installed = p_->named_fields_.find(provider_slot);
+    if (plan == p_->field_plans_.end() || installed == p_->named_fields_.end() ||
+        plan->second.output_block != p_->sp[static_cast<std::size_t>(runtime_block)].name ||
+        plan->second.output_owner_identity.empty() || plan->second.plan_identity.empty() ||
+        installed->second->output_block() != plan->second.output_block)
+      throw std::invalid_argument("Program field warm start lost its exact installed field owner");
+    field = installed->second;
+    ExactContractBuilder exact;
+    exact.text("pops.program.field-warm-start").scalar(std::uint32_t{1})
+        .text(publication_identity).text(provider_slot).text(plan->second.plan_identity)
+        .text(plan->second.output_owner_identity).scalar(runtime_block)
+        .scalar(p_->embedded_boundary_generation_);
+    contract = std::move(exact).release();
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error, lane, "Program field warm-start preparation failed collectively");
+  p_->require_field_plan_consensus();
+  require_exact_field_evaluation_request<Dim>(point, provider_slot, "warm-start", lane);
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"field-warm-start", contract}}, lane))
+    throw std::invalid_argument("Program field warm-start identity differs between ranks");
+  field->publish_warm_start(potential, lane);
+}
+
+template <int Dim>
+SolveOutcome System<Dim>::solve_initial_field(const std::string& provider_slot) {
+  const auto& lane = prepared_boundary_execution_lane();
+  std::string contract;
+  std::exception_ptr error;
+  try {
+    require_assembling(p_->lifecycle_, "solve_initial_field");
+    if (p_->t != 0.0 || p_->macro_step_ != 0 || provider_slot.empty() ||
+        field_publication_transaction_active_())
+      throw std::invalid_argument("initial field solve requires its accepted zero-time installation state");
+    const auto plan = p_->field_plans_.find(provider_slot);
+    if (plan == p_->field_plans_.end() || !p_->named_fields_.contains(provider_slot) ||
+        plan->second.plan_identity.empty() || plan->second.output_owner_identity.empty())
+      throw std::invalid_argument("initial field solve requires one exact installed named field slot");
+    ExactContractBuilder exact;
+    exact.text("pops.system.initial-named-field").scalar(std::uint32_t{1})
+        .text(provider_slot).text(plan->second.plan_identity)
+        .text(plan->second.output_owner_identity);
+    contract = std::move(exact).release();
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error, lane, "initial named field admission failed collectively");
+  p_->require_field_plan_consensus();
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"initial-named-field", contract}}, lane))
+    throw std::invalid_argument("initial named field identity differs between ranks");
+  return solve_fields_from_blocks(provider_slot, {});
 }
 
 template <int Dim>
@@ -1499,6 +1580,8 @@ std::int64_t System<Dim>::set_analytic_mapped_state(
         .text(input.provider_key.space_kind)
         .text(input.provider_key.space_name)
         .text(input.provider_key.component);
+    if (input.kind == runtime::system::AnalyticMappedInputKind::provider_derivative)
+      input_contract.scalar(input.derivative_axis).scalar(input.derivative_edge_order);
   }
   const std::string exact_inputs = std::move(input_contract).release();
   auto prepared = analytic::collectively_prepare_analytic_request(
@@ -1520,7 +1603,11 @@ std::int64_t System<Dim>::set_analytic_mapped_state(
               input.state_component >= block.ncomp)
             throw std::out_of_range(
                 "System mapped analytic state input component is outside the target state");
-          if (input.kind != runtime::system::AnalyticMappedInputKind::provider_component)
+          if (input.kind == runtime::system::AnalyticMappedInputKind::provider_derivative &&
+              input.derivative_axis >= Dim)
+            throw std::out_of_range(
+                "System mapped analytic derivative axis exceeds the native rank");
+          if (input.kind == runtime::system::AnalyticMappedInputKind::state_component)
             continue;
           if (!p_->auxiliary_registry_.sealed())
             throw std::logic_error(
@@ -1609,6 +1696,25 @@ std::int64_t System<Dim>::set_analytic_mapped_state(
     if (n_ranks() == 1 && resolution_error)
       std::rethrow_exception(resolution_error);
     throw std::runtime_error("System mapped analytic input resolution failed collectively");
+  }
+  std::vector<std::unique_ptr<MultiFab<Dim>>> derivative_inputs;
+  std::exception_ptr derivative_storage_error;
+  try {
+    derivative_inputs.reserve(inputs.size());
+  } catch (...) {
+    derivative_storage_error = std::current_exception();
+  }
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  collectively_rethrow_exception(derivative_storage_error, lane.communicator(),
+                                 "System mapped analytic derivative storage failed collectively");
+  for (std::size_t slot = 0; slot < inputs.size(); ++slot) {
+    if (inputs[slot].kind != runtime::system::AnalyticMappedInputKind::provider_derivative)
+      continue;
+    auto derivative = analytic::materialize_initial_derivative(
+        *resolved_inputs[slot].field, resolved_inputs[slot].component, p_->geom,
+        inputs[slot].derivative_axis, inputs[slot].derivative_edge_order, lane);
+    resolved_inputs[slot] = {derivative.get(), 0};
+    derivative_inputs.push_back(std::move(derivative));
   }
   const std::int64_t count =
       analytic::materialize_discrete_mapped_state(candidate, p_->geom, programs, resolved_inputs);
@@ -1710,6 +1816,9 @@ std::vector<double> System<Dim>::potential_global() {
 
 template <int Dim>
 std::vector<double> System<Dim>::field_potential_global(const std::string& provider_slot) {
+  if (all_reduce_max(p_->has_pending_field_warm_start() ? 1L : 0L,
+                     prepared_boundary_execution_lane()) != 0)
+    throw std::logic_error("field potential checkpoint/read requires resolved accepted field iterates");
   if (provider_slot == "pops.system.default-field")
     return potential_global();
   const auto found = p_->named_fields_.find(provider_slot);
@@ -1729,6 +1838,8 @@ std::vector<OutputPiece<Dim>> System<Dim>::output_state_local_pieces(const std::
 template <int Dim>
 std::vector<OutputPiece<Dim>> System<Dim>::output_field_local_pieces(
     const std::string& provider_slot, int level) {
+  if (p_->has_pending_field_warm_start())
+    throw std::logic_error("field output requires resolved accepted field iterates");
   if (level != 0)
     throw std::out_of_range("Uniform System output has only level zero");
   if (provider_slot == "pops.system.default-field")
@@ -1863,8 +1974,13 @@ template void System<kNativeDimension>::set_potential(const std::vector<double>&
 template std::vector<std::string> System<kNativeDimension>::field_provider_slots() const;
 template bool System<kNativeDimension>::field_provider_materialized(const std::string&) const;
 template std::vector<std::string> System<kNativeDimension>::configured_field_provider_slots() const;
+template std::optional<SolveReport> System<kNativeDimension>::field_solve_report(const std::string&) const;
 template void System<kNativeDimension>::set_field_potential(const std::string&,
                                                             const std::vector<double>&);
+template void System<kNativeDimension>::publish_program_field_warm_start(
+    const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&, int,
+    const MultiFab<kNativeDimension>&, const std::string&);
+template SolveOutcome System<kNativeDimension>::solve_initial_field(const std::string&);
 template std::vector<double> System<kNativeDimension>::eval_rhs(const std::string&);
 template double System<kNativeDimension>::reduce_component(const std::string&, const std::string&,
                                                            int) const;

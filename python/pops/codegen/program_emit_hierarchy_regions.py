@@ -22,7 +22,19 @@ def hierarchy_path_rhs(program: Any) -> tuple[Any, ...]:
 
 def has_hierarchy_continuations(program: Any) -> bool:
     return bool(hierarchy_region_solves(program) or hierarchy_path_rhs(program)
-                or hierarchy_field_publications(program))
+                or hierarchy_field_publications(program) or hierarchy_named_field_barriers(program))
+
+
+def hierarchy_named_field_barriers(program: Any) -> tuple[Any, ...]:
+    """Named composite solves and iterate publication consume one common-time hierarchy."""
+    from pops.codegen.program_lowerability import all_ops
+    selected = tuple(value for value in all_ops(program)
+                     if value.op in ("solve_fields", "solve_fields_from_blocks", "field_warm_start"))
+    top_level = {id(value) for value in program._values}
+    if any(id(value) not in top_level or value.attrs.get("schedule") is not None
+           for value in selected):
+        raise NotImplementedError("named AMR field barriers require unscheduled top-level operations")
+    return selected
 
 
 def hierarchy_field_publications(program: Any) -> tuple[Any, ...]:
@@ -56,6 +68,12 @@ def hierarchy_region_solves(program: Any) -> tuple[Any, ...]:
                    if value.op == "solve_linear" and value.attrs.get("scope") == "hierarchy")
     selected = tuple(value for value in scoped if "hierarchy_field_identity" in value.attrs)
     paths = hierarchy_path_rhs(program)
+    named = hierarchy_named_field_barriers(program)
+    if named and scoped and not selected:
+        top_level = {id(value) for value in program._values}
+        if len(scoped) != 1 or id(scoped[0]) not in top_level:
+            raise NotImplementedError("named field barriers support one top-level singleton hierarchy solve")
+        selected = scoped
     if paths and scoped and not selected:
         # One existing tensor provider may own the source prefix. Its singleton
         # storage is consumed once before any path RHS or field publication;
@@ -84,8 +102,9 @@ def hierarchy_region_solves(program: Any) -> tuple[Any, ...]:
             "invocation-owned hierarchy field barriers cannot share a region with a legacy "
             "singleton or spatial nonlinear hierarchy provider")
     for value in selected:
-        prepared_hierarchy_solver_provider_from_attrs(value.attrs).validate_node(
-            value, target="amr_system")
+        if "hierarchy_field_identity" in value.attrs:
+            prepared_hierarchy_solver_provider_from_attrs(value.attrs).validate_node(
+                value, target="amr_system")
     return selected
 
 
@@ -95,7 +114,7 @@ def open_hierarchy_continuation(program: Any, value: Any, values: Any, var: Any,
     from pops.time._evaluation_point import evaluation_stage_fraction
     from pops.codegen.program_emit_mapping_regions import continuation_capture
 
-    if kind not in ("linear_solve", "field_publication", "spatial_rhs"):
+    if kind not in ("linear_solve", "field_publication", "spatial_rhs", "named_field_solve", "field_warm_start"):
         raise ValueError("unknown typed hierarchy barrier kind")
     point = evaluation_stage_fraction(value)
     contract = "pops.program-hierarchy-dependencies.cbor.v1:" + canonical_bytes({

@@ -207,6 +207,50 @@ class PreparedPreconditionerEmitter(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class PreparedPreconditionerNativeContext:
+    """Compiler-resolved field inputs belonging to one exact prepared operator.
+
+    C++ expressions refer to authenticated owned storage captured by the operator emitter;
+    providers never infer storage from value numbers or identifier spelling. The inert operator
+    contract participates in the native collective identity, while generated names do not.
+    """
+
+    operator_contract: Mapping[str, Any]
+    coefficient_field_expr: str
+    coefficient_dimension: int
+    geometry_expr: str
+    boundary_expr: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.operator_contract, Mapping) or not self.operator_contract:
+            raise ValueError("prepared preconditioner requires an exact nonempty operator contract")
+        frozen = freeze_data(dict(self.operator_contract), "preconditioner native operator contract")
+        canonical_bytes(_plain_authority_data(frozen))
+        object.__setattr__(self, "operator_contract", frozen)
+        if type(self.coefficient_dimension) is not int or not 1 <= self.coefficient_dimension <= 3:
+            raise ValueError("prepared tensor coefficient dimension must be exact and in [1, 3]")
+        for name in ("coefficient_field_expr", "geometry_expr", "boundary_expr"):
+            value = getattr(self, name)
+            if type(value) is not str or not value or any(c in value for c in ("\0", "\n", "\r", ";")):
+                raise ValueError("prepared preconditioner %s must be one compiler-owned C++ expression" % name)
+
+    def contract_data(self) -> dict[str, Any]:
+        return {
+            "schema": "pops.prepared-preconditioner.native-context@1",
+            "operator_contract": _plain_authority_data(self.operator_contract),
+            "coefficient_dimension": self.coefficient_dimension,
+        }
+
+
+class PreparedPreconditionerContextEmitter(Protocol):
+    def __call__(
+        self, node: Any, prelude: Any, prototype: str, vector_distribution_expr: str,
+        provider: PreparedPreconditionerProvider, native_context: PreparedPreconditionerNativeContext,
+    ) -> PreparedPreconditionerNativeEmission:
+        ...
+
+
+@dataclass(frozen=True, slots=True)
 class PreparedPreconditionerIntOption:
     """One exact signed-native-int option in constructor order."""
 
@@ -352,6 +396,7 @@ class PreparedPreconditionerProvider:
     emitter: PreparedPreconditionerEmitter
     native_component: PreparedNativeComponent
     scratch_resources: tuple[PreparedPreconditionerScratchResource, ...] = ()
+    context_emitter: PreparedPreconditionerContextEmitter | None = None
     _option_contracts: tuple[Mapping[str, Any], ...] = dataclass_field(
         init=False, repr=False, compare=True
     )
@@ -373,7 +418,7 @@ class PreparedPreconditionerProvider:
 
     def authority(self) -> dict[str, Any]:
         """Return the exact IR identity re-authenticated by every compiler consumer."""
-        return {
+        result = {
             "schema_version": _PROVIDER_SCHEMA_VERSION,
             "provider_id": self.provider_id,
             "interface_version": self.interface_version,
@@ -389,6 +434,9 @@ class PreparedPreconditionerProvider:
             ),
             "allocation_plan": self.allocation_plan().authority(),
         }
+        if self.context_emitter is not None:
+            result["native_context_schema"] = "pops.prepared-preconditioner.native-context@1"
+        return result
 
     def validate_use(
         self, *, method_provider: Mapping[str, Any], components: int,
@@ -477,11 +525,17 @@ class PreparedPreconditionerProvider:
         prelude: Any,
         prototype: str,
         vector_distribution_expr: str,
+        *, native_context: PreparedPreconditionerNativeContext | None = None,
     ) -> str:
         """Emit native callbacks and wrap them in the exact provider contract."""
-        emission = self.emitter(
-            node, prelude, prototype, vector_distribution_expr, self
-        )
+        if self.context_emitter is None:
+            emission = self.emitter(node, prelude, prototype, vector_distribution_expr, self)
+        else:
+            if type(native_context) is not PreparedPreconditionerNativeContext:
+                raise ValueError("prepared preconditioner requires its typed native operator context")
+            emission = self.context_emitter(
+                node, prelude, prototype, vector_distribution_expr, self, native_context
+            )
         if type(emission) is not PreparedPreconditionerNativeEmission:
             raise TypeError(
                 "prepared preconditioner provider %r must emit a typed native emission"
@@ -515,11 +569,14 @@ class PreparedPreconditionerProvider:
                     % option.name
                 )
             option_contract.append({"name": option.name, "value": projector(value)})
-        exact_parameters = canonical_bytes({
+        parameter_contract = {
             "interface": "pops.prepared-linear-preconditioner@1",
             "provider": self.authority(),
             "options": option_contract,
-        })
+        }
+        if self.context_emitter is not None:
+            parameter_contract["native_context"] = native_context.contract_data()
+        exact_parameters = canonical_bytes(parameter_contract)
         byte_literal = "".join("\\x%02x" % value for value in exact_parameters)
         implementation = json.dumps(self.emitter_id, ensure_ascii=True)
         provider_expression = (
@@ -588,6 +645,8 @@ def _validate_provider(provider: Any) -> PreparedPreconditionerProvider:
         raise ValueError("prepared preconditioner provider has duplicate option names")
     if not callable(provider.emitter):
         raise TypeError("prepared preconditioner provider emitter must be callable")
+    if provider.context_emitter is not None and not callable(provider.context_emitter):
+        raise TypeError("prepared preconditioner context emitter must be callable")
     if type(provider.native_component) is not PreparedNativeComponent:
         raise TypeError(
             "prepared preconditioner provider native_component must be an exact typed component"
@@ -733,7 +792,9 @@ def prepared_preconditioner_provider_from_identity(
         "option_contracts",
         "allocation_plan",
     }
-    if not isinstance(identity, Mapping) or set(identity) != expected_keys:
+    if not isinstance(identity, Mapping) or set(identity) not in (
+        expected_keys, expected_keys | {"native_context_schema"}
+    ):
         raise ValueError(
             "prepared preconditioner identity is not authenticated: expected the exact provider "
             "authority"
@@ -784,8 +845,10 @@ def prepared_preconditioner_provider_from_attrs(
 __all__ = [
     "PreparedPreconditionerAllocationPlan",
     "PreparedPreconditionerEmitter",
+    "PreparedPreconditionerContextEmitter",
     "PreparedPreconditionerIntOption",
     "PreparedPreconditionerNativeEmission",
+    "PreparedPreconditionerNativeContext",
     "PreparedPreconditionerOption",
     "PreparedPreconditionerProvider",
     "PreparedPreconditionerScratchResource",

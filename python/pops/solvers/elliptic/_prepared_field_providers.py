@@ -252,6 +252,123 @@ def _install_configured(context: Any, binding: Any) -> None:
     context.install_configured(binding)
 
 
+def _red_black_geometric_mg_resolver(options: Mapping[str, Any], facts: Any, where: str) -> Any:
+    if set(options) != {"mg", "field_domain", "cycle", "fac"}:
+        raise TypeError("%s requires the exact staircase-MG option schema" % where)
+    mg = _resolved_mg_options(options["mg"], where=where + ".mg")
+    domain = options["field_domain"]
+    cycle = options["cycle"]
+    policy = cycle.get("residual_evaluation") if isinstance(cycle, Mapping) else None
+    keys = {"schema_version", "smoother", "constant_injection", "pre_smooth_bottom"}
+    version = 1
+    if policy is not None:
+        keys.add("residual_evaluation")
+        version = 2
+        if not isinstance(policy, Mapping) or set(policy) != {"policy", "version"} or policy["policy"] != "binary64-five-point-gamma-bound" or type(policy["version"]) is not int or policy["version"] != 1:
+            raise ValueError("%s requires the exact binary64 residual evaluation policy" % where)
+    if not isinstance(cycle, Mapping) or set(cycle) != keys or type(cycle["schema_version"]) is not int or cycle["schema_version"] != version or cycle["smoother"] != "red-black-gauss-seidel" or type(cycle["constant_injection"]) is not bool or type(cycle["pre_smooth_bottom"]) is not bool:
+        raise ValueError("%s requires an exact red-black V-cycle authority" % where)
+    if domain is None:
+        captured = None
+        centre = ()
+    else:
+        captured, centre = _capture_staircase_domain(domain, where=where)
+    native = {
+        "factory_route": "red_black_geometric_mg",
+        "schema_identity": "pops.system.red-black-geometric-mg-options@%d" % version,
+        "options": {
+            **mg, "smoother": 1, "prolongation": int(cycle["constant_injection"]),
+            "pre_smooth_bottom": cycle["pre_smooth_bottom"],
+            "domain_dimension": len(centre), "domain_radius": 0.0 if captured is None else captured.radius,
+            **{"domain_centre_%d" % axis: centre[axis] if axis < len(centre) else 0.0 for axis in range(3)},
+        },
+    }
+    if policy is not None:
+        native["options"].update({"roundoff_policy": 1, "roundoff_policy_version": 1})
+    if facts.target == "amr_system":
+        defaults = {
+            "max_iters": mg["max_cycles"], "fine_sweeps": mg["pre_smooth"] + mg["post_smooth"],
+            "rel_tol": mg["rel_tol"], "abs_tol": mg["abs_tol"],
+            "coarse_rel_tol": mg["rel_tol"], "coarse_abs_tol": mg["abs_tol"],
+            "coarse_cycles": mg["max_cycles"], "verbose": False,
+        }
+        if options["fac"] is None:
+            fac = _resolved_fac_options(defaults, where=where + ".fac")
+        else:
+            authored = options["fac"]
+            if not isinstance(authored, Mapping) or set(authored) != _FAC_KEYS:
+                raise TypeError("%s requires the exact FAC option schema" % where)
+            fac = _resolved_fac_options({name: defaults[name] if value is None else value
+                                         for name, value in authored.items()}, where=where + ".fac")
+        native["schema_identity"] = "pops.amr.field-solver-options.red-black-geometric-mg@%d" % version
+        native["options"].update({"fac.%s" % name: value for name, value in fac.items()})
+    elif facts.target != "system":
+        raise ValueError("%s explicit red-black MG does not implement this runtime target" % where)
+    return _resolution(native, _builtin_topology(facts))
+
+
+def _capture_staircase_domain(domain: Any, *, where: str) -> Any:
+    from pops.fields.domain import CellCentreBall
+    if not isinstance(domain, Mapping) or set(domain) != {
+        "schema_version", "region", "centre", "radius", "sampling", "exterior"
+    }:
+        raise TypeError("%s requires an exact field-domain authority" % where)
+    centre = domain["centre"]
+    if not isinstance(centre, tuple):
+        raise TypeError("%s field-domain coordinates lost immutable binding" % where)
+    captured = CellCentreBall(centre=centre, radius=domain["radius"])
+    canonical = captured.to_data()
+    canonical["centre"] = tuple(canonical["centre"])
+    if type(domain["schema_version"]) is not int or dict(domain) != canonical:
+        raise ValueError("%s field-domain sampling/exterior authority is inconsistent" % where)
+    return captured, centre
+
+
+def _validate_red_black_geometric_mg(use: Any, where: str) -> None:
+    facts = use.facts
+    hierarchy = _hierarchy_policy_identity(facts, where=where)
+    if facts.target == "system":
+        if facts.layout.get("kind") != "uniform" or facts.layout.get("levels") != 1 or hierarchy != _LEVEL_LOCAL_HIERARCHY_POLICY:
+            raise ValueError("%s uniform red-black MG requires one level-local field layout" % where)
+        if use.options["fac"] is not None:
+            raise ValueError("%s a uniform red-black MG cannot carry an AMR FAC contract" % where)
+    elif facts.target == "amr_system":
+        if facts.layout.get("kind") != "amr" or (facts.layout.get("levels", 0) > 1 and hierarchy != _COMPOSITE_HIERARCHY_POLICY):
+            raise ValueError("%s sparse multilevel field domains require an explicitly composite FAC authority" % where)
+    else:
+        raise ValueError("%s red-black MG has no authority for this runtime target" % where)
+    if facts.layout.get("embedded_boundary"):
+        raise ValueError("%s field-only conductor must not reuse a transport embedded boundary" % where)
+    if facts.operator.get("screened"):
+        raise ValueError("%s field-only staircase MG implements constant Poisson only" % where)
+    cells = facts.layout.get("cells")
+    domain = use.options["field_domain"]
+    if not isinstance(cells, tuple) or (domain is not None and len(cells) != len(domain["centre"])):
+        raise ValueError("%s field-domain coordinate rank differs from its exact storage" % where)
+    if facts.boundary.get("iterate_dependent"):
+        raise ValueError("%s staircase conductor has no dynamic-boundary authority" % where)
+
+
+def _register_red_black_geometric_mg_field_solver_provider() -> Any:
+    from pops.fields._prepared_field_solver_registry import (
+        PreparedFieldSolverProvider as Provider, PreparedFieldSolverUsePolicy as UsePolicy,
+        register_prepared_field_solver_provider as register,
+    )
+    return register(Provider(
+        provider_id="pops.field-solver.red-black-geometric-mg", version=1,
+        resolver_id="pops.field-solver.red-black-geometric-mg.resolve@1",
+        installer_id="pops.field-solver.red-black-geometric-mg.install@1",
+        use_policy=UsePolicy("pops.field-solver.red-black-geometric-mg.use", 1, {
+            "targets": ("system", "amr_system"), "operators": ("poisson",),
+            "algorithm": "red-black-gs.explicit-prolongation-and-bottom-contract",
+            "composite_algorithm": "partitioned-FAC.quadratic-CF.flux-matching.initial-residual-scale",
+            "field_domain": "strict-cell-centre-ball.zero-exterior.resample-per-level",
+            "transport_topology": "full-material-unchanged",
+        }, _validate_red_black_geometric_mg),
+        resolver=_red_black_geometric_mg_resolver, native_installer=_install_configured,
+    ))
+
+
 def _fft_resolver(options: Mapping[str, Any], facts: Any, where: str) -> Any:
     if options:
         raise TypeError("%s FFT provider has an exact empty option schema" % where)
@@ -380,6 +497,7 @@ def _register_ready_providers() -> tuple[Any, Any, Any]:
 
 
 _CARTESIAN_CG_PROVIDER, _GEOMETRIC_MG_PROVIDER, _FFT_PROVIDER = _register_ready_providers()
+_RED_BLACK_GEOMETRIC_MG_PROVIDER = _register_red_black_geometric_mg_field_solver_provider()
 
 
 def cartesian_cg_field_solver_provider() -> Any:
@@ -390,6 +508,10 @@ def geometric_mg_field_solver_provider() -> Any:
     return _GEOMETRIC_MG_PROVIDER
 
 
+def red_black_geometric_mg_field_solver_provider() -> Any:
+    return _RED_BLACK_GEOMETRIC_MG_PROVIDER
+
+
 def fft_field_solver_provider() -> Any:
     return _FFT_PROVIDER
 
@@ -398,4 +520,5 @@ __all__ = [
     "cartesian_cg_field_solver_provider",
     "fft_field_solver_provider",
     "geometric_mg_field_solver_provider",
+    "red_black_geometric_mg_field_solver_provider",
 ]
