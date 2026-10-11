@@ -314,6 +314,85 @@ def test_stencil_capabilities_compose_without_opcode_dispatch(t):
     ) == StencilAccess(3)
 
 
+def _projected_apply(P, _out, value):
+    # Exercise selection and affine materialization with an existing scalar capture.
+    # This authoring witness makes no claim about the mask producer or a Poisson solve.
+    mask = P.cell_gt(value, 0.0, name="mask")
+    zero = P.scalar_field("zero")
+    projected = P.where(mask, value, zero, name="projected")
+    laplacian = P.laplacian(P.scalar_field("lap"), projected)
+    negative = P.value("negative_laplacian", -laplacian)
+    return P.where(mask, negative, value, name="projected_image")
+
+
+def test_pointwise_selections_compose_with_a_scalar_laplacian(t):
+    from pops.time import StencilAccess
+
+    program = t.Program("projected_apply_stencil")
+    operator = program.matrix_free_operator("projected")
+    program.set_apply(operator, _projected_apply)
+    canonical = program._canonical_value(operator)
+    assert canonical.attrs["stencil_access"] == StencilAccess.nearest_neighbour()
+    assert canonical.attrs["apply_result"].vtype == "scalar_field"
+    assert program._ir_hash()
+
+
+def test_pointwise_selections_do_not_hide_a_required_neighbour_layer(t):
+    program = t.Program("projected_apply_too_shallow")
+    operator = program.matrix_free_operator("projected", stencil_depth=0)
+    try:
+        program.set_apply(operator, _projected_apply)
+    except ValueError as exc:
+        assert "required depth 1" in str(exc), str(exc)
+    else:
+        raise AssertionError("pointwise selections must retain the Laplacian's access depth")
+
+
+def test_pointwise_only_scalar_apply_requires_no_neighbour_layer(t):
+    from pops.time import StencilAccess
+
+    program = t.Program("pointwise_only_apply")
+    operator = program.matrix_free_operator("pointwise", stencil_depth=0)
+
+    def apply(P, _out, value):
+        mask = P.cell_ge(value, 0.0)
+        half = P.value("half", 0.5 * value)
+        return P.where(mask, value, half)
+
+    program.set_apply(operator, apply)
+    canonical = program._canonical_value(operator)
+    assert canonical.attrs["stencil_access"] == StencilAccess.pointwise()
+
+
+def test_state_affine_materialization_declares_its_pointwise_access(t):
+    from pops.time import StencilAccess
+
+    program = t.Program("state_affine_stencil")
+    state = typed_state(program, "blk")
+    mixed = program.value("mixed", 0.25 * state + 0.75 * state)
+    assert mixed.vtype == "state"
+    assert mixed.attrs["stencil_access"] == StencilAccess.pointwise()
+
+
+def test_declared_stencil_depth_does_not_qualify_an_unannotated_operation(t):
+    program = t.Program("unqualified_apply_operation")
+    operator = program.matrix_free_operator("unknown", stencil_depth=3)
+    before = program._ir_hash()
+
+    def apply(P, _out, value):
+        # A collective reduction has no stencil capability for use inside apply.
+        P.norm_inf(value)
+        return value
+
+    try:
+        program.set_apply(operator, apply)
+    except TypeError as exc:
+        assert "without an exact StencilAccess capability" in str(exc), str(exc)
+    else:
+        raise AssertionError("an explicit depth must not authenticate an unknown operation")
+    assert program._ir_hash() == before, "a refused apply must roll back its authoring graph"
+
+
 def test_gmres_now_valid_method(t):
     # gmres used to be rejected as unknown; it is now a first-class method.
     P = _spd_program(t, method="gmres")

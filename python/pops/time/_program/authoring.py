@@ -10,6 +10,7 @@ from pops.time._program.value_validation import (
     require_compatible_spaces, require_region, require_top_level,
     validate_input_regions,
 )
+from pops.time.stencil import StencilAccess
 from pops.time.values import ProgramValue, _is_field_value, _resolve_handle
 
 if TYPE_CHECKING:
@@ -200,6 +201,10 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         if not _is_field_value(field):
             raise ValueError("cell_compare: a State/RHS/scalar_field value is required (got %r)"
                              % (field,))
+        if field.attrs.get("scalar_storage") is not None:
+            raise NotImplementedError(
+                "cell_compare: typed scalar storage requires an explicitly qualified "
+                "dimensionless mask space; this comparison route is not qualified")
         try:
             threshold = scalar_literal(value)
         except (TypeError, ValueError) as exc:
@@ -209,7 +214,8 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
             raise ValueError("cell_compare: cmp must be one of %s; got %r"
                              % (sorted(self._CELL_CMPS), cmp))
         return self._new("scalar_field", "cell_compare", (field,),
-                         {"cmp": cmp, "value": threshold}, name, field.block)
+                         {"cmp": cmp, "value": threshold,
+                          "stencil_access": StencilAccess.pointwise()}, name, field.block)
 
     def cell_gt(self, field: Any, value: Any, name: Any = None) -> Any:
         """Per-cell ``field > value`` mask (1.0 / 0.0). See `cell_compare`."""
@@ -252,6 +258,14 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         if mask.block not in (None, a.block):
             raise ValueError("where: mask and selected values must belong to the same block")
         require_compatible_spaces(a.space, b.space, "where", typed_pair=True)
+        scalar_attrs = {}
+        if a.vtype == "scalar_field":
+            from pops.time.field_sampling import scalar_co_location
+            scalar_co_location(a, b, "where")
+            if a.attrs.get("scalar_storage") is not None:
+                scalar_co_location(a, mask, "where mask", same_space=False)
+                scalar_attrs = {key: a.attrs[key] for key in
+                                ("scalar_storage", "scalar_owner", "scalar_sampling_contract")}
         if mask.vtype in ("state", "rhs"):
             require_compatible_spaces(a.space, mask.space, "where mask", typed_pair=True)
         na, nb, nm_ = self._ncomp(a), self._ncomp(b), self._ncomp(mask)
@@ -261,9 +275,12 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         if nm_ is not None and ncomp is not None and nm_ not in (1, ncomp):
             raise ValueError("where: mask must be 1-component or match a/b's ncomp (mask has %d, "
                              "a/b have %d)" % (nm_, ncomp))
-        attrs = {"ncomp": ncomp} if ncomp is not None else {}
+        attrs: dict[str, Any] = {"stencil_access": StencilAccess.pointwise(), **scalar_attrs}
+        if ncomp is not None:
+            attrs["ncomp"] = ncomp
         return self._new(
-            a.vtype, "where", (mask, a, b), attrs, name, a.block, space=a.space)
+            a.vtype, "where", (mask, a, b), attrs, name, a.block, space=a.space,
+            point=a.point, inherit_state_ref=a.vtype != "scalar_field")
 
     @staticmethod
     def _ncomp(value: Any) -> Any:

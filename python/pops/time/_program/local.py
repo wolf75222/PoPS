@@ -476,12 +476,21 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
     # A ``matrix_free_op`` supplies an exact apply callback. Mathematical shape and hierarchy use
     # are validated by the selected prepared solver provider, not by this generic authoring core.
 
-    def scalar_field(self, name: Any = None, ncomp: Any = 1) -> Any:
+    def scalar_field(self, name: Any = None, ncomp: Any = 1, *, like: Any = None) -> Any:
         """A fresh, zero-initialized scalar field: scratch the apply sub-block uses (e.g. the Laplacian
         output, or a 2-component gradient buffer). @p ncomp is the component count (1 by default; 2 for a
         gradient field consumed by ``P.divergence``). Lowered to ``ctx.alloc_scalar_field(ncomp, 1)``."""
         if isinstance(ncomp, bool) or not isinstance(ncomp, int) or ncomp < 1:
             raise ValueError("scalar_field: ncomp must be a positive integer (got %r)" % (ncomp,))
+        if like is not None:
+            require_owned(self, like, "scalar field prototype")
+            from pops.time.field_sampling import storage_contract
+            attrs = storage_contract(self, like, like.attrs.get("scalar_storage"), like.space)
+            if ncomp != 1:
+                raise ValueError("typed scalar scratch requires one component")
+            attrs.update(ncomp=1, stencil_access=StencilAccess.pointwise())
+            return self._new("scalar_field", "scalar_field", (like,), attrs, name, like.block,
+                             space=like.space, point=like.point, inherit_state_ref=False)
         return self._new(
             "scalar_field", "scalar_field", (),
             {"ncomp": int(ncomp), "stencil_access": StencilAccess.pointwise()}, name, None)
@@ -513,7 +522,8 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
 
     def matrix_free_operator(self, name: Any, domain: Any = "scalar", range_: Any = "scalar",
                              ncomp: Any = None, *, scope: Any = None,
-                             stencil_depth: Any = None) -> Any:
+                             stencil_depth: Any = None, template: Any = None,
+                             storage: Any = None, space: Any = None) -> Any:
         """Declare a matrix-free operator ``A : domain -> range_``. @p domain / @p range_ are the field
         kind on each side and MUST match (a square operator: the Krylov iterate, residual and solution
         share one layout): ``"scalar"`` (a 1-component scalar field, the default), or ``"vector"`` /
@@ -559,7 +569,23 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
                  "stencil_access": None}
         if scope_id != "level":
             attrs["scope"] = scope_id
+        if any(value is not None for value in (template, storage, space)):
+            if any(value is None for value in (template, storage, space)) or ncomp != 1:
+                raise ValueError("typed scalar operator requires template, storage and space together")
+            from pops.time.field_sampling import storage_contract
+            attrs.update(storage_contract(self, template, storage, space))
+            return self._new("matrix_free_op", "matrix_free_operator", (template,), attrs,
+                             name, template.block, space=space, point=template.point,
+                             inherit_state_ref=False)
         return self._new("matrix_free_op", "matrix_free_operator", (), attrs, name, None)
+
+    @atomic_authoring
+    def field_sample(self, source: Any, *, template: Any, storage: Any, space: Any,
+                     component: Any = None, name: Any = None) -> Any:
+        """Copy one exact native auxiliary/State component into declared scalar field storage."""
+        from pops.time.field_sampling import field_sample
+        return field_sample(self, source, template=template, storage=storage, space=space,
+                            component=component, name=name)
 
     @atomic_authoring
     def set_apply(self, operator: Any, body_fn: Any) -> Any:
@@ -588,12 +614,19 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         op_ncomp = int(operator.attrs["ncomp"])
         try:
             pointwise = StencilAccess.pointwise()
+            scalar_attrs = {key: operator.attrs[key] for key in
+                            ("scalar_storage", "scalar_owner", "scalar_sampling_contract")
+                            if key in operator.attrs}
             out_sf = self._new(
                 "scalar_field", "apply_out", (),
-                {"ncomp": op_ncomp, "stencil_access": pointwise}, "apply_out", None)
+                {"ncomp": op_ncomp, "stencil_access": pointwise, **scalar_attrs},
+                "apply_out", operator.block, space=operator.space, point=operator.point,
+                inherit_state_ref=False)
             in_sf = self._new(
                 "scalar_field", "apply_in", (),
-                {"ncomp": op_ncomp, "stencil_access": pointwise}, "apply_in", None)
+                {"ncomp": op_ncomp, "stencil_access": pointwise, **scalar_attrs},
+                "apply_in", operator.block, space=operator.space, point=operator.point,
+                inherit_state_ref=False)
             result = body_fn(self, out_sf, in_sf)
         finally:
             self._recording.pop()
@@ -603,6 +636,20 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             raise ValueError("set_apply: body_fn must return the result scalar_field (out <- A(in))")
         apply_region = self._region_for_block(sub)
         require_affine_region(self, result, apply_region, "set_apply")
+        if scalar_attrs:
+            from pops.time.field_sampling import scalar_co_location
+            result_values = (result,) if isinstance(result, ProgramValue) else tuple(
+                term for term, _coefficient in result.terms)
+            for value in (*block, *result_values):
+                if value.vtype != "scalar_field":
+                    continue
+                if (value.attrs.get("scalar_storage") != scalar_attrs["scalar_storage"]
+                        or value.attrs.get("scalar_sampling_contract")
+                        != scalar_attrs["scalar_sampling_contract"]):
+                    raise ValueError(
+                        "typed scalar apply requires every scalar intermediate/result to "
+                        "retain its exact storage/space/owner authority")
+                scalar_co_location(in_sf, value, "typed scalar apply")
         attrs = dict(operator.attrs)
         inferred_stencil_access = StencilAccess.compose(
             (node.attrs.get("stencil_access") for node in block),
@@ -647,9 +694,18 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             raise ValueError("laplacian: out must be a scalar_field value")
         if not (isinstance(in_, ProgramValue) and in_.vtype == "scalar_field"):
             raise ValueError("laplacian: in must be a scalar_field value")
+        from pops.time.field_sampling import scalar_co_location
+        scalar_co_location(out, in_, "laplacian")
+        attrs = {key: in_.attrs[key] for key in
+                 ("scalar_storage", "scalar_owner", "scalar_sampling_contract")
+                 if key in in_.attrs}
+        if not attrs:
+            return self._new("scalar_field", "laplacian", (out, in_),
+                             {"stencil_access": StencilAccess.nearest_neighbour()}, out.name, None)
         return self._new(
             "scalar_field", "laplacian", (out, in_),
-            {"stencil_access": StencilAccess.nearest_neighbour()}, out.name, None)
+            {"stencil_access": StencilAccess.nearest_neighbour(), **attrs}, out.name, in_.block,
+            space=in_.space, point=in_.point, inherit_state_ref=False)
 
     def gradient(self, out: Any, phi: Any) -> Any:
         """Record ``out = grad(phi)`` (centered differences; @p out has one component per native axis). @p out and

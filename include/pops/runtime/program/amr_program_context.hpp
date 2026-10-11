@@ -427,6 +427,22 @@ public:
     synchronize_resource_generation_();
   }
 
+  /// Finish all rank-local session snapshots before a provider may enter boundary collectives.
+  /// The operation must contain local construction/copies only, never an MPI collective.
+  template <class Operation>
+  void prepare_operator_session_storage(Operation&& operation) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    require_prepared_lane_(lane, "AMR Program operator session storage");
+    std::exception_ptr local_error;
+    try {
+      std::forward<Operation>(operation)();
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    collectively_rethrow_exception(local_error, lane,
+                                  "AMR Program operator session storage allocation failed");
+  }
+
   template <class Resource, class Matches, class... Args>
   Resource& prepared_resource(std::int64_t node, int block, Matches&& matches,
                               Args&&... args) const {

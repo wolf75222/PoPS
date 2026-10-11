@@ -372,6 +372,33 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     out_sf = v.attrs["apply_out"]
     block = v.attrs["apply_block"]
     result = v.attrs["apply_result"]
+    scalar_owner_index = None
+    if v.attrs.get("scalar_storage") is not None:
+        if target != "system":
+            raise NotImplementedError("typed scalar operator requires Uniform storage")
+        indices = program._block_indices()
+        if v.block not in indices:
+            raise ValueError("typed scalar operator has no exact installed block owner")
+        scalar_owner_index = indices[v.block]
+        prelude.append("ctx.require_cartesian_generated_operator(%d, %s);" % (
+            scalar_owner_index, json.dumps("typed scalar operator")))
+
+    def allocate_shared_scalar(ncomp, ghosts):
+        if scalar_owner_index is None:
+            return ("std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+                    "ctx.alloc_scalar_field(%s, %s))" % (ncomp, ghosts))
+        return "ctx.alloc_shared_scalar_field_for_block(%d, %s, %s)" % (
+            scalar_owner_index, ncomp, ghosts)
+
+    def append_real_template(name):
+        allocation = "std::make_shared<pops::Real>(static_cast<pops::Real>(0))"
+        if scalar_owner_index is None:
+            prelude.append("auto %s = %s;" % (name, allocation))
+            return
+        prelude.append("std::shared_ptr<pops::Real> %s;" % name)
+        prelude.append("ctx.prepare_operator_session_storage([&]() {")
+        prelude.append("  %s = %s;" % (name, allocation))
+        prelude.append("});")
     if target == "amr_system" and v.attrs.get("scope") == "hierarchy" and any(w.op == "field_problem_apply" for w in block):
         from pops.solvers._composite_field import _field_apply
         _field_apply(v)
@@ -390,7 +417,8 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     sub = {in_sf.id: "in", out_sf.id: "out"}
     # 1) Evaluation templates. The step body refreshes these before problem.prepare(); each problem
     #    or workspace session factory invocation deep-copies them into private mutable state.
-    scratch = [w for w in block if w.op in ("scalar_field", "vector_field")]
+    scratch = [w for w in block if w.op in (
+        "scalar_field", "vector_field", "where", "cell_compare", "linear_combine")]
     captures = ["ctx_owner"]
     session_fields = []
     session_optional_fields = []
@@ -398,24 +426,20 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     session_points = []
     session_direct = ["ctx_owner"]
     session_dynamic = []
+    session_local_dynamic = []
     if lines is None:
         raise NotImplementedError(
             "matrix-free operators require a top-level prepared evaluation scope")
     prepare_refresh = []
     operator_dt = "operator_dt%d" % apply_id
-    prelude.append(
-        "auto %s = std::make_shared<pops::Real>(static_cast<pops::Real>(0));"
-        % operator_dt)
+    append_real_template(operator_dt)
     captures.append(operator_dt)
     session_scalars.append(operator_dt)
     for w in scratch:
         sp = "sf%d_%d" % (apply_id, w.id)
         sub[w.id] = sp
         ncomp = int(w.attrs.get("ncomp", 1))  # >1 for a gradient buffer consumed by divergence
-        prelude.append(
-            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-            "ctx.alloc_scalar_field(%d, 1));"
-            % (sp, ncomp))
+        prelude.append("auto %s = %s;" % (sp, allocate_shared_scalar(ncomp, 1)))
         captures.append(sp)
         session_fields.append(sp)
     # The affine result-write accumulator: one PERSISTENT shared_ptr (alloc-once, like the scratch),
@@ -425,10 +449,8 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     # operator's component count so the axpy / lincomb cover ALL components (a vector / state apply).
     op_ncomp, op_input_ghosts = _authenticated_operator_footprint(v)
     acc_sp = "acc%d" % apply_id
-    prelude.append(
-        "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-        "ctx.alloc_scalar_field(%d, %d));"
-        % (acc_sp, op_ncomp, op_input_ghosts))
+    prelude.append("auto %s = %s;" % (
+        acc_sp, allocate_shared_scalar(op_ncomp, op_input_ghosts)))
     captures.append(acc_sp)
     session_fields.append(acc_sp)
     # The ApplyFn is constructed at install time, outside ``ctx.install([=](double dt) {...})``,
@@ -437,8 +459,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     # scalar, exactly like the rhs_jacvec coefficient capture below.  Reusing a single value is safe:
     # a ProgramContext invokes one matrix-free ApplyFn synchronously within its owning step.
     apply_dt = "apply_dt%d" % apply_id
-    prelude.append(
-        "auto %s = std::make_shared<pops::Real>(static_cast<pops::Real>(0));" % apply_dt)
+    append_real_template(apply_dt)
     captures.append(apply_dt)
     session_scalars.append(apply_dt)
     var[("operator_dt_captures", apply_id)] = (operator_dt, apply_dt)
@@ -447,6 +468,28 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     # coefficient authority, including its allocated ghost cells.
     frozen_coefficients = {}
     freeze_pairs = []
+    local_ids = {w.id for w in block}
+    external_fields = {}
+    for w in block:
+        if w.op not in ("where", "cell_compare", "linear_combine"):
+            continue
+        for operand in w.inputs:
+            if operand.id not in local_ids and operand.vtype == "scalar_field":
+                external_fields[operand.id] = operand
+    for operand in external_fields.values():
+        if scalar_owner_index is None or operand.attrs.get("scalar_storage") is None:
+            raise ValueError("captured scalar field requires explicit typed operator storage")
+        from pops.time.field_sampling import scalar_co_location
+        scalar_co_location(in_sf, operand, "matrix-free scalar capture", same_space=False)
+        live = var.get(("field_pointer", operand.id))
+        if live is None:
+            raise ValueError("captured scalar field has no prepared lifetime pointer")
+        frozen = "frozen_field_A%d_%d" % (apply_id, operand.id)
+        prelude.append("auto %s = %s;" % (frozen, allocate_shared_scalar(1, 1)))
+        captures.append(frozen)
+        session_fields.append(frozen)
+        freeze_pairs.append((live, frozen))
+        sub[operand.id] = frozen
     for w in block:
         if w.op in ("apply_laplacian_coeff", "field_problem_apply"):
             coeffs = w.inputs[2]
@@ -524,7 +567,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         captures.append(coupled_cdt)
         session_scalars.append(coupled_cdt)
         coupled_metric_scratch = "jac_pair_metric_scratch%d" % apply_id
-        session_dynamic.append(
+        session_local_dynamic.append(
             (coupled_metric_scratch,
              "std::make_shared<std::vector<double>>("
              "ctx_owner->program_resource_vector_distribution()."
@@ -609,7 +652,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             captures.append(cdt)
             session_scalars.append(cdt)
             metric_scratch = "jac_metric_scratch%d_%d" % (apply_id, w.id)
-            session_dynamic.append(
+            session_local_dynamic.append(
                 (metric_scratch,
                  "std::make_shared<std::vector<double>>("
                  "ctx_owner->program_resource_vector_distribution()."
@@ -771,6 +814,25 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                 "ctx.pack_vector(*%s, std::array<const pops::MultiFab<"
                 "pops::kNativeDimension>*, pops::kNativeDimension>{%s});"
                 % (sub[w.id], sources))
+            continue
+        if w.op == "where":
+            from pops.codegen.program_emit_kernels import _emit_where_kernel
+            mask, first, second = w.inputs
+            body.extend(_emit_where_kernel(
+                _apply_in_arg(sub, mask), _apply_in_arg(sub, first),
+                _apply_in_arg(sub, second), "*%s" % sub[w.id]))
+            continue
+        if w.op == "cell_compare":
+            from pops.codegen.program_emit_kernels import _emit_cell_compare_kernel
+            body.extend(_emit_cell_compare_kernel(
+                _apply_in_arg(sub, w.inputs[0]), "*%s" % sub[w.id],
+                w.attrs["cmp"], w.attrs["value"]))
+            continue
+        if w.op == "linear_combine":
+            body.append("pops::PureFieldAlgebra::zero_valid(*%s);" % sub[w.id])
+            for operand, coefficient in zip(w.inputs, w.attrs["coeffs"], strict=True):
+                body.append("pops::PureFieldAlgebra::axpy(*%s, %s, %s);" % (
+                    sub[w.id], _coeff_cpp(coefficient), _apply_in_arg(sub, operand)))
             continue
         if w.op == "laplacian":
             o, i = w.inputs
@@ -1002,11 +1064,14 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     session_capture_initializers = []
     template_capture_initializers = []
     session_refresh = []
+    session_allocations = []
     for name in session_fields:
         local = "session_%s" % name
         template = "template_%s" % name
         prelude.append(
-            "  auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(*%s);"
+            "  std::shared_ptr<pops::MultiFab<pops::kNativeDimension>> %s;" % local)
+        session_allocations.append(
+            "%s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(*%s);"
             % (local, name))
         template_capture_initializers.append("%s = %s" % (template, name))
         session_capture_initializers.append("%s = %s" % (name, local))
@@ -1016,7 +1081,9 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         local = "session_%s" % name
         template = "template_%s" % name
         prelude.append(
-            "  auto %s = %s ? "
+            "  std::shared_ptr<pops::MultiFab<pops::kNativeDimension>> %s;" % local)
+        session_allocations.append(
+            "%s = %s ? "
             "std::make_shared<pops::MultiFab<pops::kNativeDimension>>(*%s) : "
             "std::shared_ptr<pops::MultiFab<pops::kNativeDimension>>{};"
             % (local, name, name))
@@ -1028,7 +1095,8 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     for name in session_scalars:
         local = "session_%s" % name
         template = "template_%s" % name
-        prelude.append("  auto %s = std::make_shared<pops::Real>(*%s);" % (local, name))
+        prelude.append("  std::shared_ptr<pops::Real> %s;" % local)
+        session_allocations.append("%s = std::make_shared<pops::Real>(*%s);" % (local, name))
         template_capture_initializers.append("%s = %s" % (template, name))
         session_capture_initializers.append("%s = %s" % (name, local))
         session_refresh.append("*%s = *%s;" % (name, template))
@@ -1036,11 +1104,24 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         local = "session_%s" % name
         template = "template_%s" % name
         prelude.append(
-            "  auto %s = std::make_shared<"
+            "  std::shared_ptr<pops::runtime::multiblock::BoundaryEvaluationPoint> %s;" % local)
+        session_allocations.append(
+            "%s = std::make_shared<"
             "pops::runtime::multiblock::BoundaryEvaluationPoint>(*%s);" % (local, name))
         template_capture_initializers.append("%s = %s" % (template, name))
         session_capture_initializers.append("%s = %s" % (name, local))
         session_refresh.append("*%s = *%s;" % (name, template))
+    for name, expression in session_local_dynamic:
+        local = "session_%s" % name
+        prelude.append("  std::shared_ptr<std::vector<double>> %s;" % local)
+        session_allocations.append("%s = %s;" % (local, expression))
+        session_capture_initializers.append("%s = %s" % (name, local))
+    # A failed local clone must converge before any boundary factory enters its own collectives.
+    # The PreparedAffineLinearProblem's outer factory catch only protects failures after the final
+    # internal collective, so it cannot replace this explicit allocation phase.
+    prelude.append("  ctx_owner->prepare_operator_session_storage([&]() {")
+    prelude.extend("    " + statement for statement in session_allocations)
+    prelude.append("  });")
     for name, expression in session_dynamic:
         local = "session_%s" % name
         prelude.append("  auto %s = %s;" % (local, expression))

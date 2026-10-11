@@ -122,7 +122,7 @@ class ConstantModeGauge:
             scalar_literal(value)
         from ._field_matrix import inverse
         from fractions import Fraction
-        gram = tuple(tuple(sum(Fraction(a) * Fraction(b) for a, b in zip(left, right))
+        gram = tuple(tuple(sum(Fraction(a) * Fraction(b) for a, b in zip(left, right, strict=True))
                            for right in self.modes) for left in self.modes)
         inverse(gram, where="constant field modes must be linearly independent")
 
@@ -146,6 +146,8 @@ class ConstantModeGauge:
 @dataclass(frozen=True, slots=True)
 class FieldStorageBinding:
     """A field-owned storage binding, independent of the load-producing state blocks."""
+
+    __pops_ir_immutable__ = True
 
     unknowns: tuple[Handle, ...]
     layout: Handle
@@ -228,7 +230,7 @@ class FieldProblem(Descriptor):
             raise FieldProblemError("field.observation.spaces", "declared observation spaces must cover the exact unknown tuple")
         else:
             spaces = dict(unknown_spaces)
-        for unknown, space in spaces.items():
+        for _unknown, space in spaces.items():
             if type(space) is not FieldSpace or len(space.components) != 1 \
                     or space.centering != "cell" or space.sampling != "cell" \
                     or space.representation != "field" or space.support is None \

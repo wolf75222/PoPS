@@ -122,7 +122,8 @@ def build_program_model_graph(plan: Any) -> Any:
             block.resolved_operations, block.instance_owner_qid,
             where="Program block %r" % block.name, required=True)
     return ProgramModelGraph.from_resolved_blocks(plan.blocks,
-                                                   program_field_plans=plan.program_field_plans)
+                                                   program_field_plans=plan.program_field_plans,
+                                                   scalar_layout_plan=plan.layout_plan)
 
 
 def compile_install_model(

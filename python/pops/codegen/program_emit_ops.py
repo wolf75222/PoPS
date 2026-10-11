@@ -1307,6 +1307,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         if target != "system":
             raise NotImplementedError("field cell-mean State projection requires the qualified Uniform System route")
         var[v.id] = var[source.id]
+    elif v.op == "field_sample":
+        from pops.codegen.program_emit_field_sample import emit_field_sample
+        emit_field_sample(v, var, lines, prelude, node_model, provider_plans, bidx, target,
+                          model_graph=model)
     elif v.op == "scalar_field":
         # Qualified AMR scalars bind current-attempt storage; uniform and unqualified scalars
         # retain their layout-bound install lifetime. Matrix-free apply sub-blocks manage their
@@ -1319,6 +1323,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         sp = "sf%d" % v.id
         var[v.id] = "(*%s)" % sp
         ncomp = int(v.attrs.get("ncomp", 1))
+        if v.attrs.get("scalar_storage") is not None:
+            if target != "system":
+                raise NotImplementedError("typed scalar scratch requires Uniform")
+            prelude.append("auto %s = ctx.alloc_shared_scalar_field_for_block(%d, %d, 1);"
+                           % (sp, bidx, ncomp))
+            var[("field_pointer", v.id)] = sp
+            return
         owner = None
         original = None
         if target == "amr_system":

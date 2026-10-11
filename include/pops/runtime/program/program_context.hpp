@@ -611,6 +611,90 @@ class ProgramContext {
     return scalar_field_like_(state(0), ncomp, ghost_depth);
   }
 
+  /// Allocate scalar storage on one exact Program block, never the first same-shaped block.
+  field_type alloc_scalar_field_for_block(int program_block, int ncomp = 1,
+                                           int ghost_depth = 1) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    require_prepared_lane_(lane, "Program scalar storage owner");
+    std::optional<field_type> candidate;
+    std::exception_ptr local_error;
+    try {
+      candidate.emplace(scalar_field_like_(state(program_block), ncomp, ghost_depth));
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    // Owner lookup, host/device allocation and zero-initialization are rank-local. Converge their
+    // failures before peers may enter the next scalar allocation or provider/layout collective.
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("Program scalar storage allocation failed on another rank");
+    }
+    return std::move(*candidate);
+  }
+
+  /// Retain both the holder and its field inside the same collective allocation boundary.
+  std::shared_ptr<field_type> alloc_shared_scalar_field_for_block(int program_block, int ncomp = 1,
+                                                                int ghost_depth = 1) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    require_prepared_lane_(lane, "Program shared scalar storage owner");
+    std::shared_ptr<field_type> candidate;
+    std::exception_ptr local_error;
+    try {
+      candidate = std::make_shared<field_type>(
+          scalar_field_like_(state(program_block), ncomp, ghost_depth));
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("Program shared scalar storage allocation failed on another rank");
+    }
+    return candidate;
+  }
+
+  /// Finish all rank-local session snapshots before a provider may enter boundary collectives.
+  /// The operation must contain local construction/copies only, never an MPI collective.
+  template <class Operation>
+  void prepare_operator_session_storage(Operation&& operation) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    require_prepared_lane_(lane, "Program operator session storage");
+    std::exception_ptr local_error;
+    try {
+      std::forward<Operation>(operation)();
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    collectively_rethrow_exception(local_error, lane,
+                                  "Program operator session storage allocation failed");
+  }
+
+  /// Authenticate source/output against the installed owner before a scalar sampling kernel.
+  void require_scalar_sampling_layout(int program_block, const field_type& source,
+                                       const field_type& output, int component = 0) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    std::exception_ptr local_error;
+    try {
+      const field_type& owner = state(program_block);
+      if (output.ncomp() != 1 || component < 0 || component >= source.ncomp())
+        throw std::invalid_argument("Program scalar sample component contract is invalid");
+      for (const field_type* candidate : {&source, &output})
+        if (candidate->layout() != owner.layout() ||
+            candidate->distribution() != owner.distribution() ||
+            candidate->local_rank() != owner.local_rank() ||
+            candidate->local_size() != owner.local_size())
+          throw std::invalid_argument("Program scalar sample layout/rank differs from its owner");
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("Program scalar sample layout failed collectively");
+    }
+  }
+
   void rhs_into(int program_block, field_type& state_value, field_type& rhs, int rate_id) const {
     require_rate_identity_(rate_id);
     count_kernel_();

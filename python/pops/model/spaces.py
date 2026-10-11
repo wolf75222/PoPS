@@ -353,8 +353,12 @@ class AuxSpace(_ImmutableTypeValue):
         object.__setattr__(self, "representation", _semantic_tag(
             representation, "AuxSpace representation"))
         object.__setattr__(self, "centering", _semantic_tag(centering, "AuxSpace centering"))
-        if unit is not None and (not isinstance(unit, str) or not unit):
-            raise ValueError("AuxSpace unit must be a non-empty string or None")
+        from pops._ir.quantity import PhysicalDimension
+        if isinstance(unit, Mapping):
+            unit = PhysicalDimension.from_data(dict(unit))
+        if unit is not None and not isinstance(unit, PhysicalDimension) \
+                and (not isinstance(unit, str) or not unit):
+            raise ValueError("AuxSpace unit must be a PhysicalDimension, non-empty string or None")
         object.__setattr__(self, "unit", unit)
         object.__setattr__(self, "frame", _semantic_tag(frame, "AuxSpace frame"))
         object.__setattr__(self, "clock", _semantic_tag(clock, "AuxSpace clock"))
@@ -369,7 +373,7 @@ class AuxSpace(_ImmutableTypeValue):
             "aux_kind": self.kind,
             "representation": self.representation,
             "centering": self.centering,
-            "unit": self.unit,
+            "unit": self.unit.to_data() if hasattr(self.unit, "to_data") else self.unit,
             "frame": self.frame,
             "clock": self.clock,
         }

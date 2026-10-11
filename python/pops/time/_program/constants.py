@@ -90,7 +90,7 @@ class _ProgramConstants:
     # same state input -- conservatively, ANY commit, in-place state mutation (project), boundary fill,
     # history store, or a second field solve into the shared aux counts as a state/aux barrier.
     _STATE_BARRIER_OPS = frozenset({
-        "project", "fill_boundary", "store_history", "input_fields",
+        "project", "fill_boundary", "store_history", "input_fields", "field_sample",
         "solve_fields", "solve_fields_from_blocks", "solve_coupled_implicit",
         "solve_implicit_source", "solve_spatial_nonlinear", "solve_spatial_field",
     })
@@ -106,7 +106,7 @@ class _ProgramConstants:
         "rhs", "diffusive_rhs", "source", "implicit_source", "apply", "local_transform", "affine_moment_update", "linear_combine", "pointwise_expression",
         "linear_source", "solve_local_linear",
         "solve_local_nonlinear", "solve_coupled_implicit", "solve_implicit_source", "solve_spatial_nonlinear", "solve_spatial_field",
-        "cell_compare", "where", "coupled_rate",
+        "cell_compare", "where", "coupled_rate", "field_sample",
     })
 
     _PERCELL_KERNEL_OPS = frozenset({
@@ -114,7 +114,7 @@ class _ProgramConstants:
         "rhs", "diffusive_rhs", "source", "implicit_source", "apply", "linear_combine", "linear_source",
         "solve_local_linear",
         "solve_local_nonlinear", "solve_coupled_implicit", "cell_compare", "where", "coupled_rate",
-        "local_transform", "affine_moment_update", "pointwise_expression", "project", "fill_boundary",
+        "local_transform", "affine_moment_update", "pointwise_expression", "project", "fill_boundary", "field_sample",
     })
     _HEAVY_KERNEL_OPS = frozenset({
         "solve_fields", "solve_fields_from_blocks", "solve_linear", "solve_coupled_implicit",

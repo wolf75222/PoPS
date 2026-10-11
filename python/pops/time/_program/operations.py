@@ -19,6 +19,7 @@ from pops.time._program.value_validation import (
     require_declared_state_space, require_owned, validate_input_clocks, validate_input_regions,
 )
 from pops.time.points import TimePoint
+from pops.time.stencil import StencilAccess
 from pops.time.values import (
     ProgramValue, _Affine, _Coeff, _Operator, _authoring_source_location, _resolve_handle,
     _to_affine,
@@ -423,10 +424,17 @@ class _ProgramCore(
             space = spaces[0] if spaces else None
             for candidate in spaces[1:]:
                 require_compatible_spaces(space, candidate, "linear_combine scalar fields")
+            from pops.time.field_sampling import scalar_co_location
+            for value in inputs[1:]:
+                scalar_co_location(inputs[0], value, "linear_combine scalar fields")
+            scalar_attrs = {key: inputs[0].attrs[key] for key in
+                            ("scalar_storage", "scalar_owner", "scalar_sampling_contract")
+                            if key in inputs[0].attrs}
             coeffs = [c.to_polynomial() for _, c in aff]
             return self._new(
-                "scalar_field", "linear_combine", inputs, {"coeffs": coeffs}, name, block,
-                space=space, point=at)
+                "scalar_field", "linear_combine", inputs,
+                {"coeffs": coeffs, "stencil_access": StencilAccess.pointwise(), **scalar_attrs},
+                name, block, space=space, point=at, inherit_state_ref=not scalar_attrs)
         inputs = tuple(v for v, _ in aff)
         # Structural type errors outrank the secondary block-label mismatch.
         state_space = merge_state_spaces(inputs, "linear_combine")
@@ -440,7 +448,8 @@ class _ProgramCore(
         field_context = merge_field_contexts(inputs, "linear_combine")
         coeffs = [c.to_polynomial() for _, c in aff]
         return self._new(
-            "state", "linear_combine", inputs, {"coeffs": coeffs}, name, block,
+            "state", "linear_combine", inputs,
+            {"coeffs": coeffs, "stencil_access": StencilAccess.pointwise()}, name, block,
             space=state_space, field_context=field_context, point=at)
 
     # --- named sources / local linear operators (Phase 4 / ADC-403) ---

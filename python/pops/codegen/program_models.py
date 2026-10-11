@@ -44,6 +44,7 @@ class ProgramModelGraph:
         "_numerics_by_block",
         "_resolved_provider_sources",
         "_resolved_program_field_sources",
+        "_scalar_layout_plan",
     )
 
     def __init__(
@@ -58,6 +59,7 @@ class ProgramModelGraph:
         numerics_by_block: Mapping[str, Any] | None = None,
         resolved_provider_sources: Mapping[str, Any] | None = None,
         program_field_plans: Mapping[str, Any] | None = None,
+        scalar_layout_plan: Any = None,
     ) -> None:
         if not models_by_owner:
             raise ValueError("ProgramModelGraph requires at least one model owner")
@@ -93,6 +95,10 @@ class ProgramModelGraph:
             raise ValueError("ProgramModelGraph block model routes must match owner block routes")
         self._models_by_block = MappingProxyType(routed_models)
         self._resolved_provider_sources = MappingProxyType(dict(resolved_provider_sources or {}))
+        from pops.mesh import LayoutPlan
+        if scalar_layout_plan is not None and type(scalar_layout_plan) is not LayoutPlan:
+            raise TypeError("scalar sampling layouts require an exact resolved LayoutPlan")
+        self._scalar_layout_plan = scalar_layout_plan
         from .program_field_plan import ResolvedProgramFieldPlan
         field_sources = {}
         for name, plan in (program_field_plans or {}).items():
@@ -114,7 +120,8 @@ class ProgramModelGraph:
             MappingProxyType({name: frozenset(peers) for name, peers in rhs_coherence_neighbours.items()}))
 
     @classmethod
-    def from_resolved_blocks(cls, blocks: Any, *, program_field_plans: Mapping[str, Any] | None = None) -> ProgramModelGraph:
+    def from_resolved_blocks(cls, blocks: Any, *, program_field_plans: Mapping[str, Any] | None = None,
+                             scalar_layout_plan: Any = None) -> ProgramModelGraph:
         """Lower every distinct exact ``ResolvedBlock`` model and capture total owner routing."""
         from pops.codegen._plans import ResolvedBlock
         from pops.codegen.module_lowering import lower_and_validate
@@ -183,6 +190,7 @@ class ProgramModelGraph:
             block_models[block.name] = emit_model
         from pops.codegen._rhs_coherence import resolved_rhs_neighbours
         return cls(
+            scalar_layout_plan=scalar_layout_plan,
             program_field_plans=program_field_plans,
             models_by_owner=models,
             source_modules_by_owner=modules,
@@ -287,6 +295,10 @@ class ProgramModelGraph:
             return self._source_modules_by_owner[canonical]
         except KeyError:
             raise KeyError("ProgramModelGraph has no source module for owner %s" % canonical) from None
+
+    @property
+    def scalar_layout_plan(self) -> Any:
+        return self._scalar_layout_plan
 
     def owner_for_block(self, block: Any) -> Any:
         from pops.problem.handles import BlockHandle

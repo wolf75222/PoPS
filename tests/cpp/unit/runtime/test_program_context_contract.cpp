@@ -1221,6 +1221,80 @@ TEST(ProgramContextContract, GeneratedScratchIsPersistentExactAndNonAliasing) {
   EXPECT_EQ(rebound.ghosts(), wider.ghosts());
 }
 
+TEST(ProgramContextContract, ScalarStorageAllocationConvergesRankLocalFailures) {
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.program-context.scalar-storage-allocation");
+  add_gas(sim);
+  sim.set_program_block_map({0});
+  NativeProgramContext ctx(&sim);
+
+  // Only rank zero violates the local constructor contract. Every rank must return from this
+  // allocation phase, retaining the originating exception on that rank, before the next call.
+  if (my_rank() == 0)
+    EXPECT_THROW((void)ctx.alloc_scalar_field_for_block(0, 0, 1), std::invalid_argument);
+  else
+    EXPECT_THROW((void)ctx.alloc_scalar_field_for_block(0, 1, 1), std::runtime_error);
+
+  // Owner authentication is inside the same collective exception boundary as the allocation.
+  EXPECT_ANY_THROW((void)ctx.alloc_scalar_field_for_block(my_rank() == 0 ? -1 : 0, 1, 1));
+
+  NativeField recovered = ctx.alloc_scalar_field_for_block(0, 1, 1);
+  EXPECT_EQ(recovered.layout(), ctx.state(0).layout());
+  EXPECT_EQ(recovered.distribution(), ctx.state(0).distribution());
+  EXPECT_EQ(recovered.local_rank(), ctx.state(0).local_rank());
+  EXPECT_EQ(recovered.ncomp(), 1);
+  for (int axis = 0; axis < kTestDimension; ++axis)
+    EXPECT_EQ(recovered.ghosts()[axis], 1);
+  EXPECT_NO_THROW(ctx.require_scalar_sampling_layout(0, ctx.state(0), recovered, 0));
+
+  if (my_rank() == 0)
+    EXPECT_THROW((void)ctx.alloc_shared_scalar_field_for_block(0, 0, 1), std::invalid_argument);
+  else
+    EXPECT_THROW((void)ctx.alloc_shared_scalar_field_for_block(0, 1, 1), std::runtime_error);
+  const auto shared = ctx.alloc_shared_scalar_field_for_block(0, 1, 1);
+  ASSERT_NE(shared, nullptr);
+  EXPECT_NO_THROW(ctx.require_scalar_sampling_layout(0, ctx.state(0), *shared, 0));
+}
+
+TEST(ProgramContextContract, OperatorSessionSnapshotFailureConvergesBeforeBoundaryPreparation) {
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.program-context.operator-session-storage");
+  add_gas(sim);
+  sim.set_program_block_map({0});
+  NativeProgramContext ctx(&sim);
+  ctx.configure_primary_clock("clock.operator-session-storage");
+  ctx.begin_step(Real(.01));
+  const auto point = ctx.boundary_evaluation_point(7);
+  const NativeField& prototype = ctx.state(0);
+  std::shared_ptr<NativeField> field;
+  std::shared_ptr<Real> scalar;
+  std::shared_ptr<runtime::multiblock::BoundaryEvaluationPoint> boundary_point;
+
+  EXPECT_ANY_THROW(ctx.prepare_operator_session_storage([&] {
+    field = std::make_shared<NativeField>(prototype);
+    scalar = std::make_shared<Real>(Real(.01));
+    boundary_point = std::make_shared<runtime::multiblock::BoundaryEvaluationPoint>(point);
+    if (my_rank() == 0)
+      throw std::bad_alloc();
+  }));
+  // All ranks can enter the same phase again, then safely enter the boundary's own collectives.
+  EXPECT_NO_THROW(ctx.prepare_operator_session_storage([&] {
+    field = std::make_shared<NativeField>(prototype);
+    scalar = std::make_shared<Real>(Real(.01));
+    boundary_point = std::make_shared<runtime::multiblock::BoundaryEvaluationPoint>(point);
+  }));
+  ASSERT_NE(field, nullptr);
+  ASSERT_NE(scalar, nullptr);
+  ASSERT_NE(boundary_point, nullptr);
+  EXPECT_EQ(*scalar, Real(.01));
+  EXPECT_EQ(boundary_point->clock, point.clock);
+  EXPECT_NO_THROW((void)ctx.prepare_mesh_boundary_session(*field, ctx.prepared_execution_lane()));
+}
+
 TEST(ProgramContextContract,
      SimultaneousNamedFieldWorkspaceIsPersistentSubsetSafeAndTransactional) {
   ensure_kokkos();

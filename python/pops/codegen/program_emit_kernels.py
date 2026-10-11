@@ -82,6 +82,7 @@ _ALLOWED_OPS = frozenset(
         "acceptance_guard",
         "matrix_free_operator",
         "scalar_field",
+        "field_sample",
         "field_problem_load",
         "field_problem_coefficients",
         "field_problem_apply",
@@ -244,7 +245,7 @@ class ProgramProviderPlans:
         """Emit the registry calls before the Program execution context is installed."""
         if target not in {"system", "amr_system"}:
             raise ValueError("Program provider plan target must be system or amr_system")
-        
+
         lines: list[str] = []
         if self._plans:
             lines.extend((
@@ -831,6 +832,7 @@ def _kernel_close() -> list:
 def _emit_cell_compare_kernel(field_var: Any, mask_var: Any, cmp: Any, value: Any) -> list:
     """Lower ``cell_compare``: maskA(index,0) = fieldA(index,0) <cmp> value ? 1 : 0 over the valid cells of
     the 1-component mask. Reads component 0 of @p field_var; writes the 0/1 mask into @p mask_var."""
+    field_var, mask_var = ("(%s)" % item for item in (field_var, mask_var))
     return [
         "for (int li = 0; li < %s.local_size(); ++li) {" % mask_var,
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> maskA = "
@@ -852,6 +854,10 @@ def _emit_where_kernel(mask_var: Any, a_var: Any, b_var: Any, out_var: Any) -> l
     valid cells of @p out_var (out's runtime ncomp). The mask component mc is 0 when the mask is
     1-component (a shared mask) and c when the mask has the SAME ncomp as a/b (a per-component mask) --
     decided per cell from the mask's own ncomp, so both layouts lower with ONE kernel."""
+    # These expressions may dereference owned session pointers. Parenthesize before member
+    # access so '*snapshot.local_size()' cannot be parsed as a member on the shared_ptr.
+    mask_var, a_var, b_var, out_var = (
+        "(%s)" % item for item in (mask_var, a_var, b_var, out_var))
     return [
         "for (int li = 0; li < %s.local_size(); ++li) {" % out_var,
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> outA = "

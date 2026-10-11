@@ -167,6 +167,14 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             raise ValueError("solve_linear: rhs must be a scalar_field or State value (rhs=...)")
         if initial_guess is not None and not _is_field_value(initial_guess):
             raise ValueError("solve_linear: initial_guess must be a scalar_field or State value")
+        scalar_attrs = {key: operator.attrs[key] for key in
+                        ("scalar_storage", "scalar_owner", "scalar_sampling_contract")
+                        if key in operator.attrs}
+        if scalar_attrs:
+            from pops.time.field_sampling import scalar_co_location
+            scalar_co_location(operator.attrs["apply_in"], rhs, "typed scalar solve")
+            if initial_guess is not None:
+                scalar_co_location(rhs, initial_guess, "typed scalar initial guess")
         if initial_guess is not None:
             unqualified_initial = (
                 initial_guess.vtype == "scalar_field"
@@ -314,6 +322,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         )
         method_provider.validate_use(method_use, where="solve_linear method provider")
         attrs = {
+            **scalar_attrs,
             "method_provider": method_provider.authority(),
             "method_options": method_options,
             "preconditioner_provider": preconditioner_provider.authority(),
@@ -352,6 +361,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             rhs.block,
             space=rhs.space,
             point=rhs.point if at is None else at,
+            inherit_state_ref=not scalar_attrs,
         )
         outcome_name = name or token.name
 
@@ -360,11 +370,12 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
                 result_type,
                 "solve_outcome_component",
                 (outcome,),
-                {"index": 0, "ncomp": op_ncomp},
+                {"index": 0, "ncomp": op_ncomp, **scalar_attrs},
                 outcome_name,
                 rhs.block,
                 space=rhs.space,
                 point=token.point,
+                inherit_state_ref=not scalar_attrs,
             )
 
         return SolveOutcome(self, token, project, outcome_name)
