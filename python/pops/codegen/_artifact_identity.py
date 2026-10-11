@@ -9,6 +9,7 @@ def model_artifact_spec(
     model: Any, *, backend: str, target: str, name: Any, compiler: str, standard: str,
     abi_key: str, hoist_reciprocals: bool, consumer_owner_qid: Any = None,
     declare_auxiliary_providers: bool = True,
+    toolchain_capture: Any = None,
 ) -> tuple[Any, Any]:
     """Return semantic and artifact-spec identities for one formula model."""
     from pops.codegen.cache import (
@@ -48,6 +49,8 @@ def model_artifact_spec(
             "consumer_owner_qid": str(consumer_owner_qid or ""),
             "declares_auxiliary_providers": bool(declare_auxiliary_providers),
             "native_model_provider_contract": NATIVE_MODEL_PROVIDER_CONTRACT,
+            **({"native_toolchain_metadata": toolchain_capture.to_data()}
+               if toolchain_capture is not None else {}),
             # Host add_native_block looks up this exact export.  Changing the
             # emitted loader surface without this component reuses a stale .so.
             "native_system_package_abi_version": NATIVE_SYSTEM_PACKAGE_ABI_VERSION,
@@ -71,6 +74,7 @@ def program_artifact_spec(
     target: str, abi_key: str,
     compiler: str, standard: str, source: str, cflags: Any, lflags: Any, optflags: Any,
     libraries: Any, native_components: Any = (), native_dimension: int,
+    toolchain_capture: Any = None,
 ) -> tuple[Any, Any]:
     """Return semantic and artifact-spec identities for one compiled Program."""
     from pops.codegen.cache import _precision_cache_key, _registry_cache_key
@@ -122,7 +126,11 @@ def program_artifact_spec(
         routes={"registry": _registry_cache_key(), "features": _native_feature_key()},
         components={
             "generated_source": hashlib.sha256(source.encode("utf-8")).digest(),
-            "native_dependency_contract": "compiler-observed-v1",
+            "native_dependency_contract": (
+                "compiler-observed-sdk-metadata-v2" if toolchain_capture is not None
+                else "compiler-observed-v1"),
+            **({"native_toolchain_metadata": toolchain_capture.to_data()}
+               if toolchain_capture is not None else {}),
             "program_entry": str(getattr(program, "name", "problem")),
             "program_graph_hash": program_graph.graph_hash,
             "prepared_native_components": list(native_components),

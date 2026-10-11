@@ -258,15 +258,18 @@ def verify_prepared_native_dependencies(
     pops_include_root: Any,
     staged_components: Any,
     toolchain_include_roots: Any,
+    toolchain_metadata: Any = None,
     working_directory: Any = None,
 ) -> tuple[str, ...]:
     """Verify the compiler-observed transitive closure before artifact publication.
 
     A dependency is accepted only when it is the generated translation unit, an exact file covered
     by the PoPS SDK signature, an exact file in a staged component manifest, or a header below an
-    explicitly replayed Kokkos/MPI/toolchain include root. Ambient compiler paths are not authorities.
+    explicitly replayed Kokkos/MPI/toolchain include root, or an exact content-authenticated SDK
+    metadata file captured before compilation. Ambient compiler paths are not authorities.
     """
     from pops.codegen.toolchain import pops_authenticated_header_paths
+    from pops.codegen._native_toolchain import verify_native_toolchain
 
     generated = os.path.realpath(os.fspath(generated_source))
     dependencies = _make_dependency_paths(
@@ -275,6 +278,7 @@ def verify_prepared_native_dependencies(
         raise RuntimeError("native compiler dependency closure omits the generated source")
 
     sdk_headers = pops_authenticated_header_paths(pops_include_root)
+    metadata_files = verify_native_toolchain(toolchain_metadata)
     component_headers: set[str] = set()
     required_entries: set[str] = set()
     for item in staged_components:
@@ -315,6 +319,7 @@ def verify_prepared_native_dependencies(
         if dependency != generated
         and dependency not in sdk_headers
         and dependency not in component_headers
+        and dependency not in metadata_files
         and not any(_is_within(dependency, root) for root in roots)
     )
     if unexpected:
