@@ -2776,8 +2776,10 @@ TEST(ProgramContextContract, AmrHistoryDeclaredScalarHaloPreservesExactStorageCo
   comm_init();
   auto [system, context] = prepare_topology_context(1);
   context->begin_step(.01);
+  // This Program-readable ring checks its own scalar storage halo. Output-only history
+  // read prohibitions are covered by the scalar-output-history suite.
   context->register_history("scalar_observation", 1, 1, 0,
-      "scalar-history:scalar_observation", "scalar-output-field-v1", "clock.topology", "none", 0);
+      "scalar-history:scalar_observation", "scalar-field", "clock.topology", "none", 0);
   {
     const auto& slot = context->history_zero_start("scalar_observation", 0, 1, 0);
     for (int axis = 0; axis < kTestDimension; ++axis)
@@ -2793,7 +2795,7 @@ TEST(ProgramContextContract, AmrHistoryDeclaredScalarHaloPreservesExactStorageCo
   wider.set_val(Real(6));
   EXPECT_ANY_THROW(context->store_history("scalar_observation", wider, 0));
   EXPECT_THROW(context->register_history("scalar_observation", 1, 1, 0,
-      "scalar-history:scalar_observation", "scalar-output-field-v1", "clock.topology", "none", 1),
+      "scalar-history:scalar_observation", "scalar-field", "clock.topology", "none", 1),
       std::runtime_error);
 }
 

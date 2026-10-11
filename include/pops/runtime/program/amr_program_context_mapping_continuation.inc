@@ -180,7 +180,12 @@ void resume_mapping_hierarchy_(std::shared_ptr<AmrProgramContext> owner) const {
                   });
                 });
         }
-        clear_active_multiblock_group_();
+        // A qualified barrier resumes the same synchronized envelopes. Keep their successful
+        // SSA proofs until completion or cancellation; only detach the currently selected group.
+        if (suspended || internal)
+          detach_qualified_hierarchy_barrier_group_();
+        else
+          clear_active_multiblock_group_();
       });
       if (internal)
         continue;

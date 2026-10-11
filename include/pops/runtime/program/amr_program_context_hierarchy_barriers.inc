@@ -89,6 +89,47 @@ enum class MappingPortKind : std::uint8_t {
   complete, map, linear_solve, field_publication, spatial_rhs, named_field_solve, field_warm_start
 };
 
+void detach_qualified_hierarchy_barrier_group_() const {
+  // This prepared hierarchy is the engine's exact authority, including a fresh restart/regrid
+  // before the raw runtime convenience view observes its generation. Enter its collective first.
+  const auto& hierarchy = facade_->prepared_amr_multiblock_hierarchy_();
+  if (!mapping_continuation_ || mapping_continuation_->executing ||
+      !mapping_continuation_->envelopes_prepared || mapping_continuation_->ports.empty() ||
+      !multiblock_subcycling_ || !multiblock_subcycling_->has_synchronized_groups())
+    throw std::logic_error("AMR SSA retention requires a live qualified hierarchy continuation");
+  const auto& frame = *mapping_continuation_;
+  const auto kind = frame.ports.front().kind;
+  if (kind != MappingPortKind::map && kind != MappingPortKind::linear_solve &&
+      kind != MappingPortKind::field_publication && kind != MappingPortKind::spatial_rhs &&
+      kind != MappingPortKind::named_field_solve && kind != MappingPortKind::field_warm_start)
+    throw std::logic_error("AMR SSA retention requires an intermediate typed hierarchy barrier");
+  if (frame.program_hash != facade_->installed_program_hash() || frame.hierarchy_authority.empty() ||
+      multiblock_subcycling_epoch_ != hierarchy.topology_runtime().topology_epoch() ||
+      multiblock_subcycling_generation_ != hierarchy.topology_runtime().materialization_generation() ||
+      frame.ports.size() != static_cast<std::size_t>(nlev()) ||
+      synchronized_level_envelopes_.size() != frame.ports.size())
+    throw std::logic_error("AMR SSA continuation lost its Program or hierarchy generation authority");
+  const auto attempt = multiblock_subcycling_->synchronized_attempt();
+  for (std::size_t level = 0; level < frame.ports.size(); ++level) {
+    const auto found = synchronized_level_envelopes_.find(static_cast<int>(level));
+    const auto group = multiblock_subcycling_->synchronized_level_group(level);
+    if (found == synchronized_level_envelopes_.end() || group.empty() ||
+        found->second.active_level_ != static_cast<int>(level) ||
+        found->second.active_subcycling_attempt_ != attempt ||
+        found->second.active_subcycling_window_.begin != group.front().window.begin ||
+        found->second.active_subcycling_window_.end != group.front().window.end ||
+        found->second.current_dt_ != frame.dt ||
+        found->second.active_attempt_states_.size() != group.size())
+      throw std::logic_error("AMR SSA continuation lost its exact level attempt or clock window");
+    for (const auto& current : group)
+      if (current.block >= found->second.active_attempt_states_.size() ||
+          current.attempt != attempt ||
+          found->second.active_attempt_states_[current.block] != &current.candidate)
+        throw std::logic_error("AMR SSA continuation lost its exact owned candidate storage");
+  }
+  detach_active_multiblock_group_();
+}
+
 void prepare_mapping_barrier_authority_() const {
   // This facade getter participates in MPI even when prepared. Call it before any local
   // allocation/validation, while all ranks are still in the common preparation sequence.

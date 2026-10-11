@@ -276,4 +276,64 @@ TEST(AmrDeclaredHistoryGhosts, ChangedWireGhostDescriptorCannotRestoreDifferentS
   fixture.expect_declared_storage();
   EXPECT_EQ(fixture.system.program_accepted_state(), before);
 }
+
+TEST(AmrDeclaredHistoryGhosts, ForgedWireHistoryTupleFailsCollectivelyBeforeMutation) {
+  Fixture fixture;
+  fixture.fill_history();
+  const auto before = fixture.system.program_accepted_state();
+  const auto before_revision = fixture.system.program_accepted_state_revision();
+  const auto before_time = fixture.system.time();
+  const auto before_step = fixture.system.macro_step();
+  const auto before_wire = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(before);
+  ASSERT_EQ(before_wire.histories.size(), 1u);
+  std::vector<std::vector<double>> before_values;
+  for (int level = 0; level < 2; ++level) {
+    before_values.push_back(fixture.system.block_level_state_global("tracer", level));
+    for (int slot = 0; slot < 2; ++slot)
+      before_values.push_back(fixture.system.history_global(kHistory, level, slot));
+  }
+  for (bool rank_zero_only : {false, true}) {
+    for (bool checkpoint_route : {false, true}) {
+      for (int field = 0; field < 7; ++field) {
+        SCOPED_TRACE(::testing::Message() << "rank_zero_only=" << rank_zero_only
+            << "/checkpoint_route=" << checkpoint_route << "/field=" << field);
+        auto changed = before_wire;
+        if (!rank_zero_only || pops::my_rank() == 0) {
+          auto& descriptor = changed.histories.front();
+          switch (field) {
+            case 0: ++descriptor.program_owner; break;
+            case 1: descriptor.state_identity += ".foreign"; break;
+            case 2: descriptor.space_identity += ".foreign"; break;
+            case 3: descriptor.clock_identity = "clock.level.1"; break;
+            case 4: descriptor.interpolation_identity += ".foreign"; break;
+            case 5: ++descriptor.components; break;
+            case 6: ++descriptor.ghost_depth; break;
+          }
+        }
+        // Each forged packet remains wire-valid; native admission must reject its tuple.
+        const auto bytes = pops::runtime::program::serialize_amr_program_accepted_state(changed);
+        EXPECT_EQ(pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes).histories,
+                  changed.histories);
+        if (checkpoint_route)
+          EXPECT_THROW(fixture.system.restore_checkpoint_accepted_state(bytes), std::exception);
+        else
+          EXPECT_THROW(fixture.system.restore_program_accepted_state(bytes), std::exception);
+        fixture.expect_declared_storage();
+        EXPECT_EQ(fixture.system.program_accepted_state(), before);
+        EXPECT_EQ(fixture.system.program_accepted_state_revision(), before_revision);
+        EXPECT_EQ(fixture.system.time(), before_time);
+        EXPECT_EQ(fixture.system.macro_step(), before_step);
+        const auto retained = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+            fixture.system.program_accepted_state());
+        EXPECT_EQ(retained.logical_clock_ticks, before_wire.logical_clock_ticks);
+        std::size_t index = 0;
+        for (int level = 0; level < 2; ++level) {
+          EXPECT_EQ(fixture.system.block_level_state_global("tracer", level), before_values[index++]);
+          for (int slot = 0; slot < 2; ++slot)
+            EXPECT_EQ(fixture.system.history_global(kHistory, level, slot), before_values[index++]);
+        }
+      }
+    }
+  }
+}
 }  // namespace

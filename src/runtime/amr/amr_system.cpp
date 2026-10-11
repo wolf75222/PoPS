@@ -24648,7 +24648,6 @@ void AmrSystem<Dim>::copy_program_accepted_state_into(std::vector<std::uint8_t>&
 
 template <int Dim>
 void AmrSystem<Dim>::restore_program_accepted_state(const std::vector<std::uint8_t>& state) {
-  p_->invalidate_checkpoint_capture();
   p_->ensure_engine();
   if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
     throw std::logic_error("AMR Program accepted-state restore requires its prepared lane");
@@ -24672,6 +24671,11 @@ void AmrSystem<Dim>::restore_program_accepted_state(const std::vector<std::uint8
     const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
     decoded.emplace(
         runtime::program::deserialize_amr_program_accepted_state<Dim>(state, &interface_budget));
+    // Direct installed contexts have no artifact resync hook. Authenticate their complete
+    // registered declarations and actual ranked ring storage before publishing accepted bytes.
+    if (decoded->histories != p_->history_descriptors())
+      throw std::invalid_argument(
+          "AMR Program accepted-state restore history differs from its registered declarations");
     std::vector<std::uint8_t> canonical_tagging;
     if (p_->tagging_spec)
       canonical_tagging = p_->tagging_state.encode(p_->tagging_spec->min_cycles,
@@ -24705,6 +24709,7 @@ void AmrSystem<Dim>::restore_program_accepted_state(const std::vector<std::uint8
   p_->require_program_checkpoint_capacity(state.size(), "AMR Program accepted-state restore");
   p_->require_program_checkpoint_capacity(candidate.size(),
                                           "AMR Program accepted-state restore candidate");
+  p_->invalidate_checkpoint_capture();
   p_->program_accepted_bytes.swap(candidate);
   p_->program_accepted_bytes_runtime_owned = false;
   ++p_->program_accepted_revision;
@@ -24733,6 +24738,11 @@ void AmrSystem<Dim>::restore_checkpoint_accepted_state(const std::vector<std::ui
     interface_budget.emplace(p_->accepted_state_interface_flux_ledger_budget());
     decoded.emplace(
         runtime::program::deserialize_amr_program_accepted_state<Dim>(state, &*interface_budget));
+    // All routes, including direct C++ contexts, must retain the exact live history tuple.
+    // External restart materializes its rings first; this preflight must not mint new storage.
+    if (decoded->histories != p_->history_descriptors())
+      throw std::invalid_argument(
+          "AMR checkpoint accepted-state history differs from its registered declarations");
   } catch (...) {
     local_failure = 1;
     local_error = std::current_exception();

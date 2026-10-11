@@ -982,7 +982,7 @@ runtime::program::AmrProgramContext<D>& incidence_context(AmrSystem<D>& system) 
 }
 
 enum class IncidenceRestoreWitness {
-  original, repeated_publication, rank_local_refusal, accepted_state_consumer
+  original, repeated_publication, rank_local_refusal, accepted_state_consumer, scaled_phi_failure
 };
 
 void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
@@ -1022,10 +1022,17 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
     "pops.field-hierarchy.composite", 1, {"pops.field-hierarchy.options.empty@1", {}}};
   const auto install_plan = [&](const std::string& slot, const std::string& field,
                                const std::string& binding, const AuxiliaryComponentKey& output) {
+    CompositeFacOptions fac_options;
+    if (extra == IncidenceRestoreWitness::scaled_phi_failure && field == "phi") {
+      fac_options.max_iters = 1;
+      fac_options.fine_sweeps = 1;
+      fac_options.rel_tol = std::numeric_limits<Real>::epsilon();
+      fac_options.abs_tol = Real(0);
+    }
     system.set_field_solver_plan(slot, slot + "/plan", slot + "/provider", kIncidenceOwner,
       "material", field, {output}, 1, {binding}, {"material"}, {field}, {1.0},
       "geometric_mg", hierarchy,
-      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{}));
+      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, fac_options));
     system.set_field_reaction(slot, 1.0); // Screened equations have no periodic mean constraint.
   };
   install_plan("test.amr-aux.phi-slot", "phi", "test.amr-aux.phi-binding", phi);
@@ -1126,6 +1133,38 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
   ASSERT_LT(actual_fine_cells, full_fine_cells) << "the real refined layout must be sparse";
   context.begin_step(.25); context.set_stage_time(1, 2);
   ASSERT_EQ(system.step_transaction_depth(), 0U);
+  if (extra == IncidenceRestoreWitness::scaled_phi_failure) {
+    // The mixed coarse2/fine1 forcing must fail the real one-cycle composite solve.
+    // Its failed Outcome must stop before psi and leave the accepted hierarchy exact.
+    const auto before_time = system.time();
+    const auto before_step = system.macro_step();
+    const auto before_auxiliary = system.capture_auxiliary_checkpoint_accepted_state();
+    std::array<std::vector<double>, 2> before_states;
+    for (int level = 0; level < 2; ++level)
+      before_states[level] = system.block_level_state_global("material", level);
+    observed.capture = true;
+    observed.snapshots.clear();
+    const auto library = dynlib::open(POPS_TEST_FIELD_RHS_AUX_INCIDENCE_PROGRAM_SO);
+    ASSERT_TRUE(dynlib::valid(library));
+    using HierarchySolve = std::array<SolveReport, 2> (*)(AmrSystem<D>*, std::int64_t,
+                                                       std::int64_t, double, int, int);
+    const auto hierarchy_solve = reinterpret_cast<HierarchySolve>(
+        dynlib::sym(library, "pops_test_aux_incidence_scaled_fields"));
+    ASSERT_NE(hierarchy_solve, nullptr);
+    EXPECT_THROW((void)hierarchy_solve(&system, 7, 8, .25, 16, 17), std::exception);
+    dynlib::close(library);
+    for (int level = 0; level < 2; ++level) {
+      ASSERT_TRUE(observed.phi_points[level].has_value());
+      EXPECT_EQ(observed.phi_points[level]->stage, 16);
+      EXPECT_EQ(system.block_level_state_global("material", level), before_states[level]);
+    }
+    EXPECT_TRUE(observed.snapshots.empty()) << "failed phi must not evaluate the psi RHS";
+    EXPECT_EQ(system.capture_auxiliary_checkpoint_accepted_state(), before_auxiliary);
+    EXPECT_EQ(system.time(), before_time);
+    EXPECT_EQ(system.macro_step(), before_step);
+    EXPECT_EQ(system.step_transaction_depth(), 0U);
+    return;
+  }
   auto baseline = context.solve_fields_from_blocks_at(context.boundary_evaluation_point(13),
     13, "test.amr-aux.psi-slot", {{0, nullptr}});
   ASSERT_TRUE(baseline.report().solved_value_available()) << baseline.report().reason;
@@ -1462,5 +1501,9 @@ TEST(PreparedFieldRhsInputs, OneRankAuxiliaryRestoreRefusalLeavesAcceptedInciden
 
 TEST(PreparedFieldRhsInputs, AcceptedProviderStateSourceSurvivesRestoreAndRegistryRollback) {
   actual_field_incidence_lifecycle(IncidenceRestoreWitness::accepted_state_consumer);
+}
+
+TEST(PreparedFieldRhsInputs, FailedScaledPhiStopsPsiAndPreservesAcceptedHierarchy) {
+  actual_field_incidence_lifecycle(IncidenceRestoreWitness::scaled_phi_failure);
 }
 } // namespace

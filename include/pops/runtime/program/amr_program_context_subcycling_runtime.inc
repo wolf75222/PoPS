@@ -563,8 +563,9 @@ void stage_prepared_publication_candidates_(std::size_t level, std::span<field_t
       *pack[block] = std::move(*staged[block]);
 }
 
-void clear_active_multiblock_group_() const noexcept {
-  program_values_.revoke_();
+// Detaching the selected envelope does not end its synchronized attempt. Values captured in
+// earlier hierarchy regions still belong to that attempt and feed the resumed continuation.
+void detach_active_multiblock_group_() const noexcept {
   active_attempt_states_.clear();
   active_staged_parents_.clear();
   active_incoming_flux_.clear();
@@ -574,6 +575,11 @@ void clear_active_multiblock_group_() const noexcept {
   active_flux_expressions_.clear();
   next_active_flux_basis_identity_ = 0;
   active_subcycling_attempt_ = 0;
+}
+
+void clear_active_multiblock_group_() const noexcept {
+  program_values_.revoke_();
+  detach_active_multiblock_group_();
 }
 
 struct ProgramInterfaceFace {

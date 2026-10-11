@@ -16,9 +16,11 @@ inline std::string source() {
 #include <pops/runtime/config/route_ids.hpp>
 #include <array>
 #include <cstdint>
+#include <exception>
 #include <map>
 #include <memory>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 constexpr int D = pops::kNativeDimension;
@@ -149,18 +151,31 @@ extern "C" std::array<pops::SolveReport, 2> pops_test_aux_incidence_scaled_field
   auto context = amr_contexts.at(system).lock();
   if (!context) throw std::logic_error("incidence hierarchy lost its actual Context owner");
   std::array<pops::SolveReport, 2> reports;
+  std::vector<AmrContext::program_value_type> retained;
+  const auto require_retired = [&] {
+    for (const auto& value : retained) {
+      bool expired = false;
+      try { value.validate(); }
+      catch (const std::logic_error&) { expired = true; }
+      if (!expired)
+        throw std::logic_error("incidence Program SSA proof survived its finished hierarchy attempt");
+    }
+  };
   const std::string dependencies = "tests.aux-incidence/full-level-scaled-state@1:" +
       std::to_string(numerator) + "/" + std::to_string(denominator) + ":" +
       std::to_string(phi_evaluation) + ":" + std::to_string(psi_evaluation);
+  try {
   context->advance_mapping_hierarchy(dt,
-      [context, numerator, denominator, phi_evaluation, psi_evaluation, dependencies, &reports](double) {
+      [context, numerator, denominator, phi_evaluation, psi_evaluation, dependencies, &reports,
+       &retained](double) {
     context->set_stage_time(numerator, denominator);
     auto root = context->capture_program_value(0, 0, context->state(0));
+    retained.push_back(root);
     auto& stage = context->scratch_state(1, 0, context->state(0));
     auto write = context->begin_program_value_write(1, 0, stage, {root});
     context->lincomb(stage, context->level() == 0 ? pops::Real(2) : pops::Real(1),
                     context->state(0), pops::Real(0), context->state(0));
-    (void)context->complete_program_value_write(std::move(write));
+    retained.push_back(context->complete_program_value_write(std::move(write)));
     context->stage_program_field_values_at(context->boundary_evaluation_point(phi_evaluation),
         10, "test.amr-aux.phi-slot", {{0, &stage, 1}});
     context->suspend_hierarchy_barrier(AmrContext::HierarchyBarrierKind::named_field_solve,
@@ -168,10 +183,14 @@ extern "C" std::array<pops::SolveReport, 2> pops_test_aux_incidence_scaled_field
         [context, phi_evaluation, &reports] {
           auto outcome = context->solve_fields_from_program_values_at(
               context->boundary_evaluation_point(phi_evaluation), 10, "test.amr-aux.phi-slot", {});
-          reports[0] = outcome.report();
-          (void)outcome.consume(pops::SolveConsumption::kFailRun);
+          reports[0] = outcome.consume(outcome.report().solved_value_available()
+              ? pops::SolveConsumption::kAccept : pops::SolveConsumption::kFailRun);
+          if (!reports[0].solved_value_available())
+            throw std::runtime_error("incidence phi solve failed: " + reports[0].reason);
         },
-        [context, numerator, denominator, psi_evaluation, dependencies, stage = &stage, &reports] {
+        [context, numerator, denominator, psi_evaluation, dependencies, stage = &stage, &reports,
+         &retained] {
+          for (const auto& value : retained) value.validate();
           context->set_stage_time(numerator, denominator);
           context->stage_program_field_values_at(context->boundary_evaluation_point(psi_evaluation),
               13, "test.amr-aux.psi-slot", {{0, stage, 1}});
@@ -180,11 +199,19 @@ extern "C" std::array<pops::SolveReport, 2> pops_test_aux_incidence_scaled_field
               [context, psi_evaluation, &reports] {
                 auto outcome = context->solve_fields_from_program_values_at(
                     context->boundary_evaluation_point(psi_evaluation), 13, "test.amr-aux.psi-slot", {});
-                reports[1] = outcome.report();
-                (void)outcome.consume(pops::SolveConsumption::kFailRun);
+                reports[1] = outcome.consume(outcome.report().solved_value_available()
+                    ? pops::SolveConsumption::kAccept : pops::SolveConsumption::kFailRun);
+                if (!reports[1].solved_value_available())
+                  throw std::runtime_error("incidence psi solve failed: " + reports[1].reason);
               }, [] {});
         });
   }, context, [] {});
+  } catch (...) {
+    const auto error = std::current_exception();
+    require_retired();
+    std::rethrow_exception(error);
+  }
+  require_retired();
   return reports;
 }
 

@@ -398,8 +398,13 @@ class ProgramValueAuthority {
     (void)producer_(ssa,block);
     const auto found = state_->values.find({ssa,level});
     if (found == state_->values.end() || found->second->buffer != &field ||
-        !found->second->attempt.same_attempt(attempt))
-      throw std::invalid_argument("Field source has no successful exact SSA producer");
+        !found->second->attempt.same_attempt(attempt)) {
+      const auto cause = found == state_->values.end() ? "missing record" :
+          found->second->buffer != &field ? "different native buffer" : "different attempt";
+      throw std::invalid_argument("Field source has no successful exact SSA producer (ssa=" +
+          std::to_string(ssa) + ", block=" + std::to_string(block) + ", level=" +
+          std::to_string(level) + ", " + cause + ")");
+    }
     Value value(state_,found->second);
     value.validate();
     return value;
