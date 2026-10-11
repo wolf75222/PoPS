@@ -213,6 +213,7 @@ extern "C" const char* pops_program_checkpoint_history_interpolation_identity(in
 }
 extern "C" int pops_program_checkpoint_history_depth(int) { return POPS_TEST_HISTORIES ? 2 : 0; }
 extern "C" int pops_program_checkpoint_history_components(int) { return POPS_TEST_HISTORIES ? 1 : 0; }
+extern "C" int pops_program_checkpoint_history_ghost_depth(int) { return -1; }
 extern "C" int pops_program_checkpoint_logical_clock_count() {
   return POPS_TEST_ATTEMPT_CURSOR ? 2 : 1;
 }

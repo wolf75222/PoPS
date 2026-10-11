@@ -10,6 +10,7 @@ int main() {
   auto dist = mesh::Distribution<1>::replicated(boxes, ranks);
   MultiFab<1> seed(boxes, dist, Index<1>{0}, 1, Extent<1>{}); seed.set_val(Real(2));
   h.histories["T"] = {seed, seed, seed}; h.depth["T"] = 3; h.owner["T"] = 7;
+  h.ghost_depth["T"] = -1;
   h.state_identity["T"] = "T-state"; h.space_identity["T"] = "T-space";
   h.clock_identity["T"] = "macro"; h.interpolation_identity["T"] = "none";
   h.initialized["T"] = false; h.fill_count["T"] = 0; h.store_pending["T"] = false;

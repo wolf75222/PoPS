@@ -67,16 +67,16 @@ TEST(AmrOutputHistoryCapability, CompleteFrozenArtifactTupleAndArbitraryTypedRin
   state.artifact_backed_ = true;
   ProgramCheckpointHistoryMetadata row{
       "temperature", 1, "scalar-history:temperature",
-      std::string(kOutputHistoryProjectionSpace), "clock-exact", "cell-copy", 6, 3};
+      std::string(kOutputHistoryProjectionSpace), "clock-exact", "cell-copy", 6, 3, 1};
   state.checkpoint_metadata_.histories = {row};
   const auto validate = [&](const ProgramCheckpointHistoryMetadata& candidate, int owner = 7) {
     return state.require_frozen_output_history_projection(
         candidate.name, owner, candidate.state_identity, candidate.space_identity,
         candidate.clock_identity, candidate.interpolation_identity,
-        candidate.depth, candidate.components, candidate.program_owner);
+        candidate.depth, candidate.components, candidate.program_owner, candidate.ghost_depth);
   };
   EXPECT_EQ(validate(row), row);
-  for (int field = 0; field < 8; ++field) {
+  for (int field = 0; field < 9; ++field) {
     auto candidate = row;
     switch (field) {
       case 0: candidate.name += ".foreign"; break;
@@ -87,6 +87,7 @@ TEST(AmrOutputHistoryCapability, CompleteFrozenArtifactTupleAndArbitraryTypedRin
       case 5: candidate.interpolation_identity += ".foreign"; break;
       case 6: --candidate.depth; break;
       case 7: --candidate.components; break;
+      case 8: ++candidate.ghost_depth; break;
     }
     EXPECT_THROW(validate(candidate), std::invalid_argument) << field;
     EXPECT_EQ(state.checkpoint_metadata_.histories, std::vector{row});

@@ -790,6 +790,7 @@ struct PreparedHistoryHierarchyImages {
     int fill_count = 0;
     bool store_pending = false;
     int owner = -1;
+    int ghost_depth = -1;
     std::string state_identity;
     std::string space_identity;
     std::string clock_identity;
@@ -5266,6 +5267,23 @@ struct AmrSystem<Dim>::Impl {
 
   void require_accepted_state_authority_contracts(
       const runtime::program::AmrProgramAcceptedState<Dim>& state) const {
+    if (program.artifact_backed_) {
+      const auto& issued = program.checkpoint_metadata_.histories;
+      if (state.histories.size() != issued.size())
+        throw std::invalid_argument("AMR accepted history registry differs from its frozen artifact");
+      for (const auto& descriptor : state.histories) {
+        const auto row = std::find_if(issued.begin(), issued.end(),
+            [&](const auto& value) { return value.name == descriptor.name; });
+        if (row == issued.end() || row->program_owner != descriptor.program_owner ||
+            row->state_identity != descriptor.state_identity ||
+            row->space_identity != descriptor.space_identity ||
+            row->clock_identity != descriptor.clock_identity ||
+            row->interpolation_identity != descriptor.interpolation_identity ||
+            row->depth != descriptor.depth || row->components != descriptor.components ||
+            row->ghost_depth != descriptor.ghost_depth)
+          throw std::invalid_argument("AMR accepted history descriptor differs from its frozen artifact");
+      }
+    }
     if (!program_flux_expression_budget)
       return;
     const auto [expected_flux, expected_coupling] = accepted_state_authority_contracts();
@@ -8922,6 +8940,8 @@ struct AmrSystem<Dim>::Impl {
     if (!engine)
       throw std::logic_error("AMR history checkpoint requires a materialized hierarchy");
     const auto& manager = program.hist_;
+    if (manager.ghost_depth.size() != manager.histories.size())
+      throw std::invalid_argument("AMR Program history declared halo registry is incomplete");
     struct Accumulated {
       runtime::program::AmrProgramHistoryDescriptor descriptor;
       std::set<int> levels;
@@ -8942,10 +8962,12 @@ struct AmrSystem<Dim>::Impl {
       const auto space = manager.space_identity.find(key);
       const auto clock = manager.clock_identity.find(key);
       const auto interpolation = manager.interpolation_identity.find(key);
+      const auto ghost_depth = manager.ghost_depth.find(key);
       if (depth == manager.depth.end() || owner == manager.owner.end() ||
           state == manager.state_identity.end() || space == manager.space_identity.end() ||
           clock == manager.clock_identity.end() ||
-          interpolation == manager.interpolation_identity.end() || depth->second < 2 ||
+          interpolation == manager.interpolation_identity.end() ||
+          ghost_depth == manager.ghost_depth.end() || ghost_depth->second < -1 || depth->second < 2 ||
           ring.size() != static_cast<std::size_t>(depth->second))
         throw std::invalid_argument("AMR Program history metadata is incomplete");
       int program_owner = -1;
@@ -8956,9 +8978,20 @@ struct AmrSystem<Dim>::Impl {
         }
       if (program_owner < 0)
         throw std::invalid_argument("AMR Program history has no exact program block owner");
+      const auto& live = block_state(static_cast<std::size_t>(owner->second),
+                                     static_cast<std::size_t>(level));
+      Extent<Dim> declared_ghosts = live.ghosts();
+      if (ghost_depth->second >= 0)
+        for (int axis = 0; axis < Dim; ++axis)
+          declared_ghosts[axis] = ghost_depth->second;
+      for (const auto& slot : ring)
+        if (slot.layout() != live.layout() || slot.distribution() != live.distribution() ||
+            slot.local_rank() != live.local_rank() || slot.ghosts() != declared_ghosts ||
+            slot.ncomp() != ring.front().ncomp())
+          throw std::invalid_argument("AMR Program history lost its declared ranked storage contract");
       runtime::program::AmrProgramHistoryDescriptor descriptor{
           name,          program_owner,         state->second, space->second,
-          clock->second, interpolation->second, depth->second, ring.front().ncomp()};
+          clock->second, interpolation->second, depth->second, ring.front().ncomp(), ghost_depth->second};
       auto [found, inserted] = logical.try_emplace(name, Accumulated{descriptor, {level}});
       if (!inserted) {
         const auto& retained = found->second.descriptor;
@@ -8968,6 +9001,7 @@ struct AmrSystem<Dim>::Impl {
             retained.clock_identity != descriptor.clock_identity ||
             retained.interpolation_identity != descriptor.interpolation_identity ||
             retained.depth != descriptor.depth || retained.components != descriptor.components ||
+            retained.ghost_depth != descriptor.ghost_depth ||
             !found->second.levels.insert(level).second)
           throw std::invalid_argument(
               "AMR Program history contract differs between hierarchy levels");
@@ -8981,6 +9015,24 @@ struct AmrSystem<Dim>::Impl {
         throw std::invalid_argument(
             "AMR Program history does not cover every active hierarchy level");
       result.push_back(std::move(accumulated.descriptor));
+    }
+    if (program.artifact_backed_) {
+      if (result.size() != program.checkpoint_metadata_.histories.size())
+        throw std::invalid_argument("AMR history registry differs from its frozen artifact metadata");
+      for (const auto& descriptor : result) {
+        const auto issued = std::find_if(program.checkpoint_metadata_.histories.begin(),
+            program.checkpoint_metadata_.histories.end(),
+            [&](const auto& row) { return row.name == descriptor.name; });
+        if (issued == program.checkpoint_metadata_.histories.end() ||
+            issued->program_owner != descriptor.program_owner ||
+            issued->state_identity != descriptor.state_identity ||
+            issued->space_identity != descriptor.space_identity ||
+            issued->clock_identity != descriptor.clock_identity ||
+            issued->interpolation_identity != descriptor.interpolation_identity ||
+            issued->depth != descriptor.depth || issued->components != descriptor.components ||
+            issued->ghost_depth != descriptor.ghost_depth)
+          throw std::invalid_argument("AMR history descriptor differs from its frozen artifact metadata");
+      }
     }
     return result;
   }
@@ -9405,6 +9457,9 @@ struct AmrSystem<Dim>::Impl {
           throw std::logic_error(
               "AMR history migration cannot capture an unaccepted pending store");
         image.owner = program.hist_.owner.at(key);
+        image.ghost_depth = program.hist_.ghost_depth.at(key);
+        if (image.ghost_depth < -1)
+          throw std::invalid_argument("AMR history hierarchy image has an invalid declared halo");
         image.state_identity = program.hist_.state_identity.at(key);
         image.space_identity = program.hist_.space_identity.at(key);
         image.clock_identity = program.hist_.clock_identity.at(key);
@@ -9421,6 +9476,7 @@ struct AmrSystem<Dim>::Impl {
             .scalar(image.fill_count)
             .scalar(image.store_pending)
             .scalar(image.owner)
+            .scalar(image.ghost_depth)
             .text(image.state_identity)
             .text(image.space_identity)
             .text(image.clock_identity)
@@ -9499,7 +9555,7 @@ struct AmrSystem<Dim>::Impl {
               descriptor.name, program.block_map_.at(static_cast<std::size_t>(descriptor.program_owner)),
               descriptor.state_identity, descriptor.space_identity, descriptor.clock_identity,
               descriptor.interpolation_identity, descriptor.depth, descriptor.components,
-              descriptor.program_owner);
+              descriptor.program_owner, descriptor.ghost_depth);
       ExactContractBuilder exact;
       exact.text("pops.amr-program.history-regrid")
           .scalar(std::uint32_t{1})
@@ -9516,7 +9572,8 @@ struct AmrSystem<Dim>::Impl {
             .text(descriptor.clock_identity)
             .text(descriptor.interpolation_identity)
             .scalar(descriptor.depth)
-            .scalar(descriptor.components);
+            .scalar(descriptor.components)
+            .scalar(descriptor.ghost_depth);
       candidate.emplace(program.hist_);
       std::vector<std::string> removed;
       for (const auto& [key, ring] : candidate->histories) {
@@ -9546,6 +9603,7 @@ struct AmrSystem<Dim>::Impl {
         candidate->space_identity.erase(key);
         candidate->clock_identity.erase(key);
         candidate->interpolation_identity.erase(key);
+        candidate->ghost_depth.erase(key);
         candidate->slot_dt.erase(key);
         candidate->slot_sample.erase(key);
       }
@@ -9561,6 +9619,9 @@ struct AmrSystem<Dim>::Impl {
             throw std::logic_error("AMR Program history regrid lost its exact parent-level ring");
           const auto* previous = source_images.find(child_key);
           const bool retained_child = previous != nullptr;
+          if (retained_child && previous->ghost_depth != descriptor.ghost_depth)
+            throw std::invalid_argument(
+                "AMR Program history regrid changed the retained child halo declaration");
           if (retained_child && previous->slots.size() != parent->second.size())
             throw std::logic_error("AMR Program history regrid changed the retained child depth");
           // A same-geometry regrid may only redistribute owners.  Keep its qualified child
@@ -9626,6 +9687,7 @@ struct AmrSystem<Dim>::Impl {
                 (previous->depth != descriptor.depth || previous->initialized != initialized ||
                  previous->store_pending || previous->fill_count != fill || !exact_dts(previous->slot_dt) ||
                  previous->slot_sample != samples || previous->owner != program.hist_.owner.at(parent_key) ||
+                 previous->ghost_depth != descriptor.ghost_depth ||
                  previous->state_identity != descriptor.state_identity ||
                  previous->space_identity != descriptor.space_identity ||
                  previous->clock_identity != descriptor.clock_identity ||
@@ -9667,6 +9729,7 @@ struct AmrSystem<Dim>::Impl {
                                [](Real dt) { return std::isfinite(dt) && dt > Real(0); }) ||
                   program.hist_.state_identity.at(parent_key) != descriptor.state_identity ||
                   program.hist_.space_identity.at(parent_key) != descriptor.space_identity ||
+                  program.hist_.ghost_depth.at(parent_key) != descriptor.ghost_depth ||
                   program.hist_.clock_identity.at(parent_key) != descriptor.clock_identity ||
                   program.hist_.interpolation_identity.at(parent_key) !=
                       descriptor.interpolation_identity)
@@ -9685,6 +9748,7 @@ struct AmrSystem<Dim>::Impl {
                    previous->store_pending || previous->slot_dt != dts ||
                    previous->fill_count != program.hist_.fill_count.at(parent_key) ||
                    previous->owner != program.hist_.owner.at(parent_key) ||
+                   previous->ghost_depth != descriptor.ghost_depth ||
                    previous->state_identity != descriptor.state_identity ||
                    previous->space_identity != descriptor.space_identity ||
                    previous->clock_identity != descriptor.clock_identity ||
@@ -9745,6 +9809,7 @@ struct AmrSystem<Dim>::Impl {
           candidate->interpolation_identity.insert_or_assign(
               child_key, parent_source ? program.hist_.interpolation_identity.at(parent_key)
                                        : previous->interpolation_identity);
+          candidate->ghost_depth.insert_or_assign(child_key, descriptor.ghost_depth);
           candidate->slot_dt.insert_or_assign(
               child_key, parent_source ? program.hist_.slot_dt.at(parent_key) : previous->slot_dt);
           candidate->slot_sample.insert_or_assign(
@@ -22887,6 +22952,7 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
           int owner = -1;
           int depth = 0;
           int components = 0;
+          int ghost_depth = -1;
           std::string state;
           std::string space;
           std::string clock;
@@ -22897,6 +22963,8 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
         std::map<std::string, Descriptor> descriptors;
         std::map<std::string, std::set<int>> levels_by_name;
         const std::size_t source_levels = live_hierarchy.num_levels();
+        if (source.ghost_depth.size() != source.histories.size())
+          throw std::runtime_error("AMR provisional history declared halo registry is incomplete");
         for (const auto& [key, ring] : source.histories) {
           const auto decoded = decode_exact_amr_history_key(key);
           if (!decoded || decoded->first < 0 ||
@@ -22921,17 +22989,23 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
               static_cast<std::size_t>(owner) >= p_->blocks.size() ||
               source.state_identity.at(key).empty() || source.space_identity.at(key).empty() ||
               source.clock_identity.at(key).empty() ||
-              source.interpolation_identity.at(key).empty() || ring.empty() ||
+              source.interpolation_identity.at(key).empty() || source.ghost_depth.at(key) < -1 || ring.empty() ||
               ring.front().ncomp() < 1)
             throw std::runtime_error(
                 "AMR restart hierarchy rebuild cannot rematerialize retained history provenance");
+          const auto& live = p_->block_state(static_cast<std::size_t>(owner),
+                                             static_cast<std::size_t>(decoded->first));
+          const auto ghosts = source.declared_ghosts(key, live.ghosts());
           for (const field_type& slot : ring)
-            if (slot.ncomp() != ring.front().ncomp())
+            if (slot.ncomp() != ring.front().ncomp() || slot.ghosts() != ghosts ||
+                slot.layout() != live.layout() || slot.distribution() != live.distribution() ||
+                slot.local_rank() != live.local_rank())
               throw std::runtime_error(
                   "AMR restart hierarchy rebuild has inconsistent provisional history components");
           const Descriptor descriptor{owner,
                                       depth,
                                       ring.front().ncomp(),
+                                      source.ghost_depth.at(key),
                                       source.state_identity.at(key),
                                       source.space_identity.at(key),
                                       source.clock_identity.at(key),
@@ -22971,10 +23045,14 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
               prototype = &additional[additional_index].levels[level];
             }
             std::vector<field_type> ring;
+            Extent<Dim> declared_ghosts = prototype->ghosts();
+            if (descriptor.ghost_depth >= 0)
+              for (int axis = 0; axis < Dim; ++axis)
+                declared_ghosts[axis] = descriptor.ghost_depth;
             ring.reserve(static_cast<std::size_t>(descriptor.depth));
             for (int slot = 0; slot < descriptor.depth; ++slot) {
               field_type empty(prototype->layout(), prototype->distribution(),
-                               prototype->local_rank(), descriptor.components, prototype->ghosts());
+                               prototype->local_rank(), descriptor.components, declared_ghosts);
               empty.set_val(Real(0));
               ring.push_back(std::move(empty));
             }
@@ -22988,6 +23066,7 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
             provisional_histories->space_identity.emplace(key, descriptor.space);
             provisional_histories->clock_identity.emplace(key, descriptor.clock);
             provisional_histories->interpolation_identity.emplace(key, descriptor.interpolation);
+            provisional_histories->ghost_depth.emplace(key, descriptor.ghost_depth);
             provisional_histories->slot_dt.emplace(
                 key, std::vector<Real>(static_cast<std::size_t>(descriptor.depth), Real(0)));
             provisional_histories->slot_sample.emplace(
@@ -24131,7 +24210,7 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
     for (const auto& row : metadata.histories)
       shape.histories.push_back({row.name, row.program_owner, row.state_identity,
                                  row.space_identity, row.clock_identity, row.interpolation_identity,
-                                 row.depth, row.components});
+                                 row.depth, row.components, row.ghost_depth});
     shape.temporal_provider_identity = metadata.temporal_provider_identity;
     shape.temporal_cell_count = effective_temporal_cells;
 
@@ -24469,7 +24548,8 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
                         .text(history.clock_identity)
                         .text(history.interpolation_identity)
                         .scalar(std::int32_t{history.depth})
-                        .scalar(std::int32_t{history.components});
+                        .scalar(std::int32_t{history.components})
+                        .scalar(std::int32_t{history.ghost_depth});
                   })
         .text(shape.temporal_provider_identity)
         .scalar(static_cast<std::uint64_t>(shape.temporal_cell_count))
@@ -24877,16 +24957,21 @@ void AmrSystem<Dim>::materialize_program_restart_histories(const std::vector<std
           .text(descriptor.clock_identity)
           .text(descriptor.interpolation_identity)
           .scalar(std::int32_t{descriptor.depth})
-          .scalar(std::int32_t{descriptor.components});
+          .scalar(std::int32_t{descriptor.components})
+          .scalar(std::int32_t{descriptor.ghost_depth});
       for (std::size_t level = 0; level < hierarchy.num_levels(); ++level) {
         const std::string key = exact_amr_history_key(descriptor.name, static_cast<int>(level));
         const MultiFab<Dim>& prototype =
             p_->block_state(static_cast<std::size_t>(runtime_owner), level);
         std::vector<MultiFab<Dim>> ring;
+        Extent<Dim> declared_ghosts = prototype.ghosts();
+        if (descriptor.ghost_depth >= 0)
+          for (int axis = 0; axis < Dim; ++axis)
+            declared_ghosts[axis] = descriptor.ghost_depth;
         ring.reserve(static_cast<std::size_t>(descriptor.depth));
         for (int slot = 0; slot < descriptor.depth; ++slot) {
           MultiFab<Dim> field(prototype.layout(), prototype.distribution(), prototype.local_rank(),
-                              descriptor.components, prototype.ghosts());
+                              descriptor.components, declared_ghosts);
           field.set_val(Real(0));
           ring.push_back(std::move(field));
         }
@@ -24902,6 +24987,7 @@ void AmrSystem<Dim>::materialize_program_restart_histories(const std::vector<std
         candidate.space_identity.emplace(key, descriptor.space_identity);
         candidate.clock_identity.emplace(key, descriptor.clock_identity);
         candidate.interpolation_identity.emplace(key, descriptor.interpolation_identity);
+        candidate.ghost_depth.emplace(key, descriptor.ghost_depth);
         candidate.slot_dt.emplace(
             key, std::vector<Real>(static_cast<std::size_t>(descriptor.depth), Real(0)));
         candidate.slot_sample.emplace(key,

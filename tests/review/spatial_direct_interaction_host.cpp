@@ -127,6 +127,7 @@ int retained_history_authority() {
   for (const std::string key : {"coarse", "fine"}) {
     MultiFab<1> retained(boxes, distribution, Index<1>{0}, 1, Extent<1>{}); retained.set_val(Real(2));
     manager.histories[key] = {retained, retained}; manager.depth[key] = 2; manager.owner[key] = 0;
+    manager.ghost_depth[key] = -1;
     manager.state_identity[key] = "rho"; manager.space_identity[key] = "rho-space";
     manager.clock_identity[key] = "clock"; manager.interpolation_identity[key] = "none";
     manager.initialized[key] = true; manager.fill_count[key] = 2; manager.store_pending[key] = false;

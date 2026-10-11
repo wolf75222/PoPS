@@ -1,5 +1,7 @@
 {
   "_meta": {
+    "tensor_diagonal_mg_estimate_source": "Unmeasured scheduling estimate added 2026-10-11 for test_tensor_diagonal_mg_preconditioner: 300.0 s copied from test_geometric_mg_nd because the native tensor diagonal multigrid preconditioner instantiates the same solver machinery. This repairs missing target inventory; it is not a measured cold-CI build duration. Replace from a complete CI timing artifact.",
+    "amr_declared_history_ghost_estimate_source": "Unmeasured scheduling estimate added 2026-10-11 for test_amr_history_remap_collective: 302.32 s copied from test_amr_scalar_output_history. Both instantiate the compiled scalar AMR model, context and history/regrid/checkpoint machinery. This is not a measured cold-CI build duration; replace from a complete CI timing artifact.",
     "api040_external_field_backend_estimate_source": "Unmeasured scheduling estimate added 2026-10-08 for test_external_field_backend_preparation: 2.0 s copied from test_physical_support_transfer. Both are native memory-residence and Kokkos execution/inspection contract tests with real host paths and backend-conditional device cases; no provider DSO compilation is added by this target. This is not a measured build or CTest duration. Replace from a complete cold-CI/CTest timing artifact.",
     "api040_prepared_field_rhs_estimate_source": "Unmeasured scheduling estimate added 2026-10-07 for test_prepared_field_rhs_inputs: 720.0 s copied from test_amr_synthetic_program_loader_transaction. Both build native-loader test executables and precompiled provider DSO fixtures through native_dso_compiler.hpp in the heavy-test pool; the analogue's six fixtures make this a conservative seed for the single Field value-authority fixture and context-heavy AMR test translation unit. This is not a measured build duration. Replace from the next complete cold-CI timing artifact.",
     "api040_named_device_kernel_estimate_source": "Unmeasured scheduling seed added 2026-10-04 for test_elliptic_named_device_kernels: catalog median 2.0 s, following estimate_policy. Replace from the next complete CI timing artifact. Host correctness runs are not cold-CI build or CTest timing measurements.",
@@ -10,6 +12,7 @@
       "test_amr_hierarchy_barrier_continuation",
       "test_amr_hierarchy_field_scratch",
       "test_amr_history_flux_snapshot",
+      "test_amr_history_remap_collective",
       "test_amr_layout_transfer",
       "test_amr_path_rhs_barrier",
       "test_amr_program_diffusion",
@@ -69,6 +72,7 @@
       "test_system_interface_core_session",
       "test_temporal_partition_restart",
       "test_tensor_coarse_gmres",
+      "test_tensor_diagonal_mg_preconditioner",
       "test_tensor_fac_conservative_interface",
       "test_tensor_fac_partial_hierarchy",
       "test_variable_recovery_chain"
@@ -80,7 +84,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 202,
+    "target_count": 204,
     "v12_estimate_source": "No per-target cold-build receipt exists. History snapshot and AMR transition use the 300 s heavy-template tier; collective rejection uses the 2 s parallel-share floor. Replace from the next complete cold-CI build timing artifact.",
     "unit_seconds": "modeled shard wall time: measured serial-pool TU or parallel-share floor",
     "v18_estimate_source": "Unmeasured scheduling estimates: AMR publication and general composite solver use the existing 300 s heavy-template tier; small runtime contracts use the 2 s parallel-share floor. Replace from the next complete CI timing artifact; no local timing measurements are claimed.",
@@ -199,6 +203,7 @@
   "test_generic_inversion_admissibility": 2.0,
   "test_geometric_mg": 2.0,
   "test_geometric_mg_nd": 300.0,
+  "test_tensor_diagonal_mg_preconditioner": 300.0,
   "test_geometry": 2.0,
   "test_imex_ap": 2.0,
   "test_implicit_source_nd": 2.0,
@@ -303,6 +308,7 @@
   "test_amr_hierarchy_field_scratch": 309.79,
   "test_amr_path_rhs_barrier": 309.79,
   "test_amr_scalar_output_history": 302.32,
+  "test_amr_history_remap_collective": 302.32,
   "test_mapped_disk_tensor": 2.0,
   "test_mapped_disk_tensor_fac": 2.0,
   "test_prepared_polar_poisson_inverse": 2.0,

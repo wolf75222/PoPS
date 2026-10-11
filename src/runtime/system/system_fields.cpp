@@ -1435,7 +1435,7 @@ MultiFab<Dim>& System<Dim>::register_history(const std::string& name, int lag, i
           histories.space_identity[name] != space_identity ||
           histories.clock_identity[name] != clock_identity ||
           histories.interpolation_identity[name] != interpolation_identity)) ||
-        (!qualified && histories.owner[name] != -1))
+        (!qualified && histories.owner[name] != -1) || histories.ghost_depth.at(name) != 1)
       throw std::invalid_argument("System history cannot be requalified");
     if (ncomp >= 1 && found->second.front().ncomp() != ncomp)
       throw std::invalid_argument("System history component count changed");
@@ -1474,6 +1474,7 @@ MultiFab<Dim>& System<Dim>::register_history(const std::string& name, int lag, i
   histories.fill_count[name] = 0;
   histories.store_pending[name] = false;
   histories.owner[name] = qualified ? owner : -1;
+  histories.ghost_depth[name] = 1;
   histories.slot_dt[name] = std::vector<Real>(static_cast<std::size_t>(depth), Real(0));
   histories.slot_sample[name] = std::vector<runtime::program::HistorySampleIdentity>(
       static_cast<std::size_t>(depth), runtime::program::HistorySampleIdentity::zero_start());

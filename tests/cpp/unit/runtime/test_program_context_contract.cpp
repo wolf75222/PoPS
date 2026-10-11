@@ -77,6 +77,30 @@ void install_execution_lane(NativeSystem& system, std::string identity) {
       std::make_shared<ExecutionLane>(ExecutionLane::world(std::move(identity))));
 }
 
+template <class SerialException, class Function>
+void expect_collective_exception(const ExecutionLane& lane, Function&& function) {
+  if (lane.size() == 1) {
+    EXPECT_THROW(std::forward<Function>(function)(), SerialException);
+  } else {
+    EXPECT_THROW(std::forward<Function>(function)(), std::runtime_error);
+  }
+}
+
+// These reference fixtures use one global box. eval_rhs returns only owned compact cells;
+// a rank without that box must participate in the gather instead of indexing an empty vector.
+std::vector<double> eval_single_box_rhs_global(NativeSystem& system, std::size_t cells) {
+  const auto local = system.eval_rhs("gas");
+  const auto& lane = system.prepared_boundary_execution_lane();
+  const long invalid = !local.empty() && local.size() != cells ? 1L : 0L;
+  if (all_reduce_max(invalid, lane) != 0 ||
+      all_reduce_sum(local.empty() ? 0L : 1L, lane) != 1)
+    throw std::logic_error("single-box reference RHS fixture has a different owner/layout");
+  std::vector<double> result(cells, 0.0);
+  if (!local.empty()) result = local;
+  for (double& value : result) value = all_reduce_sum(value, lane);
+  return result;
+}
+
 static_assert(std::is_same_v<decltype(std::declval<const runtime::program::ProgramContext<1>&>()
                                           .template provider_values_view<0>("", 0, 0)),
                              ProviderStorageView<1, 0>>);
@@ -112,6 +136,15 @@ NativeField native_field_like(const NativeField& field, int components,
 
 Real first_value(const NativeField& field, int component = 0) {
   return field.fab(0).view()(field.box(0).lo, component);
+}
+
+void expect_owned_first_value(const NativeField& field, Real expected) {
+  // Empty participants still execute every later collective phase; only owners read a Fab.
+  if (field.local_size() != 0) EXPECT_EQ(first_value(field), expected);
+}
+
+const Real* first_owned_storage(const NativeField& field) {
+  return field.local_size() == 0 ? nullptr : field.fab(0).view().data;
 }
 
 using GasModel = nd::IdealGasEuler<kTestDimension>;
@@ -173,7 +206,8 @@ void materialize_mean_free_density(const NativeField& state, NativeField& rhs) {
   }
 }
 
-void add_gas_block(NativeSystem& s, const std::string& name, int* projection_calls = nullptr) {
+void add_gas_block(NativeSystem& s, const std::string& name, int* projection_calls = nullptr,
+                   int ghost_depth = 1) {
   s.install_block_state_route(name, "test::state::" + name);
   const GasModel model = GasModel::prepare(Real(kGamma));
   PreparedSystemBlock<kTestDimension> prepared;
@@ -184,7 +218,7 @@ void add_gas_block(NativeSystem& s, const std::string& name, int* projection_cal
   prepared.primitive_variables = GasModel::primitive_vars();
   prepared.gamma = kGamma;
   for (int axis = 0; axis < kTestDimension; ++axis)
-    prepared.ghosts[axis] = 1;
+    prepared.ghosts[axis] = ghost_depth;
 
   const auto residual = [](NativeField& state, NativeField& output) {
     materialize_test_residual(state, output);
@@ -573,7 +607,8 @@ TEST(ProgramContextContract, LocalLinearConsumerPublishesStagedInputAndRejectsNa
   });
   sim.set_program_block_map({0});
   const auto original = sim.get_state("gas");
-  EXPECT_THROW(sim.step(0.1), std::logic_error);
+  expect_collective_exception<std::logic_error>(sim.prepared_boundary_execution_lane(),
+                                                [&] { sim.step(0.1); });
   EXPECT_EQ(kernel_calls, 0);
   EXPECT_EQ(sim.get_state("gas"), original);
   sim.stage_auxiliary_input(key, std::vector<double>(uniform_cell_count(4), 3.0));
@@ -596,7 +631,8 @@ TEST(ProgramContextContract, LocalLinearConsumerPublishesStagedInputAndRejectsNa
   EXPECT_EQ(sim.time(), time);
   EXPECT_EQ(sim.macro_step(), step);
   EXPECT_EQ(sim.auxiliary_component(key), accepted);
-  EXPECT_THROW((void)sim.capture_auxiliary_checkpoint_accepted_state(), std::logic_error);
+  expect_collective_exception<std::logic_error>(sim.prepared_boundary_execution_lane(),
+      [&] { (void)sim.capture_auxiliary_checkpoint_accepted_state(); });
   sim.stage_auxiliary_input(key, std::vector<double>(cells, 0.0));
   EXPECT_NO_THROW(sim.step(0.1));
   EXPECT_EQ(sim.get_state("gas"), solved);
@@ -687,8 +723,10 @@ TEST(ProgramContextContract, AuxiliaryReadClosureKeepsUnrelatedDirtyInputsAndDer
   EXPECT_THROW(context.prepare_provider_values("read-unrelated", 0, stage, 24), std::runtime_error);
   EXPECT_EQ(sim.auxiliary_component(derived), accepted);
   EXPECT_EQ(sim.auxiliary_component(unrelated), untouched);
-  EXPECT_THROW(context.prepare_provider_values("read-field", 0, stage, 25), std::logic_error);
-  EXPECT_THROW(context.prepare_provider_values("foreign", 0, stage, 25), std::out_of_range);
+  expect_collective_exception<std::logic_error>(context.prepared_execution_lane(),
+      [&] { context.prepare_provider_values("read-field", 0, stage, 25); });
+  expect_collective_exception<std::out_of_range>(context.prepared_execution_lane(),
+      [&] { context.prepare_provider_values("foreign", 0, stage, 25); });
   EXPECT_EQ(launches.size(), 1U);
   sim.stage_auxiliary_input(input, std::vector<double>(cells, 4.0));
   context.prepare_provider_values("read-input", 0, stage, 26);
@@ -901,10 +939,11 @@ TEST(ProgramContextContract, PreparedLinearSolveAcceptsDistinctCongruentWorkspac
       ::pops::detail::KrylovWorkspaceAccess::execution_lane(workspace);
   EXPECT_NE(&workspace_lane, &context.prepared_execution_lane());
   EXPECT_TRUE(workspace_lane.congruent_with(context.prepared_execution_lane()));
-  EXPECT_THROW((void)context.solve_prepared_linear(
+  expect_collective_exception<std::invalid_argument>(context.prepared_execution_lane(), [&] {
+    (void)context.solve_prepared_linear(
                    problem, legacy_workspace, solution, rhs,
-                   KrylovControls<kTestDimension>{method, Real(1e-12), Real(0), 4}),
-               std::invalid_argument);
+                   KrylovControls<kTestDimension>{method, Real(1e-12), Real(0), 4});
+  });
   sim.begin_step_transaction();
   SolveOutcome outcome = context.solve_prepared_linear(
       problem, workspace, solution, rhs,
@@ -1243,7 +1282,7 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
   add_gas(ref);
   ref.set_state("gas", U0);
   (void)pops::consume_solve_outcome(ref.solve_fields());
-  const std::vector<double> R0 = ref.eval_rhs("gas");
+  const std::vector<double> R0 = eval_single_box_rhs_global(ref, U0.size());
   std::vector<double> Uref(U0.size());
   for (std::size_t k = 0; k < Uref.size(); ++k) {
     Uref[k] = U0[k] + dt * R0[k];
@@ -1272,7 +1311,7 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
   });
   sim.set_program_block_map({0});
   sim.step(dt);
-  const std::vector<double> Up = sim.get_state("gas");
+  const std::vector<double> Up = sim.state_global("gas");
 
   EXPECT_TRUE(max_abs_diff(Up, Uref) < 1e-12) << "FE parity max|d|=" << max_abs_diff(Up, Uref);
   EXPECT_TRUE(max_abs_diff(Up, U0) > 1e-9) << "step did not change the state";
@@ -1308,21 +1347,23 @@ TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {
 
   ctx.commit_many({{&first, &second}, {&second, &first}});
 
-  ASSERT_GT(first.local_size(), 0);
-  ASSERT_GT(second.local_size(), 0);
-  EXPECT_EQ(first_value(first), Real(7));
-  EXPECT_EQ(first_value(second), Real(3));
+  ASSERT_GT(all_reduce_sum(static_cast<long>(first.local_size()), ctx.prepared_execution_lane()), 0);
+  ASSERT_GT(all_reduce_sum(static_cast<long>(second.local_size()), ctx.prepared_execution_lane()), 0);
+  expect_owned_first_value(first, Real(7));
+  expect_owned_first_value(second, Real(3));
 
   NativeField different_ghost_width =
       native_field_like(first, first.ncomp(), enlarged_ghosts(first, 1));
   different_ghost_width.set_val(Real(13));
-  EXPECT_THROW(ctx.commit_many({{&first, &different_ghost_width}}), std::invalid_argument);
-  EXPECT_EQ(first_value(first), Real(7));
+  expect_collective_exception<std::invalid_argument>(ctx.prepared_execution_lane(),
+      [&] { ctx.commit_many({{&first, &different_ghost_width}}); });
+  expect_owned_first_value(first, Real(7));
 
   NativeField wrong_components = native_field_like(first, first.ncomp() + 1, first.ghosts());
-  EXPECT_THROW(ctx.commit_many({{&first, &wrong_components}}), std::invalid_argument);
-  EXPECT_EQ(first_value(first), Real(7));
-  EXPECT_EQ(first_value(second), Real(3));
+  expect_collective_exception<std::invalid_argument>(ctx.prepared_execution_lane(),
+      [&] { ctx.commit_many({{&first, &wrong_components}}); });
+  expect_owned_first_value(first, Real(7));
+  expect_owned_first_value(second, Real(3));
 }
 
 TEST(ProgramContextContract, GeneratedScratchIsPersistentExactAndNonAliasing) {
@@ -1336,17 +1377,18 @@ TEST(ProgramContextContract, GeneratedScratchIsPersistentExactAndNonAliasing) {
   NativeField& state = ctx.state(0);
 
   NativeField& rhs = ctx.rhs_scratch(41, 0, state);
-  ASSERT_GT(rhs.local_size(), 0);
-  Real* const rhs_storage = rhs.fab(0).view().data;
+  ASSERT_GT(all_reduce_sum(static_cast<long>(rhs.local_size()), ctx.prepared_execution_lane()), 0);
+  const Real* const rhs_storage = first_owned_storage(rhs);
   rhs.set_val(Real(9));
   const AllocationEventStats before_reuse = allocation_event_stats();
   NativeField& reused = ctx.rhs_scratch(41, 0, state);
   const AllocationEventStats after_reuse = allocation_event_stats();
   EXPECT_EQ(&reused, &rhs);
-  EXPECT_EQ(reused.fab(0).view().data, rhs_storage);
+  EXPECT_EQ(first_owned_storage(reused), rhs_storage);
   EXPECT_EQ(after_reuse.fab_calls, before_reuse.fab_calls);
   EXPECT_EQ(after_reuse.fab_bytes, before_reuse.fab_bytes);
-  EXPECT_EQ(first_value(reused), Real(0)) << "a retry must not observe provisional scratch bytes";
+  // The owner must not observe provisional bytes when an exact scratch slot is reused.
+  expect_owned_first_value(reused, Real(0));
 
   NativeField& other_lane = ctx.rhs_scratch(41, 1, state);
   NativeField& provisional_state = ctx.scratch_state(41, 0, state);
@@ -1398,6 +1440,43 @@ TEST(ProgramContextContract, ScalarStorageAllocationConvergesRankLocalFailures) 
   const auto shared = ctx.alloc_shared_scalar_field_for_block(0, 1, 1);
   ASSERT_NE(shared, nullptr);
   EXPECT_NO_THROW(ctx.require_scalar_sampling_layout(0, ctx.state(0), *shared, 0));
+}
+
+TEST(ProgramContextContract, HistoryDeclaredScalarHaloDoesNotInheritWiderStateStencil) {
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.program-context.scalar-history-halo");
+  add_gas_block(sim, "gas", nullptr, 2);
+  sim.set_program_block_map({0});
+  NativeProgramContext ctx(&sim);
+  ctx.configure_primary_clock("clock.scalar-history");
+  ctx.begin_step(.01);
+  ctx.register_history("full_state", 1);
+  ctx.register_history("potential", 1, 1, 0, "potential-state", "scalar-field",
+                         "clock.scalar-history", "none", 1);
+  {
+    auto& state_ring = ctx.history_zero_start("full_state", 0);
+    auto& scalar_ring = ctx.history_zero_start("potential", 0, 1);
+    for (int axis = 0; axis < kTestDimension; ++axis) {
+      EXPECT_EQ(state_ring.ghosts()[axis], 2);
+      EXPECT_EQ(scalar_ring.ghosts()[axis], 1);
+    }
+  }
+  auto phi = ctx.alloc_scalar_field_for_block(0, 1, 1);
+  phi.set_val(Real(9));
+  EXPECT_NO_THROW(ctx.store_history("potential", phi));
+  const auto& stored = ctx.history("potential", 0, 1);
+  EXPECT_EQ(stored.ghosts(), phi.ghosts());
+  EXPECT_EQ(difference_sum_sq_all(stored, phi), Real(0));
+  auto wider_phi = native_field_like(phi, 1, ctx.state(0).ghosts());
+  wider_phi.set_val(Real(10));
+  EXPECT_ANY_THROW(ctx.store_history("potential", wider_phi));
+  EXPECT_THROW(ctx.register_history("potential", 1, 1, 0, "potential-state", "scalar-field",
+                                   "clock.scalar-history", "none", 2), std::runtime_error);
+  EXPECT_THROW(ctx.register_history("invalid", 1, 1, 0, "state", "space", "clock", "none", -2),
+               std::invalid_argument);
+  EXPECT_EQ(difference_sum_sq_all(ctx.history("potential", 0, 1), phi), Real(0));
 }
 
 TEST(ProgramContextContract, OperatorSessionSnapshotFailureConvergesBeforeBoundaryPreparation) {
@@ -1460,10 +1539,10 @@ TEST(ProgramContextContract,
   NativeField stage_b = native_field_like(live_b, live_b.ncomp(), live_b.ghosts());
   stage_a.set_val(Real(7));
   stage_b.set_val(Real(9));
-  ASSERT_GT(live_a.local_size(), 0);
-  ASSERT_GT(live_b.local_size(), 0);
-  Real* const live_a_storage = live_a.fab(0).view().data;
-  Real* const live_b_storage = live_b.fab(0).view().data;
+  ASSERT_GT(all_reduce_sum(static_cast<long>(live_a.local_size()), ctx.prepared_execution_lane()), 0);
+  ASSERT_GT(all_reduce_sum(static_cast<long>(live_b.local_size()), ctx.prepared_execution_lane()), 0);
+  const Real* const live_a_storage = first_owned_storage(live_a);
+  const Real* const live_b_storage = first_owned_storage(live_b);
 
   auto incomplete_point = point(500);
   incomplete_point.clock.clear();
@@ -1477,10 +1556,10 @@ TEST(ProgramContextContract,
                                            {{0, &stage_a}, {1, &stage_b}});
   };
   EXPECT_THROW((void)missing_field_solve(), std::out_of_range);
-  EXPECT_EQ(live_a.fab(0).view().data, live_a_storage);
-  EXPECT_EQ(live_b.fab(0).view().data, live_b_storage);
-  EXPECT_EQ(first_value(live_a), Real(2));
-  EXPECT_EQ(first_value(live_b), Real(3));
+  EXPECT_EQ(first_owned_storage(live_a), live_a_storage);
+  EXPECT_EQ(first_owned_storage(live_b), live_b_storage);
+  expect_owned_first_value(live_a, Real(2));
+  expect_owned_first_value(live_b, Real(3));
 
   const AllocationEventStats before_retry = allocation_event_stats();
   EXPECT_THROW((void)missing_field_solve(), std::out_of_range);
@@ -1489,8 +1568,8 @@ TEST(ProgramContextContract,
   EXPECT_EQ(after_retry.fab_bytes, before_retry.fab_bytes);
   EXPECT_EQ(after_retry.communication_calls, before_retry.communication_calls);
   EXPECT_EQ(after_retry.communication_bytes, before_retry.communication_bytes);
-  EXPECT_EQ(live_a.fab(0).view().data, live_a_storage);
-  EXPECT_EQ(live_b.fab(0).view().data, live_b_storage);
+  EXPECT_EQ(first_owned_storage(live_a), live_a_storage);
+  EXPECT_EQ(first_owned_storage(live_b), live_b_storage);
 
   // The complete request is validated before the first substitution: neither a cross-owner live
   // alias nor one wrong ghost footprint may expose a provisional state.
@@ -1502,10 +1581,10 @@ TEST(ProgramContextContract,
   EXPECT_THROW((void)ctx.solve_fields_from_blocks_at(point(503), 503, "missing-provider",
                                                      {{0, &stage_a}, {1, &wrong_layout}}),
                std::invalid_argument);
-  EXPECT_EQ(live_a.fab(0).view().data, live_a_storage);
-  EXPECT_EQ(live_b.fab(0).view().data, live_b_storage);
-  EXPECT_EQ(first_value(live_a), Real(2));
-  EXPECT_EQ(first_value(live_b), Real(3));
+  EXPECT_EQ(first_owned_storage(live_a), live_a_storage);
+  EXPECT_EQ(first_owned_storage(live_b), live_b_storage);
+  expect_owned_first_value(live_a, Real(2));
+  expect_owned_first_value(live_b, Real(3));
 
   // A Program may own only a subset of a larger NativeSystem. The exact block map selects NativeSystem block b,
   // while the context-owned native vector retains the required NativeSystem-sized nullptr padding.
@@ -1577,7 +1656,7 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
   add_gas(ref);
   ref.set_state("gas", U0);
   (void)pops::consume_solve_outcome(ref.solve_fields());
-  const std::vector<double> R0 = ref.eval_rhs("gas");
+  const std::vector<double> R0 = eval_single_box_rhs_global(ref, U0.size());
   std::vector<double> U1(U0.size());
   for (std::size_t k = 0; k < U1.size(); ++k) {
     U1[k] = U0[k] + dt * R0[k];
@@ -1585,7 +1664,7 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
   ref.set_state("gas", U1);
   (void)pops::consume_solve_outcome(
       ref.solve_fields());  // re-solve the fields at the stage-1 state
-  const std::vector<double> R1 = ref.eval_rhs("gas");
+  const std::vector<double> R1 = eval_single_box_rhs_global(ref, U0.size());
   std::vector<double> Uref(U0.size());
   for (std::size_t k = 0; k < Uref.size(); ++k) {
     Uref[k] = 0.5 * U0[k] + 0.5 * U1[k] + 0.5 * dt * R1[k];
@@ -1629,7 +1708,7 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
   });
   sim.set_program_block_map({0});
   sim.step(dt);
-  const std::vector<double> Up = sim.get_state("gas");
+  const std::vector<double> Up = sim.state_global("gas");
 
   EXPECT_TRUE(max_abs_diff(Up, Uref) < 1e-12) << "SSPRK2 parity max|d|=" << max_abs_diff(Up, Uref);
   EXPECT_TRUE(max_abs_diff(Up, U0) > 1e-9) << "SSPRK2 step did not change the state";
@@ -1656,7 +1735,7 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   NativeField legacy_value = ctx.alloc_scalar_field(1, 1);
   legacy_value.set_val(Real(6));
   EXPECT_NO_THROW(ctx.store_history("legacy_no_interval", legacy_value));
-  EXPECT_EQ(first_value(ctx.history("legacy_no_interval", 1)), Real(6));
+  expect_owned_first_value(ctx.history("legacy_no_interval", 1), Real(6));
   EXPECT_EQ(sim.history_slot_dt("legacy_no_interval", 0), 0.0);
   const auto legacy_samples = runtime::program::decode_history_sample_identity(
       sim.history_sample_identity("legacy_no_interval"), "legacy_no_interval", -1, 2);
@@ -1795,13 +1874,13 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   EXPECT_EQ(sim.history_slot_dt("h", 2), dt);
   NativeField interpolated = ctx.rhs_scratch_like(U);
   ctx.interpolate_history_linear(interpolated, "h", 2, 0, "clock.macro", "clock.fast", -1, Real(0));
-  EXPECT_EQ(first_value(interpolated), Real(3.5));
+  expect_owned_first_value(interpolated, Real(3.5));
   ctx.rotate_histories();
   EXPECT_EQ(sim.history_fill_count("h"), 2);
   EXPECT_EQ(sim.history_slot_dt("h", 1), next_dt);
   EXPECT_EQ(sim.history_slot_dt("h", 2), dt);
-  EXPECT_EQ(first_value(ctx.history("h", 1)), Real(4));
-  EXPECT_EQ(first_value(ctx.history("h", 2)), Real(3));
+  expect_owned_first_value(ctx.history("h", 1), Real(4));
+  expect_owned_first_value(ctx.history("h", 2), Real(3));
 
   // diagnostics: record_scalar -> program_diagnostic round-trip.
   ctx.record_scalar("mass", ctx.sum_component(U, 0));
@@ -2690,6 +2769,32 @@ prepare_topology_context(int blocks) {
       0);
   context->configure_primary_clock("clock.topology");
   return {std::move(system), std::move(context)};
+}
+
+TEST(ProgramContextContract, AmrHistoryDeclaredScalarHaloPreservesExactStorageContract) {
+  ensure_kokkos();
+  comm_init();
+  auto [system, context] = prepare_topology_context(1);
+  context->begin_step(.01);
+  context->register_history("scalar_observation", 1, 1, 0,
+      "scalar-history:scalar_observation", "scalar-output-field-v1", "clock.topology", "none", 0);
+  {
+    const auto& slot = context->history_zero_start("scalar_observation", 0, 1, 0);
+    for (int axis = 0; axis < kTestDimension; ++axis)
+      EXPECT_EQ(slot.ghosts()[axis], 0);
+  }
+  auto value = context->alloc_scalar_field(1, 0);
+  value.set_val(Real(5));
+  EXPECT_NO_THROW(context->store_history("scalar_observation", value, 0));
+  const auto& stored = context->history("scalar_observation", 0, 0);
+  EXPECT_EQ(stored.ghosts(), value.ghosts());
+  EXPECT_EQ(difference_sum_sq_all(stored, value), Real(0));
+  auto wider = context->alloc_scalar_field(1, 1);
+  wider.set_val(Real(6));
+  EXPECT_ANY_THROW(context->store_history("scalar_observation", wider, 0));
+  EXPECT_THROW(context->register_history("scalar_observation", 1, 1, 0,
+      "scalar-history:scalar_observation", "scalar-output-field-v1", "clock.topology", "none", 1),
+      std::runtime_error);
 }
 
 auto prepare_topology_regrid(TopologySystem& system, TopologyContext& context) {

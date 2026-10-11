@@ -1870,6 +1870,7 @@ class ProgramContext {
       if (history.depth.at(name) != ring_depth || history.owner.at(name) != owner ||
           existing->second.front().ncomp() != components ||
           existing->second.front().ghosts() != ghosts ||
+          history.ghost_depth.at(name) != ghost_depth ||
           history.state_identity.at(name) != state_identity ||
           history.space_identity.at(name) != space_identity ||
           history.clock_identity.at(name) != clock_identity ||
@@ -1891,6 +1892,7 @@ class ProgramContext {
     history.space_identity[name] = space_identity;
     history.clock_identity[name] = clock_identity;
     history.interpolation_identity[name] = interpolation_identity;
+    history.ghost_depth[name] = ghost_depth;
     history.slot_dt[name] = std::vector<Real>(static_cast<std::size_t>(ring_depth), Real(0));
     history.slot_sample[name].assign(static_cast<std::size_t>(ring_depth),
                                      HistorySampleIdentity::zero_start());

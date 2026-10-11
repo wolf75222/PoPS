@@ -359,7 +359,7 @@ def _emit_flux_expression_budget(program: Any) -> str:
 
 
 def _emit_checkpoint_shape_metadata(program: Any) -> str:
-    """Emit the frozen POPSAND4 shape before any native prelude allocation."""
+    """Emit the frozen checkpoint shape before any native prelude allocation."""
     block_idx = program._block_indices()
     temporal = program.temporal_manifest()
     history_manifest = {row["name"]: row for row in temporal["histories"]}
@@ -380,7 +380,7 @@ def _emit_checkpoint_shape_metadata(program: Any) -> str:
         storage_descriptor = descriptor(program, name)
         if storage_descriptor is not None:
             state_identity = storage_descriptor
-        from pops.codegen.program_history_identity import history_space_identity
+        from pops.codegen.program_history_identity import history_space_identity, history_ghost_depth
         space_identity = history_space_identity(program, name)
         row = history_manifest[name]
         interpolation = json.dumps(row["interpolation"], sort_keys=True, separators=(",", ":"))
@@ -395,6 +395,7 @@ def _emit_checkpoint_shape_metadata(program: Any) -> str:
                 interpolation,
                 int(lag) + 1,
                 -1 if component is None else int(component),
+                history_ghost_depth(program, name),
             )
         )
 
@@ -434,6 +435,7 @@ def _emit_checkpoint_shape_metadata(program: Any) -> str:
         + string_accessor("pops_program_checkpoint_history_interpolation_identity", 5, histories)
         + integer_accessor("pops_program_checkpoint_history_depth", 6)
         + integer_accessor("pops_program_checkpoint_history_components", 7)
+        + integer_accessor("pops_program_checkpoint_history_ghost_depth", 8)
         + f'extern "C" int pops_program_checkpoint_logical_clock_count() {{ return {len(clocks)}; }}\n'
         + string_accessor("pops_program_checkpoint_logical_clock_identity", 0, clocks)
         + 'extern "C" const char* pops_program_checkpoint_primary_clock_identity() {\n'

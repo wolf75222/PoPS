@@ -314,6 +314,8 @@ def test_authentic_native_guard_and_collective_helper_with_host_storage_and_tran
     public = (directory / "amr_program_context_history_checkpoint_public.inc").read_text()
     services = (directory / "amr_program_context_history_checkpoint_services.inc").read_text()
     collective = (directory / "amr_program_context_flux_expression_services.inc").read_text()
+    runtime = (directory / "program_runtime_state.hpp").read_text()
+    metadata = (directory / "module_metadata.hpp").read_text()
     methods = "\n".join((
         _cpp_method(collective, "void require_prepared_lane_("),
         "template <class Build, class Contract>\n" + _cpp_method(collective, "auto prepare_history_mutation_collectively_("),
@@ -325,12 +327,22 @@ def test_authentic_native_guard_and_collective_helper_with_host_storage_and_tran
         _cpp_method(public, "void store_global_field_history("),
     ))
     source = tmp_path / "actual_guard.cpp"
-    source.write_text(_HOST_PREFIX + methods + _HOST_SUFFIX)
+    prefix = _HOST_PREFIX.replace(
+        "// CHECKPOINT_HISTORY_METADATA",
+        _cpp_method(metadata, "struct ProgramCheckpointHistoryMetadata") + ";",
+    ).replace(
+        "// DECLARED_HISTORY_GHOSTS",
+        _cpp_method(runtime, "[[nodiscard]] Extent<Dim> declared_ghosts("),
+    ).replace(
+        "// FROZEN_OUTPUT_HISTORY_PROJECTION",
+        _cpp_method(runtime, "const ProgramCheckpointHistoryMetadata& require_frozen_output_history_projection("),
+    )
+    source.write_text(prefix + methods + _HOST_SUFFIX)
     executable = tmp_path / "actual_guard"
     subprocess.run(["/usr/bin/clang++", "-std=c++20", "-pthread", "-O0", str(source), "-o", str(executable)],
                    check=True, capture_output=True, text=True)
     result = subprocess.run([str(executable)], check=True, capture_output=True, text=True)
-    assert result.stdout.strip() == "actual guard: 41 host counterchecks passed"
+    assert result.stdout.strip() == "actual guard: 43 host counterchecks passed"
 
 
 _HOST_PREFIX = r'''
@@ -355,6 +367,9 @@ _HOST_PREFIX = r'''
 #define POPS_HD
 using Real=double;
 template<int> using Index=int;
+template<int N> using Extent=std::array<int,N>;
+inline constexpr std::string_view kOutputHistoryProjectionSpace="pops.program.scalar-output-history-projection@2";
+// CHECKPOINT_HISTORY_METADATA
 namespace Kokkos { bool isfinite(double x) { return std::isfinite(x); } }
 thread_local bool launch_fault=false, fence_fault=false, contract_fault=false;
 thread_local int fences=0;
@@ -381,11 +396,18 @@ struct Field {
  const Fab& fab(std::size_t i)const{return fabs.at(i);} int box(std::size_t i)const{return fabs.at(i).data.size();}
 };
 struct Manager {
+ static constexpr int Dim=2;
  std::map<std::string,std::vector<Field>> histories;
- std::map<std::string,int> owner,depth;
- std::map<std::string,std::string> state_identity,space_identity,clock_identity;
+ std::map<std::string,int> owner,depth,ghost_depth;
+ std::map<std::string,std::string> state_identity,space_identity,clock_identity,interpolation_identity;
+ // DECLARED_HISTORY_GHOSTS
 };
-struct Runtime { Manager hist_; };
+struct Runtime {
+ Manager hist_; bool artifact_backed_=false; std::string installed_hash_;
+ std::vector<int> block_map_;
+ struct Metadata { std::vector<ProgramCheckpointHistoryMetadata> histories; } checkpoint_metadata_;
+ // FROZEN_OUTPUT_HISTORY_PROJECTION
+};
 struct Facade {
  std::array<Field,2> states; long macro_step()const{return 4;}
  const Field& prepared_amr_block_state(int owner,int)const{return states.at(owner);}
@@ -432,7 +454,7 @@ struct Context {
  Context(Transport& t,int rank):lane{&t,rank} {
   for(auto& state:facade.states){state.rank=rank;state.components=5;}
   auto& m=runtime.hist_; std::string key="pops.amr.level-history.v1/0/4:ring";
-  Field ring;ring.rank=rank; m.histories[key]={ring};m.owner[key]=0;m.depth[key]=1;
+  Field ring;ring.rank=rank; m.histories[key]={ring};m.owner[key]=0;m.depth[key]=1;m.ghost_depth[key]=-1;
   m.state_identity[key]="issued-descriptor";m.space_identity[key]="scalar-output-field-v1";m.clock_identity[key]="macro";
  }
  const ExecutionLane& prepared_execution_lane()const{return lane;}
@@ -448,7 +470,7 @@ int main() {
  int checks=0;
  // In every negative case only rank zero is altered. Actual preparation must
  // vote before agreement/store; both host ranks refuse with no publication.
- for(int attack=0;attack<40;++attack) {
+ for(int attack=0;attack<42;++attack) {
   Transport transport; std::array<bool,2> refused{};
   std::array<int,2> stores{},fence_counts{};
   std::array<std::thread,2> threads;
@@ -477,6 +499,8 @@ int main() {
     case 35:point.application_identity="foreign";break;
     case 36:launch_fault=true;break;case 37:fence_fault=true;break;case 38:contract_fault=true;break;
     case 39:point.stage++;break; // Locally valid but exact operation contracts disagree.
+    case 40:m.ghost_depth[key]=2;break;
+    case 41:m.ghost_depth.clear();break;
    }
    try{ctx.store_global_field_history("ring",value,owner,descriptor,witness,point);}
    catch(...){refused[rank]=true;}
@@ -500,7 +524,7 @@ int main() {
   ctx.store_global_field_history("ring",value,0,"issued-descriptor","issued-State0",{});stores[rank]=ctx.stores;
  });
  for(auto& thread:threads)thread.join();assert(stores[0]==1&&stores[1]==1);++checks;
- assert(checks==41);
+ assert(checks==43);
  std::cout<<"actual guard: "<<checks<<" host counterchecks passed\n";
 }
 '''

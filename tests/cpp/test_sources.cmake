@@ -4,6 +4,7 @@ set(POPS_CPP_TEST_SOURCE_test_amr_coupled_source_role_strict "tests/cpp/integrat
 set(POPS_CPP_TEST_SOURCE_test_amr_diagnostics "tests/cpp/integration/amr/test_amr_diagnostics.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_distribute_coarse_serial "tests/cpp/integration/amr/test_amr_distribute_coarse_serial.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_history_ring "tests/cpp/integration/amr/test_amr_history_ring.cpp")
+set(POPS_CPP_TEST_SOURCE_test_amr_history_remap_collective "tests/cpp/unit/runtime/test_amr_history_remap_collective.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_synthetic_program_loader_transaction "tests/cpp/integration/native_loader/test_amr_synthetic_program_loader_transaction.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_multiblock_compiled "tests/cpp/integration/amr/test_amr_multiblock_compiled.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_multiblock_coupled_source "tests/cpp/integration/amr/test_amr_multiblock_coupled_source.cpp")

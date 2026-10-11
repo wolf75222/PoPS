@@ -765,6 +765,9 @@ pops_add_gtest_suite(NAME test_amr_system_contract SOURCES "${_src}" EXTRA_LIBS 
 pops_test_source(_src test_amr_scalar_output_history)
 pops_add_gtest_suite(NAME test_amr_scalar_output_history SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr RUNTIME_DISCOVERY)
 
+pops_test_source(_src test_amr_history_remap_collective)
+pops_add_gtest_suite(NAME test_amr_history_remap_collective SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr LABELS unit runtime amr medium RUNTIME_DISCOVERY)
+
 pops_test_source(_src test_amr_system_twoblock)
 pops_add_gtest_suite(NAME test_amr_system_twoblock SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
@@ -1012,6 +1015,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_amr_hierarchy_barrier_continuation 2)
   set(POPS_MPI_RANKS_test_amr_path_rhs_barrier 2)
   set(POPS_MPI_RANKS_test_amr_scalar_output_history 2)
+  set(POPS_MPI_RANKS_test_amr_history_remap_collective 2)
   set(POPS_MPI_RANKS_test_amr_hierarchy_field_scratch 2)
   set(POPS_MPI_RANKS_test_amr_synchronized_continuation 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_substeps 2)
@@ -1212,6 +1216,7 @@ if(POPS_HAS_MPI)
     # Canonical fine subfaces and signed NCP terms publish before any level update.
     test_amr_path_rhs_barrier
     test_amr_scalar_output_history
+    test_amr_history_remap_collective
     # Rank-local field shape and solve-identity refusals must remain collective.
     test_amr_hierarchy_field_scratch
     test_amr_synchronized_continuation

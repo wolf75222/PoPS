@@ -1,5 +1,7 @@
 {
   "_meta": {
+    "tensor_diagonal_mg_estimate_source": "Unmeasured scheduling estimate added 2026-10-11 for test_tensor_diagonal_mg_preconditioner: 0.1 s copied from test_geometric_mg_nd for the three native multigrid preconditioner storage/coefficient/zero-input contracts. This repairs missing target inventory; it is not a measured CTest duration. Replace from a complete CTest timing artifact.",
+    "amr_declared_history_ghost_estimate_source": "Unmeasured scheduling estimate added 2026-10-11 for test_amr_history_remap_collective: 1.0 s copied from test_amr_scalar_output_history. The three native cases cover halo1 histories on halo2 State, real regrid, rank-local tampering/rollback, and wire descriptor refusal with a serial executable and MPI2 variant. This is not a measured CTest duration; replace from a complete CTest timing artifact.",
     "api040_external_field_backend_estimate_source": "Unmeasured scheduling estimate added 2026-10-08 for test_external_field_backend_preparation: 0.2 s copied from test_physical_support_transfer. Both are native memory-residence and Kokkos execution/inspection contract tests with real host paths and backend-conditional device cases; no provider DSO compilation is added by this target. This is not a measured build or CTest duration. Replace from a complete cold-CI/CTest timing artifact.",
     "api040_prepared_field_rhs_estimate_source": "Unmeasured scheduling estimate added 2026-10-07 for test_prepared_field_rhs_inputs: 45.0 s copied from the test_program_loader/test_amr_hierarchy_field_scratch native-loader tier. The new suite covers real compiled-Program loading, value-authority refusal, rollback and multilevel Field RHS checks, with a serial executable and an np2 variant. Its provider DSO is compiled during the build and is charged to build_durations.json, not measured as CTest work here. This is not a measured test duration. Replace from the next complete CTest timing artifact.",
     "api040_named_device_kernel_estimate_source": "Unmeasured scheduling seed added 2026-10-04 for test_elliptic_named_device_kernels: catalog median 0.05 s, following estimate_policy. Replace from the next complete CI timing artifact. Host correctness runs are not cold-CI build or CTest timing measurements.",
@@ -10,6 +12,7 @@
       "test_amr_hierarchy_barrier_continuation",
       "test_amr_hierarchy_field_scratch",
       "test_amr_history_flux_snapshot",
+      "test_amr_history_remap_collective",
       "test_amr_layout_transfer",
       "test_amr_path_rhs_barrier",
       "test_amr_program_diffusion",
@@ -68,6 +71,7 @@
       "test_system_interface_core_session",
       "test_temporal_partition_restart",
       "test_tensor_coarse_gmres",
+      "test_tensor_diagonal_mg_preconditioner",
       "test_tensor_fac_conservative_interface",
       "test_tensor_fac_partial_hierarchy",
       "test_variable_recovery_chain"
@@ -79,7 +83,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 202,
+    "target_count": 204,
     "unit_seconds": "aggregate CTest wall time per build target",
     "v12_estimate_source": "The edd85c10f6184e7b14b048ee16d5cc39bc606b62 full CTest diagnostic observed approximately 0.7 s history-snapshot, 0.52 s AMR-transition, and 0.5 s collective-rejection aggregate work. Each is conservatively scheduled at 1 s; these are scheduling estimates, not controlled performance measurements.",
     "v18_estimate_source": "Unmeasured analogous-target scheduling estimates: AMR publication uses test_amr_program_diffusion; general composite field uses test_composite_fac_variable_k; physical support transfer uses test_nd_transfer; prepared resource cache uses test_cache_manager. Replace from the next complete CI timing artifact; no local timing measurements are claimed.",
@@ -203,6 +207,7 @@
   "test_generic_inversion_admissibility": 0.01,
   "test_geometric_mg": 0.14,
   "test_geometric_mg_nd": 0.1,
+  "test_tensor_diagonal_mg_preconditioner": 0.1,
   "test_geometry": 0.01,
   "test_imex_ap": 0.01,
   "test_implicit_source_nd": 0.02,
@@ -307,6 +312,7 @@
   "test_amr_hierarchy_field_scratch": 45.0,
   "test_amr_path_rhs_barrier": 10.0,
   "test_amr_scalar_output_history": 1.0,
+  "test_amr_history_remap_collective": 1.0,
   "test_mapped_disk_tensor": 14.12,
   "test_mapped_disk_tensor_fac": 45.0,
   "test_prepared_polar_poisson_inverse": 2.92,
