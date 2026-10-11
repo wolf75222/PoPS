@@ -42,6 +42,9 @@ from pops.codegen._compile_emit import (
     model_hash,
 )
 from pops.codegen._backends import lower_backend
+from pops.codegen._native_toolchain import (
+    capture_native_toolchain, native_toolchain_flags, verify_native_toolchain,
+)
 from pops.codegen._compile_command_redact import _redact_compile_command  # noqa: F401
 from pops.codegen.compile_link_flags import (
     deterministic_component_link_flags, deterministic_program_link_flags,
@@ -65,6 +68,7 @@ def compile_native(
     native_field_roles: Any = None,
     consumer_owner_qid: Any = None,
     declare_auxiliary_providers: bool = True,
+    _toolchain_capture: Any = None,
 ) -> Any:
     """Backend "production": generate the NATIVE LOADER (emit_cpp_native_loader)
     and compile it into a .so loadable by System.add_native_block
@@ -75,6 +79,9 @@ def compile_native(
     from pops.codegen._compile_platform import require_shared_library_compile_platform
 
     require_shared_library_compile_platform("compile_native", windows_supported=True)
+    toolchain_capture = (_toolchain_capture if _toolchain_capture is not None
+                         else capture_native_toolchain())
+    verify_native_toolchain(toolchain_capture)
     if include is None:
         include = pops_include()
     sig = _check_headers_match_module(include)
@@ -96,7 +103,9 @@ def compile_native(
         declare_auxiliary_providers=declare_auxiliary_providers,
     )
     cc, native_compile_flags, native_link_flags = pops_loader_build_flags(cxx)
+    native_compile_flags = native_toolchain_flags(toolchain_capture, native_compile_flags)
     native_link_flags = deterministic_component_link_flags(native_link_flags)
+    native_link_flags = native_toolchain_flags(toolchain_capture, native_link_flags)
     if not cc:
         raise RuntimeError(
             "compile_native: no C++ compiler found. The PRODUCTION native route is REQUIRED for "
@@ -150,17 +159,29 @@ def compile_native(
                 '-DPOPS_HEADER_SIG="%s"' % sig,
                 *native_compile_flags,
             ]
-            dependency_flags = ["-MMD", "-MF", dependency_file] if native_components else []
+            dependency_flags = (["-MMD", "-MF", dependency_file]
+                                if native_components or toolchain_capture is not None else [])
             cmd = [cc, *flags, *dependency_flags, "-I", include, *component_flags,
                    cpp, "-o", so_path, *native_link_flags]
-        from pops.codegen.model_compile_evidence import retain
-        retain(so_path, cpp, cmd, sig, _run_compile)
-        if native_components:
-            from pops.native_components import compiler_include_roots, verify_prepared_native_dependencies
-            verify_prepared_native_dependencies(
-                dependency_file, generated_source=cpp, pops_include_root=include,
-                staged_components=staged_authorities,
-                toolchain_include_roots=compiler_include_roots(native_compile_flags))
+        from pops.codegen.model_compile_evidence import paths, retain
+        try:
+            verify_native_toolchain(toolchain_capture)
+            retain(so_path, cpp, cmd, sig, _run_compile)
+            if native_components or toolchain_capture is not None:
+                from pops.native_components import compiler_include_roots, verify_prepared_native_dependencies
+                verify_prepared_native_dependencies(
+                    dependency_file, generated_source=cpp, pops_include_root=include,
+                    staged_components=staged_authorities,
+                    toolchain_include_roots=compiler_include_roots(native_compile_flags),
+                    toolchain_metadata=toolchain_capture)
+            verify_native_toolchain(toolchain_capture)
+        except (RuntimeError, TypeError, ValueError):
+            for leftover in (so_path, *paths(so_path)):
+                try:
+                    os.remove(leftover)
+                except FileNotFoundError:
+                    pass
+            raise
     return so_path
 
 
@@ -224,6 +245,7 @@ def compile_model(
     m._check_require_metadata(require_metadata, backend)
 
     eff_cxx = _native_kokkos_compiler(cxx)
+    toolchain_capture = capture_native_toolchain()
     abi_key = _abi_key_python(include, eff_cxx, std)
     from pops.codegen._artifact_identity import model_artifact_spec
 
@@ -247,6 +269,7 @@ def compile_model(
         hoist_reciprocals=hoist_reciprocals,
         consumer_owner_qid=consumer_owner_qid,
         declare_auxiliary_providers=declare_auxiliary_providers,
+        toolchain_capture=toolchain_capture,
     )
 
     def _compile_and_authenticate(path: Any, destination: Any = None) -> Any:
@@ -264,8 +287,10 @@ def compile_model(
                                 or target == "amr_system" else None),
             consumer_owner_qid=consumer_owner_qid,
             declare_auxiliary_providers=declare_auxiliary_providers,
+            _toolchain_capture=toolchain_capture,
         )
         read(out_path, require=model_source_policy != "allow_missing")
+        verify_native_toolchain(toolchain_capture)
         if destination is None:
             write_artifact_sidecar(
                 out_path, semantic_identity=semantic_identity, spec_identity=spec_identity
@@ -295,6 +320,7 @@ def compile_model(
                     so_path, semantic_identity=semantic_identity, spec_identity=spec_identity
                 )
                 read(so_path, require=model_source_policy == "require")
+                verify_native_toolchain(toolchain_capture)
                 return so_path
             staging = _artifact_cache_staging_path(so_path)
             try:
@@ -556,7 +582,10 @@ def _compile_problem_impl(
     for component in native_components:
         component.verify_builtin_headers(include)
     cc, cflags, lflags = pops_loader_build_flags(cxx)
+    toolchain_capture = capture_native_toolchain()
+    cflags = native_toolchain_flags(toolchain_capture, cflags)
     lflags = deterministic_program_link_flags(lflags)
+    lflags = native_toolchain_flags(toolchain_capture, lflags)
     eff_std = _probe_cxx_std(cc, std or loader_cxx_std())
     abi_key = "%s|%s|%s|dim=%d" % (sig, cc, eff_std, native_dimension)
     # Semantic, artifact-spec and final binary identities remain independently versioned.
@@ -581,6 +610,7 @@ def _compile_problem_impl(
         source=src,
         cflags=cflags,
         lflags=lflags,
+        toolchain_capture=toolchain_capture,
         optflags=optflags,
         libraries=library_manifests,
         native_components=[
@@ -656,6 +686,7 @@ def _compile_problem_impl(
         # Compiler writes never target a shared content-addressed path.  Only a fully compiled and
         # authenticated staging pair is atomically promoted while the identity lock is held.
         compile_path = _artifact_cache_staging_path(so_path) if staged else so_path
+        published = False
         gen_src_path = os.path.splitext(so_path)[0] + ".cpp" if cenv.keep_generated else None
         try:
             with tempfile.TemporaryDirectory() as tmp:
@@ -729,6 +760,7 @@ def _compile_problem_impl(
                         gen_src_path = None
                 cenv.log("compile_problem: invoking %s" % compile_command, level="debug")
                 try:
+                    verify_native_toolchain(toolchain_capture)
                     _run_compile(cmd, "compile_problem (backend production)")
                     from pops.native_components import (
                         compiler_include_roots,
@@ -741,6 +773,7 @@ def _compile_problem_impl(
                         pops_include_root=include,
                         staged_components=tuple(staged_component_authorities),
                         toolchain_include_roots=compiler_include_roots(cflags),
+                        toolchain_metadata=toolchain_capture,
                     )
                     if pops_header_signature(include) != sig:
                         raise RuntimeError(
@@ -763,6 +796,7 @@ def _compile_problem_impl(
                         "the .cpp with a full provenance banner (IR + hashes + flags + command)."
                         % (exc, getattr(time, "name", "problem"), failed_src)
                     ) from exc
+            verify_native_toolchain(toolchain_capture)
             if staged:
                 binary, artifact = publish_staged_artifact(
                     compile_path,
@@ -776,6 +810,7 @@ def _compile_problem_impl(
                     semantic_identity=semantic,
                     spec_identity=spec_identity,
                 )
+            published = True
             _record_artifact_identity(so_path, spec_identity)
             cenv.log("compile_problem: compiled -> %s" % so_path)
             return _compiled_handle(
@@ -785,7 +820,7 @@ def _compile_problem_impl(
                 generated_source=gen_src_path,
             )
         finally:
-            if staged:
+            if staged or not published:
                 for leftover in (compile_path, artifact_sidecar_path(compile_path)):
                     try:
                         os.remove(leftover)
@@ -805,6 +840,7 @@ def _compile_problem_impl(
                     semantic_identity=semantic,
                     spec_identity=spec_identity,
                 )
+                verify_native_toolchain(toolchain_capture)
                 cenv.log("compile_problem: cache HIT -> %s" % so_path)
                 return _compiled_handle(binary, artifact)
             return _compile_fresh(staged=True)

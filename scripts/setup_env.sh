@@ -172,9 +172,44 @@ case "$(uname)" in
       echo "    xcode-select --install" >&2
       exit 1
     fi
+    # An explicit SDK choice is a toolchain input, not a dependency-closure inference. Discovery
+    # uses only the selected developer tools and never accepts a licence or changes xcode-select.
+    if [[ -n "${SDKROOT+x}" ]]; then
+      declared_sdk_root="$SDKROOT"
+    elif ! declared_sdk_root="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"; then
+      echo "ERROR: the selected developer tools cannot resolve a licensed macOS SDK." >&2
+      echo "       Select usable developer tools explicitly; setup never accepts a licence." >&2
+      exit 1
+    fi
+    if ! canonical_sdk_root="$(conda run --no-capture-output -n "$ENV_NAME" env -u PYTHONPATH \
+      SDKROOT="$declared_sdk_root" python - "$HERE" <<'PY'
+import pathlib
+import runpy
+import sys
+capture = runpy.run_path(str(pathlib.Path(sys.argv[1]) / "python/pops/codegen/_native_toolchain.py"))[
+    "capture_native_toolchain"
+]()
+if capture is None:
+    raise RuntimeError("Darwin setup requires a captured native SDK")
+print(capture.sysroot)
+PY
+    )"; then
+      echo "ERROR: the declared macOS SDKROOT or its exact metadata is invalid." >&2
+      exit 1
+    fi
+    if [[ -z "$canonical_sdk_root" || "$canonical_sdk_root" != /* \
+          || ! -d "$canonical_sdk_root" ]]; then
+      echo "ERROR: native SDK validation returned no canonical absolute directory." >&2
+      exit 1
+    fi
+    sdk_config_vars=("SDKROOT=$canonical_sdk_root")
+    if [[ -n "${DEVELOPER_DIR+x}" ]]; then
+      sdk_config_vars+=("DEVELOPER_DIR=$DEVELOPER_DIR")
+    fi
     conda env config vars set -n "$ENV_NAME" \
       CC=/usr/bin/clang CXX=/usr/bin/clang++ \
-      MPICH_CC=/usr/bin/clang MPICH_CXX=/usr/bin/clang++ >/dev/null
+      MPICH_CC=/usr/bin/clang MPICH_CXX=/usr/bin/clang++ \
+      "${sdk_config_vars[@]}" >/dev/null
     echo "macOS: CC/CXX and MPICH wrappers -> AppleClang pinned in the env "\
          "(exported on each activation, priority over PATH)."
     ;;
