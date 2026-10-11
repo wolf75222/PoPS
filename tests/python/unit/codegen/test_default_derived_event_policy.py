@@ -1,4 +1,4 @@
-"""Pure generated producer defaults follow actual consumer events; Source only."""
+"""Pure producer defaults include pre-CFL, residual and field consumer events; Source only."""
 import re
 
 import pytest
@@ -16,7 +16,7 @@ from pops.model import Module
 from pops.time import Program
 
 
-EVENTS = ("before_residual", "before_field_solve")
+EVENTS = ("before_stability", "before_residual", "before_field_solve")
 
 
 def _policies(source):

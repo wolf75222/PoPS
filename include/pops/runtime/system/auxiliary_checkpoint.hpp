@@ -315,7 +315,7 @@ inline AuxiliaryEvaluationPoint read_point(Reader& in) {
   result.stage = in.i32();
   result.nonlinear_iteration = in.i32();
   const std::uint64_t event = in.u64();
-  if (event > static_cast<std::uint64_t>(AuxiliaryEvaluationEvent::output))
+  if (event > static_cast<std::uint64_t>(AuxiliaryEvaluationEvent::before_stability))
     throw std::runtime_error("invalid exact auxiliary checkpoint: invalid evaluation event");
   result.event = static_cast<AuxiliaryEvaluationEvent>(event);
   return result;

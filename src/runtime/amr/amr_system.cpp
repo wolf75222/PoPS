@@ -13103,12 +13103,15 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
         } else {
           transactions[level].emplace(registry->begin_publication(level_point, level_forced, consumer_qids));
         }
-        if (transactions[level])
+        if (transactions[level]) {
+          runtime::system::detail::require_stability_auxiliary_permissions(
+              *registry, *transactions[level], level_point);
           for (const auto index : registry->topological_order()) {
             const auto& id = registry->provider(index).identity();
             if (transactions[level]->requires_staging(id))
               captured_obligations[level].emplace(id, next_invalidations.obligation(level, id));
           }
+        }
       } catch (...) {
         candidate_error = std::current_exception();
       }
@@ -20372,6 +20375,7 @@ double AmrSystem<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, d
   struct PreparedCflLevel {
     const typename Impl::level_block_type* prepared = nullptr;
     std::size_t block_index = 0;
+    int level = 0;
     Real spacing = Real(0);
     int substeps = 1;
     int stride = 1;
@@ -20403,7 +20407,8 @@ double AmrSystem<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, d
         for (int axis = 1; axis < Dim; ++axis)
           spacing = std::min(spacing, geometry.spacing(axis));
         level_schedule.push_back(
-            {&prepared_levels[level], block_index, spacing, block.substeps, block.stride});
+            {&prepared_levels[level], block_index, static_cast<int>(level), spacing,
+             block.substeps, block.stride});
         exact.scalar(static_cast<std::uint64_t>(level))
             .scalar(spacing)
             .bytes(prepared_levels[level].collective_contract());
@@ -20434,6 +20439,89 @@ double AmrSystem<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, d
   std::size_t reason_block_index = 0;
   std::size_t global_reason_index = std::numeric_limits<std::size_t>::max();
   for (const PreparedCflLevel& prepared_level : level_schedule) {
+    const auto& block = p_->prepared_blocks[prepared_level.block_index];
+    if (block.provider_components != 0) {
+      // No proposed interval exists yet. Stability reads the current accepted image,
+      // using the last accepted duration (or the honest initial zero), never a guessed
+      // residual point. Ancestor samples share this native accepted authority.
+      runtime::system::AuxiliaryEvaluationPoint auxiliary;
+      std::optional<runtime::system::detail::NativeAcceptedAuxiliaryPoint> authority;
+      std::exception_ptr publication_point_error;
+      try {
+        runtime::multiblock::BoundaryEvaluationPoint point;
+        const auto metadata = p_->program.checkpoint_metadata_;
+        point.clock = metadata.primary_clock_identity;
+        const bool physical_clock = !point.clock.empty();
+        if (physical_clock &&
+            std::find(metadata.logical_clock_identities.begin(),
+                      metadata.logical_clock_identities.end(), point.clock) ==
+                metadata.logical_clock_identities.end())
+          throw std::invalid_argument("AMR CFL auxiliary Clock is not installed");
+        if (!physical_clock)
+          point.clock = "pops.amr.accepted-stability";
+        point.tick = p_->macro_step;
+        point.level = prepared_level.level;
+        point.stage_fraction = {0, 1};
+        point.dt = static_cast<double>(p_->program.last_dt_);
+        point.physical_time = p_->accepted_time;
+        if (point.tick < 0 || !std::isfinite(point.dt) || point.dt < 0 ||
+            (physical_clock && point.tick != 0 && point.dt == 0) ||
+            !std::isfinite(point.physical_time))
+          throw std::invalid_argument("AMR CFL auxiliary requires its live accepted point");
+        auxiliary.clock = point.clock;
+        auxiliary.accepted_step = static_cast<std::uint64_t>(point.tick);
+        auxiliary.layout_generation = p_->engine->materialization_generation();
+        auxiliary.level = point.level;
+        auxiliary.event = runtime::system::AuxiliaryEvaluationEvent::before_stability;
+        if (physical_clock) {
+          const auto topology = p_->engine->topology_epoch();
+          const auto generation = p_->engine->materialization_generation();
+          const auto levels = p_->engine->hierarchy().num_levels();
+          const auto depth = step_transaction_depth();
+          auto* owner = p_.get();
+          auto validate = [owner, topology, generation, levels, depth, metadata, point] {
+            if (owner->engine->topology_epoch() != topology ||
+                owner->engine->materialization_generation() != generation ||
+                owner->engine->hierarchy().num_levels() != levels ||
+                owner->facade->step_transaction_depth() != depth ||
+                owner->program.checkpoint_metadata_ != metadata ||
+                owner->macro_step != point.tick || owner->accepted_time != point.physical_time ||
+                static_cast<double>(owner->program.last_dt_) != point.dt)
+              throw std::logic_error("AMR CFL auxiliary lost its live accepted authority");
+          };
+          authority = runtime::system::detail::NativeAcceptedAuxiliaryPoint(
+              point, levels, std::move(validate));
+          authority->validate();
+          if (point.dt > 0)
+            auxiliary.qualify_physical_evaluation(point);
+          else {
+            runtime::system::AuxiliaryPhysicalEvaluation physical(
+                point.stage_fraction, point.dt, point.physical_time);
+            physical.qualify_native_accepted_initial(point);
+            auxiliary.physical_evaluation = std::move(physical);
+          }
+        }
+        auxiliary.validate();
+        if (p_->active_accepted_auxiliary_point)
+          throw std::logic_error("AMR CFL auxiliary cannot nest accepted publication");
+      } catch (...) { publication_point_error = std::current_exception(); }
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          publication_point_error, &lane, "AMR CFL auxiliary point failed collectively");
+      struct RestoreAcceptedAuthority {
+        Impl& owner;
+        ~RestoreAcceptedAuthority() { owner.active_accepted_auxiliary_point = nullptr; }
+      } restore_authority{*p_};
+      p_->active_accepted_auxiliary_point = authority ? &*authority : nullptr;
+      refresh_auxiliary_on_prepared_lane(auxiliary, {block.provider_consumer_qid},
+                                        static_cast<int>(prepared_level.block_index));
+      std::exception_ptr authority_error;
+      try {
+        if (authority)
+          authority->validate();
+      } catch (...) { authority_error = std::current_exception(); }
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          authority_error, &lane, "AMR CFL auxiliary authority validation failed collectively");
+    }
     const Real speed =
         std::max(prepared_level.prepared->maximum_speed(), static_cast<Real>(speed_floor));
     double level_dt = cfl * static_cast<double>(prepared_level.spacing) * prepared_level.substeps /

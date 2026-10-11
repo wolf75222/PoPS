@@ -491,7 +491,7 @@ def _default_auxiliary_evaluation_policy_cpp(kind):
     """Default pure-expression providers follow the event of their actual consumer.
 
     DerivedAux and AnalyticAux are lowered immutable expressions. Numeric reads
-    request residual or Field preparation at the actual consuming evaluation.
+    request stability, residual or Field preparation at the actual consuming evaluation.
     Forced invalidation handles layout recomputation separately; allowing a
     generic after_regrid event would also select unrelated temporal expressions
     on the legacy topology diagnostic point, which has no physical authority.
@@ -503,6 +503,7 @@ def _default_auxiliary_evaluation_policy_cpp(kind):
         return ("AuxiliaryEvaluationPolicy{AuxiliaryEvaluationEvent::initialization, "
                 "AuxiliaryFreshness::once}")
     events = (
+        "before_stability",     # accepted state, before the next CFL interval is known
         "before_residual",      # residual and local implicit consumer prerequisites
         "before_field_solve",   # Field RHS, including an accepted zero-interval source
     )

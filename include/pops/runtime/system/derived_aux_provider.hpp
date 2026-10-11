@@ -81,6 +81,7 @@ enum class AuxiliaryEvaluationEvent : std::uint8_t {
   nonlinear_iteration = 3,
   after_regrid = 4,
   output = 5,
+  before_stability = 6,
 };
 
 /// Freshness rule for an auxiliary component. The rule compares discrete identities and, when
@@ -438,7 +439,8 @@ struct AuxiliaryEvaluationPolicy {
           event != AuxiliaryEvaluationEvent::before_field_solve &&
           event != AuxiliaryEvaluationEvent::nonlinear_iteration &&
           event != AuxiliaryEvaluationEvent::after_regrid &&
-          event != AuxiliaryEvaluationEvent::output)
+          event != AuxiliaryEvaluationEvent::output &&
+          event != AuxiliaryEvaluationEvent::before_stability)
         throw std::invalid_argument("auxiliary evaluation policy has an invalid event");
   }
 

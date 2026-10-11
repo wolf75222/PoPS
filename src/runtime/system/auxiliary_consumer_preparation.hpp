@@ -16,6 +16,26 @@ namespace pops { template <int> class AmrSystem; }
 
 namespace pops::runtime::system::detail {
 
+// Layout/input invalidations may force a dependency closure to republish. Check
+// the transaction's exact staging selection, so stability cannot override an
+// expression's explicit event permissions and clean read-only reuse stays valid.
+// External input upload is not expression evaluation.
+template <class Registry, class Transaction>
+void require_stability_auxiliary_permissions(
+    const Registry& registry, const Transaction& transaction,
+    const AuxiliaryEvaluationPoint& point) {
+  if (point.event != AuxiliaryEvaluationEvent::before_stability)
+    return;
+  for (const auto index : registry.topological_order()) {
+    const auto& provider = registry.provider(index);
+    if (transaction.requires_staging(provider.identity()) &&
+        provider.kind() != AuxiliaryProviderKind::input &&
+        !provider.policy().allows(AuxiliaryEvaluationEvent::before_stability))
+      throw std::logic_error("stability auxiliary policy forbids the required publication: " +
+                             provider.identity());
+  }
+}
+
 // Only the owning AMR facade can issue this transient accepted/topology authority.
 // The validator captures live session, hierarchy, original carrier and Clock membership.
 class NativeAcceptedAuxiliaryPoint {
