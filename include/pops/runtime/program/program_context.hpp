@@ -1849,20 +1849,27 @@ class ProgramContext {
                         const std::string& state_identity = {},
                         const std::string& space_identity = {},
                         const std::string& clock_identity = {},
-                        const std::string& interpolation_identity = {}) const {
-    if (name.empty() || lag < 1)
-      throw std::invalid_argument("ProgramContext history requires a name and positive lag");
+                        const std::string& interpolation_identity = {},
+                        int ghost_depth = -1) const {
+    if (name.empty() || lag < 1 || ghost_depth < -1)
+      throw std::invalid_argument(
+          "ProgramContext history requires a name, positive lag and valid declared halo");
     const int owner = program_owner < 0 ? 0 : sys_block(program_owner);
     const field_type& prototype = system_->block_state(owner);
     const int components = ncomp < 0 ? prototype.ncomp() : ncomp;
     if (components < 1)
       throw std::invalid_argument("ProgramContext history component count must be positive");
+    Extent<Dim> ghosts = prototype.ghosts();
+    if (ghost_depth >= 0)
+      for (int axis = 0; axis < Dim; ++axis)
+        ghosts[axis] = ghost_depth;
     auto& history = runtime_state().hist_;
     const int ring_depth = lag + 1;
     const auto existing = history.histories.find(name);
     if (existing != history.histories.end()) {
       if (history.depth.at(name) != ring_depth || history.owner.at(name) != owner ||
           existing->second.front().ncomp() != components ||
+          existing->second.front().ghosts() != ghosts ||
           history.state_identity.at(name) != state_identity ||
           history.space_identity.at(name) != space_identity ||
           history.clock_identity.at(name) != clock_identity ||
@@ -1873,7 +1880,7 @@ class ProgramContext {
     std::vector<field_type> ring;
     ring.reserve(static_cast<std::size_t>(ring_depth));
     for (int slot = 0; slot < ring_depth; ++slot)
-      ring.push_back(make_scratch_(prototype, components, prototype.ghosts()));
+      ring.push_back(make_scratch_(prototype, components, ghosts));
     history.histories.emplace(name, std::move(ring));
     history.depth[name] = ring_depth;
     history.initialized[name] = false;

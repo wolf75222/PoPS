@@ -450,16 +450,17 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                 raise ValueError("AMR global field history storage @1 requires the primary logical clock; "
                                  "child-clock storage realization is not implemented")
             state_identity = storage_descriptor
-        from pops.codegen.program_history_identity import history_space_identity
+        from pops.codegen.program_history_identity import history_space_identity, history_ghost_depth
         space_identity = history_space_identity(program, name)
         row = history_manifest[name]
         interpolation = json.dumps(
             row["interpolation"], sort_keys=True, separators=(",", ":"))
-        prelude.append("ctx.register_history(%s, %d, %d, %d, %s, %s, %s, %s);"
+        prelude.append("ctx.register_history(%s, %d, %d, %d, %s, %s, %s, %s, %d);"
                        % (json.dumps(name), int(lag), -1 if ncomp is None else int(ncomp),
                           -1 if owner_index is None else int(owner_index),
                           json.dumps(state_identity), json.dumps(space_identity),
-                          json.dumps(row["clock"]), json.dumps(interpolation)))
+                          json.dumps(row["clock"]), json.dumps(interpolation),
+                          history_ghost_depth(program, name)))
     from pops.codegen.program_balance_due import (
         emit_balance_due_guards,
         prepare_balance_due_lowering,
@@ -813,16 +814,16 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
             storage_descriptor = descriptor(program, name)
             if storage_descriptor is not None:
                 state_identity = storage_descriptor
-            from pops.codegen.program_history_identity import history_space_identity
+            from pops.codegen.program_history_identity import history_space_identity, history_ghost_depth
             space_identity = history_space_identity(program, name)
             row = manifests[name]
             interpolation = json.dumps(
                 row["interpolation"], sort_keys=True, separators=(",", ":"))
-            lines.append("ctx.register_history(%s, %d, %d, %d, %s, %s, %s, %s);"
+            lines.append("ctx.register_history(%s, %d, %d, %d, %s, %s, %s, %s, %d);"
                          % (json.dumps(name), int(lag), -1 if ncomp is None else int(ncomp),
                             int(block_idx[owner]), json.dumps(state_identity),
                             json.dumps(space_identity), json.dumps(row["clock"]),
-                            json.dumps(interpolation)))
+                            json.dumps(interpolation), history_ghost_depth(program, name)))
         return lines
 
     def emit_phase(phase: str) -> str:

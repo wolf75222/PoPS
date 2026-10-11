@@ -75,9 +75,10 @@ void copy_grown_component_span(field_type& destination, int destination_componen
 void register_history(const std::string& name, int lag, int ncomp, int program_owner,
                       const std::string& state_identity, const std::string& space_identity,
                       const std::string& clock_identity,
-                      const std::string& interpolation_identity) const {
+                      const std::string& interpolation_identity, int ghost_depth = -1) const {
   if (name.empty() || lag < 1 || program_owner < 0 || state_identity.empty() ||
-      space_identity.empty() || clock_identity.empty() || interpolation_identity.empty())
+      space_identity.empty() || clock_identity.empty() || interpolation_identity.empty() ||
+      ghost_depth < -1)
     throw std::invalid_argument(
         "AMR Program history requires complete owner/state/space/clock identities");
   const int runtime_owner = sys_block(program_owner);
@@ -87,6 +88,7 @@ void register_history(const std::string& name, int lag, int ncomp, int program_o
   const int components = ncomp < 0 ? prototype.ncomp() : ncomp;
   if (components < 1)
     throw std::invalid_argument("AMR Program history component count must be positive");
+  const Extent<Dim> ghosts = ghost_depth < 0 ? prototype.ghosts() : uniform_ghosts_(ghost_depth);
   const std::string key = history_key_(name, active_level_);
   auto& manager = runtime_state().hist_;
   const int depth = lag + 1;
@@ -97,7 +99,7 @@ void register_history(const std::string& name, int lag, int ncomp, int program_o
         retained.layout() != prototype.layout() ||
         retained.distribution() != prototype.distribution() ||
         retained.local_rank() != prototype.local_rank() || retained.ncomp() != components ||
-        retained.ghosts() != prototype.ghosts() ||
+        retained.ghosts() != ghosts ||
         manager.state_identity.at(key) != state_identity ||
         manager.space_identity.at(key) != space_identity ||
         manager.clock_identity.at(key) != clock_identity ||
@@ -111,7 +113,7 @@ void register_history(const std::string& name, int lag, int ncomp, int program_o
   std::vector<field_type> ring;
   ring.reserve(static_cast<std::size_t>(depth));
   for (int slot = 0; slot < depth; ++slot)
-    ring.push_back(make_scratch_(prototype, components, prototype.ghosts()));
+    ring.push_back(make_scratch_(prototype, components, ghosts));
   manager.histories.emplace(key, std::move(ring));
   manager.depth[key] = depth;
   manager.initialized[key] = false;

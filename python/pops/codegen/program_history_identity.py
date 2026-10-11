@@ -9,6 +9,23 @@ SCALAR_OUTPUT_HISTORY_SPACE = "scalar-output-field-v1"
 OUTPUT_HISTORY_PROJECTION_SPACE = "pops.program.scalar-output-history-projection@2"
 
 
+def history_ghost_depth(program: Any, name: str) -> int:
+    """Declare scalar storage independently from its owning State's stencil halo.
+
+    Generic scalar allocations carry one ghost cell. Full State histories keep
+    the owner's native halo, including a scalar State with an explicit Space.
+    """
+    if (getattr(program, "_history_spaces", {}).get(name) is not None or
+            getattr(program, "_history_state_refs", {}).get(name) is not None):
+        return -1
+    width = getattr(program, "_histories_ncomp", {}).get(name)
+    if width is None:
+        return -1
+    if type(width) is not int or width < 1:
+        raise ValueError("scalar history requires its declared positive component width")
+    return 1
+
+
 def history_space_identity(program: Any, name: str) -> str:
     """Qualify a typed store-only ring; preserve the legacy width-one/two-slot profile.
 
