@@ -3574,7 +3574,9 @@ TEST(GeneratedAmrSystemBlock, CflPublishesCoordinateAuxiliaryBeforeSpeedAndRetai
   auto probe = std::make_shared<Probe>();
   system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<Dim>{
       "tests.cfl.control", AuxiliaryProviderKind::input,
-      {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
+      {std::vector<AuxiliaryEvaluationEvent>{AuxiliaryEvaluationEvent::initialization,
+                                             AuxiliaryEvaluationEvent::before_stability},
+       AuxiliaryFreshness::once},
       {{control_key, contract, shape}}, {}});
   system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<Dim>{
       "tests.cfl.coordinate",
