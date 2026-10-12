@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 import importlib.machinery
 import json
 from pathlib import Path
@@ -38,7 +39,7 @@ def _fake_variant(path: Path, dimension: int = 2) -> selector._Variant:
         dimension=dimension,
         path=path,
         sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
-        version="1.0.0",
+        version=pops.__version__,
         abi_key="abi;dim=%d" % dimension,
         has_mpi=False,
         has_kokkos=True,
@@ -56,7 +57,7 @@ def _fake_module(path: Path, dimension: int = 2) -> ModuleType:
     module = ModuleType("pops._pops")
     module.__file__ = str(path)
     module.__native_dimension__ = dimension
-    module.__version__ = "1.0.0"
+    module.__version__ = pops.__version__
     module.__has_mpi__ = False
     module.__has_kokkos__ = True
     module.abi_key = lambda: "abi;dim=%d" % dimension
@@ -95,13 +96,22 @@ def test_selection_is_single_exact_dimension_and_idempotent(
         selector.select_native_dimension(1 if dimension != 1 else 2)
 
 
+@pytest.mark.parametrize("mismatch,error,match", (
+    ("dimension", RuntimeError, "dimension differs"),
+    ("manifest_version", RuntimeError, "version differs from variants.json"),
+    ("package_version", ImportError, "native/package version mismatch"),
+))
 def test_failed_post_dlopen_verification_hides_module_and_poisons_process(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mismatch, error, match
 ) -> None:
     extension = tmp_path / "_pops.so"
     extension.write_bytes(b"native")
     variant = _fake_variant(extension)
-    module = _fake_module(extension, dimension=3)
+    module = _fake_module(extension, dimension=3 if mismatch == "dimension" else 2)
+    if mismatch in ("manifest_version", "package_version"):
+        module.__version__ = pops.__version__ + ".foreign"
+    if mismatch == "package_version":
+        variant = replace(variant, version=module.__version__)
     monkeypatch.setattr(selector, "_variant_from_manifest", lambda dimension: variant)
 
     def load(_path: Path) -> ModuleType:
@@ -111,7 +121,7 @@ def test_failed_post_dlopen_verification_hides_module_and_poisons_process(
 
     monkeypatch.setattr(selector, "_load_global", load)
 
-    with pytest.raises(RuntimeError, match="dimension differs"):
+    with pytest.raises(error, match=match):
         selector.select_native_dimension(2)
     assert "pops._pops" not in sys.modules
     assert not hasattr(pops, "_pops")
@@ -167,7 +177,7 @@ def test_manifest_selects_and_hashes_only_requested_leaf(
                 "dimension": 1,
                 "path": "dim1/" + first.name,
                 "sha256": hashlib.sha256(first.read_bytes()).hexdigest(),
-                "version": "1.0.0",
+                "version": pops.__version__,
                 "abi_key": "abi;dim=1",
                 "has_mpi": False,
                 "has_kokkos": True,
@@ -176,7 +186,7 @@ def test_manifest_selects_and_hashes_only_requested_leaf(
                 "dimension": 2,
                 "path": "dim2/" + second.name,
                 "sha256": "0" * 64,
-                "version": "1.0.0",
+                "version": pops.__version__,
                 "abi_key": "abi;dim=2",
                 "has_mpi": False,
                 "has_kokkos": True,

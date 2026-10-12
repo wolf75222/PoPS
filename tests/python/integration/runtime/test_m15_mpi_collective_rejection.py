@@ -7,6 +7,7 @@ import pops
 import pytest
 
 from tests.python.unit.moments.test_m15_axial_reception import _load, oracle
+from tests.python.support.requirements import require_mpi_or_skip
 
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
 
@@ -32,7 +33,8 @@ def test_periodic_generated_face_refusal_is_collective_before_retry_envelope(
     execution = pops.ExecutionContext.mpi_world(artifact)
     world = execution.communicator.handle
     if world.size < 2:
-        pytest.skip("the regression requires at least two MPI ranks")
+        require_mpi_or_skip("the regression requires at least two MPI ranks",
+                            optional_skip=pytest.skip)
 
     initial = np.ascontiguousarray(oracle.invalid_states(8)["negative_density"])
     runtime = None
@@ -69,3 +71,7 @@ def test_periodic_generated_face_refusal_is_collective_before_retry_envelope(
     gathered = np.asarray(runtime.state_global("moments"))
     if world.rank == 0:
         np.testing.assert_array_equal(gathered.reshape(initial.shape), initial)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-q", "-ra", "--maxfail=1"]))

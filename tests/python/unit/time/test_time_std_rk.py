@@ -34,11 +34,30 @@ def _authoring(t, name="rk", model=None):
     return model, block[state], rate
 
 
-def _coeff(node, value):
-    for candidate, coefficient in zip(node.inputs, node.attrs["coeffs"], strict=True):
-        if candidate is value:
-            return coefficient
-    raise AssertionError("value %r not an input of %r" % (value, node))
+def _affine_polynomial(node):
+    """Expand the authored DAG into exact (State/RHS SSA, dt power) weights."""
+    cache = {}
+
+    def expand(value):
+        if value.id in cache:
+            return cache[value.id]
+        if value.op in {"state", "rhs"}:
+            result = {(value.id, 0): Fraction(1)}
+        else:
+            assert value.op == "linear_combine", value.op
+            result = {}
+            for child, polynomial in zip(value.inputs, value.attrs["coeffs"], strict=True):
+                for power, coefficient in polynomial.items():
+                    assert type(power) is int and power >= 0
+                    for (atom, inner_power), inner_coefficient in expand(child).items():
+                        key = atom, power + inner_power
+                        result[key] = (result.get(key, Fraction())
+                                       + Fraction(coefficient) * inner_coefficient)
+            result = {key: coefficient for key, coefficient in result.items() if coefficient}
+        cache[value.id] = result
+        return result
+
+    return expand(node)
 
 
 def _topology(program):
@@ -61,11 +80,24 @@ def test_runge_kutta_ssprk2_tableau_is_heun(t):
     program = lt.RungeKutta(state, rate=rate, tableau=lt.SSPRK2_TABLEAU)
     assert program.validate() is True
     node = commits_by_block(program)["plasma"]
-    states = [value for value in node.inputs if value.vtype == "state"]
-    rates = [value for value in node.inputs if value.vtype == "rhs"]
+    states = [value for value in program._values if value.op == "state"]
+    rates = [value for value in program._values if value.op == "rhs"]
     assert len(states) == 1 and len(rates) == 2
-    assert _coeff(node, states[0]) == {0: 1}
-    assert all(_coeff(node, rate_value) == {1: Fraction(1, 2)} for rate_value in rates)
+    initial, = states
+    first, second = rates
+    assert _affine_polynomial(first.inputs[0]) == {(initial.id, 0): Fraction(1)}
+    assert _affine_polynomial(second.inputs[0]) == {
+        (initial.id, 0): Fraction(1), (first.id, 1): Fraction(1)}
+    assert _affine_polynomial(node) == {
+        (initial.id, 0): Fraction(1),
+        (first.id, 1): Fraction(1, 2), (second.id, 1): Fraction(1, 2)}
+    # These are the actual evaluation inputs and points, regardless of aliases
+    # or a staged convex representation of the final affine expression.
+    for value, expected in ((initial, 0), (first.inputs[0], 0), (first, 0),
+                            (second.inputs[0], 1), (second, 1), (node, 1)):
+        point = value.point.time if isinstance(value.point, t.StagePoint) else value.point
+        assert point.clock == program.clock
+        assert Fraction(point.step) + Fraction(point.offset.to_python()) == expected
 
 
 def test_runge_kutta_requires_an_exact_typed_tableau(t):

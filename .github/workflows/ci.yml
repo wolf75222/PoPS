@@ -247,9 +247,9 @@ jobs:
     runs-on: ubuntu-latest
     # Runtime objects are prewarmed in parallel above. Keep an 18-minute bounded final build for
     # contract verification, ccache hits, shard-owned test executables and links, then seven minutes
-    # for tests. A cold common runtime can no longer consume this watchdog independently thirteen times.
-    # Thirteen shards keep the complete PR #680 catalog at 900.175 modeled seconds versus
-    # 910.3325 with twelve, preserving the 906-second budget. These are scheduling estimates.
+    # for tests. A cold common runtime can no longer consume this watchdog independently fourteen times.
+    # Two additional heavy suites require fourteen shards: the unchanged duration catalog models
+    # 901.2175 seconds versus 910.1075 with thirteen, preserving the 906-second scheduling budget.
     timeout-minutes: 40
     needs: [changes, set-mode, gate-cpp-prewarm]
     strategy:
@@ -306,7 +306,7 @@ jobs:
             --explain-file "$RUNNER_TEMP/cpp-test-plan.json" \
             --github-output "$GITHUB_OUTPUT" \
             --shard-index "${{ matrix.shard }}" \
-            --shard-total 13 \
+            --shard-total 14 \
             "${force_args[@]}"
           cpp_summary=$(grep '^cpp_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
           cpp_shard_summary=$(grep '^cpp_shard_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
@@ -1004,7 +1004,8 @@ jobs:
         if: steps.test-plan.outputs.python_shard_count != '0'
         uses: ./.github/actions/setup-kokkos
         with:
-          extra-apt: mold
+          # Required syntax witnesses instantiate the genuine MPI branch even on the Serial lane.
+          extra-apt: mold libopenmpi-dev openmpi-bin
 
       - uses: actions/setup-python@v7
         if: steps.test-plan.outputs.python_shard_count != '0'
@@ -1053,7 +1054,8 @@ jobs:
           # The full gate exercises the serial HDF5 writer used by the final examples. h5py remains
           # an optional user dependency; CI installs that capability explicitly instead of skipping.
           # mpmath supplies the independent precision oracle in the Fan–Li native witnesses.
-          pip install --upgrade pip numpy pytest h5py 'mpmath>=1.3.0'
+          # scipy supplies the independent matrix-exponential and DOP853 reference oracles.
+          pip install --upgrade pip numpy pytest h5py scipy 'mpmath>=1.3.0'
           # PoPS est Kokkos-only : les tests DSL qui compilent un loader/.so production ou son ABI
           # incluent les en-tetes pops (-> for_each, #error sans Kokkos). Ils lisent le Kokkos a utiliser
           # via Kokkos_ROOT / POPS_KOKKOS_ROOT : on pointe le MEME Kokkos Serial que le module _pops.
@@ -1365,10 +1367,134 @@ jobs:
   #      ici gate ECHOUE explicitement (routage non fiable = pas de verdict) ;
   #  (3) le nom du check reste STABLE meme si les gates sont re-decoupes plus tard.
   # Un gate skip PAR LE ROUTAGE (changes en succes) reste un succes : c'est le but du routage.
+  mpi-dim1:
+    name: ubuntu-24.04 / MPI Dim1 Python collective rejection
+    runs-on: ubuntu-24.04
+    # One authenticated MPI Dim1 module and its mandatory two-rank regression.
+    # 15 min cold dependencies + 40 min module build + 8 min installation/authentication
+    # + 15 min MPI test ceiling + 2 min bounded publication/cleanup.
+    timeout-minutes: 80
+    needs: [set-mode, changes]
+    if: needs.set-mode.outputs.mpi_required == 'true'
+    env:
+      POPS_NATIVE_DIM: "1"
+      POPS_REQUIRE_NATIVE_TESTS: "1"
+      POPS_REQUIRE_MPI_TESTS: "1"
+      PYTHONNOUSERSITE: "1"
+      KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
+      CCACHE_DIR: ${{ github.workspace }}/.ccache-mpi-dim1
+      CCACHE_MAXSIZE: 2G
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_SLOPPINESS: locale
+      OMP_NUM_THREADS: "2"
+      OMP_PROC_BIND: "false"
+      OMPI_MCA_rmaps_base_oversubscribe: "true"
+      PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
+      OMPI_ALLOW_RUN_AS_ROOT: "1"
+      OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: "1"
+      OMPI_MCA_io: "^ompio"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-kokkos
+        id: kokkos
+        with:
+          extra-apt: libhdf5-openmpi-dev libopenmpi-dev openmpi-bin pybind11-dev python3-dev python3-venv python3-pip python3-packaging python3-numpy python3-pytest python3-h5py python3-mpmath
+      - name: Restore MPI Dim1 module ccache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-mpi-dim1-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-mpi-dim1-${{ github.ref }}-
+            ccache-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-mpi-dim1-refs/heads/master-
+      - name: Plan exact Dim1 MPI entrypoints
+        id: mpi-dim1-plan
+        run: |
+          /usr/bin/python3 scripts/ci_select_tests.py python-mpi \
+            --native-dimension 1 \
+            --plan-file build-mpi-dim1/python-mpi-plan.tsv \
+            --orchestrator-plan-file build-mpi-dim1/python-mpi-orchestrators.txt \
+            --explain-file build-mpi-dim1/python-mpi-plan.json \
+            --github-output "$GITHUB_OUTPUT"
+          test "$(wc -l < build-mpi-dim1/python-mpi-plan.tsv)" -eq 1
+          test ! -s build-mpi-dim1/python-mpi-orchestrators.txt
+      - name: Configure MPI Dim1 Python module without C++ suites
+        run: |
+          cmake --preset ci-mpi -B build-mpi-dim1 \
+            -DPOPS_NATIVE_DIM=1 -DPOPS_BUILD_TESTS=OFF -DPOPS_BUILD_PYTHON=ON \
+            -DPOPS_USE_MPI=ON -DPOPS_USE_HDF5=ON \
+            -DPython_EXECUTABLE=/usr/bin/python3 \
+            -DPOPS_HEAVY_MODULE_TU_POOL=2 -DPOPS_LIGHT_MODULE_TU_POOL=2 \
+            -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
+      - name: Build authenticated MPI Dim1 native module
+        timeout-minutes: 42
+        run: |
+          source scripts/ci_heartbeat.sh
+          run_with_heartbeat "MPI Dim1 native Python build" 40m \
+            cmake --build build-mpi-dim1 --parallel 2 --target _pops
+      - name: Assemble and authenticate installed MPI Dim1 wheel
+        timeout-minutes: 8
+        run: |
+          /usr/bin/python3 scripts/ci_assemble_installed_wheel.py \
+            --package build-mpi-dim1/python --output-dir build-mpi-dim1/wheel \
+            --dimension 1 --backend mpi
+          native_prefix="$RUNNER_TEMP/pops-mpi-dim1-installed"
+          test ! -e "$native_prefix"
+          /usr/bin/python3 -m venv --system-site-packages "$native_prefix"
+          wheels=(build-mpi-dim1/wheel/pops-*.whl)
+          test "${#wheels[@]}" -eq 1
+          env -u PYTHONPATH "$native_prefix/bin/python" -m pip --isolated install \
+            --ignore-installed --no-deps --prefix "$native_prefix" "${wheels[0]}"
+          env -u PYTHONPATH "$native_prefix/bin/python" scripts/prove_installed_wheel.py \
+            --wheel "${wheels[0]}" --expect-dim 1 \
+            > build-mpi-dim1/installed-wheel-proof.json
+          env -u PYTHONPATH "$native_prefix/bin/python" scripts/verify_installed_native.py \
+            --expect-dim 1 --expect-mpi --expect-parallel-hdf5 --json \
+            > build-mpi-dim1/installed-native-proof.json
+      - name: Test mandatory MPI Dim1 collective rejection
+        timeout-minutes: 15
+        env:
+          POPS_KOKKOS_ROOT: ${{ github.workspace }}/.kokkos-install
+          Kokkos_ROOT: ${{ github.workspace }}/.kokkos-install
+        run: |
+          native_python="$RUNNER_TEMP/pops-mpi-dim1-installed/bin/python"
+          native_bootstrap="from pops._native_selector import select_native_dimension; select_native_dimension(1); import os, runpy, sys; sys.path.insert(0, os.getcwd()); sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')"
+          count=0
+          while IFS=$'\t' read -r ranks entrypoint <&3; do
+            test "$ranks" -eq 2 && test -f "$entrypoint"
+            env -u PYTHONPATH timeout --signal=TERM --kill-after=30s 14m \
+              mpiexec --mca orte_abort_on_non_zero_status 1 -n "$ranks" \
+              "$native_python" -u -c "$native_bootstrap" "$entrypoint" </dev/null 3<&-
+            count=$((count + 1))
+          done 3< build-mpi-dim1/python-mpi-plan.tsv
+          test "$count" -eq "${{ steps.mpi-dim1-plan.outputs.python_mpi_entrypoint_count }}"
+          test "$count" -eq 1
+      - name: Save MPI Dim1 module ccache
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-mpi-dim1-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Upload MPI Dim1 identity and routing receipts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mpi-dim1-installed-contract
+          path: |
+            build-mpi-dim1/python-mpi-plan.json
+            build-mpi-dim1/installed-wheel-proof.json
+            build-mpi-dim1/installed-native-proof.json
+            build-mpi-dim1/wheel/assembly-receipt.json
+          if-no-files-found: error
+          retention-days: 1
+
   gate:
     name: gate (agregation requise)
     runs-on: ubuntu-latest
-    needs: [changes, set-mode, gate-cpp, gate-python-architecture, gate-python-build, gate-python, gate-python-compile-cache, mpi, kokkos-openmp]
+    needs: [changes, set-mode, gate-cpp, gate-python-architecture, gate-python-build, gate-python, gate-python-compile-cache, mpi, mpi-dim1, kokkos-openmp]
     if: always()
     steps:
       - uses: actions/checkout@v7
@@ -1392,6 +1518,8 @@ jobs:
               "${{ needs.gate-python-compile-cache.result }}" \
               "${{ needs.set-mode.outputs.compile_cache_required }}" \
             --gate mpi "${{ needs.mpi.result }}" \
+              "${{ needs.set-mode.outputs.mpi_required }}" \
+            --gate mpi-dim1 "${{ needs.mpi-dim1.result }}" \
               "${{ needs.set-mode.outputs.mpi_required }}" \
             --gate kokkos-openmp "${{ needs.kokkos-openmp.result }}" \
               "${{ needs.set-mode.outputs.openmp_required }}"
@@ -1963,7 +2091,7 @@ jobs:
           retention-days: 1
 
   kokkos-openmp:
-    # The OpenMP C++ proof is the same exact thirteen-way target partition as the Serial gate:
+    # The OpenMP C++ proof is the same exact fourteen-way target partition as the Serial gate:
     # every non-MPI target belongs to exactly one shard and every built target must expose
     # an authenticated CTest label before its cases can run.  The independent Python/native-ABI
     # proof stays in its own lane because it builds one module rather than the C++ test graph.
@@ -1982,67 +2110,72 @@ jobs:
           - lane: cpp-0
             kind: cpp
             shard: 0
-            shard_total: 13
+            shard_total: 14
             ccache_maxsize: 2G
           - lane: cpp-1
             kind: cpp
             shard: 1
-            shard_total: 13
+            shard_total: 14
             ccache_maxsize: 2G
           - lane: cpp-2
             kind: cpp
             shard: 2
-            shard_total: 13
+            shard_total: 14
             ccache_maxsize: 2G
           - lane: cpp-3
             kind: cpp
             shard: 3
-            shard_total: 13
+            shard_total: 14
             ccache_maxsize: 2G
           - lane: cpp-4
             kind: cpp
             shard: 4
-            shard_total: 13
+            shard_total: 14
             ccache_maxsize: 2G
           - lane: cpp-5
             kind: cpp
             shard: 5
-            shard_total: 13
+            shard_total: 14
             ccache_maxsize: 2G
           - lane: cpp-6
             kind: cpp
             shard: 6
-            shard_total: 13
+            shard_total: 14
             ccache_maxsize: 2G
           - lane: cpp-7
             kind: cpp
             shard: 7
-            shard_total: 13
+            shard_total: 14
             ccache_maxsize: 2G
           - lane: cpp-8
             kind: cpp
             shard: 8
-            shard_total: 13
+            shard_total: 14
             ccache_maxsize: 2G
           - lane: cpp-9
             kind: cpp
             shard: 9
-            shard_total: 13
+            shard_total: 14
             ccache_maxsize: 2G
           - lane: cpp-10
             kind: cpp
             shard: 10
-            shard_total: 13
+            shard_total: 14
             ccache_maxsize: 2G
           - lane: cpp-11
             kind: cpp
             shard: 11
-            shard_total: 13
+            shard_total: 14
             ccache_maxsize: 2G
           - lane: cpp-12
             kind: cpp
             shard: 12
-            shard_total: 13
+            shard_total: 14
+            ccache_maxsize: 2G
+          - lane: cpp-13
+            kind: cpp
+            shard: 13
+            shard_total: 14
             ccache_maxsize: 2G
           - lane: python
             kind: python
@@ -2115,6 +2248,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libeigen3-dev ninja-build ccache mold
+
+      - name: Install MPI SDK for required Python syntax witnesses
+        if: matrix.kind == 'python'
+        run: sudo apt-get install -y libopenmpi-dev openmpi-bin
 
       - name: Resolve runner and compiler cache identity
         id: kokkos-platform
@@ -2275,7 +2412,7 @@ jobs:
 
       - name: Install OpenMP Python test dependencies
         if: matrix.kind == 'python'
-        run: pip install --upgrade pip numpy pytest h5py
+        run: pip install --upgrade pip numpy pytest h5py scipy 'mpmath>=1.3.0'
 
       - name: Reuse exact OpenMP module and sync Python sources
         if: matrix.kind == 'python' && steps.openmp-python-module-cache.outputs.cache-hit == 'true'

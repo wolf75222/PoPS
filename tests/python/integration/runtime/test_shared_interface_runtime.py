@@ -561,9 +561,11 @@ def _ssprk2_program(left_state, right_state, rate):
     program = pops.Program("shared_interface_ssprk2")
     left = program.state(left_state)
     right = program.state(right_state)
+    # Declare both lazy state reads before either residual can be consumed.
+    left_n, right_n = left.n, right.n
     stage_0 = StagePoint("shared_stage_0", {"main": TimePoint(program.clock, 0)})
-    left_k0 = program.value("left_k0", rate(left.n), at=stage_0)
-    right_k0 = program.value("right_k0", rate(right.n), at=stage_0)
+    left_k0 = program.value("left_k0", rate(left_n), at=stage_0)
+    right_k0 = program.value("right_k0", rate(right_n), at=stage_0)
     stage_1 = StagePoint("shared_stage_1", {"main": TimePoint(program.clock, 1)})
     left_stage = program.value(
         "left_stage", left.n + program.dt * left_k0, at=stage_1)
@@ -1620,9 +1622,10 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
 def _shared_copied_rate_program(left_state, right_state, rate, *, asymmetric=False):
     program = pops.Program("shared_copied_rate_asymmetric" if asymmetric else "shared_copied_rate")
     left, right = program.state(left_state), program.state(right_state)
+    left_n, right_n = left.n, right.n
     stage = StagePoint("copied_rate", {"main": TimePoint(program.clock, 0)})
-    left_rate = program.value("left_rate", rate(left.n), at=stage)
-    right_rate = program.value("right_rate", rate(right.n), at=stage)
+    left_rate = program.value("left_rate", rate(left_n), at=stage)
+    right_rate = program.value("right_rate", rate(right_n), at=stage)
     # Distinct value aliases and signed affine paths must retain one physical source identity.
     left_copy = program.value("left_copy", left_rate, at=stage)
     left_next = program.value(
@@ -1678,8 +1681,9 @@ def _shared_ab2_program(left_state, right_state, rate):
     stage = StagePoint("shared_ab2_current", {"main": TimePoint(program.clock, 0)})
     endpoints = [(name, program.state(state))
                  for name, state in (("left", left_state), ("right", right_state))]
-    rates = [program.value(name + "_rate", rate(temporal.n), at=stage)
-             for name, temporal in endpoints]
+    initial_states = [temporal.n for _, temporal in endpoints]
+    rates = [program.value(name + "_rate", rate(initial), at=stage)
+             for (name, _), initial in zip(endpoints, initial_states, strict=True)]
     # Materialize the coherent pair before either endpoint's history publication barrier.
     for (name, temporal), current in zip(endpoints, rates, strict=True):
         history_name = name + ".rate"

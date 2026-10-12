@@ -251,7 +251,10 @@ def test_uniform_explicit_default_rhs_role_emits_one_selected_closure() -> None:
     )
     install = source[source.index("void pops_install_native("):]
     assert install.count("auto named_elliptic_rhs_") == 1
-    assert "auto named_elliptic_rhs_0 = pops::make_poisson_rhs(model);" in install
+    assert "auto named_elliptic_model_0 = pops_generated::SelectedDefaultRhsEll_DefaultRhs{};" in install
+    assert "auto named_elliptic_rhs_0 = pops::make_poisson_rhs(named_elliptic_model_0);" in install
+    assert "pops::compiled_model::apply_runtime_params(\n      named_elliptic_model_0," in install
+    assert "pops::compiled_model::declaration_runtime_params(model)" in install
     assert install.count("NativeEllipticAttachmentRole::rhs_only") == 1
     assert install.count("package.elliptic_attachments.push_back(") == 1
     assert 'attachment.field = "fields_from_state";' in install

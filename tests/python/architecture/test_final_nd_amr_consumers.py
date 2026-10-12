@@ -290,12 +290,19 @@ PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
     + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET + RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET
     + PROGRAM_NEW_CONTRACT_BUDGET
 )
+PROGRAM_SEMANTIC_HELPER_PATHS = frozenset({
+    "pops/runtime/program/prepared_program_field_stages.hpp",
+    "pops/runtime/program/prepared_hierarchy_barrier.hpp",
+})
 SEMANTIC_AUTHORITIES = frozenset(
     {
         "pops/numerics/time/amr/reflux/amr_flux_execution.hpp",
         "pops/numerics/time/amr/reflux/amr_flux_preparation.hpp",
         "pops/numerics/time/amr/levels/amr_subcycling_plan.hpp",
         "pops/numerics/time/amr/levels/amr_subcycling_engine.hpp",
+        # Hierarchy Field staging is a real upstream owner: traverse and count
+        # its body in the unchanged semantic closure instead of hiding a fragment.
+        *PROGRAM_SEMANTIC_HELPER_PATHS,
         *CONTEXT_FRAGMENT_PATHS,
     }
 )
@@ -305,6 +312,7 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/amr/transfer/temporal_interpolation_provider.hpp",
         "pops/amr/transfer/transfer_provider.hpp",
         "pops/core/foundation/types.hpp",
+        "pops/core/foundation/kokkos_env.hpp",
         "pops/core/identity/prepared_provider.hpp",
         "pops/core/identity/sha256.hpp",
         "pops/mesh/execution/for_each.hpp",
@@ -338,6 +346,9 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/program/prepared_amr_spatial_residual.hpp",
         "pops/runtime/program/prepared_amr_field_residual.hpp",
         "pops/runtime/program/prepared_integral_capture.hpp",
+        "pops/runtime/program/prepared_program_field_stages.hpp",
+        "pops/runtime/program/prepared_hierarchy_barrier.hpp",
+        "pops/runtime/program/prepared_resource_lifetime.hpp",
         "pops/runtime/program/program_value_authority.hpp",
         "pops/runtime/program/spatial_direct_interaction.hpp",
         "pops/runtime/program/spatial_interaction_history_source.hpp",
@@ -348,6 +359,7 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/program/step_transaction.hpp",
         "pops/runtime/program/collective_step_rejection.hpp",
         "pops/runtime/system/provider_storage_binding.hpp",
+        "pops/runtime/system/prepared_field_rhs_inputs.hpp",
     }
 )
 INCLUDE_RE = re.compile(r'^\s*#include\s*(?:<(pops/[^>]+)>|"(pops/[^"]+)")', re.MULTILINE)
@@ -507,10 +519,12 @@ def test_amr_consumer_closures_are_explicit_bounded_and_acyclic() -> None:
     # Persistent synchronized continuations add retained state and rollback to this closure.
     assert len(_source(closures["subcycling"]).splitlines()) <= 1_650
     program_fragments = tuple(
-        path for path in closures["program"] if path in CONTEXT_FRAGMENT_PATHS
+        path for path in closures["program"]
+        if path in CONTEXT_FRAGMENT_PATHS | PROGRAM_SEMANTIC_HELPER_PATHS
     )
     program_scaffolding = tuple(
-        path for path in closures["program"] if path not in CONTEXT_FRAGMENT_PATHS
+        path for path in closures["program"]
+        if path not in CONTEXT_FRAGMENT_PATHS | PROGRAM_SEMANTIC_HELPER_PATHS
     )
     assert len(_source(program_fragments).splitlines()) <= PROGRAM_FRAGMENT_BUDGET
     resource_lines = _resource_authority_scaffolding_lines()
@@ -549,6 +563,10 @@ def test_new_program_upstream_contracts_have_exact_ranked_owners_and_bounds() ->
             (128, "class PreparedIntegralCapture"),
         "pops/runtime/program/program_value_authority.hpp":
             (480, "class ProgramValueAuthority"),
+        "pops/runtime/program/prepared_program_field_stages.hpp":
+            (240, "class PreparedProgramFieldStages"),
+        "pops/runtime/program/prepared_hierarchy_barrier.hpp":
+            (128, "class PreparedHierarchyBarrier"),
         "pops/runtime/program/spatial_direct_interaction.hpp":
             (384, "direct_spatial_interaction"),
         "pops/runtime/program/spatial_interaction_history_source.hpp":

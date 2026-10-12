@@ -36,6 +36,8 @@ def test_package_exposes_exact_final_surface():
     assert set(linalg.__all__) == {
         "LinearOperator", "MatrixFreeOperator", "LinearOperatorProperties", "LinearProblem",
         "L1", "L2", "LInf", "Dot", "Norm2", "dot", "norm2",
+        "FiniteSupport", "FiniteMeasure", "FiniteVector", "FiniteLinearMap",
+        "FiniteSymmetricInteraction",
         "operator", "problem", "norms", "reductions",
     }
     assert not hasattr(linalg, "Residual")

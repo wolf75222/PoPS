@@ -1,0 +1,63 @@
+{
+  "source_commit": "c9a1dbe454dac313cf3396ac355a2961dbef7ef0",
+  "native_identity": {
+    "source_commit": "c9a1dbe454dac313cf3396ac355a2961dbef7ef0",
+    "native_sha256": "bb499c934cd36aecf911157ea586cb9fa3dcb4bf7c9057f917cf0f0a1eedeca4",
+    "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.3.34.2);std=202002L;headers=23f396b59c293abba76993af16139e061c2874dd75420607c2c4bd65f4eb26ce;kokkos=1;stdlib=libc++_220106;mpi=1;mpi_abi=40d6e65d7f79f247f867711ee0854b6220e3b9c1950da10f38add6e0977b9e89;dim=2",
+    "abi_version": 13,
+    "dimension": 2
+  },
+  "scope": "Targeted reception of CI integration repairs; original four-defect campaign remains separately attributed to a17fe0e9.",
+  "received": {
+    "PredictorCorrector_public_runtime": "1 process-isolated test passed, no skip; public B/C runtime stages included",
+    "prepared_field_rhs_stage_refusal": "MPI1 one pass; MPI2 one pass per rank",
+    "temporal_partition_and_reflux": "13 distinct C++ passes on MPI1",
+    "FAC_refined_final_root": "one native pass in an earlier three-case run; two diagnostic fixture failures in that run separately superseded below",
+    "root_source_and_real_compiler": "17 passes; separate operator/FanLi isolated witness batch 2 passes",
+    "root_runtime_final": "7 passes: 2 scheduling-refusal fixtures, 1 external FieldSolver AMR rollback/regrid/retry, 2 diagnostic Uniform/AMR capacity/restore, 2 M19 freestreaming exact restart"
+  },
+  "superseded_attempts": "Earlier diagnostic exception and external solver-counter fixture assertions failed; final root runtime batch records successful replacements. No failed attempt counts as qualification.",
+  "logs": [
+    {
+      "name": "native-c9a1dbe-predictor-corrector-final.log",
+      "sha256": "1cc8eece295e30d2213cd502cff1ffd6bd1061bb8ec9c4cd7500c36a63ea95a7"
+    },
+    {
+      "name": "native-field-request-mpi1.log",
+      "sha256": "f5502e59473245c6485285248761bbb9647e10a2e9fffd75b1f8e56adf1c9580"
+    },
+    {
+      "name": "native-field-request-mpi2.log",
+      "sha256": "d06e8a5acf4dfe4c8f924a3bcb6a36878609503612793ff49f0ee687cd1bd192"
+    },
+    {
+      "name": "native-c9-history-cpp-mpi1.log",
+      "sha256": "c07233dcde74f7ccca3aa094c8c622960e1ba92e4fb8638e0a8e8fdfa3538afa"
+    },
+    {
+      "name": "native-c9a1dbe-root-oracles-compiler.log",
+      "sha256": "a5f76d6d8dc788e27cb2177a22ff279da73f53081707d615e67c03276e6dcffa"
+    },
+    {
+      "name": "c9-root-source-compiler-batch.log",
+      "sha256": "3a00132d5dacf1a696fa11079605aacaf625d9dfb971b88596ffc5c405903a4e"
+    },
+    {
+      "name": "native-c9-field-diagnostic-retry.log",
+      "sha256": "e19214a0f2d854479929e65629cef1c5f108add047314619a7edc89365d3f720"
+    },
+    {
+      "name": "native-c9-root-runtime-final.log",
+      "sha256": "3b98d9e3d0bb13fce6b27b086c03e3763c4636e71e5f9a624e9c7d95573039d8"
+    }
+  ],
+  "remote_ci": {
+    "initial_head": "d3110adcc209cff2f64c1a56edd284fd1d9751b7",
+    "run_id": 38270709033,
+    "main_jobs": 129,
+    "success": 56,
+    "failure": 73,
+    "url": "https://github.com/wolf75222/PoPS/actions/runs/38270709033",
+    "final_required_gate": "pending receipt on final pushed SHA"
+  }
+}

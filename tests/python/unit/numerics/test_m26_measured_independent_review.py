@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError
 import numpy as np
 import pytest
 
-from pops._ir.expr import Add, Const, Mul, Sub
+from pops._ir.expr import Add, Const, Mul, Sub, _wrap
 from pops._ir.finite_linear import FiniteProjection
 from pops.linalg import FiniteMeasure, FiniteSupport, FiniteSymmetricInteraction
 
@@ -18,6 +18,7 @@ Y = np.array((1.4, .2, 1.1, .9))
 
 def literal_expression_value(node):
     """Read constant authoring IR only; this is not a Program execution backend."""
+    node = _wrap(node)
     if isinstance(node, Const):
         return node.eval({})
     if isinstance(node, FiniteProjection):

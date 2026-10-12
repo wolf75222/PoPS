@@ -29,8 +29,10 @@ def synthetic_geometry(cells=8):
         row = metric_arrays(cells, level, valid)
         row["active"] = np.tile(active, (n, 1))
         row["native_base_shape"] = np.array([cells, cells], dtype=np.int64)
-        row["native_patch_boxes"] = np.array([[0, 0, 0, cells-1, cells-1],
+        row["carrier_patch_boxes"] = np.array([[0, 0, 0, cells-1, cells-1],
             [1, cells//2, 0, 3*cells//2-1, 2*cells-1]], dtype=np.int64)
+        row["native_patch_boxes"] = row["carrier_patch_boxes"][
+            row["carrier_patch_boxes"][:, 0] > 0].copy()
         rows.append(row)
     return rows
 
@@ -141,7 +143,7 @@ def test_reference_refuses_foreign_geometry_instead_of_falling_back_to_homogeneo
     elif mutation == "edges":
         rows[0]["x_edges"][1] += .01
     elif mutation == "boxes":
-        rows[0]["native_patch_boxes"][1, 1] += 1
+        rows[0]["native_patch_boxes"][0, 1] += 1
     else:
         rows[0]["native_base_shape"][0] += 1
     with pytest.raises((ValueError, AssertionError)):

@@ -246,8 +246,27 @@ if(POPS_NATIVE_DIM STREQUAL "2")
       tests/python/integration/mpi/test_external_amr_field_solver_mpi.py
       tests/python/integration/mpi/test_scientific_output_mpi.py
       tests/python/integration/mpi/test_uniform_history_checkpoint_mpi.py)
-  set(_pops_py_rank_change_orchestrator
-      tests/python/integration/mpi/test_amr_rank_change_restart.py)
+  set(_pops_py_runtime_mpi_entrypoints
+      tests/python/integration/runtime/test_mapped_field_binding_collective_runtime.py)
+  set(_pops_py_mpi_orchestrators
+      tests/python/integration/mpi/test_amr_rank_change_restart.py
+      tests/python/integration/mpi/test_initial_field_ghost_mpi.py
+      tests/python/integration/mpi/test_public_amr_original_field_mpi1.py
+      tests/python/integration/mpi/test_public_amr_original_field_mpi2.py
+      tests/python/integration/mpi/test_public_amr_profile_mpi1.py
+      tests/python/integration/mpi/test_public_amr_profile_mpi2.py
+      tests/python/integration/mpi/test_public_captured_diffusion_mpi1.py
+      tests/python/integration/mpi/test_public_captured_diffusion_mpi2.py
+      tests/python/integration/mpi/test_public_completed_original_interaction_mpi1.py
+      tests/python/integration/mpi/test_public_completed_original_interaction_mpi2.py
+      tests/python/integration/mpi/test_public_evolved_original_stage_mpi1.py
+      tests/python/integration/mpi/test_public_evolved_original_stage_mpi2.py
+      tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi1.py
+      tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi2.py
+      tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi1.py
+      tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi2.py
+      tests/python/integration/mpi/test_public_spatial_interaction_mpi1.py
+      tests/python/integration/mpi/test_public_spatial_interaction_mpi2.py)
 
   set(_pops_py_io_ignore_args)
   foreach(_pops_py_mpi_entrypoint IN LISTS _pops_py_io_mpi_entrypoints)
@@ -259,8 +278,16 @@ if(POPS_NATIVE_DIM STREQUAL "2")
     list(APPEND _pops_py_mpi_ignore_args
          "--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_mpi_entrypoint}")
   endforeach()
-  list(APPEND _pops_py_mpi_ignore_args
-       "--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_rank_change_orchestrator}")
+  set(_pops_py_runtime_ignore_args
+      "--ignore=${CMAKE_SOURCE_DIR}/tests/python/integration/runtime/test_m15_mpi_collective_rejection.py")
+  foreach(_pops_py_mpi_entrypoint IN LISTS _pops_py_runtime_mpi_entrypoints)
+    list(APPEND _pops_py_runtime_ignore_args
+         "--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_mpi_entrypoint}")
+  endforeach()
+  foreach(_pops_py_mpi_orchestrator IN LISTS _pops_py_mpi_orchestrators)
+    list(APPEND _pops_py_mpi_ignore_args
+         "--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_mpi_orchestrator}")
+  endforeach()
 
   pops_add_pytest_suite(pops_python_unit_descriptors tests/python/unit/descriptors "unit;python;descriptors;fast")
   pops_add_pytest_suite(pops_python_unit_codegen tests/python/unit/codegen "unit;python;codegen;fast")
@@ -271,7 +298,7 @@ if(POPS_NATIVE_DIM STREQUAL "2")
   pops_add_pytest_suite(pops_python_unit_runtime tests/python/unit/runtime "unit;python;runtime;fast")
 
   pops_add_pytest_suite(pops_python_integration_bindings tests/python/integration/bindings "integration;python;bindings;medium")
-  pops_add_pytest_suite(pops_python_integration_runtime tests/python/integration/runtime "integration;python;runtime;medium")
+  pops_add_pytest_suite(pops_python_integration_runtime tests/python/integration/runtime "integration;python;runtime;medium" ${_pops_py_runtime_ignore_args})
   pops_add_pytest_suite(pops_python_integration_amr tests/python/integration/amr "integration;python;amr;medium")
   pops_add_pytest_suite(pops_python_integration_native_loader tests/python/integration/native_loader "integration;python;native_loader;compiler;medium")
   pops_add_pytest_suite(pops_python_integration_io tests/python/integration/io "integration;python;io;hdf5;medium" ${_pops_py_io_ignore_args})
@@ -296,18 +323,21 @@ if(POPS_NATIVE_DIM STREQUAL "2")
         TIMEOUT 900)
     endfunction()
 
-    foreach(_pops_py_mpi_entrypoint IN LISTS _pops_py_io_mpi_entrypoints _pops_py_mpi_entrypoints)
+    foreach(_pops_py_mpi_entrypoint IN LISTS _pops_py_io_mpi_entrypoints _pops_py_mpi_entrypoints _pops_py_runtime_mpi_entrypoints)
       pops_add_mpi_pytest_entrypoint("${_pops_py_mpi_entrypoint}")
     endforeach()
 
-    add_test(
-      NAME pops_python_mpi_test_amr_rank_change_restart_orchestrator
-      COMMAND ${Python_EXECUTABLE} -m pytest "${CMAKE_SOURCE_DIR}/${_pops_py_rank_change_orchestrator}" -q)
-    set_tests_properties(pops_python_mpi_test_amr_rank_change_restart_orchestrator PROPERTIES
-      ENVIRONMENT "${_pops_py_test_env};POPS_REQUIRE_MPI_TESTS=1"
-      LABELS "integration;python;mpi;orchestrator"
-      PROCESSORS 2
-      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-      TIMEOUT 900)
+    foreach(_pops_py_mpi_orchestrator IN LISTS _pops_py_mpi_orchestrators)
+      get_filename_component(_pops_py_mpi_stem "${_pops_py_mpi_orchestrator}" NAME_WE)
+      add_test(
+        NAME "pops_python_mpi_${_pops_py_mpi_stem}_orchestrator"
+        COMMAND ${Python_EXECUTABLE} -m pytest "${CMAKE_SOURCE_DIR}/${_pops_py_mpi_orchestrator}" -q)
+      set_tests_properties("pops_python_mpi_${_pops_py_mpi_stem}_orchestrator" PROPERTIES
+        ENVIRONMENT "${_pops_py_test_env};POPS_REQUIRE_MPI_TESTS=1"
+        LABELS "integration;python;mpi;orchestrator"
+        PROCESSORS 2
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        TIMEOUT 900)
+    endforeach()
   endif()
 endif()

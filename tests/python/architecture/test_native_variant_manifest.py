@@ -462,7 +462,7 @@ def test_ctest_python_mpi_projection_matches_the_manifest_and_dim2_contract():
         block = source.split(f"set({variable}", 1)[1].split(")", 1)[0]
         return tuple(
             re.findall(
-                r"^\s*(tests/python/integration/(?:io|mpi)/test_[^\s]+\.py)\s*$",
+                r"^\s*(tests/python/integration/(?:io|mpi|runtime)/test_[^\s]+\.py)\s*$",
                 block,
                 flags=re.MULTILINE,
             )
@@ -471,22 +471,41 @@ def test_ctest_python_mpi_projection_matches_the_manifest_and_dim2_contract():
     manifest_projection = (
         *manifest_entrypoints("pops_python_integration_io"),
         *manifest_entrypoints("pops_python_integration_mpi"),
+        *manifest_entrypoints("pops_python_integration_runtime"),
     )
     cmake_projection = (
         *cmake_entrypoints("_pops_py_io_mpi_entrypoints"),
         *cmake_entrypoints("_pops_py_mpi_entrypoints"),
+        *cmake_entrypoints("_pops_py_runtime_mpi_entrypoints"),
     )
-    assert len(manifest_projection) == 9
+    assert len(manifest_projection) == 10
     assert all(nproc == 2 for _, nproc in manifest_projection)
     assert cmake_projection == tuple(path for path, _ in manifest_projection)
 
-    orchestrator = re.search(
-        r"set\(_pops_py_rank_change_orchestrator\s+([^\s)]+)\)", source
+    manifest_orchestrators = tuple(re.findall(
+        r'\{ path = "([^"]+)" \}', manifest_suite("pops_python_integration_mpi")
+    ))
+    assert manifest_orchestrators == (
+        "tests/python/integration/mpi/test_amr_rank_change_restart.py",
+        "tests/python/integration/mpi/test_initial_field_ghost_mpi.py",
+        "tests/python/integration/mpi/test_public_amr_original_field_mpi1.py",
+        "tests/python/integration/mpi/test_public_amr_original_field_mpi2.py",
+        "tests/python/integration/mpi/test_public_amr_profile_mpi1.py",
+        "tests/python/integration/mpi/test_public_amr_profile_mpi2.py",
+        "tests/python/integration/mpi/test_public_captured_diffusion_mpi1.py",
+        "tests/python/integration/mpi/test_public_captured_diffusion_mpi2.py",
+        "tests/python/integration/mpi/test_public_completed_original_interaction_mpi1.py",
+        "tests/python/integration/mpi/test_public_completed_original_interaction_mpi2.py",
+        "tests/python/integration/mpi/test_public_evolved_original_stage_mpi1.py",
+        "tests/python/integration/mpi/test_public_evolved_original_stage_mpi2.py",
+        "tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi1.py",
+        "tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi2.py",
+        "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi1.py",
+        "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi2.py",
+        "tests/python/integration/mpi/test_public_spatial_interaction_mpi1.py",
+        "tests/python/integration/mpi/test_public_spatial_interaction_mpi2.py",
     )
-    assert orchestrator is not None
-    assert orchestrator.group(1) == (
-        "tests/python/integration/mpi/test_amr_rank_change_restart.py"
-    )
+    assert cmake_entrypoints("_pops_py_mpi_orchestrators") == manifest_orchestrators
     assert (
         "if(POPS_NATIVE_DIM STREQUAL \"2\")" in source
         and source.count("if(POPS_NATIVE_DIM STREQUAL \"2\")") == 1
@@ -531,17 +550,22 @@ def test_ctest_python_mpi_projection_matches_the_manifest_and_dim2_contract():
 
     assert "${_pops_py_io_ignore_args}" in source
     assert "${_pops_py_mpi_ignore_args}" in source
-    assert source.count('"--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_mpi_entrypoint}"') == 2
-    assert '"--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_rank_change_orchestrator}"' in source
-    assert source.count("pops_python_mpi_test_amr_rank_change_restart_orchestrator") == 2
-    assert "NAME pops_python_mpi_test_amr_rank_change_restart_orchestrator" in source
+    assert source.count('"--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_mpi_entrypoint}"') == 3
+    assert '"--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_mpi_orchestrator}"' in source
+    assert source.count(
+        "foreach(_pops_py_mpi_orchestrator IN LISTS _pops_py_mpi_orchestrators)"
+    ) == 2
+    assert source.count("pops_python_mpi_${_pops_py_mpi_stem}_orchestrator") == 2
+    assert 'NAME "pops_python_mpi_${_pops_py_mpi_stem}_orchestrator"' in source
     orchestrator_properties = source.split(
-        "set_tests_properties(pops_python_mpi_test_amr_rank_change_restart_orchestrator", 1
-    )[1].split("endif()", 1)[0]
+        'set_tests_properties("pops_python_mpi_${_pops_py_mpi_stem}_orchestrator"', 1
+    )[1].split("endforeach()", 1)[0]
     assert "PROCESSORS 2" in orchestrator_properties
+    assert 'LABELS "integration;python;mpi;orchestrator"' in orchestrator_properties
+    assert "TIMEOUT 900" in orchestrator_properties
     assert "${MPIEXEC_EXECUTABLE}" not in source.split(
-        "NAME pops_python_mpi_test_amr_rank_change_restart_orchestrator", 1
-    )[1].split("endif()", 1)[0]
+        'NAME "pops_python_mpi_${_pops_py_mpi_stem}_orchestrator"', 1
+    )[1].split("endforeach()", 1)[0]
 
 
 def test_wheel_proof_accepts_an_explicit_fat_set_and_rejects_a_hidden_subset(tmp_path):

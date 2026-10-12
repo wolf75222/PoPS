@@ -24,6 +24,67 @@ def test_selected_files_are_partitioned_exactly_by_the_explicit_contract():
         runner.partition([drift], {"default": 2, "files": {drift: "1"}})
 
 
+def test_scientific_dim1_runtime_files_keep_their_declared_geometry():
+    contract = json.loads(runner.CONTRACT.read_text())
+    paths = [
+        "tests/python/integration/runtime/test_public_moving_interval.py",
+        "tests/python/integration/runtime/test_api040_m26_finite_interaction_runtime.py",
+        "tests/python/integration/runtime/test_m07_coordinated_hydrostatic_runtime.py",
+        "tests/python/integration/runtime/test_m15_axial_b1_runtime.py",
+        "tests/python/integration/runtime/test_m23_hall_fourier_runtime.py",
+        "tests/python/integration/runtime/test_coupled_gradient_exchange_runtime.py",
+    ]
+    assert runner.partition(paths, contract) == {1: paths}
+
+
+def test_coupled_gradient_fourier_runtime_keeps_its_three_dimensional_geometry():
+    contract = json.loads(runner.CONTRACT.read_text())
+    path = "tests/python/integration/runtime/test_coupled_gradient_dim3_fourier_runtime.py"
+    assert runner.partition([path], contract) == {3: [path]}
+
+
+def test_syntax_compiler_uses_authenticated_kokkos_contract_over_venv_prefix(tmp_path, monkeypatch):
+    from tests.python.support import native_syntax_toolchain as syntax
+
+    prefix = tmp_path / "configured-kokkos"
+    compile_flags, link_flags = ["-I", str(prefix / "include")], ["-pthread"]
+    monkeypatch.setattr(syntax.toolchain, "_native_kokkos_selection",
+                        lambda: (str(prefix), (str(prefix / "include"),), "authenticated"))
+    monkeypatch.setattr(syntax.toolchain, "_native_kokkos_compiler", lambda requested: "real-c++")
+    monkeypatch.setattr(syntax.toolchain, "_native_kokkos_flags", lambda: (compile_flags, link_flags))
+    actual = syntax.configured_kokkos_toolchain()
+    assert actual == ("real-c++", prefix, compile_flags, link_flags)
+    assert actual[2] is not compile_flags and actual[3] is not link_flags
+
+
+def test_mpi_syntax_sdk_requirement_stays_fail_closed(monkeypatch):
+    from tests.python.support import native_syntax_toolchain as syntax
+
+    monkeypatch.setenv("POPS_REQUIRE_NATIVE_TESTS", "1")
+    monkeypatch.setattr(syntax.shutil, "which", lambda requested: None)
+    with pytest.raises(RuntimeError, match="required native test unavailable: real MPI SDK"):
+        syntax.mpi_syntax_flags()
+
+
+@pytest.mark.parametrize("wrapper", ("openmpi", "mpich"))
+def test_mpi_syntax_flags_come_from_the_actual_wrapper(monkeypatch, wrapper):
+    from tests.python.support import native_syntax_toolchain as syntax
+
+    monkeypatch.setattr(syntax.shutil, "which", lambda requested: "/real/mpicxx")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        if command[1] == "--showme:compile" and wrapper == "mpich":
+            return SimpleNamespace(returncode=1, stdout="")
+        return SimpleNamespace(returncode=0, stdout=("g++ " if wrapper == "mpich" else "")
+                               + "-I/real/mpi/include -DMPI_SDK=1")
+
+    monkeypatch.setattr(syntax.subprocess, "run", run)
+    assert syntax.mpi_syntax_flags() == ["-I/real/mpi/include", "-DMPI_SDK=1"]
+    assert all(command[0] == "/real/mpicxx" for command in calls)
+
+
 def artifact(tmp_path, dimension):
     p = tmp_path / "packages" / ("dim%d" % dimension)
     p.mkdir(parents=True)

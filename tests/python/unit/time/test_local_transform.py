@@ -96,7 +96,14 @@ def test_local_transform_program_emits_one_collective_fail_closed_kernel() -> No
     assert 'require_cartesian_generated_operator(0, "local_transform")' not in source
     assert "ctx.pointwise_active_mask(0," in source
     assert "transform_has_active_mask_" in source
-    assert "outA(index, 0) = u0A(index, 0);" in source
+    input_view = re.search(
+        r"(\w+A) = std::as_const\((\w+)\)\.fab\(li\)\.view\(\);", step_body)
+    assert input_view is not None
+    view_name, field_name = input_view.groups()
+    assert view_name == field_name + "A"
+    inactive_branch = step_body.split("if (transform_has_active_mask_", 1)[1].split("return;", 1)[0]
+    assert "outA(index, 0) = %s(index, 0);" % view_name in inactive_branch
+    assert "statusA(index, 0) = pops::Real(0);" in inactive_branch
     assert "ctx.pointwise_status_max(0," in source
     assert "StepAttemptRejected" in source
     assert "Kokkos::isfinite" in source

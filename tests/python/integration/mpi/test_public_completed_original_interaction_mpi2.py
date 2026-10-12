@@ -1,0 +1,12 @@
+"""Every completed_original native case on every rank in one mandatory MPI2 world."""
+import pytest
+
+from tests.python.support.public_field_profile_mpi import run_public_field_profile_world
+
+
+pytestmark = pytest.mark.mpi
+
+
+def test_public_completed_original_on_authenticated_mpi2_world(tmp_path):
+    run_public_field_profile_world(group="completed_original", ranks=2,
+                                   directory=tmp_path / "mpi2")

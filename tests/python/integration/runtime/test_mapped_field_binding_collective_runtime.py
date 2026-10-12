@@ -119,3 +119,7 @@ def test_rank_local_mapped_dto_refusals_preserve_accepted_storage(
             exact_payload(before[1], after[1])
             exact_payload(before[2], after[2])
     record_property("mapped_binding_refusal_directory", str(directory))
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-q", "-ra", "--maxfail=1"]))

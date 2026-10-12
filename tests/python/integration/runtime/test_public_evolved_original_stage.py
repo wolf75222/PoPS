@@ -9,7 +9,6 @@ from io import BytesIO
 import json
 from pathlib import Path
 import struct
-import sys
 
 import numpy as np
 import pops
@@ -23,6 +22,7 @@ from tests.python.support.evolved_stage_mms import (
 )
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.public_native_profile import native_profile, rank_and_size
 
 
 def checkpoint_restart_authority(runtime):
@@ -264,17 +264,16 @@ def check_saved(path, previous, initial, target, width, dt, candidate):
 def test_public_evolved_original_stage_saved_and_exact_replay(
         isolated_native_cache, tmp_path, record_property, cells, dt, width, candidate):
     del isolated_native_cache
-    from pops._native_selector import select_native_dimension
-    native = select_native_dimension(2)
-    world = native.mpi_world()
-    with collective_check(world):
-        assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+    native, world = native_profile(scope="public evolved original stage")
+    rank, size = rank_and_size(world)
+    record_property("native_abi_version", native.__abi_version__)
+    record_property("native_profile", "MPI" if world is not None else "Serial")
     case, layout, _ = collective_call(world, lambda: build(cells, width, dt, candidate_diffusion=candidate))
     initial, initial_t, target, _, volumes = collective_call(world, lambda:
         manufactured_data(cells, width, dt, candidate_diffusion=candidate))
     resolved = collective_call(world, lambda: pops.resolve(pops.validate(case), layout=layout))
-    artifact = compile_resolved_plan_once(world, resolved, route="evolved-original-stage-Uniform",
-                                          compile_artifact=pops.compile)
+    artifact = (pops.compile(resolved) if world is None else compile_resolved_plan_once(
+        world, resolved, route="evolved-original-stage-Uniform", compile_artifact=pops.compile))
     def bind():
         context = artifact_execution_context(artifact)
         return pops.bind(artifact, initial_state={name: value.copy() for name, value in initial.items()},
@@ -316,7 +315,7 @@ def test_public_evolved_original_stage_saved_and_exact_replay(
         assert accepted[1][-1] == (dt, 1) and continuous[1][-1] == (2*dt, 2)
         for index in range(width):
             np.testing.assert_array_equal(continuous[0]["T%d-previous" % index], accepted[0]["T%d" % index])
-        if world.rank == 0:
+        if rank == 0:
             checkpoint_equivalence = compare_checkpoint_replay_v2(dict(checkpoint_files), checkpoint_authorities)
             initial_path = directory/"initial.npz"
             np.savez(initial_path, **initial, initial_temperature=initial_t, first_target=target, cell_volumes=volumes)
@@ -362,8 +361,8 @@ def test_public_evolved_original_stage_saved_and_exact_replay(
             observation_paths.add(initial_path.resolve())
             assert checkpoint_paths.isdisjoint(observation_paths), "checkpoints and observations must use distinct files"
             receipt = {"fixture_schema": "pops.evolved-stage-native-fixture@2",
-                "artifact": artifact.artifact_identity.token, "dimension": 2, "rank": world.rank,
-                "size": world.size, "cells": cells, "dt": dt, "evolved_states": width,
+                "artifact": artifact.artifact_identity.token, "dimension": 2, "rank": rank,
+                "size": size, "cells": cells, "dt": dt, "evolved_states": width,
                 "unknowns": width+(width == 2), "candidate_diffusion": candidate,
                 "newton": CONTROLS, "fd_step": FD_STEP, "acceptance": ACCEPTANCE,
                 "projection": "piecewise_constant_cell", "volume_sum": float(np.sum(volumes)),
@@ -376,6 +375,6 @@ def test_public_evolved_original_stage_saved_and_exact_replay(
                 "exact_restart_and_replay": True}
             (directory/"receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True)+"\n")
         for name, value in (("artifact_identity", artifact.artifact_identity.token), ("dimension", 2),
-                ("rank", world.rank), ("size", world.size), ("evidence_path", str(directory)),
+                ("rank", rank), ("size", size), ("evidence_path", str(directory)),
                 ("evolved_stage_receipt", str(directory/"receipt.json"))):
             record_property(name, value)

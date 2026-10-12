@@ -7,28 +7,28 @@ import importlib
 import pytest
 
 
-def test_external_reconstruction_selector_is_not_published() -> None:
+def test_symbolic_user_reconstruction_selector_is_published() -> None:
     module = importlib.import_module("pops.numerics.reconstruction")
 
-    assert "User" not in module.__all__
-    assert "User" not in vars(module)
-    assert "User" not in vars(module.reconstruction)
+    assert "User" in module.__all__
+    assert callable(module.User)
+    assert module.reconstruction.User is module.User
 
 
 @pytest.mark.parametrize("catalog", [
     importlib.import_module("pops.numerics.reconstruction"),
     importlib.import_module("pops.numerics.reconstruction").reconstruction,
 ])
-def test_retired_external_reconstruction_selector_fails_with_native_contract(catalog) -> None:
-    with pytest.raises(AttributeError) as error:
-        catalog.User("acme.reconstruction")
-
-    message = str(error.value)
-    assert "not an executable PoPS route" in message
-    assert "device-callable Kokkos" in message
-    assert "formal_order" in message
-    assert "ghost_depth" in message
-    assert "authenticated source-compiled Kokkos provider" in message
+def test_user_reconstruction_requires_an_authored_body_and_explicit_order(catalog) -> None:
+    from pops.numerics.reconstruction.user import authenticated_user_reconstruction
+    policy = catalog.User(lambda sample: sample(0), formal_order=1)
+    authenticated_user_reconstruction(policy)
+    assert policy.options["formal_order"] == 1
+    assert policy.options["ghost_depth"] == 1
+    with pytest.raises(TypeError, match="formal_order"):
+        catalog.User(lambda sample: sample(0))
+    with pytest.raises(TypeError, match="callable symbolic body"):
+        catalog.User("acme.reconstruction", formal_order=1)
 
 
 @pytest.mark.parametrize("scheme,native_id", [

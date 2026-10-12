@@ -10,7 +10,6 @@ from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
-import sys
 
 import numpy as np
 import pops
@@ -41,6 +40,7 @@ from tests.python.support.amr_snapshots import composite_active_mask
 from tests.python.support.collective_checks import collective_attempt, collective_call, collective_check
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.public_native_profile import native_profile, rank_and_size
 
 TARGET = np.array((.15, .25, .18))
 DIFFUSION = np.array(((.04, .006, 0.), (-.003, .05, 0.), (0., 0., .03)))
@@ -169,7 +169,8 @@ def bind_case(world, cells, order, *, guarded=False, seed=False, right_precondit
     case, layout = collective_call(world, lambda: build(cells, order, guarded=guarded, seed=seed,
                                                       right_preconditioner=right_preconditioner, solver=solver, physical_seed=physical_seed))
     resolved = collective_call(world, lambda: pops.resolve(pops.validate(case), layout=layout))
-    artifact = compile_resolved_plan_once(world, resolved, route="original nonlinear composite AMR field", compile_artifact=pops.compile)
+    artifact = (pops.compile(resolved) if world is None else compile_resolved_plan_once(
+        world, resolved, route="original nonlinear composite AMR field", compile_artifact=pops.compile))
     context = collective_call(world, lambda: artifact_execution_context(artifact))
     runtime = collective_call(world, lambda: pops.bind(artifact, resources={"execution_context": context}))
     return runtime, artifact
@@ -247,11 +248,10 @@ def check_original_saved(rows, cells, width, time):
 @pytest.mark.parametrize("cells,order,seed", [(16, (0,), False), (16, (0, 1, 2), False), (32, (2, 0, 1), True)])
 def test_public_original_amr_saved_reaction_and_exact_restart(isolated_native_cache, tmp_path, record_property, cells, order, seed):
     del isolated_native_cache
-    from pops._native_selector import select_native_dimension
-    native = select_native_dimension(2)
-    world = native.mpi_world()
-    with collective_check(world):
-        assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+    native, world = native_profile(scope="public original AMR field")
+    rank, size = rank_and_size(world)
+    record_property("native_abi_version", native.__abi_version__)
+    record_property("native_profile", "MPI" if world is not None else "Serial")
     runtime, artifact = bind_case(world, cells, order, seed=seed, right_preconditioner="SpatialBasisJacobi@1")
     directory = collective_directory(world, tmp_path / "original-amr-field")
     collective_call(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
@@ -259,7 +259,7 @@ def test_public_original_amr_saved_reaction_and_exact_restart(isolated_native_ca
     checkpoint = collective_call(world, lambda: runtime.checkpoint(directory / "accepted-checkpoint"))
     with collective_check(world):
         assert accepted[3][:2] == (DT, 1)
-        if world.rank == 0:
+        if rank == 0:
             payload = {"level%d_%s" % (level, name): value for level, row in enumerate(accepted[0])
                        for name, value in zip(("response", "forcing", "parameter", "active"), row, strict=True)}
             saved = directory / "accepted.npz"
@@ -269,7 +269,7 @@ def test_public_original_amr_saved_reaction_and_exact_restart(isolated_native_ca
                               for level in range(2)]
                 errors, residuals = check_original_saved(saved_rows, cells, len(order), DT)
             (directory / "receipt.json").write_text(json.dumps({"artifact": artifact.artifact_identity.token,
-                "native_dimension": 2, "mpi_size": world.size, "cells": cells, "order": order,
+                "native_dimension": 2, "mpi_size": size, "cells": cells, "order": order,
                 "native_path": str(native.__file__), "native_sha256": hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest(),
                 "saved_sha256": hashlib.sha256(saved.read_bytes()).hexdigest(), "errors": errors,
                 "original_constant_solution_reaction_residuals": residuals, "tolerance": TOL,
@@ -293,7 +293,7 @@ def test_public_original_amr_saved_reaction_and_exact_restart(isolated_native_ca
             for a, b in zip(left, right, strict=True):
                 np.testing.assert_array_equal(a, b)
     for name, value in (("artifact_identity", artifact.artifact_identity.token), ("native_dimension", 2),
-                        ("mpi_rank", world.rank), ("mpi_size", world.size), ("evidence_path", str(directory))):
+                        ("mpi_rank", rank), ("mpi_size", size), ("evidence_path", str(directory))):
         record_property(name, value)
 
 
@@ -302,11 +302,10 @@ def test_public_original_amr_saved_reaction_and_exact_restart(isolated_native_ca
 @pytest.mark.native_loader
 def test_public_original_amr_published_fields_parent_rollback_and_retry(isolated_native_cache, record_property):
     del isolated_native_cache
-    from pops._native_selector import select_native_dimension
-    native = select_native_dimension(2)
-    world = native.mpi_world()
-    with collective_check(world):
-        assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+    native, world = native_profile(scope="public original AMR field")
+    rank, size = rank_and_size(world)
+    record_property("native_abi_version", native.__abi_version__)
+    record_property("native_profile", "MPI" if world is not None else "Serial")
     runtime, artifact = bind_case(world, 16, (2, 0, 1), guarded=True,
                                   right_preconditioner="SpatialBasisJacobi@1")
     before = capture(world, runtime)
@@ -325,7 +324,7 @@ def test_public_original_amr_published_fields_parent_rollback_and_retry(isolated
     retried, fresh = capture(world, runtime), capture(world, clean)
     with collective_check(world):
         assert retried[1:] == fresh[1:]
-        if world.rank == 0:
+        if rank == 0:
             check_original_saved(retried[0], 16, 3, DT)
         for left, right in zip(retried[0], fresh[0], strict=True):
             for a, b in zip(left, right, strict=True):
@@ -352,5 +351,5 @@ def test_public_original_amr_published_fields_parent_rollback_and_retry(isolated
             for a, b in zip(left, right, strict=True):
                 np.testing.assert_array_equal(a, b)
     for name, value in (("artifact_identity", artifact.artifact_identity.token), ("native_dimension", 2),
-                        ("mpi_rank", world.rank), ("mpi_size", world.size), ("native_path", str(native.__file__))):
+                        ("mpi_rank", rank), ("mpi_size", size), ("native_path", str(native.__file__))):
         record_property(name, value)

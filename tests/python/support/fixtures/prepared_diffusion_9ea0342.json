@@ -1,0 +1,7 @@
+{
+  "schema": "pops.historical-sdk-header@1",
+  "source_commit": "9ea03423df6b04bd0e495c5b6c932574c8529e37",
+  "source_path": "include/pops/numerics/diffusion/prepared_diffusion.hpp",
+  "sha256": "712a36865bb8b6bab3660ba482a53c9e35a618fe405d03d57d6ba9066cede385",
+  "bytes": 38815
+}

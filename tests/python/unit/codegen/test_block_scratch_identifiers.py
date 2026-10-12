@@ -9,6 +9,7 @@ from pops.codegen.cpp_symbols import block_scratch_identifiers, variable_scope
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen.program_models import ProgramModelGraph
 from tests.python.support.public_coupled_block_name_case import build
+from tests.python.support.native_syntax_toolchain import configured_kokkos_toolchain
 
 ROOT = Path(__file__).resolve().parents[4]
 
@@ -30,11 +31,12 @@ def test_token_table_is_injective_order_independent_and_keeps_safe_legacy():
 def compile_program(source, tmp_path):
     cpp = tmp_path / "program.cpp"
     cpp.write_text(source)
-    command = ["/usr/bin/clang++", "-Xpreprocessor", "-fopenmp", "-std=c++20",
+    compiler, _, compile_flags, _ = configured_kokkos_toolchain()
+    command = [compiler, "-std=c++20",
         "-DPOPS_NATIVE_DIM=2", "-DPOPS_HAS_KOKKOS=1", "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI=1",
-        "-I" + str(ROOT / "include"), "-I" + str(Path(sys.prefix) / "include"),
+        "-I" + str(ROOT / "include"), *compile_flags,
         "-fsyntax-only", str(cpp)]
-    result = subprocess.run(command, capture_output=True)
+    result = subprocess.run(command, capture_output=True, timeout=90)
     (tmp_path / "command.json").write_text(__import__("json").dumps(command))
     (tmp_path / "compile.stdout").write_bytes(result.stdout)
     (tmp_path / "compile.stderr").write_bytes(result.stderr)

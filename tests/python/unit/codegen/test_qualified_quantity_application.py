@@ -290,9 +290,16 @@ def test_retained_joint_local_rate_signature_does_not_relax_grid_or_source_route
     signature = Signature((state, other, field), Rate(state))
     retained = module.operator("joint_rate", signature=signature, kind="local_rate", expr=[0])
     assert retained.signature.inputs == (state, other, field)
-    for kind in ("grid_operator", "local_source"):
-        with pytest.raises(TypeError, match="incompatible signature"):
-            module.operator(kind, signature=signature, kind=kind, expr=[0])
+    grid = module.operator("joint_grid", signature=signature, kind="grid_operator", expr=[0])
+    assert grid.signature.inputs == (state, other, field)
+    with pytest.raises(TypeError, match="incompatible signature"):
+        module.operator("local_source", signature=signature, kind="local_source", expr=[0])
+    absent = module.state_space("absent", ["rho"])
+    for name, invalid in (("missing_grid_target", Signature(signature.inputs, Rate(absent))),
+                          ("duplicate_grid_target", Signature((state, state, field), Rate(state)))):
+        with pytest.raises(TypeError, match="one exact input StateSpace"):
+            module.operator(name, signature=invalid, kind="grid_operator", expr=[0])
+        assert name not in module.operator_registry().names()
     with pytest.raises(TypeError, match="first StateSpace"):
         module.operator("wrong_target", signature=Signature(signature.inputs, Rate(other)),
                         kind="local_rate", expr=[0])

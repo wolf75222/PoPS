@@ -103,7 +103,8 @@ TEST(test_temporal_partition_restart, PendingRemapKeepsOriginAcrossTwoUnchangedQ
     EXPECT_EQ(marker.source_sample, origin.source_sample);
     EXPECT_EQ(marker.retained_ring_contract, origin.retained_ring_contract);
     const auto bytes = program::serialize_amr_program_accepted_state(state);
-    EXPECT_EQ(bytes[7], '9');
+    ASSERT_GE(bytes.size(), 8u);
+    EXPECT_EQ(std::string(bytes.begin(), bytes.begin() + 8), "POPSANDA");
     EXPECT_EQ(program::serialized_amr_program_accepted_state_size(state), bytes.size());
     EXPECT_EQ(program::deserialize_amr_program_accepted_state<2>(bytes).pending_history_remaps,
               state.pending_history_remaps);

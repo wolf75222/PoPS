@@ -4,9 +4,7 @@ This is neither a native loader test nor MPI/GPU qualification.
 """
 import ctypes
 from pathlib import Path
-import shutil
 import subprocess
-import sys
 
 import numpy as np
 import pops
@@ -18,16 +16,12 @@ from pops.linalg import FiniteSupport, FiniteLinearMap
 from pops.math import where
 from pops._ir.expr import Compare
 from tests.python.support.finite_m09_case import case_module, oracle
+from tests.python.support.native_syntax_toolchain import configured_kokkos_toolchain
 
 
 @pytest.fixture(scope="module")
 def host(tmp_path_factory):
-    compiler = shutil.which("clang++") or shutil.which("c++")
-    if compiler is None:
-        pytest.skip("host compiler unavailable")
-    kokkos = Path(sys.prefix)/"include"
-    if not (kokkos/"Kokkos_Array.hpp").exists():
-        pytest.skip("Kokkos headers unavailable for real host instantiation")
+    compiler,_,compile_flags,link_flags = configured_kokkos_toolchain()
     source = """#include <pops/numerics/linalg/finite_linear.hpp>
 #include <pops/numerics/nonlinear/prepared_local_nonlinear.hpp>
 struct Capture { const double* data; double operator()(int,int c)const{return data[c];} };
@@ -97,7 +91,8 @@ return static_cast<int>(result.status);}
     cpp,library=folder/"probe.cpp",folder/"probe.so"
     cpp.write_text(source)
     command=[compiler,"-std=c++20","-O2","-fno-fast-math","-shared","-fPIC",
-             "-I"+str(Path(__file__).resolve().parents[4]/"include"),"-I"+str(kokkos),str(cpp),"-o",str(library)]
+             "-I"+str(Path(__file__).resolve().parents[4]/"include"),*compile_flags,
+             str(cpp),"-o",str(library),*link_flags]
     result=subprocess.run(command,capture_output=True,text=True)
     assert result.returncode==0,result.stderr
     return ctypes.CDLL(str(library))

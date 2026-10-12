@@ -6,12 +6,14 @@ No JIT, linking, simulation, or package installation occurs here.
 """
 import os
 from pathlib import Path
-import re
-import shutil
 import subprocess
 import sys
 
 import pytest
+
+from tests.python.support.native_syntax_toolchain import (
+    configured_kokkos_toolchain, mpi_syntax_flags,
+)
 
 
 EMIT_WORKER = r'''
@@ -92,12 +94,8 @@ print("source_import=" + pops.__file__)
 ])
 def test_m23_complete_ssprk2_program_syntax(tmp_path, dimension, components, reverse, repeated):
     root = Path(os.environ.get("POPS_M23_SOURCE_ROOT", Path(__file__).resolve().parents[4])).resolve()
-    compiler = shutil.which("clang++")
-    kokkos = Path(sys.prefix) / "include"
-    if compiler is None or not (kokkos / "Kokkos_Core.hpp").is_file():
-        pytest.skip("real compiler and Kokkos SDK required")
-    if not (kokkos / "mpi.h").is_file():
-        pytest.skip("real MPI SDK required for this MPI-branch syntax test")
+    compiler, _kokkos, kokkos_flags, _link_flags = configured_kokkos_toolchain()
+    mpi_flags = mpi_syntax_flags()
     source = tmp_path / "complete_m23_program.cpp"
     env = dict(os.environ)
     env.pop("PYTHONPATH", None)
@@ -110,18 +108,8 @@ def test_m23_complete_ssprk2_program_syntax(tmp_path, dimension, components, rev
     assert emitted.returncode == 0, emitted.stdout + emitted.stderr
     flags = ["-std=c++20", "-fsyntax-only", "-fno-fast-math",
              "-DPOPS_NATIVE_DIM=" + str(dimension),
-             "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI", "-DPOPS_HAS_KOKKOS",
-             "-DKOKKOS_DEPENDENCE", "-DPOPS_HAS_MPI",
-             "-I" + str(root / "include"), "-I" + str(kokkos)]
-    config = (kokkos / "KokkosCore_config.h").read_text()
-    if re.search(r"^#define KOKKOS_ENABLE_OPENMP\b", config, re.MULTILINE):
-        if sys.platform == "darwin":
-            omp = Path("/opt/homebrew/opt/libomp/include")
-            if not (omp / "omp.h").is_file():
-                pytest.skip("installed Kokkos requires real OpenMP headers")
-            flags += ["-Xpreprocessor", "-fopenmp", "-I" + str(omp)]
-        else:
-            flags += ["-fopenmp"]
+             "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI", "-DPOPS_HAS_MPI",
+             "-I" + str(root / "include"), *kokkos_flags, *mpi_flags]
     command = [compiler, *flags, str(source)]
     (tmp_path / "compiler-command.txt").write_text("\n".join(command))
     result = subprocess.run(command, capture_output=True, text=True, timeout=90)

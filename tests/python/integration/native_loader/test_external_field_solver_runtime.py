@@ -405,9 +405,10 @@ def _moving_amr_program(state, rate, field, *, off_policy):
 
     program = ForwardEuler(
         state, rate=rate, fields=field, solve_action=FailRun())
-    field_node = next(value for value in program._values if value.op == "solve_fields")
-    scheduled = Schedule(Every(AcceptedStep(program.clock), 5), off=off_policy)
-    program._replace_value(field_node, attrs={**field_node.attrs, "schedule": scheduled})
+    if off_policy is not None:
+        field_node = next(value for value in program._values if value.op == "solve_fields")
+        scheduled = Schedule(Every(AcceptedStep(program.clock), 5), off=off_policy)
+        program._replace_value(field_node, attrs={**field_node.attrs, "schedule": scheduled})
     program.step_strategy(FixedDt(2.0e-2))
     return program
 
@@ -476,7 +477,7 @@ def test_external_field_pair_executes_and_reports_materialized_topology(tmp_path
     assert simulation.inspect().to_dict()["instance"]["field_providers"] == providers
 
 
-@pytest.mark.parametrize("off_policy", (Hold(), Skip()), ids=("hold", "skip"))
+@pytest.mark.parametrize("off_policy", (None, Hold(), Skip()), ids=("unscheduled", "hold-refused", "skip-refused"))
 def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
     tmp_path, off_policy,
 ):
@@ -497,7 +498,7 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
         source_factory=lambda manifest: _solver_source(
             manifest,
             solution_expression=(
-                "std::filesystem::exists(%s) "
+                "(state->solve_count == 1 && std::filesystem::exists(%s)) "
                 "? std::numeric_limits<double>::quiet_NaN() : 7.0"
                 % json.dumps(str(fault_marker))
             ),
@@ -553,6 +554,13 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
         slot.handle for slot in resolved.bind_schema.runtime_slots
         if slot.handle.local_id == "external-amr-field-runtime_refine_threshold"
     )
+    if off_policy is not None:
+        # A named composite barrier requires one unscheduled top-level invocation.
+        # Retain both forbidden off-cadence policies as explicit source refusals.
+        with pytest.raises(NotImplementedError, match="named AMR field barriers require unscheduled top-level operations"):
+            pops.compile(resolved)
+        assert not solve_observer.exists()
+        return
     artifact = pops.compile(resolved)
     simulation = pops.bind(
         artifact,
@@ -579,9 +587,9 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
     assert bootstrap_calls == ["1", "1"]
     first = pops.run(simulation, t_end=2.0e-2, max_steps=1)
     assert first.accepted_steps == 1
-    # The initially-due Program runs once on each live level, using the current solver.
+    # One common-time composite Program invocation solves the entire live hierarchy.
     initial_step_calls = solve_observer.read_text(encoding="utf-8").splitlines()
-    assert initial_step_calls == bootstrap_calls + ["2", "3"]
+    assert initial_step_calls == bootstrap_calls + ["2"]
     accepted_before_fault = {
         "time": simulation.time(),
         "step": simulation.macro_step(),
@@ -597,9 +605,9 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
         "reason=native FieldSolver v2 marked a non-finite active solution as solved",
     ):
         pops.run(simulation, t_end=4.0e-2, max_steps=1)
-    # Hold/Skip is off-cadence; only the new topology solver attempts a first solve.
+    # The accepted solver runs before regrid; only the new topology's first solve faults.
     rejected_calls = solve_observer.read_text(encoding="utf-8").splitlines()
-    assert rejected_calls == initial_step_calls + ["1"]
+    assert rejected_calls == initial_step_calls + ["3", "1"]
     assert simulation.time() == accepted_before_fault["time"]
     assert simulation.macro_step() == accepted_before_fault["step"]
     assert tuple(simulation.patch_boxes()) == accepted_before_fault["boxes"]
@@ -632,8 +640,9 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
         potential = np.asarray(simulation.field_potential_level_global(slot, level))
         assert np.all(np.isfinite(potential))
         np.testing.assert_array_equal(potential.reshape(active.shape)[active], 7.0)
-    # The retry creates one fresh topology solver; neither off-cadence step nor reads solve again.
-    assert solve_observer.read_text(encoding="utf-8").splitlines() == rejected_calls + ["1"]
+    # Rollback reconstructs the accepted solver before retry; regrid then creates
+    # a fresh topology solver. The next step solves once, and reads remain inert.
+    assert solve_observer.read_text(encoding="utf-8").splitlines() == rejected_calls + ["1", "1", "2"]
 
 
 def test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retries(

@@ -49,8 +49,11 @@ def test_to_graph_detaches_values_handles_and_write_only_commit():
 
     assert program._ir_hash() == before
     assert graph.name == "step"
-    assert [type(node) for node in graph.nodes] == [StateRead, Commit]
-    assert graph.nodes[-1].value == graph.ref(graph.nodes[0])
+    assert [type(node) for node in graph.nodes] == [StateRead, ProgramValue, Commit]
+    state, alias, commit = graph.nodes
+    assert alias.op == "linear_combine" and alias.inputs == (graph.ref(state),)
+    assert alias.point == commit.point
+    assert commit.value == graph.ref(alias)
     assert graph.nodes[-1].target.to_data()["endpoint"] == "next"
     assert graph.nodes[-1].point == TimePoint(graph.nodes[-1].clock, step=1)
     assert not hasattr(graph, "_values")

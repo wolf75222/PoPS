@@ -60,9 +60,11 @@ def build_case(*, variant="canonical", cells=CELLS):
     tau_handle, kappa_handle = model.param(tau_decl), model.param(kappa_decl)
     tau, kappa = model.value(tau_handle), model.value(kappa_handle)
     speed = sqrt(kappa / tau)
+    # Each joint (T, qx, qy) directional Jacobian has one transverse
+    # stationary mode and the exact two thermal waves, in either storage order.
+    model.module.eigenvalues(**{axis.name: (-speed, 0., speed) for axis in frame.axes})
     flux_t = model.flux("temperature_transport", state=temperature, frame=frame,
-                       components={frame.x: (qx,), frame.y: (qy,)},
-                       waves={axis: (speed,) for axis in frame.axes})
+                       components={frame.x: (qx,), frame.y: (qy,)})
     canonical_q_flux = {frame.x: (kappa / tau * temperature[0], 0.),
                         frame.y: (0., kappa / tau * temperature[0])}
     flux_q = model.flux("heat_transport", state=heat_flux, frame=frame,

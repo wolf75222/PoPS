@@ -124,3 +124,31 @@ def test_accepted_rate_without_state_budget_cannot_skip_stability_proof():
 
     with pytest.raises(ValueError, match="stability|convex|Shu"):
         _lower(rate_only)
+
+
+@pytest.mark.parametrize("actual_input_budget", [False, True])
+def test_prepared_path_stage_needs_a_budget_from_its_actual_evaluated_state(actual_input_budget):
+    def prepared(state, *, rate):
+        program = pops.Program("prepared_path_stage")
+        q = program.state(state)
+        point = program.stage("prepared", c=0)
+        hot = program.value("hot", 100*q.n, at=point)
+        rhs = program.value("rate", rate(hot), at=point)
+        endpoint = program.value("next", (hot if actual_input_budget else q.n) + program.dt*rhs,
+                                 at=q.next.point)
+        program.commit(q.next, endpoint)
+        return program
+
+    if not actual_input_budget:
+        with pytest.raises(ValueError, match="stability|convex|Shu"):
+            _lower(prepared, target="amr_system")
+        return
+    program, source = _lower(prepared, target="amr_system")
+    endpoint = next(iter(program._commits.values()))
+    groups = partition_stability_groups(endpoint, include_transport=True)
+    assert len(groups) == 1
+    actual, alpha, rates = groups[0]
+    assert actual.name == "hot" and alpha == 1
+    assert len(rates) == 1 and rates[0][1] == 1
+    assert rates[0][0].inputs[0] is actual
+    assert source.count('"user_face_numerical_stability"') == 1

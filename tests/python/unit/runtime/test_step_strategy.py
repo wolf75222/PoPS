@@ -1155,8 +1155,14 @@ def test_composite_checkpoint_preflight_authenticates_uniform_and_amr_temporal_e
     leaves = [TemporalRestartState.from_json(
         state.checkpoint_json(time=0.01, macro_step=1), time=0.01, macro_step=1,
         program_schedule=state.program_schedule) for state in temporal.states]
-    children = (_PreparedUniformRestart(None, None, leaves[0], None, b"", b""),
-                _PreparedAMRSystemRestart(None, SimpleNamespace(temporal_state=leaves[1])))
+    children = (
+        _PreparedUniformRestart(
+            payload=None, restart_identity=None, temporal_state=leaves[0], cadence_state=None,
+            auxiliary_checkpoint=b"", exchange_checkpoint=b"",
+            program_diagnostic_checkpoint=b"", state_carriers=None,
+        ),
+        _PreparedAMRSystemRestart(None, SimpleNamespace(temporal_state=leaves[1])),
+    )
     candidate = executor._prepared_temporal_state(children)
     assert candidate.layout_ids == temporal.layout_ids
     snapshot = deepcopy(candidate)

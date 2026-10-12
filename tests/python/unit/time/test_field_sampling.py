@@ -174,7 +174,7 @@ def test_nonperiodic_typed_operator_requires_boundary_authority_for_its_stencil_
     from pops.time.references import canonical_handle
     layout = builder.resolve(states=(canonical_handle(temporal.n.state_ref),),
                               blocks=(canonical_handle(temporal.n.block),))
-    from pops.time.field_sampling import validate_resolved_scalar_storage
+    from pops.codegen.program_field_observations import validate_resolved_scalar_storage
     with pytest.raises(NotImplementedError, match="conducting field boundary authority"):
         validate_resolved_scalar_storage(program, layout, target="system")
 
@@ -287,7 +287,7 @@ def test_compiled_sample_requires_resolved_layout_proof_not_just_matching_attrib
     resolved = pops.resolve(pops.validate(case), layout=layout, layout_providers=providers)
     from pops.codegen.program_models import ProgramModelGraph
     from pops.time._program.detach import detach_compiled_program
-    from pops.time.field_sampling import emitted_sample_contract
+    from pops.codegen.program_field_observations import emitted_sample_contract
     detached = detach_compiled_program(resolved.time)
     sample = next(node for node in detached._values if node.op == "field_sample")
     graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
@@ -328,7 +328,7 @@ def test_scalar_sampling_refuses_a_same_shaped_foreign_layout():
     assert sample.attrs["scalar_storage"].layout == other
     plan = builder.resolve(states=(case.resolve(temporal.n.state_ref),),
                            blocks=(case.resolve(temporal.n.block),))
-    from pops.time.field_sampling import validate_resolved_scalar_storage
+    from pops.codegen.program_field_observations import validate_resolved_scalar_storage
     with pytest.raises(ValueError, match="layout differs"):
         validate_resolved_scalar_storage(program, plan, target="system")
 
@@ -341,7 +341,7 @@ def test_scalar_sampling_refuses_wrong_support_axis_binding():
     from pops.time.references import canonical_handle
     plan = builder.resolve(states=(canonical_handle(temporal.n.state_ref),),
                            blocks=(canonical_handle(temporal.n.block),))
-    from pops.time.field_sampling import validate_resolved_scalar_storage
+    from pops.codegen.program_field_observations import validate_resolved_scalar_storage
     with pytest.raises(ValueError, match="support-axis"):
         validate_resolved_scalar_storage(program, plan, target="system")
 

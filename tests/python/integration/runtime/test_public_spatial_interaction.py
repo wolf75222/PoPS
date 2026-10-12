@@ -38,9 +38,8 @@ def prepare(world, width, adaptive, failure):
 
 
 def world_and_native():
-    from pops._native_selector import select_native_dimension
-    native = select_native_dimension(2)
-    world = native.mpi_world()
+    from tests.python.support.public_native_profile import native_profile
+    native, world = native_profile(scope="public spatial interaction")
     with collective_check(world):
         assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
     return world, native

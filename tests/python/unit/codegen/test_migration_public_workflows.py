@@ -118,13 +118,17 @@ def test_native_flux_arithmetic_remains_joint_with_cse_disabled(tmp_path):
     from pops.native_calls import NativeFunction
 
     component = imported_native_primitive.prepare_arithmetic(tmp_path / "native")
+    case, layout, _, _ = imported_native_primitive.build_case(8, component)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    graph = build_program_model_graph(resolved)
+    model = graph.model_for_block("left")._m
     scalar = FieldSpace("scalar", components=("value",))
     multiply = NativeFunction(
         component, "migration_arithmetic::multiply", Signature((scalar, scalar), scalar)
     )
     value = multiply((2,), (3,)).value[0]
     lines, outputs, statuses = _codegen_exprs(
-        None, (value, 2 * value), False, return_native_statuses=True
+        model, (value, 2 * value), False, return_native_statuses=True
     )
     assert "\n".join(lines).count("migration_arithmetic::multiply(") == 1
     assert len(outputs) == 2 and len(statuses) == 1

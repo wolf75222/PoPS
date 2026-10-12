@@ -38,15 +38,18 @@ def principal_amr_case(widths=(1, 1), *, levels=2, reverse=False, singular=False
         np.diag(1. + .1*np.arange(count)) + .025*(row + col + 1),
         np.diag(-.5 - .05*np.arange(count)) - .015*(row + col + 1)))
     speeds = tuple(float(np.max(np.sum(abs(a), axis=1))) for a in matrices)
+    # Principal Rusanov consumes a numerical wave-speed majorant through maxabs,
+    # not the physical eigenvalue spectrum. The full-matrix infinity norm bounds
+    # its spectral radius and preserves the historical directional dissipation.
+    model.module.eigenvalues(**{axis.name: (bound,) * count
+                               for axis, bound in zip(frame.axes, speeds)})
     starts = np.cumsum((0, *widths))
     fluxes, rates = [], []
     for i, state in enumerate(states):
         flux = model.flux("flux%d" % i, state=state, frame=frame,
             components={axis: tuple(sum(float(a[k,j])*q[j] for j in range(count))
                          for k in range(starts[i], starts[i+1]))
-                         for axis, a in zip(frame.axes, matrices)},
-            waves=({axis: (speed,)*widths[0] for axis, speed in zip(frame.axes, speeds)}
-                   if i == 0 else None))
+                         for axis, a in zip(frame.axes, matrices)})
         fluxes.append(flux)
         rates.append(model.rate("rate%d" % i, equation=ddt(state) == -div(flux)))
     case = pops.Case("principal_amr_case")

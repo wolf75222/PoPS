@@ -28,10 +28,13 @@ def captured_group(*, widths=(1, 1), reverse=False, face=False, foreign=False,
         other = pops.Model("capture_law", frame=frame)
         coefficients = (other.value(other.param(RuntimeParam("alpha0", default=.1))), *coefficients[1:])
     total = sum(q for state in states for q in state)
+    # The full x-flux Jacobian is I + 11^T: eigenvalue 1 on the
+    # N-1-dimensional zero-sum subspace and N+1 on the common mode.
+    count = sum(widths)
+    model.module.eigenvalues(x=(1.,) * (count - 1) + (float(count + 1),),
+                            y=(0.,) * count)
     fluxes = tuple(model.flux("F%d" % i, state=state, frame=frame,
-        components={frame.x: tuple(total + q for q in state), frame.y: (0.,) * len(state.components)},
-        waves=({frame.x: (float(sum(widths) + 1),) * widths[0], frame.y: (0.,) * widths[0]}
-               if i == 0 else None))
+        components={frame.x: tuple(total + q for q in state), frame.y: (0.,) * len(state.components)})
         for i, state in enumerate(states))
     rates = tuple(model.rate("R%d" % i, equation=ddt(state) == -div(flux))
                   for i, (state, flux) in enumerate(zip(states, fluxes)))
@@ -103,6 +106,9 @@ def test_generated_reconstruction_selects_row_table_and_slot_in_compiled_scalar_
     import ctypes
     import shutil
     import subprocess
+    from pops.codegen._native_toolchain import (
+        capture_native_toolchain, native_toolchain_flags, verify_native_toolchain,
+    )
     from pops.codegen.program_emit_principal_numerics import emit_principal_reconstruction
     compiler = shutil.which("c++")
     if compiler is None:
@@ -136,10 +142,13 @@ extern "C" double evaluate(int component,double alpha0,double alpha1) {
 """ % wrapper
     cpp, library = tmp_path / "capture.cpp", tmp_path / "capture.so"
     cpp.write_text(source)
-    result = subprocess.run([compiler, "-std=c++20", "-shared", "-fPIC", "-O2",
-        "-fno-fast-math", "-ffp-contract=off", str(cpp), "-o", str(library)],
+    toolchain = capture_native_toolchain()
+    flags = native_toolchain_flags(toolchain, ["-std=c++20", "-shared", "-fPIC", "-O2",
+                                              "-fno-fast-math", "-ffp-contract=off"])
+    result = subprocess.run([compiler, *flags, str(cpp), "-o", str(library)],
         capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+    verify_native_toolchain(toolchain)
     function = ctypes.CDLL(str(library)).evaluate
     function.argtypes, function.restype = [ctypes.c_int, ctypes.c_double, ctypes.c_double], ctypes.c_double
     for alpha0, alpha1 in ((.25, .75), (.5, -.125)):

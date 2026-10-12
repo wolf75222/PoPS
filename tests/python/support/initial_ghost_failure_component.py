@@ -51,7 +51,9 @@ def package_data():
       signature={'generic':True,'state_components':2,'native_interface':ordinary.signature_declaration(),'native_interface_extensions':{'schema_version':1,'interfaces':[initial.signature_declaration()]}},interfaces=ordinary.manifest_declarations(),
       target={'variants':[{'dimension':2,'scalar':'float64','device':'cpu','features':[]}]},entry_points={'interface_table':'pops_component_interface_v1'})
     source=r'''#include <pops/runtime/config/generated_component_abi.hpp>
+#ifdef POPS_HAS_MPI
 #include <mpi.h>
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -67,8 +69,23 @@ void event(const char* kind,int rank,int size,double value,double time){
 struct State{int rank;int size;};
 int prepare(const PopsComponentPrepareRequestV1* r,void** out,PopsComponentStatusV1* status){
  if(!r||!out||!status)return 51;
- int rank=0,size=1;MPI_Comm comm=MPI_Comm_f2c(static_cast<MPI_Fint>(r->execution.communicator_f_handle));
- MPI_Comm_rank(comm,&rank);MPI_Comm_size(comm,&size);*out=new State{rank,size};event("prepare",rank,size,0.,0.);
+ int rank=0,size=1;
+ const char* identity=r->execution.communicator_identity;
+ if(!identity)return 51;
+ if(std::strcmp(identity,"serial")==0){
+  if(r->execution.communicator_f_handle||r->execution.communicator_datatype_f_handle)return 51;
+ }else{
+#ifdef POPS_HAS_MPI
+  constexpr char lane_prefix[]="pops.amr.package-assembly/";
+  const bool package_lane=std::strncmp(identity,lane_prefix,sizeof lane_prefix-1)==0&&identity[sizeof lane_prefix-1];
+  if(std::strcmp(identity,"MPI_COMM_WORLD")!=0&&!package_lane)return 51;
+  MPI_Comm comm=MPI_Comm_f2c(static_cast<MPI_Fint>(r->execution.communicator_f_handle));
+  if(MPI_Comm_rank(comm,&rank)!=MPI_SUCCESS||MPI_Comm_size(comm,&size)!=MPI_SUCCESS)return 51;
+#else
+  return 51;
+#endif
+ }
+ *out=new State{rank,size};event("prepare",rank,size,0.,0.);
  *status={sizeof(PopsComponentStatusV1),0,POPS_COMPONENT_CONTINUE_V1,nullptr};return 0;
 }
 void destroy(void* p){auto* s=static_cast<State*>(p);if(s){event("destroy",s->rank,s->size,0.,0.);delete s;}}

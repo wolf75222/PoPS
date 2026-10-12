@@ -54,6 +54,18 @@ Initial grouped AMR/Richardson attempts timed out after 240 seconds and are excl
 
 The verification recorded no missing requested qualification, no production changes after the received native campaign, and no rerun of previously received tests during finalization. This report does not qualify unrelated scientific campaigns, GPU configurations, or all distributed AMR behavior.
 
+## CI integration reception after the original campaign
+
+The first public main CI run on `d3110adc`, [run 38270709033](https://github.com/wolf75222/PoPS/actions/runs/38270709033), completed 129 jobs: 56 succeeded and 73 failed, including the required aggregate gate. Its failures are recorded evidence, not a green CI verdict.
+
+Integration commit `c9a1dbe454dac313cf3396ac355a2961dbef7ef0` restores temporal consumer layering without relaxing import guards, retains exact point-aligned sources in PredictorCorrector, recognizes strictly typed pointwise stencil metadata in SSP certification, and extracts authenticated field-stage owners within the unchanged C++ architecture limits. It also restores scalar retention in finite descriptors. The separate solver research commits and solver algorithms remain outside these integration changes.
+
+This commit has a newly rebuilt installed Dim2 MPI runtime: native SHA-256 `bb499c934cd36aecf911157ea586cb9fa3dcb4bf7c9057f917cf0f0a1eedeca4`, headers `23f396b59c293abba76993af16139e061c2874dd75420607c2c4bd65f4eb26ce`, ABI 13. The original `a17fe0e9` campaign is not silently transferred to this different binary. [Targeted integration receipts](ci-repair-qualification.json) record the public PredictorCorrector run, actual MPI1/MPI2 field-stage refusal, 13 C++ history/reflux tests, refined FAC lifecycle, real compiler witnesses, and the seven-case final runtime/negative-fixture batch. Earlier failed diagnostic and solver-counter fixture assertions remain superseded attempts.
+
+CI fixtures now retain exact current live/detached authority, explicit historical golden provenance, declared ABI/schema versions, and installed SDK compiler flags. Public Serial profiles carry no MPI communicator; MPI profiles authenticate their real world. Dimension-specific native tests are routed to their declared specialization, including a mandatory installed MPI Dim1 collective-rejection job. C++ partitioning uses fourteen shards within the existing modeled per-shard and watchdog limits; it does not remove tests or raise those limits. Scheduling policies unsupported by named composite AMR field barriers remain explicit refusals, accompanied by the actual unscheduled composite solve/regrid/rollback/retry witness.
+
+The final GitHub gate must still be assessed on the final pushed PR SHA. The local receipts above do not establish that verdict.
+
 ## Portable evidence
 
 [evidence-manifest.json](evidence-manifest.json) records the selected small receipts/logs, their original SHA-256 values and the SHA-256 values of these public copies. Personal absolute paths are replaced with portable environment, repository or evidence references; test outcomes, runtime hashes and revision identifiers are preserved. The large CTest catalog, build directories, binaries, and full compilation logs are excluded. References to nonbundled private launch scripts or JUnit files are historical metadata, not additional claimed evidence.

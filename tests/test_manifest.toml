@@ -1388,6 +1388,23 @@ mpi_entrypoints = [
 ]
 mpi_orchestrators = [
   { path = "tests/python/integration/mpi/test_amr_rank_change_restart.py" },
+  { path = "tests/python/integration/mpi/test_initial_field_ghost_mpi.py" },
+  { path = "tests/python/integration/mpi/test_public_amr_original_field_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_amr_original_field_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_amr_profile_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_amr_profile_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_captured_diffusion_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_captured_diffusion_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_completed_original_interaction_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_completed_original_interaction_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_evolved_original_stage_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_evolved_original_stage_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_spatial_interaction_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_spatial_interaction_mpi2.py" },
 ]
 
 [[python.suite]]
@@ -1398,7 +1415,11 @@ labels = ["integration", "python", "native_loader", "compiler", "medium"]
 [[python.suite]]
 name = "pops_python_integration_runtime"
 path = "tests/python/integration/runtime"
-labels = ["integration", "python", "runtime", "medium"]
+labels = ["integration", "python", "runtime", "mpi", "medium"]
+mpi_entrypoints = [
+  { path = "tests/python/integration/runtime/test_m15_mpi_collective_rejection.py", nproc = 2, native_dimension = 1 },
+  { path = "tests/python/integration/runtime/test_mapped_field_binding_collective_runtime.py", nproc = 2 },
+]
 
 [[python.suite]]
 name = "pops_python_unit_analytic"

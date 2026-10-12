@@ -175,8 +175,13 @@ def test_foreign_equation_binding_refuses_without_symbolic_comparison(binding):
 
 def test_captured_clock_cannot_be_relabelled_after_binding():
     _, field, program, current, request, *_ = mixed_case()
-    # value(SSA, at=...) replaces the same record; the frozen equation sees this drift.
-    program.value("relabelled-capture", current.n, at=current.next.point)
+    # A fresh alias does not rewrite the bound capture or its evaluation point.
+    initial = current.n
+    alias = program.value("relabelled-capture", initial, at=current.next.point)
+    assert alias.id != initial.id and current.n is initial
+    capture = request.equation_inputs["capture_0"]
+    # Exercise drift of the actual issued capture, rather than an unrelated alias.
+    program._replace_value(capture, point=current.next.point)
     before = (program._next_id, tuple(program._values))
     with pytest.raises(SolveRequestError, match="captures"):
         program.solve(request, solver=field.default_program_solver())

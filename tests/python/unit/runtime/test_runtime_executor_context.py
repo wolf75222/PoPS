@@ -45,7 +45,26 @@ from pops.runtime._runtime_plan_contracts import (
 from pops.runtime._runtime_planning import build_runtime_plans
 from pops.time import AcceptedStep, Clock, Every, Schedule
 from tests.python.support.native_execution_context import artifact_execution_context
-from tests.python.unit.runtime.test_runtime_planning import _install, _manifest
+from tests.python.unit.runtime.test_runtime_planning import _install as _planning_install, _manifest
+
+
+def _install(*args, **kwargs):
+    """Retain the exact authored Program in these controlled executor fixtures."""
+    from pops.time import Program
+
+    plan = _planning_install(*args, **kwargs)
+    declared = Program("rk2")
+    assert plan.artifact.plan.time_identity == {
+        "type": "%s.%s" % (type(declared).__module__, type(declared).__qualname__),
+        "_ir_hash": declared._ir_hash(),
+    }
+    for row in plan.artifact.layout_programs:
+        row.program.program = declared
+    artifact = CompiledSimulationArtifact(
+        plan.artifact.plan, plan.artifact.program, plan.artifact.blocks,
+        plan.artifact.layout_programs, plan.artifact.component_artifacts,
+    )
+    return replace(plan, artifact=artifact, execution_context=artifact_execution_context(artifact))
 
 
 def _context(*, datatype="float64"):
@@ -164,8 +183,26 @@ def test_runtime_plan_is_required_before_native_preflight(monkeypatch):
     assert calls == []
 
 
+def test_missing_retained_program_is_rejected_before_native_fact_probe(monkeypatch):
+    plan = _install()
+    plan.artifact.layout_programs[0].program.program = None
+    artifact = CompiledSimulationArtifact(
+        plan.artifact.plan, plan.artifact.program, plan.artifact.blocks,
+        plan.artifact.layout_programs, plan.artifact.component_artifacts,
+    )
+    plan = replace(plan, artifact=artifact, execution_context=artifact_execution_context(artifact))
+    runtime_plan = build_runtime_plans(plan, {"fluid": _manifest("fluid")})
+
+    def forbidden_native_facts():
+        raise AssertionError("native fact probe became reachable")
+
+    monkeypatch.setattr(executor, "_native_runtime_facts", forbidden_native_facts)
+    with pytest.raises(ValueError, match="no retained Program authority"):
+        executor.install_runtime_executor(plan, runtime_plan)
+
+
 def test_determinism_assumptions_are_rechecked_before_native_preflight(monkeypatch):
-    plan = SimpleNamespace(execution_context=SimpleNamespace())
+    plan = SimpleNamespace(execution_context=SimpleNamespace(), artifact=_install().artifact)
     runtime_plan = SimpleNamespace(
         determinism=DeterminismGuarantee(
             "reproducible",

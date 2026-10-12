@@ -1,12 +1,11 @@
 """Independent full-Program syntax and unsupported-route probes; source only."""
 import os
 from pathlib import Path
-import re
-import shutil
 import subprocess
 import sys
 
 import pytest
+from tests.python.support.native_syntax_toolchain import configured_kokkos_toolchain, mpi_syntax_flags
 
 
 WORKER = r'''
@@ -79,10 +78,8 @@ print("source_import=" + pops.__file__)
 @pytest.mark.parametrize("dimension,permuted", [(2, False), (3, True)])
 def test_nd_complete_ssprk2_program_and_amr_refusal(tmp_path, dimension, permuted):
     root = Path(os.environ.get("POPS_ND_REVIEW_SOURCE_ROOT", Path(__file__).resolve().parents[4])).resolve()
-    compiler = shutil.which("clang++")
-    include = Path(sys.prefix) / "include"
-    if compiler is None or not all((include / name).is_file() for name in ("Kokkos_Core.hpp", "mpi.h")):
-        pytest.skip("real compiler, Kokkos and MPI headers required")
+    compiler, _prefix, kokkos_flags, _link_flags = configured_kokkos_toolchain()
+    mpi_flags = mpi_syntax_flags()
     env = dict(os.environ)
     env.pop("PYTHONPATH", None)
     env["POPS_NATIVE_DIM"] = str(dimension)
@@ -91,13 +88,8 @@ def test_nd_complete_ssprk2_program_and_amr_refusal(tmp_path, dimension, permute
         str(dimension), str(int(permuted))], capture_output=True, text=True, env=env, timeout=90)
     assert emission.returncode == 0, emission.stdout + emission.stderr
     flags = ["-std=c++20", "-fsyntax-only", "-fno-fast-math", f"-DPOPS_NATIVE_DIM={dimension}",
-        "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI", "-DPOPS_HAS_KOKKOS", "-DKOKKOS_DEPENDENCE",
-        "-DPOPS_HAS_MPI", "-I"+str(root / "include"), "-I"+str(include)]
-    if re.search(r"^#define KOKKOS_ENABLE_OPENMP\b", (include / "KokkosCore_config.h").read_text(), re.MULTILINE):
-        if sys.platform == "darwin":
-            flags += ["-Xpreprocessor", "-fopenmp", "-I/opt/homebrew/opt/libomp/include"]
-        else:
-            flags += ["-fopenmp"]
+        "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI", "-DPOPS_HAS_MPI",
+        "-I"+str(root / "include"), *kokkos_flags, *mpi_flags]
     command = [compiler, *flags, str(source)]
     (tmp_path / "compiler-command.txt").write_text("\n".join(command))
     compiled = subprocess.run(command, capture_output=True, text=True, timeout=90)
@@ -108,7 +100,7 @@ def test_nd_complete_ssprk2_program_and_amr_refusal(tmp_path, dimension, permute
 def test_sdk_signature_changes_artifact_spec_despite_unchanged_method_schema(tmp_path):
     root = Path(os.environ.get("POPS_ND_REVIEW_SOURCE_ROOT", Path(__file__).resolve().parents[4])).resolve()
     worker = r'''
-import pathlib, sys, shutil, subprocess
+import pathlib, sys, shutil, hashlib, json
 root, tmp = pathlib.Path(sys.argv[1]).resolve(), pathlib.Path(sys.argv[2])
 sys.path.insert(0, str(root / "python"))
 import pops
@@ -119,7 +111,14 @@ from pops.identity.semantic import semantic_identity
 from pops.frames import Cartesian1D
 from pops.numerics import CoupledGradient
 relative = "pops/numerics/diffusion/prepared_diffusion.hpp"
-old_header = subprocess.check_output(["git", "show", "9ea0342:include/"+relative], cwd=root)
+fixture = root / "tests/python/support/fixtures/prepared_diffusion_9ea0342.hpp"
+receipt = json.loads(fixture.with_suffix(".json").read_text())
+assert receipt["schema"] == "pops.historical-sdk-header@1"
+assert receipt["source_commit"] == "9ea03423df6b04bd0e495c5b6c932574c8529e37"
+assert receipt["source_path"] == "include/"+relative
+old_header = fixture.read_bytes()
+assert len(old_header) == receipt["bytes"]
+assert hashlib.sha256(old_header).hexdigest() == receipt["sha256"]
 assert old_header != (root / "include" / relative).read_bytes()
 shutil.copytree(root / "include", tmp / "old-sdk")
 (tmp / "old-sdk" / relative).write_bytes(old_header)

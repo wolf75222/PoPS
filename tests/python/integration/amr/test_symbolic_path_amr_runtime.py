@@ -50,7 +50,10 @@ def _resolved(levels, *, hot_stage=False):
         stage = StagePoint("hot", {"main": TimePoint(program.clock, 0)})
         hot = program.value("hot_input", 100. * temporal.n, at=stage)
         rhs = program.value("path_rhs", rate(hot), at=stage)
-        result = program.value("next", temporal.n + program.dt * rhs, at=temporal.next.point)
+        # Give this attempted FE update its actual evaluated State budget.
+        # The hot stage must fail the face-CFL check before publishing an endpoint;
+        # rollback below still restores the original unscaled accepted State.
+        result = program.value("next", hot + program.dt * rhs, at=temporal.next.point)
         program.commit(temporal.next, result)
     else:
         program = ForwardEuler(instance, rate=rate)

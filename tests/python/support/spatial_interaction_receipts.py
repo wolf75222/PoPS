@@ -249,7 +249,8 @@ def _allgather_array_values(world, value):
     from pops._native_collectives import allgather_value
     # A local encoding error must vote before peers enter the payload collective.
     encoded = collective_call(world, lambda: array_wire_encode(value))
-    gathered = collective_call(world, lambda: tuple(allgather_value(world, encoded)))
+    gathered = collective_call(world, lambda: (encoded,) if world is None
+                              else tuple(allgather_value(world, encoded)))
     return collective_call(world, lambda: tuple(array_wire_decode(copy) for copy in gathered))
 
 def capture(world, runtime, width, *, adaptive, step):

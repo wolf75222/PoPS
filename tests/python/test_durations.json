@@ -583,7 +583,7 @@
       ]
     },
     "ci_20260914_field_provider_install": "Conservative 5-second scheduling estimate for mocked field-provider installation contracts; not a measured CI duration. Replace from a complete per-file timing receipt.",
-    "estimated_count": 830,
+    "estimated_count": 829,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -734,7 +734,6 @@
       "tests/python/integration/runtime/test_m10_self_consistent_sg.py",
       "tests/python/integration/runtime/test_m11_w10_constrained_runtime.py",
       "tests/python/integration/runtime/test_m15_axial_b1_runtime.py",
-      "tests/python/integration/runtime/test_m15_mpi_collective_rejection.py",
       "tests/python/integration/runtime/test_m18_discrete_entropy_runtime.py",
       "tests/python/integration/runtime/test_m18_w09_declared_domain_runtime.py",
       "tests/python/integration/runtime/test_m19_amr_consumed_runtime.py",
@@ -745,7 +744,6 @@
       "tests/python/integration/runtime/test_m19_vlasov_poisson_runtime.py",
       "tests/python/integration/runtime/test_m23_hall_fourier_runtime.py",
       "tests/python/integration/runtime/test_mapped_condensed_disk_runtime.py",
-      "tests/python/integration/runtime/test_mapped_field_binding_collective_runtime.py",
       "tests/python/integration/runtime/test_multi_layout_runtime.py",
       "tests/python/integration/runtime/test_multiblock_implicit_phase.py",
       "tests/python/integration/runtime/test_multicomponent_diffusion_exchange_ledger.py",
@@ -814,6 +812,7 @@
       "tests/python/integration/runtime/test_w11_child_trace_rollback.py",
       "tests/python/unit/amr/test_accepted_halo_preparation.py",
       "tests/python/unit/amr/test_explicit_local_storage_authority.py",
+      "tests/python/unit/amr/test_initial_field_ghost_profile.py",
       "tests/python/unit/amr/test_external_amr_providers.py",
       "tests/python/unit/amr/test_local_state_storage_adversarial.py",
       "tests/python/unit/amr/test_local_state_storage_amr.py",
@@ -1514,7 +1513,7 @@
       "scope": "M0-M7 migration additions",
       "timing_limit": "The inherited scalar-advection pipeline estimate is not refreshed from the local OMP qualification, where a full run exceeded 4299 s. CI Serial hardware/cache behavior differs; no observed CI fit is claimed. Preserve the indivisible full scientific test and refresh its estimate from the next complete CI artifact."
     },
-    "total_files": 895,
+    "total_files": 894,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -4810,6 +4809,27 @@
         "tests/python/integration/runtime/test_public_scalar_field_sample.py": 600
       },
       "basis": "Unmeasured CI scheduling estimates using the existing source/runtime tiers: 5 seconds for strict SDK metadata and public typed FieldSample authoring/codegen contracts; 600 seconds for one complete native Dim2 projected Poisson witness. The architecture setup contract remains in its existing dedicated source-only lane. These weights are not measured Native or CI durations and do not establish ADC reproduction or MPI qualification. Existing watchdogs and shard capacities are unchanged; replace estimates only from complete per-file CI receipts."
+    },
+    "ci_20261012_initial_field_ghost_profile": {
+      "path": "tests/python/unit/amr/test_initial_field_ghost_profile.py",
+      "estimated_seconds": 5,
+      "analogue": "tests/python/unit/amr/test_accepted_halo_preparation.py",
+      "basis": "Unmeasured five-second source-only scheduling estimate for exact Serial/MPI profile, ABI and SDK admission plus per-rank mandatory receipt checks. Uses the existing pure AMR contract tier; no native execution or CI duration measured. MPI1/MPI2 runtime drivers remain manifest-owned dedicated orchestrators, outside this serial catalog."
+    },
+    "ci_20261012_real_compiler_fixtures": {
+      "estimates_seconds": {
+        "tests/python/unit/codegen/test_m23_complete_program_syntax.py": 180,
+        "tests/python/unit/codegen/test_m26_complete_program_review.py": 120,
+        "tests/python/unit/codegen/test_m27_complete_program_review.py": 90,
+        "tests/python/unit/numerics/test_coordinated_face.py": 90
+      },
+      "basis": "Unmeasured conservative scheduling allowances for mandatory real compiler witnesses: nine M23 full Program MPI-branch syntax cases over Dim1/2/3; four M26 and two M27 Dim1 full Program cases; and coordinated-face source contracts plus two genuine composite executables. The old five-second source-only classification missed their compiler work. Local compiler receipts support these allowances but are not complete CI timing measurements. Existing native runtime weights, 71 Python shards, watchdogs and fail-closed coverage are unchanged; replace estimates only from complete per-file CI receipts.",
+      "source_sha256": {
+        "tests/python/unit/codegen/test_m23_complete_program_syntax.py": "4d4ecb8fba62e957b0871ee9cce58bc228926814550565042d5b3361f2256a92",
+        "tests/python/unit/codegen/test_m26_complete_program_review.py": "ea1484a001b77c778726c4dfb260a959985d77cf7e13315ff5c24d4448071cb3",
+        "tests/python/unit/codegen/test_m27_complete_program_review.py": "a03b491d68885f4e93ed01f114b92948561820477e2b3e59dc9a237e9e5f5481",
+        "tests/python/unit/numerics/test_coordinated_face.py": "65edea674d02bb3199b7d3e38ef76e58704e2917663ee0f1d29e07aca7119e92"
+      }
     }
   },
   "tests/python/integration/amr/test_accepted_halo_extent_binding.py": 600,
@@ -4866,7 +4886,6 @@
   "tests/python/integration/runtime/test_m10_self_consistent_sg.py": 600,
   "tests/python/integration/runtime/test_m11_w10_constrained_runtime.py": 600,
   "tests/python/integration/runtime/test_m15_axial_b1_runtime.py": 600,
-  "tests/python/integration/runtime/test_m15_mpi_collective_rejection.py": 600,
   "tests/python/integration/runtime/test_m18_discrete_entropy_runtime.py": 600,
   "tests/python/integration/runtime/test_m18_w09_declared_domain_runtime.py": 600,
   "tests/python/integration/runtime/test_m19_amr_consumed_runtime.py": 600,
@@ -4876,7 +4895,6 @@
   "tests/python/integration/runtime/test_m19_thermal_consumed_runtime.py": 600,
   "tests/python/integration/runtime/test_m19_vlasov_poisson_runtime.py": 600,
   "tests/python/integration/runtime/test_m23_hall_fourier_runtime.py": 600,
-  "tests/python/integration/runtime/test_mapped_field_binding_collective_runtime.py": 600,
   "tests/python/integration/runtime/test_native_amr12_state_carrier_failures.py": 600,
   "tests/python/integration/runtime/test_nonlinear_mixed_field_runtime.py": 600,
   "tests/python/integration/runtime/test_nonnegative_diagonal_diffusion_runtime.py": 600,
@@ -4921,6 +4939,7 @@
   "tests/python/integration/runtime/test_w11_child_trace_rollback.py": 600,
   "tests/python/unit/amr/test_accepted_halo_preparation.py": 5,
   "tests/python/unit/amr/test_explicit_local_storage_authority.py": 5,
+  "tests/python/unit/amr/test_initial_field_ghost_profile.py": 5,
   "tests/python/unit/amr/test_local_state_storage_adversarial.py": 5,
   "tests/python/unit/amr/test_local_state_storage_amr.py": 5,
   "tests/python/unit/codegen/test_accepted_exchange_coverage_independent.py": 5,
@@ -4972,9 +4991,9 @@
   "tests/python/unit/codegen/test_m10_independent_review.py": 5,
   "tests/python/unit/codegen/test_m19_product_mpi_publication.py": 5,
   "tests/python/unit/codegen/test_m19_product_support_contracts.py": 5,
-  "tests/python/unit/codegen/test_m23_complete_program_syntax.py": 5,
-  "tests/python/unit/codegen/test_m26_complete_program_review.py": 5,
-  "tests/python/unit/codegen/test_m27_complete_program_review.py": 5,
+  "tests/python/unit/codegen/test_m23_complete_program_syntax.py": 180,
+  "tests/python/unit/codegen/test_m26_complete_program_review.py": 120,
+  "tests/python/unit/codegen/test_m27_complete_program_review.py": 90,
   "tests/python/unit/codegen/test_moving_interval_codegen.py": 5,
   "tests/python/unit/codegen/test_physical_global_primitive_authority.py": 300,
   "tests/python/unit/codegen/test_physical_global_source.py": 5,
@@ -5039,7 +5058,7 @@
   "tests/python/unit/numerics/test_api040_m26_finite_interaction.py": 5,
   "tests/python/unit/numerics/test_api040_path_consumer_stability.py": 5,
   "tests/python/unit/numerics/test_api040_path_ssp_stability.py": 5,
-  "tests/python/unit/numerics/test_coordinated_face.py": 5,
+  "tests/python/unit/numerics/test_coordinated_face.py": 90,
   "tests/python/unit/numerics/test_coupled_gradient_hall_source.py": 5,
   "tests/python/unit/numerics/test_coupled_gradient_independent_review.py": 5,
   "tests/python/unit/numerics/test_coupled_gradient_nd_independent.py": 5,

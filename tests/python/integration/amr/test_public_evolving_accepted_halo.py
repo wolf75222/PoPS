@@ -6,7 +6,6 @@ restart preflight. No production test hook is introduced.
 from pathlib import Path
 import hashlib
 import json
-import sys
 import numpy as np
 import pops
 import pytest
@@ -16,6 +15,7 @@ from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.amr_snapshots import composite_active_mask
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.public_native_profile import native_profile, rank_and_size
 from tests.review.sol61_amr_full_carrier_offline import decode
 from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION
 from tests.python.support.evolving_accepted_halo_oracle import full_carrier,halo_rows
@@ -58,22 +58,21 @@ def persist(directory,phase,image):
 
 def publish(world,directory,phase,image):
     with collective_check(world):
-        if world.rank==0:persist(directory,phase,image)
+        if world is None or world.rank==0:persist(directory,phase,image)
 
 @pytest.mark.compiler
 @pytest.mark.native_loader
 @pytest.mark.parametrize("subcycled",(False,True))
 def test_public_evolving_accepted_halo_restart_and_refusal(isolated_native_cache,tmp_path,record_property,subcycled):
     del isolated_native_cache
-    from pops._native_selector import select_native_dimension
-    native=select_native_dimension(2);world=native.mpi_world()
-    with collective_check(world):
-        assert native.__abi_version__==8
-        assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
-        assert Path(native.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+    native,world=native_profile(scope="public evolving accepted halo")
+    rank,size=rank_and_size(world)
+    record_property("native_abi_version",native.__abi_version__)
+    record_property("native_profile","MPI" if world is not None else "Serial")
     case,layout=collective_call(world,lambda:build(subcycled))
     resolved=collective_call(world,lambda:pops.resolve(pops.validate(case),layout=layout))
-    artifact=compile_resolved_plan_once(world,resolved,route="evolving accepted halo public reception",compile_artifact=pops.compile)
+    artifact=(pops.compile(resolved) if world is None else compile_resolved_plan_once(
+        world,resolved,route="evolving accepted halo public reception",compile_artifact=pops.compile))
     context=collective_call(world,lambda:artifact_execution_context(artifact))
     def bind():return pops.bind(artifact,resources={"execution_context":context})
     runtime=collective_call(world,bind)
@@ -94,7 +93,7 @@ def test_public_evolving_accepted_halo_restart_and_refusal(isolated_native_cache
     images["replay"]=observe(world,restarted)
     publish(world,directory,"replay",images["replay"])
     with collective_check(world):
-        if world.rank==0:
+        if rank==0:
             with np.load(path,allow_pickle=False) as saved:
                 payload={k:saved[k].copy() for k in saved.files}
             contract=json.loads(str(payload["amr_accepted_contract"]))
@@ -130,7 +129,7 @@ def test_public_evolving_accepted_halo_restart_and_refusal(isolated_native_cache
                 # comparison subtractions across two macrosteps give gamma14.
                 eps=np.finfo(np.float64).eps;k=14;gamma=k*eps/(1-k*eps)
                 assert np.max(np.abs(current[0 if subcycled else 1][mask]-initial[0 if subcycled else 1][mask]-step*DT))<=gamma*(np.max(np.abs(initial[0 if subcycled else 1][mask]))+step*DT+1)
-        if world.rank==0:
+        if rank==0:
             assert int(payload["pops_amr_checkpoint_version"])==AMR_CHECKPOINT_PAYLOAD_VERSION==12
             assert type(contract["schema_version"]) is int and contract["schema_version"]==9
             halo_rows(contract["accepted_halo"])
@@ -142,7 +141,7 @@ def test_public_evolving_accepted_halo_restart_and_refusal(isolated_native_cache
     _,failures=collective_attempt(world,lambda:restarted.restart(bad))
     refused=observe(world,restarted)
     with collective_check(world):
-        if world.rank==0:persist(directory,"refused-preflight",refused)
+        if rank==0:persist(directory,"refused-preflight",refused)
         assert all(failures),failures
         assert all("state carrier payload exceeds bytes" in row[1] for row in failures),failures
         same(images["replay"],refused)

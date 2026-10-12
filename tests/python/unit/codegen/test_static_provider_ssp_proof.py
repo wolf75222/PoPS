@@ -40,6 +40,28 @@ def test_actual_matrix_fixtures_keep_exact_static_fields_and_authored_weights(ki
     assert all(v.block._instance_registry is None for v in program._values if v.block is not None)
 
 
+@pytest.mark.parametrize("fault", ("neighbour", "untyped", "boolean_depth", "extra_effect"))
+def test_affine_stencil_metadata_cannot_bypass_accepted_effect_proof(fault):
+    from pops.time.stencil import StencilAccess
+    program, authority = resolved(method="ssprk2")
+    endpoint = next(iter(program._commits.values()))
+    assert endpoint.attrs["stencil_access"] == StencilAccess.pointwise()
+    attrs = dict(endpoint.attrs)
+    if fault == "neighbour":
+        attrs["stencil_access"] = StencilAccess.nearest_neighbour()
+    elif fault == "untyped":
+        attrs["stencil_access"] = StencilAccess.pointwise().to_data()
+    elif fault == "boolean_depth":
+        access = StencilAccess.pointwise()
+        object.__setattr__(access, "required_ghost_depth", False)
+        attrs["stencil_access"] = access
+    else:
+        attrs["evaluation_partition"] = "unproved"
+    object.__setattr__(endpoint, "attrs", attrs)
+    certificate, reason = prove_accepted_update_ssp(program, model_authority=authority)
+    assert certificate is None and ("stencil" in reason or "effect" in reason)
+
+
 @pytest.mark.parametrize("fault", (
     "wrong_point", "wrong_context_stage", "wrong_context_components", "different_rate",
     "wrong_field_owner", "wrong_formal_space", "missing_input", "extra_attr",

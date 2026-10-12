@@ -10,6 +10,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from pops._platform_contracts import ExecutionContext, ExecutionResource, proven_serial_manifest
+from pops.mesh._layout_plan_contracts import LayoutRepresentation
 from pops.runtime._multi_layout_executor import (
     _layout_runtime_authority_plan,
     _release_layout_engines,
@@ -585,9 +586,11 @@ def _mapping_row(mapping_id, source_block, target_block):
         requirement=SimpleNamespace(
             qualified_id=mapping_id,
             source_port=SimpleNamespace(
+                representation=LayoutRepresentation.CELL_AVERAGE_V1,
                 subject=SimpleNamespace(block_ref=SimpleNamespace(local_id=source_block))
             ),
             target_port=SimpleNamespace(
+                representation=LayoutRepresentation.CELL_AVERAGE_V1,
                 subject=SimpleNamespace(block_ref=SimpleNamespace(local_id=target_block))
             ),
         )

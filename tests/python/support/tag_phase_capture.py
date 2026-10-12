@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import numpy as np
 from tests.python.support.collective_checks import collective_call, collective_check
+from tests.python.support.public_native_profile import rank_and_size
 from tests.python.support.amr_snapshots import composite_active_mask
 from tests.review.sol61_amr_full_carrier_offline import decode
 
@@ -40,6 +41,7 @@ def ghost_diagnostics(image):
 def capture(world,runtime,artifact,native,directory,phase,tag_contract,package_path):
     """All ranks enter public reads; rank0 persists before the strict guard can fail."""
     directory=Path(directory)
+    rank,size=rank_and_size(world)
     image=collective_call(world,lambda:bytes(runtime._executor.checkpoint_state_carriers()))
     levels=collective_call(world,runtime.n_levels)
     values={}
@@ -49,13 +51,13 @@ def capture(world,runtime,artifact,native,directory,phase,tag_contract,package_p
     boxes=collective_call(world,lambda:tuple(runtime.patch_boxes()))
     clock=collective_call(world,lambda:[runtime.time(),runtime.macro_step()])
     with collective_check(world):
-        if int(world.rank)==0:
+        if rank==0:
             directory.mkdir(parents=True,exist_ok=True)
             blob=directory/(phase+"-state-carriers.bin")
             with blob.open("xb") as stream:stream.write(image)
             valid=directory/(phase+"-valid.npz")
             with valid.open("xb") as stream:np.savez(stream,**values)
-            metadata=dict(schema="sol61.public-tag-phase-capture@1",phase=phase,rank=0,size=int(world.size),
+            metadata=dict(schema="sol61.public-tag-phase-capture@1",phase=phase,rank=0,size=size,
                 clock=clock,patch_boxes=[list(row) for row in boxes],tag_selection_contract=tag_contract,
                 artifact_identity=artifact.artifact_identity.token,native_abi_version=native.__abi_version__,
                 package=pin(package_path),native=pin(native.__file__),carriers=pin(blob),valid_npz=pin(valid),

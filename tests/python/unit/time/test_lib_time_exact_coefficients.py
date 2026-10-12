@@ -217,7 +217,11 @@ def test_repeating_decimal_division_is_never_silently_rounded():
 def test_multistep_factories_serialize_integer_and_rational_weights():
     state, rate, _ = _authoring("ab3_exact")
     ab3 = libtime.AdamsBashforth(state, rate=rate, order=3)
-    coeffs = _node(ab3, "linear_combine")["attrs"]["coeffs"]
+    serialized = ab3._serialize()
+    endpoint, = serialized["commits"]
+    accepted = next(node for node in serialized["nodes"] if node["id"] == endpoint["value"])
+    assert accepted["op"] == "linear_combine"
+    coeffs = accepted["attrs"]["coeffs"]
     assert coeffs == [
         [[0, {"kind": "integer", "value": "1"}]],
         [[1, {"kind": "rational", "numerator": "23", "denominator": "12"}]],

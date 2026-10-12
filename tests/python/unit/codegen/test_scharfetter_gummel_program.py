@@ -46,13 +46,13 @@ def fitted_case(*,n=16,diffusivity=.1,mobility=.1,potential=None,coverage="compl
 
 
 def test_fitted_public_case_preserves_two_physical_occurrences_and_one_face_flux():
-    from pops.codegen.module_lowering import lower_and_validate
+    from pops.codegen._orchestration_compile import build_program_model_graph
     from pops.codegen.program_codegen import emit_cpp_program
     resolved,model,_,_,_,rate,_=fitted_case()
     view=model.balance_contract(rate)
     assert [(row.kind,row.coefficient) for row in view.occurrences]==[("drift",-1),("diffusion",1)]
-    emitter=lower_and_validate(model)[0]
-    code=emit_cpp_program(resolved.time,model=emitter)
+    source_authority=build_program_model_graph(resolved)
+    code=emit_cpp_program(resolved.time,model_graph=source_authority)
     assert ".apply_fitted(" in code
     assert code.count(".stage_accepted_exchanges(")==1
     assert "joint-occurrences:0,1" in code

@@ -85,9 +85,11 @@ def test_frozen_temporal_handles_preserve_materialized_pure_reads():
 
     program.freeze()
 
-    # Defining the stage gives the current state record a canonical named replacement with the same
-    # SSA id. The frozen getter must return that canonical record without trying to republish it.
-    assert state.n is defined
+    # Defining a different point issues a separate stage value while preserving
+    # the accepted initial read. Frozen getters return both issued records.
+    assert state.n is current
+    assert defined.id != current.id and defined.inputs[0] is current
+    assert defined.point == point and current.point == TimePoint(state.clock)
     assert state.stage("predictor", point=point) is stage
     assert stage.value is defined
     assert state.prev.value is previous

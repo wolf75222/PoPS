@@ -294,17 +294,24 @@ def test_reused_operator_session_refreshes_private_state_time_and_point_before_b
     assert prepare.index(refresh_dt) < prepare.index(refresh_point)
     assert prepare.index(refresh_point) < prepare.index(boundary_prepare)
 
-    private_fields = re.findall(
-        r"auto session_(\w+) = std::make_shared<"
-        r"pops::MultiFab<pops::kNativeDimension>>\(\*\1\);", source)
-    private_scalars = re.findall(
-        r"auto session_(\w+) = std::make_shared<pops::Real>\(\*\1\);", source)
-    private_points = re.findall(
-        r"auto session_(\w+) = std::make_shared<"
-        r"pops::runtime::multiblock::BoundaryEvaluationPoint>\(\*\1\);",
-        source,
+    allocation_start = source.index("ctx_owner->prepare_operator_session_storage([&]() {")
+    allocation_end = source.index("\n    });", allocation_start)
+    allocation = source[allocation_start:allocation_end]
+    kinds = (
+        "pops::MultiFab<pops::kNativeDimension>", "pops::Real",
+        "pops::runtime::multiblock::BoundaryEvaluationPoint",
+    )
+    private_fields, private_scalars, private_points = (
+        re.findall(r"std::shared_ptr<%s> session_(\w+);" % re.escape(kind),
+                   source[:allocation_start])
+        for kind in kinds
     )
     assert private_fields and private_scalars and private_points
+    for kind, names_for_kind in zip(kinds, (private_fields, private_scalars, private_points), strict=True):
+        for name in names_for_kind:
+            assert "session_%s = " % name in allocation
+            assert "std::make_shared<%s>(*%s)" % (kind, name) in allocation
+            assert "%s = session_%s" % (name, name) in prepare
     for name in private_fields:
         assert (
             f"pops::PureFieldAlgebra::copy_allocated(*{name}, *template_{name});"

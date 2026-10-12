@@ -500,6 +500,11 @@ def manifest_python_mpi_entrypoints(manifest: dict) -> list[dict]:
                 )
             path = normalize(str(raw.get("path", "")))
             nproc = raw.get("nproc")
+            dimension = raw.get("native_dimension", 2)
+            if set(raw) - {"path", "nproc", "native_dimension"}:
+                raise SystemExit("Python MPI entrypoint contains unknown contract fields")
+            if type(dimension) is not int or dimension not in (1, 2, 3):
+                raise SystemExit("Python MPI entrypoint needs an exact native_dimension 1, 2 or 3")
             candidate = Path(path)
             if (
                 not path
@@ -525,7 +530,10 @@ def manifest_python_mpi_entrypoints(manifest: dict) -> list[dict]:
             if path in seen_paths:
                 raise SystemExit(f"duplicate Python MPI entrypoint: {path}")
             seen_paths.add(path)
-            entries.append({"suite": name, "path": path, "nproc": nproc})
+            entry = {"suite": name, "path": path, "nproc": nproc}
+            if "native_dimension" in raw:
+                entry["native_dimension"] = dimension
+            entries.append(entry)
     return sorted(entries, key=lambda item: (item["path"], item["nproc"]))
 
 
@@ -1651,8 +1659,14 @@ def plan_cpp_label(args: argparse.Namespace) -> int:
 def plan_python_mpi(args: argparse.Namespace) -> int:
     """Write the manifest-owned real-MPI Python launch plan for the dedicated CI job."""
     manifest = load_manifest()
-    entries = manifest_python_mpi_entrypoints(manifest)
-    orchestrators = manifest_python_mpi_orchestrators(manifest)
+    dimension = getattr(args, "native_dimension", 2)
+    if type(dimension) is not int or dimension not in (1, 2, 3):
+        raise SystemExit("Python MPI plan requires an exact native dimension 1, 2 or 3")
+    entries = [entry for entry in manifest_python_mpi_entrypoints(manifest)
+               if entry.get("native_dimension", 2) == dimension]
+    # Existing orchestrators explicitly select their Dim2 runtime. Other dimensions
+    # use ranked entrypoints; never launch a Dim2 driver against another installed leaf.
+    orchestrators = manifest_python_mpi_orchestrators(manifest) if dimension == 2 else []
     if not entries and not orchestrators:
         raise SystemExit("no Python MPI contracts declared in tests/test_manifest.toml")
     plan_path = Path(args.plan_file)
@@ -1691,6 +1705,7 @@ def plan_python_mpi(args: argparse.Namespace) -> int:
         getattr(args, "explain_file", None),
         {
             "kind": "python-mpi",
+            "native_dimension": dimension,
             "selected_count": len(entries) + len(orchestrators),
             "entrypoints": entries,
             "orchestrators": orchestrators,
@@ -2058,6 +2073,7 @@ def main() -> int:
     py_mpi = sub.add_parser("python-mpi")
     py_mpi.add_argument("--plan-file", required=True)
     py_mpi.add_argument("--orchestrator-plan-file", required=True)
+    py_mpi.add_argument("--native-dimension", type=int, choices=(1, 2, 3), default=2)
     py_mpi.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
     py_mpi.add_argument("--explain-file")
     py_mpi.set_defaults(func=plan_python_mpi)
