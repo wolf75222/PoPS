@@ -2,6 +2,7 @@
 from pathlib import Path
 import hashlib
 import json
+import sys
 import numpy as np
 import pops
 from pops._generated_release_contract import NATIVE_ABI_VERSION

@@ -21,13 +21,17 @@ def execution_context(artifact):
     import pops
     from pops._native_selector import selected_native_module
     from pops.codegen._native_mpi import native_mpi_communicator
-    from pops._platform_contracts import serial_execution_context
+    from pops.runtime._platform_manifest import execution_context_for_bind
+    from pops.runtime_environment import runtime_environment_report
 
     artifact.verify()
     native = selected_native_module(required=True)
     route = native_mpi_communicator(native)
+    report = runtime_environment_report()
+    if report.get("communicator") != route:
+        raise RuntimeError("scientific runner communicator differs from the native runtime report")
     if route == "MPI_COMM_WORLD":
         return pops.ExecutionContext.mpi_world(artifact)
     if route == "serial":
-        return serial_execution_context(artifact.platform_manifest)
+        return execution_context_for_bind(artifact.platform_manifest, {})
     raise RuntimeError("scientific runner has no authenticated native communicator route")

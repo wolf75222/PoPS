@@ -13,6 +13,7 @@ import sys
 import numpy as np
 import pops
 import pytest
+from tests.python.support.checkpoint_staging import require_no_checkpoint_staging as _require_no_checkpoint_staging
 from tests.python.support.collective_checks import collective_attempt, collective_call, collective_check
 from tests.python.support.evolved_stage_v_capture import pin, retain_v_provenance, save_json
 from tests.python.support.integral_state_receipts import collective_directory
@@ -179,7 +180,11 @@ def test_original_imex_final_checkpoint_failure_restores_science_and_outputs(
             if rank == 0:
                 _same_checkpoints(before_arrays, after_arrays)
                 assert _files(output_root) == baseline_files
-                assert not list(output_root.rglob("*.pops-*")), "no checkpoint staging artifacts may survive"
+                tombstones = _require_no_checkpoint_staging(output_root)
+                save_json(directory / "cleanup-proof.json", dict(
+                    schema="pops.checkpoint.empty-cleanup-tombstones@1",
+                    output_files=baseline_files, tombstones=tombstones,
+                    surviving_staging_entries=False))
             report = simulation._executor._last_step_transaction_report
             assert report.status == "failed" and report.phase == "effect" and report.action == "fail_run"
             assert report.attempts == 1 and report.staged_effects == report.rolled_back_effects

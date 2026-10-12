@@ -1003,11 +1003,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         named_fluxes = _named_fluxes(v)
         requested = v.attrs.get("sources")
         named = [s for s in (requested or []) if s != "default"]
-        if target == "system" and (named_fluxes is not None or named):
-            operation = "named_flux" if named_fluxes is not None else "named_source"
+        if target == "system" and named_fluxes is not None:
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
-                % (bidx, json.dumps(operation)))
+                % (bidx, json.dumps("named_flux")))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = "
                      "ctx.rhs_scratch(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[state_in.id]))
@@ -1200,10 +1199,6 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "source":
         state_in = v.inputs[0]  # source inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id
-        if target == "system":
-            lines.append(
-                "ctx.require_cartesian_generated_operator(%d, %s);"
-                % (bidx, json.dumps("named_source")))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[state_in.id]))
         output_setup_end = len(lines)

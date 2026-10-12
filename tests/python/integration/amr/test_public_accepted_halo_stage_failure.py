@@ -28,12 +28,14 @@ def same_accepted_payload(before,after):
         assert a.dtype==b.dtype and a.shape==b.shape and a.tobytes()==b.tobytes(),key
 
 def accepted_attempt(payload):
-    # Exact current checkpoint.hpp write_state prefix: magic8, i32 stored as
+    # Exact current POPSANDA write_state prefix: magic8, i32 stored as
     # i64, string(u64 length+bytes), topology u64, generation u64, attempt u64.
+    # ANDA adds history ghost depths later in the image; the byte-exact full
+    # payload comparison above retains those fields and every continuation byte.
     array=payload['program_accepted_state']
     assert array.dtype==np.uint8 and array.ndim==1
     wire=array.tobytes()
-    assert wire[:8]==b'POPSAND9' and len(wire)>=24
+    assert wire[:8]==b'POPSANDA' and len(wire)>=24
     assert int.from_bytes(wire[8:16],'little')==2
     length=int.from_bytes(wire[16:24],'little')
     offset=24+length+16

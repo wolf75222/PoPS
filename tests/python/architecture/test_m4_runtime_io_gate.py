@@ -105,7 +105,7 @@ def test_m4_required_ci_lane_executes_the_complete_installed_gate():
 
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     mpi_job = workflow.split("\n  mpi:\n", 1)[1]
-    mpi_job = mpi_job.split("\n  gate-openmp-prewarm:\n", 1)[0]
+    mpi_job = mpi_job.split("\n  mpi-python:\n", 1)[0]
     assert "if: needs.set-mode.outputs.mpi_required == 'true'" in mpi_job
     assert "python3-vtk9" in mpi_job
     assert "/usr/bin/python3 scripts/run_m4_gate.py --list-ctest-targets" in mpi_job
@@ -120,7 +120,15 @@ def test_m4_required_ci_lane_executes_the_complete_installed_gate():
     assert 'OMPI_MCA_io: "^ompio"' in mpi_job.split("\n    steps:\n", 1)[0]
     assert "vtkXMLPUnstructuredGridReader" in complete
     assert "vtkXMLUnstructuredGridReader" in complete
-    assert "/usr/bin/python3 scripts/run_m4_gate.py \\" in complete
+    installed_python = 'env -u PYTHONPATH "$RUNNER_TEMP/pops-mpi-producer-installed/bin/python"'
+    assert installed_python + " - <<'PY'" in complete
+    assert installed_python + " scripts/run_m4_gate.py \\" in complete
+    assert "POPS_CI_TEST_EXECUTION: installed" in complete
+    assert 'POPS_NATIVE_DIM: "2"' in complete
+    producer = mpi_job.split("- name: Assemble and authenticate the unique MPI Dim2 wheel", 1)[1]
+    producer = producer.split("- name: Publish authenticated MPI Python wheel", 1)[0]
+    assert "scripts/ci_python_mpi.py authenticate" in producer
+    assert '--install-root "$RUNNER_TEMP/pops-mpi-producer-installed"' in producer
     assert "--build-dir build-mpi" in complete
     assert "--mpi-exec mpiexec" in complete
     assert "--audit-only" not in complete

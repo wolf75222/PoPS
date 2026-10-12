@@ -583,7 +583,7 @@
       ]
     },
     "ci_20260914_field_provider_install": "Conservative 5-second scheduling estimate for mocked field-provider installation contracts; not a measured CI duration. Replace from a complete per-file timing receipt.",
-    "estimated_count": 828,
+    "estimated_count": 829,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -1048,6 +1048,7 @@
       "tests/python/unit/codegen/test_tensor_transport_composition.py",
       "tests/python/unit/codegen/test_transport_quadrature.py",
       "tests/python/unit/codegen/test_typed_phase_records.py",
+      "tests/python/unit/codegen/test_typed_product_seed_history.py",
       "tests/python/unit/codegen/test_uniform_clock_manifest_contract.py",
       "tests/python/unit/codegen/test_uniform_field_roles.py",
       "tests/python/unit/codegen/test_user_joint_reconstruction.py",
@@ -1512,7 +1513,7 @@
       "scope": "M0-M7 migration additions",
       "timing_limit": "The inherited scalar-advection pipeline estimate is not refreshed from the local OMP qualification, where a full run exceeded 4299 s. CI Serial hardware/cache behavior differs; no observed CI fit is claimed. Preserve the indivisible full scientific test and refresh its estimate from the next complete CI artifact."
     },
-    "total_files": 893,
+    "total_files": 894,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -4841,6 +4842,16 @@
         "estimate_is_hardware_timing": false,
         "basis": "Existing 120-second CPU scheduling estimate retained as provenance only; authentic CUDA/HIP device/managed Field storage is mandatory. No GPU execution or timing received. CPU plans exclude this exact manifest-declared profile; scripts/ci_python_hardware.py --hardware gpu --execute fails closed on CPU."
       }
+    },
+    "ci_20261013_typed_product_seed_history": {
+      "path": "tests/python/unit/codegen/test_typed_product_seed_history.py",
+      "estimated_seconds": 60,
+      "source_sha256": "e81f6134d172dce2b55b6779bd7cd1af23efb308f92615f19975495f203a9847",
+      "local_source_cases": 14,
+      "local_source_phase_seconds": 30.648,
+      "local_source_session_cases": 26,
+      "local_source_session_seconds": 39.96,
+      "basis": "Conservative 60-second scheduling estimate for fourteen source-only NS typed-product and named-producer history/codegen regressions. The local checkout source receipt has fourteen testcase phases totaling 30.648 seconds in a complete 26-case source session lasting 39.96 seconds, with no native selected before or after and no DSO compilation. These local figures are not GitHub CI file wall times or native Dim1 qualification. Existing suite ownership, 71 shards, dimensions, MPI inventories and watchdogs remain unchanged; replace the estimate only from a complete CI per-file receipt."
     }
   },
   "tests/python/integration/amr/test_accepted_halo_extent_binding.py": 600,
@@ -5163,5 +5174,6 @@
   "tests/python/unit/initial/test_amr_bootstrap_program.py": 5,
   "tests/python/unit/initial/test_bootstrap_program.py": 5,
   "tests/python/unit/runtime/test_staircase_field_domain.py": 5,
-  "tests/python/unit/time/test_solved_field_sampling.py": 5
+  "tests/python/unit/time/test_solved_field_sampling.py": 5,
+  "tests/python/unit/codegen/test_typed_product_seed_history.py": 60
 }

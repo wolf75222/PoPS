@@ -178,11 +178,22 @@ def test_public_spatial_interaction_refuses_without_publication(
     runtime = bind(world, artifact, 1, failure=failure)
     directory = collective_directory(world, tmp_path/("spatial-interaction-"+failure))
     initial = capture(world, runtime, 1, adaptive=False, step=0)
+    if failure == "nonfinite":
+        with collective_check(world):
+            resident = [tuple(np.asarray(piece["values"]) for piece in pieces)
+                for level in initial["levels"] for copy in level["copies"]
+                for pieces in zip(copy["pieces"]["rho"], copy["pieces"]["active"],
+                                  copy["pieces"]["kappa"], strict=True)]
+            assert all(np.all(np.isfinite(rho)) for rho, _active, _kappa in resident)
+            assert any(np.any((rho == 3.) & (active == 1) & (kappa > 0))
+                       for rho, active, kappa in resident), "native active source pole is absent"
     checkpoints = {"initial": checkpoint(world, runtime, directory, "initial")}
     _, errors = collective_attempt(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
     with collective_check(world):
         assert all(error is not None for error in errors), errors
         assert all("direct spatial interaction" in error[1] or "direct interaction" in error[1] for error in errors), errors
+        if failure == "nonfinite" and rank_and_size(world)[1] == 1:
+            assert all("nonfinite active source" in error[1] for error in errors), errors
     rejected = capture(world, runtime, 1, adaptive=False, step=0)
     with collective_check(world):
         same(initial, rejected)
@@ -192,3 +203,61 @@ def test_public_spatial_interaction_refuses_without_publication(
     for key, value in (("evidence_path", str(directory)), ("rank", rank_and_size(world)[0]), ("size", rank_and_size(world)[1]), ("failure", failure),
                        ("fixture_schema", "pops.spatial-interaction-native-fixture@1")):
         record_property(key, value)
+
+
+@pytest.mark.compiler
+@pytest.mark.kokkos
+@pytest.mark.native_loader
+def test_public_spatial_interaction_ignores_inactive_source_pole(
+        isolated_native_cache, tmp_path, record_property):
+    del isolated_native_cache
+    world, native = world_and_native()
+    artifact, _selected = prepare(world, 1, False, "nonfinite-inactive")
+    runtime = bind(world, artifact, 1, failure="nonfinite-inactive")
+    directory = collective_directory(world, tmp_path/"spatial-interaction-inactive-pole")
+    initial = capture(world, runtime, 1, adaptive=False, step=0)
+    with collective_check(world):
+        source_pieces = [tuple(np.asarray(piece["values"]) for piece in pieces)
+            for level in initial["levels"] for copy in level["copies"]
+            for pieces in zip(copy["pieces"]["rho"], copy["pieces"]["active"],
+                              copy["pieces"]["kappa"], strict=True)]
+        assert all(np.all(np.isfinite(rho)) for rho, _active, _kappa in source_pieces)
+        assert any(np.any((rho == 3.) & (active == 0) & (kappa == 0))
+                   for rho, active, kappa in source_pieces)
+        assert not any(np.any((rho == 3.) & (active == 1))
+                       for rho, active, _kappa in source_pieces)
+    checkpoints = {"initial": checkpoint(world, runtime, directory, "initial")}
+    collective_call(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
+    accepted = capture(world, runtime, 1, adaptive=False, step=1)
+    checkpoints["accepted"] = checkpoint(world, runtime, directory, "accepted")
+    with collective_check(world):
+        assert accepted["clock"] == (DT, 1)
+        for old, new in zip(initial["levels"], accepted["levels"], strict=True):
+            for first, second in zip(old["copies"], new["copies"], strict=True):
+                for before, active, after in zip(first["pieces"]["rho"], first["pieces"]["active"],
+                                                  second["pieces"]["rho"], strict=True):
+                    rho, mask = np.asarray(before["values"]), np.asarray(active["values"])
+                    rate = np.zeros_like(rho)
+                    np.divide(rho, 3-rho, out=rate, where=mask == 1)
+                    values = np.asarray(after["values"])
+                    assert np.all(np.isfinite(values))
+                    np.testing.assert_allclose(values, rho+DT*rate, rtol=5e-12, atol=5e-12)
+                    np.testing.assert_array_equal(values[mask == 0], rho[mask == 0])
+                assert np.all(np.isfinite(second["history_values"]["I_accepted"]))
+        if rank_and_size(world)[0] == 0:
+            phases = {}
+            for name, image in (("initial", initial), ("accepted", accepted)):
+                path = directory/(name+".npz")
+                np.savez(path, **arrays(image))
+                phases[name] = dict(path=str(path), sha256=digest(path))
+            receipt = dict(schema="pops.spatial-source-inactive-pole-native-fixture@1",
+                source_law="rho/(3-rho)", dt=DT, dimension=2, rank=0,
+                size=rank_and_size(world)[1], phases=phases, checkpoints=checkpoints,
+                native=dict(path=str(native.__file__), sha256=digest(native.__file__)),
+                artifact_identity=artifact.artifact_identity.token,
+                components_origins=save_origins(artifact, directory),
+                fixture_sources=[dict(path=str(path), sha256=digest(path)) for path in
+                    (Path(__file__).resolve(), Path(sys.modules[build.__module__].__file__).resolve())])
+            (directory/"receipt.json").write_text(json.dumps(receipt, sort_keys=True, indent=2)+"\n")
+    record_property("evidence_path", str(directory))
+    record_property("fixture_schema", "pops.spatial-source-inactive-pole-native-fixture@1")

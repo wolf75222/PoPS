@@ -12,6 +12,7 @@ import pops
 import pytest
 
 from pops.output._consumer_contracts import ConsumerGraph, ConsumerKind, Retry
+from tests.python.support.checkpoint_staging import require_no_checkpoint_staging
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.evolved_stage_v_capture import pin, retain_v_provenance, save_json
 from tests.python.support.integral_state_receipts import collective_directory
@@ -141,7 +142,10 @@ def test_original_imex_checkpoint_retry_replays_one_completed_seal(
             assert publications[0]['sealed_sha256'] == publications[1]['sealed_sha256']
             assert publications[0]['source_inode'] == publications[1]['source_inode']
             assert Path(publications[0]['retained']['path']).read_bytes() == Path(publications[1]['retained']['path']).read_bytes()
-            assert not list(output_root.rglob('.pops-restart-*'))
+            tombstones = require_no_checkpoint_staging(output_root)
+            save_json(directory/'cleanup-proof.json', dict(
+                schema='pops.checkpoint.empty-cleanup-tombstones@1',
+                tombstones=tombstones, surviving_staging_entries=False))
 
     # Share the actual published path through the existing collective checkpoint operation.
     from pops.output._checkpoint_collective import checkpoint_topology, root_value

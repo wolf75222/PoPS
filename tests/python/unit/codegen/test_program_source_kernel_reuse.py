@@ -45,11 +45,12 @@ def _typed_source_model(name, guarded):
 
 
 def _resolved(*, foreign=False, changed=False, runtime=False, guarded=False, provider=False,
-              typed=False):
+              typed=False, primitive=False):
     def model(name):
         physical = Model(name)
         u, = physical.conservative_vars("u")
         physical.primitive_vars(u=u)
+        source_input = physical.primitive("inverse_u", 1 / u) if primitive else u
         physical.conservative_from([u])
         physical.flux(x=[0 * u], y=[0 * u])
         physical.wave_speeds(x=(0 * u, 0 * u), y=(0 * u, 0 * u))
@@ -57,7 +58,7 @@ def _resolved(*, foreign=False, changed=False, runtime=False, guarded=False, pro
         if runtime:
             from pops.params import RuntimeParam
             coefficient = physical.value(physical.param(RuntimeParam("rate", default=-2)))
-        expression = 1 / u if guarded else coefficient * u
+        expression = 1 / u if guarded else coefficient * source_input
         if provider:
             expression = expression + physical.aux("forcing")
         source = physical.source_term("decay", [expression])
@@ -91,12 +92,40 @@ def _resolved(*, foreign=False, changed=False, runtime=False, guarded=False, pro
     return pops.resolve(pops.validate(case), layout=Uniform(cartesian_grid(n=8, periodic=True)))
 
 
-def _source(resolved):
-    return emit_cpp_program(resolved.time, model_graph=build_program_model_graph(resolved))
+def _source(resolved, *, target="system"):
+    return emit_cpp_program(resolved.time, model_graph=build_program_model_graph(resolved),
+                            target=target)
 
 
 def _definitions(source):
     return re.findall(r"inline void (pops_shared_source_[0-9a-f]{64})\(", source)
+
+
+def _inline_source_kernels(source):
+    queries = re.finditer(
+        r"source_active_mask_(\w+) = ctx\.pointwise_active_mask\((\d+), (\w+)\);",
+        source,
+    )
+    return [(int(query[2]), query[3], source[query.start():source.index("});", query.end())])
+            for query in queries]
+
+
+def _assert_inactive_source_returns_before_reads(kernel, *reads, components=(0,)):
+    query = kernel.index("ctx.pointwise_active_mask(")
+    fab_loop = kernel.index("for (int li = 0;")
+    cell_loop = kernel.index("pops::for_each_cell(")
+    assert query < fab_loop < cell_loop
+    inactive = re.search(
+        r"if \(source_has_active_mask_ && !\(source_activeA_\(index, 0\) "
+        r">= pops::Real\(0\.5\)\)\) \{(?P<body>.*?)\n\s*\}", kernel, re.S,
+    )
+    assert inactive is not None
+    assert inactive.start() > cell_loop
+    expected = ["outA(index, %d) = pops::Real(0);" % component for component in components]
+    assert [line.strip() for line in inactive["body"].splitlines() if line.strip()] == [
+        *expected, "return;"]
+    for read in reads:
+        assert inactive.end() < kernel.index(read)
 
 
 def test_same_declared_model_emits_one_source_implementation_and_two_owned_calls():
@@ -105,19 +134,25 @@ def test_same_declared_model_emits_one_source_implementation_and_two_owned_calls
     helper, = _definitions(source)
     assert source.count(helper + "(ctx,") == 2
     assert source.count("pops::Real(-2) * u") == 1
-    assert source.count("ctx.require_cartesian_generated_operator(") == 2
+    assert '"named_source"' not in source
+    assert source.count("ctx.pointwise_active_mask(block_index, kernel_input);") == 1
+    _assert_inactive_source_returns_before_reads(source, "const pops::Real u =",
+                                                "pops::Real(-2) * u")
     assert source.count("ctx.rhs_scratch(") == 2
     assert "provider_values_view<0>(consumer_qid, block_index, li)" in source
     left, right = resolved.blocks
     assert left.instance_owner_qid != right.instance_owner_qid
     assert left.resolved_operations.identity != right.resolved_operations.identity
-    for block in resolved.blocks:
+    for block_index, block in enumerate(resolved.blocks):
         owned_nodes = {value.id for value in resolved.time._values if value.op == "source"
                        and str(value.block.instance_owner_path.canonical()) == block.instance_owner_qid}
         selected = [operation for operation in block.resolved_operations.operations
                     if operation.guarantees.get("program_evaluation", {}).get("node_id") in owned_nodes]
         assert len(selected) == 1
         assert block.instance_owner_qid + "/program/" in source
+        node, = [value for value in resolved.time._values if value.id in owned_nodes]
+        assert re.search(re.escape(helper) + r'\(ctx, "[^"]+", %d, u%d, r%d\);' % (
+            block_index, node.inputs[0].id, node.id), source)
         assert not selected[0].guards
 
 
@@ -126,15 +161,23 @@ def test_changed_body_or_foreign_declaration_does_not_share_implementation(chang
     assert len(_definitions(_source(_resolved(**{change: True})))) == 2
 
 
-def test_runtime_parameter_source_keeps_existing_per_block_binding_route():
-    source = _source(_resolved(runtime=True))
+@pytest.mark.parametrize("target", ("system", "amr_system"))
+def test_runtime_parameter_source_keeps_existing_per_block_binding_route(target):
+    source = _source(_resolved(runtime=True), target=target)
     assert not _definitions(source)
     assert "ctx.program_params(0)" in source
     assert "ctx.program_params(1)" in source
+    kernels = _inline_source_kernels(source)
+    assert [block for block, _, _ in kernels] == [0, 1]
+    for block, state, kernel in kernels:
+        assert "ctx.pointwise_active_mask(%d, %s);" % (block, state) in kernel
+        _assert_inactive_source_returns_before_reads(kernel, "const pops::Real u =",
+                                                    "params.get(")
 
 
-def test_source_with_a_provider_keeps_its_exact_per_node_access_plan():
-    source = _source(_resolved(provider=True))
+@pytest.mark.parametrize("target", ("system", "amr_system"))
+def test_source_with_a_provider_keeps_its_exact_per_node_access_plan(target):
+    source = _source(_resolved(provider=True), target=target)
     assert not _definitions(source)
     assert source.count("provider_values_view<1>(") == 2
     assert "providers(index, 0)" in source
@@ -143,6 +186,50 @@ def test_source_with_a_provider_keeps_its_exact_per_node_access_plan():
     for preparation in preparations:
         following = source[preparation.end():]
         assert following.index("for (int li = 0;") < following.index("provider_values_view<1>(")
+    kernels = _inline_source_kernels(source)
+    assert [block for block, _, _ in kernels] == [0, 1]
+    for _, _, kernel in kernels:
+        assert kernel.index("ctx.pointwise_active_mask(") < kernel.index(
+            "ctx.prepare_provider_values(")
+        _assert_inactive_source_returns_before_reads(kernel, "const pops::Real u =",
+                                                    "providers(index, 0)")
+
+
+@pytest.mark.parametrize("fallback", (False, True))
+def test_inactive_source_masks_singular_primitive_before_any_scalar_read(fallback):
+    source = _source(_resolved(primitive=True, runtime=fallback, provider=fallback))
+    if fallback:
+        assert not _definitions(source)
+        kernels = [kernel for _, _, kernel in _inline_source_kernels(source)]
+        assert len(kernels) == 2
+    else:
+        assert len(_definitions(source)) == 1
+        kernels = [source]
+    for kernel in kernels:
+        _assert_inactive_source_returns_before_reads(
+            kernel, "const pops::Real u =", "const pops::Real inverse_u =", " / u")
+        if fallback:
+            _assert_inactive_source_returns_before_reads(
+                kernel, "params.get(", "providers(index, 0)")
+
+
+@pytest.mark.parametrize("target", ("system", "amr_system"))
+def test_physical_global_fallback_masks_every_source_component(target):
+    from tests.python.unit.codegen.test_integral_candidate_capture import build_feedback
+
+    case, layout, _, _, _ = build_feedback(physical_global=True, components=("mass", "energy"))
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    source = _source(resolved, target=target)
+    assert not _definitions(source)
+    block, state, kernel = _inline_source_kernels(source)[0]
+    assert block == 0 and "ctx.pointwise_active_mask(0, %s);" % state in kernel
+    _assert_inactive_source_returns_before_reads(
+        kernel, "const pops::Real mass =", "const pops::Real energy =", components=(0, 1))
+    inactive_return = kernel.index("return;")
+    for component in (0, 1):
+        global_read = re.search(r"outA\(index, %d\) = [^\n]*physical_global_[^\n]*;" %
+                                component, kernel)
+        assert global_read is not None and inactive_return < global_read.start()
 
 
 def test_provider_preparation_precedes_uniform_and_amr_provider_reads():
@@ -168,6 +255,8 @@ def test_shared_fallible_implementation_is_called_only_inside_its_guard():
     resolved = _resolved(guarded=True)
     source = _source(resolved)
     assert len(_definitions(source)) == 2
+    singular_helper = source[:source.index('extern "C" void pops_install_program(')]
+    _assert_inactive_source_returns_before_reads(singular_helper, "const pops::Real u =", " / u")
     install = source[source.index('extern "C" void pops_install_program('):]
     first_if = install.index("if (")
     first_else = install.index("} else {", first_if)

@@ -517,19 +517,24 @@ def _accepted_reflux_mass_delta(runtime, n, support):
                         "native_payload_sha256": payload_digest, "signed_mass_delta": correction}
 
 
-def _coarse_fine_basis_oracle(runtime, providers=("provider/1", "provider/4")):
+def _coarse_fine_basis_oracle(runtime, providers=("provider/1", "provider/4"), *,
+                            evaluation_support=None):
     rows = tuple(tuple(map(str, row)) for row in runtime._executor.program_flux_ledger_manifest())
     assert all(len(row) == 17 for row in rows)
-    assert runtime.n_levels() == 2
-    frame = _accepted_frame(runtime)
+    # Accepted face evidence belongs to the operator evaluation. A completed
+    # macro step may then regrid and publish a new accepted-state envelope.
+    support = evaluation_support if evaluation_support is not None else _exchange_support(runtime)
+    assert len(support["active"]) == 2
+    frame = support["frame"]
     assert all(row[13] == frame["space"] and int(row[14]) == frame["topology_epoch"]
-               and int(row[15]) == frame["generation"] and int(row[16]) == runtime.n_levels()
-               for row in rows), "accepted reflux rows have a foreign topology/materialization frame"
-    coarse_active = composite_active_mask(runtime, 0, refinement_ratio=2)
+               and int(row[15]) == frame["generation"] and int(row[16]) == len(support["active"])
+               for row in rows), ("accepted reflux rows have a foreign evaluation frame", frame,
+                                  tuple(row[13:17] for row in rows))
+    coarse_active = support["active"][0]
     if not coarse_active.any():
         # A fully covered coarse level has no coarse/fine interface to reconcile.
         # Authenticate that geometry and require the corresponding empty ledger.
-        assert composite_active_mask(runtime, 1, refinement_ratio=2).all()
+        assert support["active"][1].all()
         assert not rows
         return {"no_coarse_fine_faces": "full_fine_cover", "ledger_count": 0}
     result = {}
@@ -657,7 +662,7 @@ def test_periodic_full_refinement_restart_and_face_inventory(
     reflux_delta, reflux_inventory = _accepted_reflux_mass_delta(continuous, n, last_step_support)
     raw_exchange = exchange_inventory["raw_pre_reflux_incidence_amount"]
     assert abs(raw_exchange + reflux_delta - accepted_mass_change) < 8.0e-11
-    basis = _coarse_fine_basis_oracle(continuous)
+    basis = _coarse_fine_basis_oracle(continuous, evaluation_support=last_step_support)
     _evidence(
         artifact,
         n,

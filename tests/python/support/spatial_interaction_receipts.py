@@ -28,12 +28,12 @@ def build(width, *, adaptive=False, failure=None):
     from pops.mesh import CartesianGrid
     from pops.mesh.geometry import Disc, EmbeddedBoundary
     from pops.mesh.masks import CutCell
-    from pops.boundary import ZeroFlux
+    from pops.boundary import TransportBoundarySet, ZeroFlux
+    from pops.boundary.transport import NoFlux
     from pops.layouts import Uniform
     from pops.numerics import DiscretizationPlan, FiniteVolume, reconstruction, riemann, variables
     from pops.math import ddt, div
     from pops._ir.expr import Const
-    from pops.numerics.terms import Flux, DefaultSource
     from pops.time import Program, FixedDt
     from pops.initial import InitialCondition
     from pops.lib.initial import BindArray
@@ -50,14 +50,19 @@ def build(width, *, adaptive=False, failure=None):
     flux = model.flux("zero_flux", frame=frame, state=rho,
         components={axis: tuple(0*rho[c] for c in range(width)) for axis in frame.axes},
         waves={axis: (Const(0),)*width for axis in frame.axes})
-    reaction = model.source("invalid_input" if failure == "nonfinite" else "decay", on=rho,
-        value=tuple(rho[c]/(3-rho[c]) if failure == "nonfinite" else -GAMMA*rho[c] for c in range(width)))
+    invalid_source = failure in ("nonfinite", "nonfinite-inactive")
+    reaction = model.source("invalid_input" if invalid_source else "decay", on=rho,
+        value=tuple(rho[c]/(3-rho[c]) if invalid_source else -GAMMA*rho[c] for c in range(width)))
     rate = model.rate("evolve", equation=ddt(rho) == -div(flux)+reaction)
     case = pops.Case("actual_spatial_interaction")
     block = case.block("density", model)
     numerics = DiscretizationPlan()
     numerics.rates.add(rate, FiniteVolume(flux=flux, variables=variables.Conservative(rho),
         reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov()))
+    numerics.boundaries.add(TransportBoundarySet({
+        boundary: NoFlux(state=block[rho]) for boundary in
+        (frame.boundaries.x_min, frame.boundaries.x_max,
+         frame.boundaries.y_min, frame.boundaries.y_max)}))
     case.numerics(numerics, block=block)
     program = Program("actual_direct_interaction")
     u = program.state(block[rho])
@@ -70,17 +75,19 @@ def build(width, *, adaptive=False, failure=None):
     realization = DirectSpatialInteraction(1 if failure == "budget" else WORKSPACE)
     accepted_source = u.n
     accepted_scope = "accepted"
-    if failure == "nonfinite":
-        # The IC stays finite and identical on every rank. A single actual cell
-        # with rho=3 produces nonfinite issued data on its real resident ranks.
+    if invalid_source:
+        # The IC stays finite and identical on every rank. A cell with rho=3
+        # probes whether native activity is checked before this source law.
         accepted_source = program.value("invalid_issued",
-            u.n+program.dt*program.rhs(state=u.n, terms=[DefaultSource()]), at=u.next.point)
+            u.n+program.dt*rate(u.n), at=u.next.point)
         accepted_scope = "issued"
     for name, source, scope in (("I_accepted", accepted_source, accepted_scope), ("I_history", u.prev, "issued")):
         field = program.spatial_interaction(source, kernel, output_space=output, components=selected,
             measure=CellVolumeMeasure(), quadrature=CellMidpoint(), realization=realization, source_scope=scope)
         program.store_history(name, field, depth=1)
-    candidate = program.value("decayed", u.n+program.dt*program.rhs(state=u.n, terms=[Flux(), DefaultSource()]),
+    # The physical rate selects the declared named reaction. DefaultSource()
+    # would select this model's empty composite source instead.
+    candidate = program.value("decayed", u.n+program.dt*rate(u.n),
                               at=u.next.point)
     program.commit(u.next, candidate)
     program.step_strategy(FixedDt(DT))
@@ -117,6 +124,8 @@ def initial_values(width, *, failure=None):
         # This finite value is bound to the declared BindArray initial plan;
         # its declared source alone creates nonfinite issued candidate data.
         result[0, CELLS[1]//2, CELLS[0]//2] = 3.
+    elif failure == "nonfinite-inactive":
+        result[0, 0, 0] = 3.
     return result
 
 

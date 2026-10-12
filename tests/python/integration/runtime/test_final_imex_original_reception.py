@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from tests.python.support.evolved_stage_v_capture import retain_v_provenance
+from tests.python.support.public_native_profile import native_profile, rank_and_size
 
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 EXAMPLE = Path(__file__).resolve().parents[4] / 'examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py'
@@ -36,13 +37,12 @@ def _save_snapshot(directory, phase, snapshot):
 
 @pytest.fixture(scope='module')
 def original_manual(tmp_path_factory):
-    from pops._native_selector import select_native_dimension
-    native = select_native_dimension(2)
+    native, world = native_profile(dimension=2, scope='final IMEX original reception')
     before = native.runtime_environment_report()
-    world = native.mpi_world()
     native.native_execution_resource()
     after = native.runtime_environment_report()
-    assert world.active and world.rank == 0 and world.size == 1
+    rank, size = rank_and_size(world)
+    assert (rank, size) == (0, 1)
     directory = tmp_path_factory.mktemp('imex-original')
     spec = importlib.util.spec_from_file_location('pops_final_imex_original_reception', EXAMPLE)
     example = importlib.util.module_from_spec(spec)
@@ -52,7 +52,7 @@ def original_manual(tmp_path_factory):
     # This exact public compilation is the same input used by run_manual_and_restart.
     # Its second compile call uses the authenticated cache; no substitute runtime is bound.
     _target, _resolved, artifact = example.compile_final_case(use_preset=False)
-    retain_v_provenance(artifact, native, directory, world.rank)
+    retain_v_provenance(artifact, native, directory, rank)
     evidence = example.run_manual_and_restart(directory / 'manual')
     assert evidence.artifact_identity == artifact.artifact_identity.token
     for phase in ('accepted', 'restored', 'continuous', 'restarted'):

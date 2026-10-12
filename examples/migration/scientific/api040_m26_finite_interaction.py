@@ -27,6 +27,7 @@ from pops.time import FixedDt
 
 from api040_m26_finite_oracle import NODES, PERMUTATION, density_pair, metrics
 from api040_receipts import receipt_json
+from _native_example_profile import execution_context as native_execution_context
 
 
 DIAGNOSTICS = (
@@ -241,10 +242,7 @@ def run_and_archive(destination: Path) -> list[dict]:
 
         _collective_call(bootstrap, "Dim1 artifact", require_dim1)
         def execution_context(artifact=artifact):
-            if route == "MPI_COMM_WORLD":
-                return pops.ExecutionContext.mpi_world(artifact)
-            from pops._platform_contracts import serial_execution_context
-            return serial_execution_context(artifact.platform_manifest)
+            return native_execution_context(artifact)
 
         execution = _collective_call(bootstrap, "execution context", execution_context)
         world = _collective_call(

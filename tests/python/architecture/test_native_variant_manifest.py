@@ -24,6 +24,7 @@ PROVER = ROOT / "scripts" / "prove_installed_wheel.py"
 PYTHON_CMAKE = ROOT / "python" / "CMakeLists.txt"
 TEST_MANIFEST = ROOT / "tests" / "test_manifest.toml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+MPI_PYTHON_RUNNER = ROOT / "scripts" / "ci_python_mpi.py"
 PYTEST_CONFTEST = ROOT / "tests" / "python" / "conftest.py"
 SERIAL_PARENT_MPI_SMOKE = ROOT / "tests" / "cmake" / "run_serial_parent_mpi_target.cmake"
 HDF5_WITHOUT_MPI_SMOKE = ROOT / "tests" / "cmake" / "expect_hdf5_without_mpi_rejected.cmake"
@@ -43,10 +44,17 @@ def test_mpi_script_bootstraps_preserve_direct_script_imports_and_arguments(
         monkeypatch.setattr(runner.shutil, "which", lambda _: "/usr/bin/mpiexec")
         bootstrap = runner._mpi_python_command("mpiexec", 2, "probe.py")[5]
     elif launcher == "ci":
-        source = CI_WORKFLOW.read_text(encoding="utf-8")
-        match = re.search(r'^\s*native_script_bootstrap="(.*)"$', source, re.MULTILINE)
-        assert match is not None
-        bootstrap = match.group(1)
+        tree = ast.parse(MPI_PYTHON_RUNNER.read_text(encoding="utf-8"))
+        functions = [node for node in tree.body
+                     if isinstance(node, ast.FunctionDef) and node.name == "run_launches"]
+        assert len(functions) == 1
+        assignments = [node for node in functions[0].body
+                       if isinstance(node, ast.Assign) and len(node.targets) == 1
+                       and isinstance(node.targets[0], ast.Name)
+                       and node.targets[0].id == "bootstrap"]
+        assert len(assignments) == 1
+        bootstrap = ast.literal_eval(assignments[0].value)
+        assert isinstance(bootstrap, str)
     else:
         source = PYTHON_CMAKE.read_text(encoding="utf-8")
         match = re.search(r'set\(_pops_py_mpi_bootstrap\s+("(?:\\.|[^"\\])*")\)', source)
@@ -381,19 +389,69 @@ def test_ci_consumes_only_authenticated_explicit_native_variants():
         "--exclude='_native/***'",
         "scripts/verify_installed_native.py",
         '--expect-dim "$POPS_NATIVE_DIM" --expect-serial',
-        "build-mpi/python/pops/_native/variants.json",
-        "build-mpi/python-package/pops/_native/variants.json",
-        "build-mpi/python-package/pops/_native/dim2/",
-        '--expect-dim "$POPS_NATIVE_DIM" --expect-mpi --expect-parallel-hdf5',
-        "_pops = select_native_dimension(2)",
-        "select_native_dimension(2); import os, runpy, sys",
     ):
         assert required_contract in workflow
+
+    producer = workflow.split("\n  mpi:\n", 1)[1].split("\n  mpi-python:\n", 1)[0]
+    assembly = producer.split("- name: Assemble and authenticate the unique MPI Dim2 wheel", 1)[1]
+    assembly = assembly.split("- name: Publish authenticated MPI Python wheel", 1)[0]
+    for contract in (
+        'wheel_directory="$RUNNER_TEMP/pops-mpi-python-wheel"',
+        "scripts/ci_assemble_installed_wheel.py",
+        '--package build-mpi/python --output-dir "$wheel_directory"',
+        "--dimension 2 --backend mpi",
+        "scripts/ci_python_mpi.py authenticate",
+        '--wheel-directory "$wheel_directory"',
+        '--install-root "$RUNNER_TEMP/pops-mpi-producer-installed"',
+    ):
+        assert contract in assembly
+    publish = producer.split("- name: Publish authenticated MPI Python wheel", 1)[1]
+    publish = publish.split("- name: M4 complete native runtime", 1)[0]
+    assert "name: gate-mpi-python-wheel" in publish
+    assert "path: ${{ runner.temp }}/pops-mpi-python-wheel/" in publish
+    assert "if-no-files-found: error" in publish
+    worker = workflow.split("\n  mpi-python:\n", 1)[1].split("\n  gate-openmp-prewarm:\n", 1)[0]
+    download = worker.split("- name: Download the unique authenticated MPI Dim2 wheel", 1)[1]
+    download = download.split("- name: Authenticate fresh MPI wheel installation", 1)[0]
+    assert "name: gate-mpi-python-wheel" in download
+    assert "path: ${{ runner.temp }}/pops-mpi-python-wheel" in download
+    authenticate, execute = worker.split("- name: Authenticate fresh MPI wheel installation", 1)[1].split(
+        "- name: Execute every mandatory contract in the bounded MPI group", 1)
+    execute = execute.split("- name: Publish MPI group installation", 1)[0]
+    assert "scripts/ci_python_mpi.py authenticate" in authenticate
+    assert "scripts/ci_python_mpi.py run" in execute
+    for step in (authenticate, execute):
+        assert '--wheel-directory "$RUNNER_TEMP/pops-mpi-python-wheel"' in step
+        assert '--install-root "$RUNNER_TEMP/pops-mpi-python-installed"' in step
+
+    runner = MPI_PYTHON_RUNNER.read_text(encoding="utf-8")
+    for contract in (
+        "wheel_directory.is_relative_to(ROOT) or prefix.is_relative_to(ROOT)",
+        "len(wheels) != 1 or wheels[0].is_symlink()",
+        "type(assembly.get('dimension')) is not int or assembly['dimension'] != 2",
+        "assembly.get('backend') != 'mpi'",
+        "hashlib.sha256(wheel.read_bytes()).hexdigest() != assembly.get('wheel_sha256')",
+        "str(python), '-I', str(ROOT / 'scripts/prove_installed_wheel.py')",
+        "'--wheel', str(wheel), '--expect-dim', '2'",
+        "str(python), '-I', str(ROOT / 'scripts/verify_installed_native.py')",
+        "'--expect-dim', '2', '--expect-mpi', '--expect-parallel-hdf5', '--json'",
+        "signature==abi.module_header_signature()==sys.argv[1]",
+        "selection is not None",
+        "str(python), '-I', '-c', sdk_bootstrap, assembly['SDK']",
+        "native['sha256'] != assembly['native_sha256']",
+        "native['has_mpi'] is not True",
+        "native['has_parallel_hdf5'] is not True",
+        "existing=args.command == 'run'",
+        "return run_launches(groups[0], python, environment, args.receipt_dir)",
+        "str(python),\n                     '-u', '-c', bootstrap, launch['path']",
+    ):
+        assert contract in runner
 
     native_jobs = (
         ("gate-python-compile-cache", "gate-mpi-prewarm"),
         ("gate-mpi-prewarm", "gate"),
-        ("mpi", "gate-openmp-prewarm"),
+        ("mpi", "mpi-python"),
+        ("mpi-python", "gate-openmp-prewarm"),
         ("gate-openmp-prewarm", "kokkos-openmp"),
         ("kokkos-openmp", None),
     )

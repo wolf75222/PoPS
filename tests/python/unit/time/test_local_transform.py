@@ -177,10 +177,9 @@ def test_generated_operator_preflight_keeps_only_unqualified_cartesian_kernels()
         (
             "rhs",
             "source",
-            ('operation = "named_flux"', 'else "named_source"'),
+            'json.dumps("named_flux")',
             "ctx.rhs_scratch",
         ),
-        ("source", "apply", 'json.dumps("named_source")', "ctx.rhs_scratch"),
         ("apply", "solve_local_linear", 'json.dumps("linear_source_apply")', "ctx.rhs_scratch"),
         (
             "solve_local_linear",
@@ -196,6 +195,14 @@ def test_generated_operator_preflight_keeps_only_unqualified_cartesian_kernels()
             identities = (identities,)
         assert all(identity in emitted for identity in identities)
         assert preflight < emitted.index(allocation)
+
+    source_branch = branch("source", "apply")
+    assert "ctx.require_cartesian_generated_operator" not in source_branch
+    assert "_emit_source_kernel(" in source_branch
+    rhs_branch = branch("rhs", "source")
+    assert 'json.dumps("named_source")' not in rhs_branch
+    assert "for source_subslot, s in enumerate(named," in rhs_branch
+    assert "_emit_source_kernel(" in rhs_branch
 
 
 def test_local_transform_name_collisions_are_rejected() -> None:

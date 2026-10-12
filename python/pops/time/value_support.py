@@ -4,9 +4,33 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from pops.time._program.api import Program
-    from pops.time.values import ProgramValue, _Coeff
-    from pops.time.value_metadata import CoeffPolynomial
+    from typing import Protocol
+
+    class _CoefficientPolynomial(Protocol):
+        """The exact coefficient projection consumed by expression identity."""
+
+        def to_data(self) -> Any: ...
+
+    class _ValueProgram(Protocol):
+        """Only the owner surface read through a symbolic value, without reverse imports."""
+
+        _values: list
+
+        @property
+        def owner_path(self) -> Any: ...
+
+        def _compare(self, lhs: Any, rhs: Any, cmp: Any) -> Any: ...
+        def _scalar_binop(self, a: Any, b: Any, fn: Any) -> Any: ...
+        def apply(self, operator: Any = None, state: Any = None, fields: Any = None,
+                  name: Any = None) -> Any: ...
+        def _new(self, vtype: Any, op: Any, inputs: Any, attrs: Any, name: Any,
+                 block: Any, **metadata: Any) -> Any: ...
+        def _call(self, operator: Any, *args: Any, name: Any = None,
+                  schedule: Any = None, **kwargs: Any) -> Any: ...
+        def _canonical_value(self, value: Any) -> Any: ...
+        def _subblock_value_refs(self, node: Any) -> Any: ...
+        def _guard_mutable(self, operation: Any) -> None: ...
+        def _require_endpoint(self, endpoint: Any, where: str) -> Any: ...
 
 
 class _ProgramValueBase:
@@ -15,7 +39,7 @@ class _ProgramValueBase:
     __slots__ = ()
     vtype: str
     block: Any
-    prog: Program
+    prog: _ValueProgram
     id: int
     name: str
 
@@ -29,14 +53,18 @@ class _MethodCoefficientBase:
     __slots__ = ()
 
     if TYPE_CHECKING:
-        def to_polynomial(self) -> CoeffPolynomial: ...
+        def to_polynomial(self) -> _CoefficientPolynomial: ...
+        def __add__(self, other: Any) -> Any: ...
+        def __neg__(self) -> Any: ...
+        def __mul__(self, other: Any) -> Any: ...
+        def __truediv__(self, other: Any) -> Any: ...
 
 
 class _AffineExpressionBase:
     """Nominal affine marker shared without importing concrete Program values."""
 
     __slots__ = ()
-    terms: tuple[tuple[ProgramValue, _Coeff], ...]
+    terms: tuple[tuple[_ProgramValueBase, _MethodCoefficientBase], ...]
 
 
 def require_owned_value(program: Any, value: Any, where: str, *, vtype: Any = None) -> Any:
