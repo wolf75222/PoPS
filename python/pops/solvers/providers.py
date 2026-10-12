@@ -790,8 +790,11 @@ def _validate_composite_options(values: Any, where: str) -> dict[str, Any]:
     if coarse_method == "gauss_seidel" and coarse_restart != 64:
         raise ValueError("CompositeTensorFAC coarse_restart applies only to GMRES")
     coarse_preconditioner = values.get("coarse_preconditioner", "diagonal")
-    if type(coarse_preconditioner) is not str or coarse_preconditioner not in ("diagonal", "polar_poisson"):
-        raise ValueError("CompositeTensorFAC coarse_preconditioner must be diagonal or polar_poisson")
+    if type(coarse_preconditioner) is not str or coarse_preconditioner not in (
+            "diagonal", "polar_poisson", "tensor_diagonal_mg"):
+        raise ValueError("CompositeTensorFAC coarse_preconditioner must be diagonal, polar_poisson or tensor_diagonal_mg")
+    if coarse_preconditioner == "tensor_diagonal_mg" and coarse_method != "gmres":
+        raise ValueError("CompositeTensorFAC tensor_diagonal_mg requires GMRES")
     if coarse_preconditioner == "polar_poisson" and (
             coarse_method != "gmres" or values.get("diagonal_average", "harmonic") != "arithmetic"):
         raise ValueError("CompositeTensorFAC polar_poisson requires GMRES and arithmetic diagonal averaging")
@@ -1121,7 +1124,9 @@ def _emit_composite_tensor_fac(
             '{"fac.coarse_restart", std::int64_t{%d}}' % options["coarse_restart"],
         ))
     if options.get("coarse_preconditioner", "diagonal") != "diagonal":
-        native_options.append('{"fac.coarse_preconditioner", std::string{"polar_poisson"}}')
+        native_options.append(
+            '{"fac.coarse_preconditioner", std::string{"%s"}}' % options["coarse_preconditioner"]
+        )
     if options.get("interface_coupling", "level_stencil") == "fine_flux":
         native_options.append('{"fac.interface_coupling", std::string{"fine_flux"}}')
     if verbose is not None:
@@ -1252,7 +1257,11 @@ class CompositeTensorFAC:
     fixed preconditioner. The default is diagonal. ``polar_poisson`` uses a bounded replicated
     inverse of the FV polar metric on a conducting disk; native preparation checks geometry,
     face laws and full coarse ownership. It requires GMRES and arithmetic diagonal averaging.
-    It changes only the approximate inverse of the full tensor. ``coarse_cycles``
+    ``coarse_preconditioner="tensor_diagonal_mg"`` requires GMRES and selects one fixed
+    Cartesian diagonal multigrid V-cycle, with harmonic coefficient averaging, minimum
+    coarse extent 2, two pre/post sweeps and fifty bottom sweeps. The original tensor
+    operator keeps its authored averaging and all cross terms. Each preconditioner
+    changes only the approximate inverse of the full tensor. ``coarse_cycles``
     caps iterations of the selected coarse method; ``coarse_restart`` sizes the prepared
     GMRES basis. The outer FAC convergence criterion is unchanged.
     ``interface_coupling="fine_flux"`` selects a conservative composite operator:
@@ -1308,8 +1317,11 @@ class CompositeTensorFAC:
             self.coarse_restart, where="CompositeTensorFAC(coarse_restart=)", minimum=1))
         if self.coarse_method == "gauss_seidel" and self.coarse_restart != 64:
             raise ValueError("CompositeTensorFAC coarse_restart applies only to GMRES")
-        if type(self.coarse_preconditioner) is not str or self.coarse_preconditioner not in ("diagonal", "polar_poisson"):
-            raise ValueError("CompositeTensorFAC coarse_preconditioner must be diagonal or polar_poisson")
+        if type(self.coarse_preconditioner) is not str or self.coarse_preconditioner not in (
+                "diagonal", "polar_poisson", "tensor_diagonal_mg"):
+            raise ValueError("CompositeTensorFAC coarse_preconditioner must be diagonal, polar_poisson or tensor_diagonal_mg")
+        if self.coarse_preconditioner == "tensor_diagonal_mg" and self.coarse_method != "gmres":
+            raise ValueError("CompositeTensorFAC tensor_diagonal_mg requires GMRES")
         if self.coarse_preconditioner == "polar_poisson" and (
                 self.coarse_method != "gmres" or self.diagonal_average != "arithmetic"):
             raise ValueError("CompositeTensorFAC polar_poisson requires GMRES and arithmetic diagonal averaging")

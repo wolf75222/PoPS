@@ -233,6 +233,42 @@ TEST(TensorCoarseGMRES, ExplicitDiagonalPreservesTheExistingDefault) {
   EXPECT_LE(explicit_diagonal.original_residual(), Real(1e-10));
 }
 
+TEST(TensorCoarseGMRES, TensorDiagonalMgRetainsFullTensorRefreshAndAllOwnershipKinds) {
+  for (const auto [replicated, empty] :
+       std::array<std::pair<bool, bool>, 3>{{{false, false}, {false, true}, {true, false}}}) {
+    SCOPED_TRACE(replicated ? "replicated" : empty ? "empty-owner" : "partitioned");
+    RootProblem problem(replicated, empty, CoarsePreconditionerKind::tensor_diagonal_mg);
+    problem.stage(Real(0.1));
+    auto report = problem.gmres->solve(problem.correction, problem.rhs, Real(1e-10), 400);
+    ASSERT_TRUE(report.solved()) << report.reason;
+    EXPECT_LE(problem.original_residual(), Real(1e-10));
+    EXPECT_LT(problem.error(), Real(2e-10));
+    const auto allocations = allocation_event_stats();
+    problem.stage(Real(0.2));
+    problem.correction.set_val(Real(17));
+    report = problem.gmres->solve(problem.correction, problem.rhs, Real(1e-10), 400);
+    ASSERT_TRUE(report.solved()) << report.reason;
+    EXPECT_LE(problem.original_residual(), Real(1e-10));
+    EXPECT_LT(problem.error(), Real(2e-10));
+    EXPECT_EQ(allocation_event_stats(), allocations);
+    report = problem.gmres->solve(problem.correction, problem.rhs, Real(1e-12), 1);
+    EXPECT_FALSE(report.solved());
+    EXPECT_EQ(report.status, SolveStatus::kIterationLimit);
+    EXPECT_GT(problem.original_residual(), Real(1e-12));
+    EXPECT_EQ(allocation_event_stats(), allocations);
+  }
+}
+
+TEST(TensorCoarseGMRES, TensorDiagonalMgSelectionMustAgreeAcrossRanks) {
+  RootProblem problem;
+  if (problem.lane.size() < 2) GTEST_SKIP() << "MPI consensus requires two owners";
+  const auto kind = problem.lane.rank() == 0 ? CoarsePreconditionerKind::diagonal
+                                           : CoarsePreconditionerKind::tensor_diagonal_mg;
+  EXPECT_THROW((void)TensorCoarseGmres<2>(problem.correction, problem.geometry, problem.halo,
+      problem.physical, problem.options, problem.lane, "tests.tensor-coarse-gmres.MG-consensus", 64, kind),
+      std::exception);
+}
+
 TEST(TensorCoarseGMRES, PolarPreconditionerKeepsTheFullTensorAndRefreshesWithoutAllocation) {
   RootProblem problem(false, false, CoarsePreconditionerKind::polar_poisson);
   problem.stage(Real(0.1));

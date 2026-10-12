@@ -70,6 +70,21 @@ TEST(HierarchyTensorExactRank, PolarCoarsePreconditionerRequiresExactWireAndArit
   EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
 }
 
+TEST(HierarchyTensorExactRank, TensorDiagonalMgCoarsePreconditionerRequiresExplicitGMRES) {
+  using namespace pops::runtime::program;
+  using tensor_fac::CoarsePreconditionerKind;
+  auto options = tensor_elliptic_detail::default_options();
+  options.values.emplace("fac.coarse_preconditioner", std::string{"tensor_diagonal_mg"});
+  EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
+  options.values.emplace("fac.coarse_method", std::string{"gmres"});
+  EXPECT_EQ(tensor_elliptic_detail::decode_controls(options).coarse_preconditioner,
+            CoarsePreconditionerKind::tensor_diagonal_mg);
+  options.values.at("fac.coarse_preconditioner") = std::string{"TENSOR_DIAGONAL_MG"};
+  EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
+  options.values.at("fac.coarse_preconditioner") = true;
+  EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
+}
+
 TEST(HierarchyTensorExactRank, FineFluxCouplingKeepsExactWireAndTypedContracts) {
   using namespace pops::runtime::program;
   using tensor_fac::InterfaceCoupling;
