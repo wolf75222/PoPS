@@ -72,8 +72,10 @@ def emitted_sample_contract(value: Any, model_graph: Any, *, field_plans: Any = 
         raise ValueError("compiled FieldSample lost its exact auxiliary declaration")
     declaration = source.declaration_ref or source
     module.declaration_index().authenticate(declaration)
-    if source.is_instance and source.block_ref._resolved() != value.block._resolved():
-        raise ValueError("compiled FieldSample auxiliary belongs to another block instance")
+    if source.is_instance:
+        _, block = source._instance_refs()
+        if block._resolved() != value.block._resolved():
+            raise ValueError("compiled FieldSample auxiliary belongs to another block instance")
     descriptor = module.aux()[declaration.local_id]
     if descriptor.kind != "cell_scalar" or descriptor.centering != "cell" \
             or descriptor.unit != value.space.units[0] or descriptor.frame != value.space.frame \

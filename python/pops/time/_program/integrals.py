@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pops.time.values import ProgramValue
 from pops.time._authoring import atomic_authoring
@@ -46,7 +46,13 @@ class IntegralState:
         return integral_identity(self.program, self.name)
 
 
-class _ProgramIntegrals:
+if TYPE_CHECKING:
+    from pops.time._program.contract import _ProgramBase
+else:
+    _ProgramBase = object
+
+
+class _ProgramIntegrals(_ProgramBase):
     def integral_state(self, name: str, *, initial: float, units=None) -> IntegralState:
         """Declare a global persistent scalar, independent of cell-state and diagnostic storage."""
         self._guard_mutable("declare integral state")

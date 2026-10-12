@@ -128,7 +128,7 @@ class SymbolicPath:
             tuple(Const(int(i == j)) for j in range(len(frame.axes)))
             for i in range(len(frame.axes))))
 
-    def validate_flux(self, flux: Any) -> None:
+    def validate_flux(self: Any, flux: Any) -> None:
         from pops.model.expression_language import QuantityRef
         from pops.model.expression_language import _children
         from pops.model.expression_language import Var
@@ -177,7 +177,7 @@ class SymbolicPath:
                                           *self.speeds),
                 "identity_namespace": "numerics.symbolic-path"}
 
-    def validate_native(self, *, law: Any, flux_body: Any, native: Any) -> None:
+    def validate_native(self: Any, *, law: Any, flux_body: Any, native: Any) -> None:
         # The integral was constructed from this exact retained product. The common
         # lowerer authenticates the resolved law and method identities separately.
         from pops.model.expression_language import Var

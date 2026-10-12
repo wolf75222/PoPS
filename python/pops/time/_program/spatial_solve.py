@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, TypedDict, cast
 
 from pops.identity import make_identity
 from pops.time._graph.base import CanonicalData
@@ -117,10 +117,23 @@ def spatial_scalar(value: Any) -> int | float:
     raise SolveRequestError("invalid_solver_controls", "spatial controls require exact numeric literals")
 
 
+class _NewtonNumericOptions(TypedDict, total=False):
+    tolerance: int | float
+    max_iterations: int | float
+    linear_tolerance: int | float
+    linear_max_iterations: int | float
+    restart: int | float
+    armijo: int | float
+    minimum_step: int | float
+    max_dense_bytes: int
+
+
 def spatial_newton_options(controls: Any) -> dict[str, Any]:
     from pops.solvers import Newton
 
-    return Newton(**{key: spatial_scalar(value) for key, value in controls.items()}).options()
+    numeric = cast(_NewtonNumericOptions, {
+        key: spatial_scalar(value) for key, value in controls.items()})
+    return Newton(**numeric).options()
 
 
 def _equation(program: Any, token: Any) -> dict[str, Any]:

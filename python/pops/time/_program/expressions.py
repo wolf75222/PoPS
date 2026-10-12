@@ -1,4 +1,5 @@
 """Materialize mathematical expressions through the native Program IR."""
+from typing import TYPE_CHECKING
 from pops._ir.expr import is_scalar_expression
 from pops.time._authoring import atomic_authoring
 from pops.time.expressions import ProgramExpression, component_names, encode_expressions
@@ -9,7 +10,13 @@ def is_pointwise_expression(value):
     return is_scalar_expression(value) or isinstance(value, (ProgramExpression, tuple, list))
 
 
-class _ProgramExpressions:
+if TYPE_CHECKING:
+    from pops.time._program.contract import _ProgramBase
+else:
+    _ProgramBase = object
+
+
+class _ProgramExpressions(_ProgramBase):
     def _materialize_finite_vector(self, name, components, *, support, template, at=None):
         from pops._ir.finite_linear import lower_finite_scalars
         if component_names(template) != support[1]:

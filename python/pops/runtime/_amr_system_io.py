@@ -67,7 +67,7 @@ class _AmrSystemIO(_AmrSystem):
         if not callable(factory):
             raise RuntimeError("AMR checkpoint candidate capture requires a rebuilt native backend")
         capture = factory()
-        if capture.contract != "pops.amr.prepared-checkpoint-capture@1":
+        if getattr(capture, "contract") != "pops.amr.prepared-checkpoint-capture@1":
             raise TypeError("AMR candidate capture has an unsupported native contract")
         return capture
 

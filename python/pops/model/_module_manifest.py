@@ -293,7 +293,8 @@ class ModuleManifest:
                 raise TypeError("Module physical frame must be a mapping")
             providers = {"cartesian_box": CartesianDomainFrame,
                          "rectangle_cartesian_2d": RectangleFrame}
-            provider = providers.get(physical_frame.get("frame_type"))
+            frame_type = physical_frame.get("frame_type")
+            provider = providers.get(frame_type) if isinstance(frame_type, str) else None
             if provider is None:
                 raise ValueError("Module physical frame requires a registered Cartesian domain frame")
             canonical_frame = provider.from_dict(physical_frame)

@@ -161,7 +161,9 @@ class BootstrapProgram:
             for _, source in row.inputs:
                 if type(source) is ProviderDerivative and source.axis >= len(seed.frame.axes):
                     raise ValueError("BootstrapProgram derivative axis exceeds the physical rank")
-                if type(source) is not ProviderDerivative and source[0] == "state" \
+                if type(source) is not ProviderDerivative and not isinstance(source,tuple):
+                    raise TypeError("BootstrapProgram input requires an exact source contract")
+                if isinstance(source,tuple) and source[0] == "state" \
                         and source[1] >= len(seed.components):
                     raise ValueError("BootstrapProgram input component exceeds the target state")
         object.__setattr__(self, "seed", seed)

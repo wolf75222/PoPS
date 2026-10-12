@@ -48,7 +48,7 @@ def lower_expression(expression,*,output_state=None):
         if isinstance(node,Const):return scalar_cpp(node.literal)
         if isinstance(node,RuntimeParamRef):
             handle=node.handle
-            if not handle.is_resolved:raise ValueError('Inflow parameter requires an owner-qualified Handle')
+            if handle is None or not handle.is_resolved:raise ValueError('Inflow parameter requires an owner-qualified Handle')
             leaves.append({'parameter':handle.canonical_identity()})
             return 'parameter(r,%s)'%json.dumps(handle.qualified_id)
         if isinstance(node,InteriorTrace):
@@ -61,7 +61,7 @@ def lower_expression(expression,*,output_state=None):
         if isinstance(node,QuantityRef):return carrier(node.handle,node.index)
         if isinstance(node,BoundaryValue):return carrier(node.handle,node.component)
         if isinstance(node,ValueExpr):
-            if node.handle.kind=='parameter':
+            if getattr(node.handle,'kind',None)=='parameter':
                 leaves.append({'parameter':node.handle.canonical_identity()})
                 return 'parameter(r,%s)'%json.dumps(node.handle.qualified_id)
             components=_components(node.handle)

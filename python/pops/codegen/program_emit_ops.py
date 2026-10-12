@@ -973,6 +973,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             )
         var[v.id] = var[scalar_in.id]
     elif v.op == "diffusive_rhs":
+        if bidx is None:
+            raise ValueError("diffusive delegate requires an explicit resolved block owner")
         from pops.codegen.program_emit_diffusion import _emit_diffusive_rhs
         from pops.codegen.program_partition_stability import has_independent_diffusion_transport
         defer_bound = (has_independent_diffusion_transport(node_model)

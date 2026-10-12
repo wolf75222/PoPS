@@ -19,6 +19,7 @@ def _static_read_keys(authority, block, module, pack, selected, reads):
     )
     from pops._ir.handle_expr import ValueExpr
     from pops.fields.aux import DerivedAux
+    from pops.model.handles import Handle
     from .component_provider_packs import (
         _component_key_for_auxiliary_reference, auxiliary_component_slot,
         canonical_emitter_carrier_value, require_emitter_provider_carrier,
@@ -52,7 +53,7 @@ def _static_read_keys(authority, block, module, pack, selected, reads):
             return ()
         if type(expression) is ValueExpr:
             handle = expression.handle
-            if handle.kind not in {"aux", "field"} or handle.is_instance \
+            if not isinstance(handle, Handle) or handle.kind not in {"aux", "field"} or handle.is_instance \
                     or str(handle.owner_path.canonical()) != owner:
                 raise ValueError("static derived provider has a foreign or non-static capture")
             index.authenticate(handle)

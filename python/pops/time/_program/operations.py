@@ -528,7 +528,7 @@ class _ProgramCore(
             from pops.time.field_context import require_field_read
             field_context = require_field_read(fields, state, "source")
         inputs = (state, fields) if fields is not None else (state,)
-        attrs = {"source": name}
+        attrs: dict[str, object] = {"source": name}
         if global_bindings:
             offset = len(inputs)
             attrs["physical_global_inputs_v1"] = tuple({**row, "input": row["input"]+offset}

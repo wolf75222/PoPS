@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from typing import Any, cast
+from typing import Any, TypeGuard, cast
 
 from .expr import Const, Expr, Var, _Bin, Neg, Sqrt, Exp, Abs, Sign
 from .values import EigWitness, StateRef, RuntimeParamRef
@@ -236,7 +236,7 @@ def validate_dag_key_data(graph, *, root_count=None):
     def fail():
         raise ValueError("invalid canonical expression DAG descriptor")
 
-    def seq(value):
+    def seq(value: Any) -> TypeGuard[tuple[Any, ...] | list[Any]]:
         return type(value) in (tuple, list)
 
     def text(value):

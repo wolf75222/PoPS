@@ -1,4 +1,5 @@
 """One explicit nonlocal spatial map; publication belongs to the surrounding Program."""
+from typing import TYPE_CHECKING
 from pops.time.values import ProgramValue, _resolve_handle
 from pops.time._program.value_validation import require_top_level
 from pops.time._authoring import atomic_authoring
@@ -200,7 +201,13 @@ def interaction_contract(value):
     return source, dimension, cpp, int(raw, 16), components
 
 
-class _ProgramSpatialInteraction:
+if TYPE_CHECKING:
+    from pops.time._program.contract import _ProgramBase
+else:
+    _ProgramBase = object
+
+
+class _ProgramSpatialInteraction(_ProgramBase):
     @atomic_authoring
     def spatial_interaction(self, state, kernel, *, output_space, measure, quadrature, realization, components=None, source_scope="issued", name=None, owner_block=None):
         """I_c(x)=sum_y W(x,y) rho_c(y) kappa_y volume_y, without commit.

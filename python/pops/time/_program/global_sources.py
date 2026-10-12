@@ -1,5 +1,17 @@
 """Explicit physical-source inputs backed by typed temporal captures."""
+from __future__ import annotations
 from collections.abc import Mapping
+from typing import TYPE_CHECKING, TypedDict
+
+if TYPE_CHECKING:
+    from pops.model.global_quantity import GlobalQuantityHandle
+    from pops.time.values import ProgramValue
+
+    class _GlobalSourceBinding(TypedDict):
+        port: GlobalQuantityHandle
+        units: str
+        input: int
+        version: int
 
 
 def physical_source_roots(body, state):
@@ -9,7 +21,8 @@ def physical_source_roots(body, state):
     return expand_primitive_recipes(body, module.primitive_recipes())
 
 
-def source_global_inputs(program, operator, state, supplied):
+def source_global_inputs(program, operator, state, supplied) -> tuple[
+        tuple[_GlobalSourceBinding, ...], tuple[ProgramValue, ...]]:
     from pops.model.global_quantity import GlobalQuantityHandle, global_references
     from pops.time.expressions import ProgramGlobal
     from pops.time.value_support import require_owned_value
@@ -19,7 +32,8 @@ def source_global_inputs(program, operator, state, supplied):
     if supplied is None: supplied = {}
     if not isinstance(supplied, Mapping):
         raise TypeError("source global_inputs must be a mapping of physical ports to captures")
-    rows, captures = [], []
+    rows: list[_GlobalSourceBinding] = []
+    captures: list[ProgramValue] = []
     seen = set()
     for port, expression in supplied.items():
         if not isinstance(port, GlobalQuantityHandle) or not port.is_instance:
@@ -27,7 +41,12 @@ def source_global_inputs(program, operator, state, supplied):
         if port.block_ref != state.state_ref.block_ref:
             raise ValueError("physical global source input belongs to another block")
         # Authenticate through the live Case registry; equal-looking metadata is insufficient.
-        issued = port.block_ref[port.declaration_ref]
+        from pops.problem.handles import BlockHandle
+        block = port.block_ref
+        declaration = port.declaration_ref
+        if not isinstance(block, BlockHandle) or declaration is None:
+            raise TypeError("source global input requires the exact block[global_quantity] handle")
+        issued = block[declaration]
         if issued is not port:
             raise ValueError("physical global source input is not the registry-issued port")
         ref = wanted.get(port.local_id)

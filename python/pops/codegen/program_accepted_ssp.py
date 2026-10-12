@@ -87,7 +87,7 @@ def _convex_coefficient_one(A, b):
     inverse = [[Fraction(int(i == j)) for j in range(n)] for i in range(n)]
     for i in range(n):
         for j in range(i):
-            inverse[i][j] = -sum(K[i][k] * inverse[k][j] for k in range(j, i))
+            inverse[i][j] = -sum((K[i][k] * inverse[k][j] for k in range(j, i)), Fraction())
     base = tuple(sum(row, Fraction()) for row in inverse)
     alpha = tuple(tuple(Fraction(int(i == j)) - inverse[i][j]
                         for j in range(n)) for i in range(n))

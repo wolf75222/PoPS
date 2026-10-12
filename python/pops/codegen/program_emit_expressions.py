@@ -123,6 +123,8 @@ def checked_expression_dag(expressions, nodes, inputs):
             result = ir.Compare(node[1], *arguments)
         else:
             constructor = Where if operation == "where" else binary.get(operation, unary.get(operation))
+            if constructor is None:
+                raise ValueError("pointwise expression has unsupported operation or arity")
             result = constructor(*arguments)
         restored.append(result)
     if any(type(root) is not int or not 0 <= root < len(restored) for root in expressions):

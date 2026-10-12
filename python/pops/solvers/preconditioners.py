@@ -123,7 +123,7 @@ def _validate_tensor_diagonal_use(use: Any, where: str) -> None:
         raise ValueError("%s: TensorDiagonalMG is not certified as a symmetric CG preconditioner" % where)
 
 
-def _missing_tensor_context(*_args: Any) -> Any:
+def _missing_tensor_context(*_args: Any, **_kwargs: Any) -> Any:
     raise ValueError("TensorDiagonalMG requires an authenticated tensor operator context")
 
 

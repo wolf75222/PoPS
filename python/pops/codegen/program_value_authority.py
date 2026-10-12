@@ -248,6 +248,8 @@ def field_value_overrides_cpp(value: Any, var: Any, block_indices: Any) -> str:
     plan = _plan(var)
     rows = []
     for source in value.inputs:
+        if plan is None:
+            raise ValueError("Field overrides require their installed value authority plan")
         owner = block_indices[source.block]
         edge = next((item for item in plan.fields
                      if item.field_node == value.id and item.block == owner), None)
@@ -260,8 +262,16 @@ def field_value_overrides_cpp(value: Any, var: Any, block_indices: Any) -> str:
 
 def _dependencies(row: ValueProducer, var: Any) -> str:
     plan = _plan(var)
-    return ", ".join("ctx.program_value(%d, %d, %s)" % (
-        item, plan.producer(item).block, var[item]) for item in row.inputs)
+    dependencies = []
+    for item in row.inputs:
+        if plan is None:
+            raise ValueError("value dependencies require their installed authority plan")
+        producer = plan.producer(item)
+        if producer is None:
+            raise ValueError("value dependency is not an issued Program producer")
+        dependencies.append("ctx.program_value(%d, %d, %s)" % (
+            item, producer.block, var[item]))
+    return ", ".join(dependencies)
 
 
 def begin_value_write_cpp(value: Any, var: Any, *, alternate: bool = False) -> list[str]:

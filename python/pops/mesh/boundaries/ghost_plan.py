@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from typing import TYPE_CHECKING, Any
+from collections.abc import Iterable
 
 from .component_binding import BoundaryComponentBinding
 from .ghost_plan_types import (
@@ -505,7 +506,10 @@ class GhostProducerPlan:
         # Delegate inferred expressions to their exact component, not BindSchema
         # expression evaluation. The full AST remains in its manifest identity.
         inferred=getattr(self.execution_authority,"inferred_component_bindings",None)
-        for expected,component in inferred() if callable(inferred) else ():
+        inferred_rows=inferred() if callable(inferred) else ()
+        if not isinstance(inferred_rows,Iterable):
+            raise TypeError("inferred boundary component bindings must be iterable")
+        for expected,component in inferred_rows:
             bound=self._binding_map().get(expected.target)
             if bound is None or bound.canonical_identity()!=expected.canonical_identity():
                 raise ValueError("inferred boundary value delegation lacks its exact component binding")
@@ -779,7 +783,11 @@ class GhostProducerPlan:
     @property
     def inferred_component_inputs(self) -> tuple[Any, ...]:
         factory=getattr(self.execution_authority,"inferred_component_bindings",None)
-        return tuple(component for _,component in factory()) if callable(factory) else ()
+        if not callable(factory):return ()
+        rows=factory()
+        if not isinstance(rows,Iterable):
+            raise TypeError("inferred boundary component bindings must be iterable")
+        return tuple(component for _,component in rows)
 
     def require_component_inputs(self, components: tuple[Any, ...]) -> None:
         """Authenticate every bound component against the explicit resolve input tuple."""

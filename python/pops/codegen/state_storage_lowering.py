@@ -55,7 +55,7 @@ def resolve_local_state_storage(model, *, state_space):
     # A reusable multi-state emitter may carry another State's transport. Its
     # canonical selected operator signatures, not that shared emitter, decide.
     impl = getattr(lowering.emit_model, "_m", lowering.emit_model)
-    if len(module.state_spaces()) == 1 and impl._flux:
+    if len(module.state_spaces()) == 1 and getattr(impl, "_flux"):
         return None
     axes = local_state_storage_axes(module, getattr(lowering.facade, "frame", None),
                                     state_space=state_space)

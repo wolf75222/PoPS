@@ -740,6 +740,8 @@ class ComputedDtController(StepController[ComputedDt]):
             if not callable(getter):
                 raise TypeError("ComputedDt lacks its native Program frontier result")
             diagnostics = getter()
+            if not isinstance(diagnostics, Mapping):
+                raise TypeError("ComputedDt native Program frontier result must be a Mapping")
             if "pops.frontier.duration" not in diagnostics:
                 raise RuntimeError("ComputedDt Program did not return its effective duration")
             duration = float(diagnostics["pops.frontier.duration"])

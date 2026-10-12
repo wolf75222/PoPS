@@ -575,6 +575,8 @@ class PreparedPreconditionerProvider:
             "options": option_contract,
         }
         if self.context_emitter is not None:
+            if native_context is None:
+                raise ValueError("prepared preconditioner requires its typed native operator context")
             parameter_contract["native_context"] = native_context.contract_data()
         exact_parameters = canonical_bytes(parameter_contract)
         byte_literal = "".join("\\x%02x" % value for value in exact_parameters)

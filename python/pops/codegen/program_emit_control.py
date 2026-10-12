@@ -277,7 +277,7 @@ def _stage_fraction(value: Any) -> Fraction:
 
 
 def _emit_contiguous_rhs_group(
-        values: Sequence[Any], block_idx: Mapping[Any, int], var: dict[Any, str],
+        values: Sequence[Any], block_idx: Mapping[Any, int], var: dict[Any, Any],
         lines: list[str], group_identity: int, target: Any = "system", model: Any = None) -> None:
     """Emit one complete same-StagePoint residual group before any result is consumable."""
     from pops.codegen.program_emit_ops import _required_block_index, _rhs_flux_temporal_family

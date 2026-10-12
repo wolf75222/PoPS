@@ -44,10 +44,13 @@ def _validate_parameters(module, roots):
     from pops._ir.values import RuntimeParamRef
     for node in _walk(roots):
         if isinstance(node,RuntimeParamRef):
-            if node.handle.is_instance:
+            handle = node.handle
+            if handle is None:
+                raise ValueError('primitive coordinates require declaration-owned parameters')
+            if handle.is_instance:
                 raise ValueError('primitive coordinates require declaration-owned parameters')
             try:
-                module._param_registry.handle(node.handle)
+                module._param_registry.handle(handle)
             except (KeyError,ValueError) as exc:
                 raise ValueError('primitive coordinates capture another physical model') from exc
 

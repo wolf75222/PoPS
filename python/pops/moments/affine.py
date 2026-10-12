@@ -45,7 +45,7 @@ def affine_push_forward(moments, *, indices, matrix, offset):
     if width is not None and width != len(indices):
         raise ValueError("affine_push_forward moments and indices must have equal length")
 
-    zero = (0,) * dimension
+    zero: tuple[int, ...] = (0,) * dimension
     positions = {index: k for k, index in enumerate(indices)}
     # Do not prune zero coefficients: closure must not depend on runtime values,
     # and symbolic comparisons must never become Python control flow.
@@ -76,7 +76,7 @@ def affine_push_forward(moments, *, indices, matrix, offset):
             for exponent, coefficient in polynomials[parent].items():
                 add(exponent, offset[axis] * coefficient)
                 for coordinate in range(dimension):
-                    raised = list(exponent)
+                    raised: list[int] = list(exponent)
                     raised[coordinate] += 1
                     add(tuple(raised), matrix[axis][coordinate] * coefficient)
             polynomials[current] = terms

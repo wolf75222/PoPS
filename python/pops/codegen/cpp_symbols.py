@@ -5,12 +5,13 @@ concurrent and reentrant emitters and restores the outer table on failure.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
+from collections.abc import Mapping
 from functools import wraps
 import re
 from types import MappingProxyType
 
 CONTRACT = "cpp-local-symbols@2"
-_ACTIVE = ContextVar("pops_cpp_local_symbols", default={})
+_ACTIVE: ContextVar[Mapping[tuple[str, str], str]] = ContextVar("pops_cpp_local_symbols", default={})
 _RESERVED = frozenset(("index", "providers", "params", "outA", "statusA",
                        "U", "F", "dir", "dt", "th_dt_", "State", "Prim", "Primitive",
                        "Schema", "Real", "Axis", "ProviderParameters", "state", "interior",
@@ -24,7 +25,8 @@ def symbol_table(symbols):
     symbols = set(symbols)
     bases = {symbol: _cpp_identifier(symbol[1]) for symbol in symbols}
     occupied = set(bases.values()) | _RESERVED
-    used, result = set(_RESERVED), {}
+    used: set[str] = set(_RESERVED)
+    result = {}
     order = {"cons": 0, "prim": 1, "aux": 2}
     # Already valid public spellings win over aliases produced by sanitization.
     for kind, name in sorted(symbols, key=lambda s: (

@@ -21,6 +21,11 @@ if TYPE_CHECKING:
 else:
     _ProgramBase = object
 
+def _raise_ir_version(result: dict[str, Any], version: int) -> None:
+    """Raise the same schema floor without accumulating index-flow inference."""
+    result["version"] = max(result["version"], version)
+
+
 def _schedule_json_ready(value: Any) -> Any:
     """Strict canonical projection for extension-owned schedule payloads."""
     if isinstance(value, ProgramValue):
@@ -161,7 +166,7 @@ class _ProgramSerialization(_ProgramBase):
             for key in ("residual", "iterate", "guess"):
                 if key in attrs:
                     attrs[key] = attrs[key].id
-        node = {"id": value.id, "name": value.name, "vtype": value.vtype, "op": value.op,
+        node: dict[str, Any] = {"id": value.id, "name": value.name, "vtype": value.vtype, "op": value.op,
                 "block": handle_data(value.block) if value.block is not None else None,
                 "state": handle_data(value.state_ref) if value.state_ref is not None else None,
                 "point": _json_ready(value.point),
@@ -185,7 +190,7 @@ class _ProgramSerialization(_ProgramBase):
         from .global_history_storage import validate_issuances
         validate_issuances(self)
         order = self._block_indices()
-        result = {
+        result: dict[str, Any] = {
             "name": self.name,
             # Version 6 extends persistent trace selectors to prepared constitutive faces.
             # Keep existing transport-only program identities/restart authorities unchanged.
@@ -297,47 +302,47 @@ class _ProgramSerialization(_ProgramBase):
             seen.add(id(node))
             if node.id in trace_rates and node.region != 0:
                 # Version25 authenticates region-owned accepted trace quadrature/carry semantics.
-                result["version"] = max(result["version"], 25)
+                _raise_ir_version(result, 25)
                 result["external_trace_regions_v2"] = {
                     "contract": "pops.accepted-trace-regions@2",
                     "carry": "unit-affine",
                     "duration": "exact-logical-child",
                 }
             if node.attrs.get("contract") == "mapped-consumed-output@1" or node.op == "field_map_pack":
-                result["version"] = max(result["version"], 24)
+                _raise_ir_version(result, 24)
             if node.op == "affine_moment_update" and "basis" in node.attrs:
-                result["version"] = max(result["version"], 23)
+                _raise_ir_version(result, 23)
             if node.op == "solve_spatial_field" and "convergence" in node.attrs:
-                result["version"] = max(result["version"], 22)
+                _raise_ir_version(result, 22)
             if node.op == "spatial_interaction":
-                result["version"] = max(result["version"], 19 if node.attrs.get("contract") == "pops.spatial-interaction@3" else 18 if node.attrs.get("contract") == "pops.spatial-interaction@2" else 17)
+                _raise_ir_version(result, 19 if node.attrs.get("contract") == "pops.spatial-interaction@3" else 18 if node.attrs.get("contract") == "pops.spatial-interaction@2" else 17)
             if node.op in ("solve_spatial_field", "integral_candidate"):
-                result["version"] = max(result["version"],
+                _raise_ir_version(result,
                     20 if node.op == "solve_spatial_field" and node.attrs.get("contract") == "pops.spatial-field-residual@4" else
                     13 if node.op == "solve_spatial_field" and node.attrs.get("right_preconditioner") == "pops.amr.full-residual-basis-lu@1" else
                     11 if node.op == "solve_spatial_field" and node.attrs.get("contract") == "pops.spatial-field-residual@3" else
                     10 if node.op == "solve_spatial_field" and node.attrs.get("contract") == "pops.spatial-field-residual@2" else
                     9 if node.op == "solve_spatial_field" and "right_preconditioner" in node.attrs else 8)
             if node.op == "field_evolved_state" or (node.op == "solve_spatial_field" and "temporal_tau" in node.attrs.get("source_contract", {})):
-                result["version"] = max(result["version"], 12)
+                _raise_ir_version(result, 12)
             stage = (node.attrs.get("stage", {}) if node.op == "field_evolved_state" else
                      node.attrs.get("source_contract", {}).get("evolved_stage", {}))
             if stage.get("schema_version") == 2:
-                result["version"] = max(result["version"], 14)
+                _raise_ir_version(result, 14)
             if stage.get("schema_version") == 3:
                 from pops.fields._evolved_stage_contract import issued_previous
                 issued_previous(stage)
-                result["version"] = max(result["version"], 21)
+                _raise_ir_version(result, 21)
             if node.op == "pointwise_expression" and "field_product_seed" in node.attrs:
-                result["version"] = max(result["version"], 21)
+                _raise_ir_version(result, 21)
             if node.op == "field_evolved_state" and node.attrs.get("projection_contract") == "pops.evolved-original-field-stage@2":
-                result["version"] = max(result["version"], 15)
+                _raise_ir_version(result, 15)
             if node.op == "store_history" and "global_field_storage" in node.attrs:
                 from .global_history_storage import validate_storage_node
                 validate_storage_node(self, node)
-                result["version"] = max(result["version"], 16)
+                _raise_ir_version(result, 16)
             elif node.op == "reduce" and node.attrs.get("kind") == "dot_all":
-                result["version"] = max(result["version"], 7)
+                _raise_ir_version(result, 7)
             for key in ("cond_block", "body_block", "true_block", "false_block",
                         "apply_block", "residual_block"):
                 block = node.attrs.get(key)

@@ -83,6 +83,8 @@ def field_sample(program: Any, source: Any, *, template: Any, storage: Any, spac
         require_owned(program, source, "field sample State")
         if source.vtype != "state" or source.block != template.block or source.point != template.point:
             raise ValueError("field sample State must share the exact template owner and point")
+        if source.space is None:
+            raise ValueError("field sample requires a complete State component Space")
         if type(component) is str:
             component = source.space.components.index(component)
         if type(component) is not int or not 0 <= component < len(source.space.components):
@@ -100,7 +102,8 @@ def field_sample(program: Any, source: Any, *, template: Any, storage: Any, spac
         module = getattr(model, "module", model)
         declaration = source.declaration_ref or source
         module.declaration_index().authenticate(declaration)
-        if source.is_instance and source.block_ref._resolved() != template.block._resolved():
+        if source.is_instance and (source.block_ref is None
+                or source.block_ref._resolved() != template.block._resolved()):
             raise ValueError("field sample auxiliary belongs to a different block instance")
         descriptor = module.aux()[declaration.local_id]
         if descriptor.kind != "cell_scalar" or descriptor.centering != "cell" \

@@ -6,19 +6,22 @@ exact scalar bits, including redistribution onto a recorded patch topology.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 import numpy as np
 
 STATE_CARRIERS_KEY = "state_carriers_checkpoint"
 STATE_CARRIERS_CONTRACT = "pops.amr.state-carriers-checkpoint@1"
 
 
-def _native_image(image):
+def _native_image(image: object) -> bytes:
     if type(image) is not bytes or len(image) <= 8 or image[:8] != b"POPSCAR1":
         raise ValueError("AMR state carrier checkpoint requires an exact native @1 image")
     return image
 
 
-def _method(sim, name):
+def _method(sim: Any, name: str) -> Callable[..., Any]:
     method = getattr(sim, name, None)
     if not callable(method):
         raise TypeError("AMR engine lacks native full-state storage checkpoint: " + name)
@@ -41,6 +44,8 @@ def capture_checkpoint_state_carriers(owner, sim, payload, *, prepared_capture=N
     error = None
     image = None
     try:
+        if capture is None:
+            raise RuntimeError("AMR state carrier capture preflight lost its native method")
         image = _native_image(capture() if prepared_capture is None else capture(prepared_capture))
         payload[STATE_CARRIERS_KEY] = np.frombuffer(image, dtype=np.uint8).copy()
     except BaseException as exc:
@@ -69,5 +74,7 @@ def prepare_checkpoint_state_carriers(owner, sim, payload):
     consensus(topology, "AMR state carrier restore preflight", error=error)
     # The codec validates recorded source geometry; the rebuilt destination is
     # checked again before publication within the native restart transaction.
+    if validate is None or image is None:
+        raise RuntimeError("AMR state carrier restore preflight lost its native method or image")
     validate(image)
     return image

@@ -1,16 +1,22 @@
 """Exact output-State authority for a flux's authored eigenvalue law (@1 spectra; additive @2 signed bounds)."""
+from __future__ import annotations
+
 from dataclasses import dataclass
 from types import MappingProxyType
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
 from pops._cartesian_axes import canonical_axis_mapping
 from .hash_data import canonical_hash_data
+
+if TYPE_CHECKING:
+    from .spaces import StateSpace
 
 
 @dataclass(frozen=True)
 class FluxWaveLaw:
-    output_state: object
-    values: object
-    signed_bounds: object = None
+    output_state: StateSpace
+    values: Mapping[str, tuple[object, ...]]
+    signed_bounds: Mapping[str, tuple[object, ...]] | None = None
 
     def __post_init__(self):
         from .spaces import StateSpace

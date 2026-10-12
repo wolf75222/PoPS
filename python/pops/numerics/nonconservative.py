@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, TYPE_CHECKING
+from typing import Any, Protocol, TYPE_CHECKING, cast
 
 from pops.model import Handle
 from .spatial import FiniteVolume, _brick_data, _resolved_brick
@@ -13,6 +13,17 @@ from .coordinated_face import CoordinatedFace, FaceBalance
 if TYPE_CHECKING:
     from pops.model.expression_language import Expr
     from pops.physics.nonconservative import NonconservativeProductHandle
+
+
+class _NumericalPath(Protocol):
+    """Shape consumed after authenticating a supported numerical path marker."""
+
+    product: Any
+    frame: Any
+
+    def validate_flux(self, flux: Any) -> None: ...
+    def resolve_references(self, resolver: Any) -> _NumericalPath: ...
+    def to_data(self) -> Any: ...
 
 
 def path_balance_supported(view: Any) -> bool:
@@ -41,6 +52,7 @@ class PathConservativeFiniteVolume(FiniteVolume):
                  reconstruction: Any, riemann: Any, zero_measure_faces: Any = ()) -> None:
         if not isinstance(path, (PathArithmeticComposition, SymbolicPath)):
             raise TypeError("path-conservative transport requires a typed numerical path")
+        path = cast(_NumericalPath, path)
         super().__init__(flux=flux, variables=variables, reconstruction=reconstruction, riemann=riemann)
         if (isinstance(flux, tuple) or flux.owner_path != path.product.owner_path
                 or self.variables.options.get("state") != path.product.state):

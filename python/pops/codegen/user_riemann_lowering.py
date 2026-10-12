@@ -41,7 +41,11 @@ def prepare_user_face_carrier(emitter: Any, numerics: Any) -> Any:
             if isinstance(node, RuntimeParamRef):
                 if registry is None:
                     raise ValueError("user face runtime read has no model parameter authority")
-                handle = node.handle.declaration_ref if node.handle.is_instance else node.handle
+                handle = node.handle
+                if handle is None:
+                    raise ValueError("user face runtime capture requires its declaring Handle")
+                if handle.is_instance:
+                    handle, _ = handle._instance_refs()
                 try:
                     registered = registry.handle(handle)
                 except (KeyError, ValueError) as exc:

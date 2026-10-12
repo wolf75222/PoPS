@@ -795,7 +795,7 @@ class LayoutMappingPort:
         return getattr(self.subject, "space", None)
 
     def to_data(self) -> dict[str, Any]:
-        data = {"subject": self.subject.canonical_identity(), "representation": self.representation.to_data()}
+        data: dict[str, Any] = {"subject": self.subject.canonical_identity(), "representation": self.representation.to_data()}
         if self.representation is LayoutRepresentation.CELL_FIELD_V1:
             data["observation"] = None if self.observation is None else self.observation.to_data()
             data["component"] = self.component

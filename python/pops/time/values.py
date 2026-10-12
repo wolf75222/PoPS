@@ -288,7 +288,10 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
         from pops.time.expressions import as_expression, component_names
         if component_names(self) != dofs:
             raise ValueError("Program components differ from the ordered finite support labels")
-        return as_expression(self).components
+        expression = as_expression(self)
+        if expression is None:
+            raise TypeError("Program components require a complete finite expression")
+        return expression.components
 
     def __init__(self, prog: Any, vid: Any, vtype: Any, op: Any, inputs: Any, attrs: Any,
                  name: Any, block: Any, *, space: Any = None, source_location: Any = None,
@@ -516,7 +519,10 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
         from pops.time.expressions import ProgramExpression, as_expression
         resolved = _resolve_handle(other)
         if isinstance(resolved, (ProgramExpression, _Affine)) or _is_field_value(resolved):
-            return as_expression(self) / resolved
+            expression = as_expression(self)
+            if expression is None:
+                raise TypeError("Program division requires a complete field expression")
+            return expression / resolved
         try:
             exact = _exact_number(other)
         except CoefficientLiteralError:

@@ -5,7 +5,7 @@ remain owned by the field domain rather than entering the temporal module DAG.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from pops.model import FieldSpace, Handle
 
@@ -100,7 +100,7 @@ def sampled_field_key(module: Any, source: Any, component: Any, space: Any,
         raise TypeError("field output sample requires an exact (Field Handle, component) pair")
     declaration = source.declaration_ref or source
     module.declaration_index().authenticate(declaration)
-    if source.is_instance and source.block_ref._resolved() != block._resolved():
+    if source.is_instance and cast(Handle, source.block_ref)._resolved() != block._resolved():
         raise ValueError("field output sample belongs to another block instance")
     declared = declared_field_output_space(module, declaration)
     if type(declared) is not FieldSpace or component not in declared.components:

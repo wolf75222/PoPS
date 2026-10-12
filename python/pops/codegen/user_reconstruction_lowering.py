@@ -48,10 +48,14 @@ def prepare_user_reconstruction_carrier(emitter: Any, numerics: Any) -> Any:
                 continue
             seen.add(id(node))
             if isinstance(node, RuntimeParamRef):
-                if node.handle.is_instance and (owner is None or
-                        node.handle.block_ref._resolved() != owner.block_ref._resolved()):
-                    raise ValueError("user reconstruction runtime capture belongs to another block instance")
-                handle = node.handle.declaration_ref if node.handle.is_instance else node.handle
+                handle = node.handle
+                if handle is None:
+                    raise ValueError("user reconstruction runtime capture requires its declaring Handle")
+                if handle.is_instance:
+                    declaration, block = handle._instance_refs()
+                    if owner is None or block._resolved() != owner._instance_refs()[1]._resolved():
+                        raise ValueError("user reconstruction runtime capture belongs to another block instance")
+                    handle = declaration
                 if registry is None:
                     raise ValueError("user reconstruction runtime read has no model parameter authority")
                 try:

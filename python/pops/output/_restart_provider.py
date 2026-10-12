@@ -675,6 +675,8 @@ class _SealedCheckpointReplay:
                 error = _CheckpointTransportFailure(
                     "checkpoint transport failed during sealed replay retention: %s"
                     % attempt.transport_error)
+            if error is None:
+                raise RuntimeError("checkpoint replay retention lost its failure evidence")
             if self.topology.rank == 0:
                 try:
                     self._cleanup_root()
@@ -760,7 +762,10 @@ class _SealedCheckpointReplay:
 
         def stage_root() -> dict[str, Any]:
             self.authenticate_root(links=1)
-            result._proof = self._link(self.proof, self.proof.transaction.parent)
+            proof = self.proof
+            if proof is None:
+                raise RuntimeError("checkpoint replay lease is no longer live")
+            result._proof = self._link(proof, proof.transaction.parent)
             result._staging_owned = True
             self.authenticate_root(links=2)
             return dict(transaction=result._proof.transaction.to_data(), proof=result._proof.to_data())
@@ -771,6 +776,8 @@ class _SealedCheckpointReplay:
             if attempt.transport_error is not None:
                 self.transport_lost = True
                 error = _CheckpointTransportFailure("checkpoint transport failed during sealed replay staging")
+            if error is None:
+                raise RuntimeError("checkpoint replay staging lost its failure evidence")
             if self.topology.rank == 0:
                 try:
                     result._cleanup_root(include_published=True)
@@ -784,12 +791,15 @@ class _SealedCheckpointReplay:
                 transaction = _CheckpointTransactionReceipt.observed(attempt.value["transaction"])
                 result._proof = _CheckpointPayloadProof.observed(transaction, attempt.value["proof"])
                 result._staging_owned = True
-            elif attempt.value != dict(transaction=result._proof.transaction.to_data(),
-                                       proof=result._proof.to_data()):
+            proof = result._proof
+            if proof is None:
+                raise RuntimeError("checkpoint replay staging evidence changed")
+            if self.topology.rank == 0 and attempt.value != dict(transaction=proof.transaction.to_data(),
+                                                                proof=proof.to_data()):
                 raise RuntimeError("checkpoint replay staging evidence changed")
             if (previous._proof is None
-                    or result._proof.transaction.parent != previous._proof.transaction.parent
-                    or result._proof.owner != previous._proof.owner):
+                    or proof.transaction.parent != previous._proof.transaction.parent
+                    or proof.owner != previous._proof.owner):
                 raise RuntimeError("checkpoint replay staging differs from its original owner and parent")
         except BaseException as error:
             evidence_error = error

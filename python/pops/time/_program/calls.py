@@ -96,6 +96,8 @@ class _ProgramCall(_ProgramBase):
         # Tag the result with the operator's declared output type (a Rate / FieldSpace /
         # LocalLinearOperator / StateSpace) so downstream ops can type-check the composition
         # (a Rate(U) cannot be combined with a State(V); an L: U -> U cannot drive a State(V)).
+        if result is None:
+            raise ValueError("operator lowering returned no Program value")
         attrs = dict(result.attrs)
         attrs["operator_handle"] = operator_handle
         if native_calls:
