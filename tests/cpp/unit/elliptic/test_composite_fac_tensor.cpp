@@ -261,8 +261,8 @@ pops::runtime::program::HierarchyTensorSolverBuildRequest<2> periodic_request(in
   result.components = 1;
   result.levels = {{coarse_geometry, all_periodic(coarse_geometry), coarse_layout,
                     coarse_distribution, Index<2>{0, 0}}};
-  result.levels.push_back({fine_geometry, all_periodic(fine_geometry), fine_layout,
-                           fine_distribution, Index<2>{0, 0}});
+  result.levels.push_back(
+      {fine_geometry, all_periodic(fine_geometry), fine_layout, fine_distribution, Index<2>{0, 0}});
   result.ratios = {amr::RefinementRatio<2>{std::array<int, 2>{2, 2}}};
   result.plan_identity = "tests.full-tensor-composite-periodic-nullspace";
   result.operator_contract_identity =
@@ -314,6 +314,74 @@ double solution_mean(const pops::MultiFab<2>& field, const pops::Geometry<2>& ge
   return measure > 0 ? sum / measure : 0;
 }
 
+TEST(test_composite_fac_tensor, discontinuous_spd_tensor_solves_the_positive_energy_mode) {
+  using namespace pops;
+  using namespace pops::runtime::program;
+  constexpr int cells = 6;
+  constexpr Real two_pi = Real{6.283185307179586476925286766559005768L};
+  const ExecutionLane lane = ExecutionLane::world("tests.discontinuous-spd-tensor");
+  const auto registry = make_default_hierarchy_tensor_solver_provider_registry<2>(lane);
+  for (Real contrast : {Real(10), Real(100)}) {
+    auto request = periodic_request(cells);
+    const auto geometry = request.levels[1].geometry;
+    const int fine_cells = geometry.domain().length(0);
+    const mesh::BoxArray<2> full_fine(std::vector<Box<2>>{geometry.domain()});
+    request.levels[1].layout = full_fine;
+    request.levels[1].distribution = mesh::Distribution<2>::partitioned(
+        full_fine, request.levels[0].distribution.rank_space(),
+        std::vector<Index<2>>{Index<2>{0, 0}});
+    auto solver = prepare_hierarchy_tensor_solver_collectively(
+        *registry, tensor_elliptic_detail::kCompositeTensorProvider, std::move(request), lane);
+    for (int level = 0; level < solver->level_count(); ++level) {
+      for (int slot = 0; slot < 4; ++slot) {
+        auto& field = solver->assembly_target(
+            tensor_elliptic_detail::coefficient_slot(slot / 2, slot % 2), level);
+        auto& coefficient_fab = field.fab(0);
+        auto coefficient_host = coefficient_fab.create_host_mirror();
+        const auto box = coefficient_fab.box();
+        for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+          for (int i = box.lo[0]; i <= box.hi[0]; ++i) {
+            const Real a = level == 0    ? Real(.5) * (Real(1) + contrast)
+                           : (i + j) % 2 ? Real(1)
+                                         : contrast;
+            coefficient_host(ordinal(coefficient_fab.grown_box(), Index<2>{i, j})) =
+                a * (slot == 0 || slot == 3 ? Real(1) : Real(.9));
+          }
+        coefficient_fab.copy_from_host(coefficient_host);
+      }
+      solver->assembly_target("pops.tensor-elliptic.rhs", level).set_val(Real(0));
+      solver->stage_initial_guess(level, nullptr);
+    }
+    auto& rhs = solver->assembly_target("pops.tensor-elliptic.rhs", 1);
+    auto& fab = rhs.fab(0);
+    auto host = fab.create_host_mirror();
+    const Real angle = two_pi / Real(fine_cells);
+    const Real harmonic = Real(2) * contrast / (Real(1) + contrast);
+    const Real eigenvalue =
+        harmonic *
+        (Real(4) * (Real(1) - std::cos(angle)) - Real(1.8) * std::sin(angle) * std::sin(angle)) /
+        (geometry.spacing(0) * geometry.spacing(0));
+    for (int j = 0; j < fine_cells; ++j)
+      for (int i = 0; i < fine_cells; ++i)
+        host(ordinal(fab.grown_box(), Index<2>{i, j})) = eigenvalue * std::cos(angle * Real(i - j));
+    fab.copy_from_host(host);
+    auto outcome =
+        solve_prepared_hierarchy_tensor_collectively(*solver, {Real(1e-9), Real(1e-11), 80}, lane);
+    const auto report =
+        outcome.consume(outcome.report().solved_value_available() ? SolveConsumption::kAccept
+                                                                  : SolveConsumption::kFailRun);
+    ASSERT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm;
+    const auto& solution = solver->solution(1).fab(0);
+    auto actual = solution.create_host_mirror();
+    solution.copy_to_host(actual);
+    for (int j = 0; j < fine_cells; ++j)
+      for (int i = 0; i < fine_cells; ++i)
+        EXPECT_NEAR(actual(ordinal(solution.grown_box(), Index<2>{i, j})),
+                    std::cos(angle * Real(i - j)), 2e-7);
+    EXPECT_NEAR(solution_mean(solver->solution(1), geometry), 0, 1e-9);
+  }
+}
+
 TEST(test_composite_fac_tensor, periodic_tensor_fac_applies_mean_zero_gauge) {
   using namespace pops;
   using namespace pops::runtime::program;
@@ -356,9 +424,9 @@ TEST(test_composite_fac_tensor, periodic_tensor_fac_applies_mean_zero_gauge) {
   }
   auto outcome =
       solve_prepared_hierarchy_tensor_collectively(*solver, {Real(1e-4), Real(1e-12), 60}, lane);
-  const SolveReport report = outcome.consume(
-      outcome.report().solved_value_available() ? SolveConsumption::kAccept
-                                                : SolveConsumption::kFailRun);
+  const SolveReport report =
+      outcome.consume(outcome.report().solved_value_available() ? SolveConsumption::kAccept
+                                                                : SolveConsumption::kFailRun);
   EXPECT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm;
   EXPECT_NEAR(solution_mean(solver->solution(0), geometries[0]), 0.0, 1.0e-7);
   EXPECT_NEAR(solution_mean(solver->solution(1), geometries[1]), 0.0, 1.0e-6);
@@ -385,7 +453,8 @@ TEST(test_composite_fac_tensor, periodic_tensor_fac_applies_mean_zero_gauge) {
         double average = 0;
         for (int dy = 0; dy < 2; ++dy)
           for (int dx = 0; dx < 2; ++dx)
-            average += 0.25 * fine_host(ordinal(fine.grown_box(), Index<2>{2 * i + dx, 2 * j + dy}));
+            average +=
+                0.25 * fine_host(ordinal(fine.grown_box(), Index<2>{2 * i + dx, 2 * j + dy}));
         maximum_parent_error = std::max(maximum_parent_error, std::abs(value - average));
       } else {
         composite_integral += value * coarse_volume;

@@ -1276,7 +1276,11 @@ if(POPS_HAS_MPI)
     "test_krylov_workspace_reentrancy.shared_problem_allocation_and_input_failures_converge_before_constructor_and_retry:"
     "test_krylov_workspace_reentrancy.shared_workspace_allocation_and_input_failures_converge_before_constructor_and_retry:"
     "test_krylov_workspace_reentrancy.workspace_rebind_reserves_mutation_during_blocking_operator_prepare:"
-    "test_krylov_workspace_reentrancy.problem_prepare_reserves_mutation_during_blocking_resource_freeze"
+    "test_krylov_workspace_reentrancy.problem_prepare_reserves_mutation_during_blocking_resource_freeze:"
+    "test_krylov_workspace_reentrancy.richardson_confirms_the_last_allowed_correction_before_staged_publication:"
+    "test_krylov_workspace_reentrancy.richardson_late_convergence_and_iteration_limit_preserve_acceptance_controls:"
+    "test_krylov_workspace_reentrancy.richardson_last_correction_retains_invalid_controls_and_nonfinite_guards:"
+    "test_krylov_workspace_reentrancy.numerical_actions_do_not_downgrade_explicit_provider_failure_or_false_convergence"
   )
   foreach(_test IN LISTS POPS_CPP_MPI_VARIANT_TESTS)
     foreach(_np IN LISTS POPS_MPI_RANKS_${_test})

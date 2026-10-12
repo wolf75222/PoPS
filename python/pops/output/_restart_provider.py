@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from ._checkpoint_collective import (
-    canonical_checkpoint_path,
     checkpoint_topology,
+    collective_checkpoint_path,
     consensus,
     root_value,
 )
@@ -1105,16 +1105,9 @@ class _RestartSnapshot:
             raise RuntimeError("restart snapshot has no checkpoint payload proof")
         if self._prepared_capture is not None:
             self._runtime._validate_committed_checkpoint_candidate(self._prepared_capture)
-        local_target = canonical_checkpoint_path(target)
         target_error = None
         try:
-            rows = consensus(
-                self._topology,
-                "target agreement",
-                value=str(local_target),
-            )
-            if any(row["value"] != str(local_target) for row in rows):
-                raise ValueError("checkpoint target differs across ranks")
+            local_target = collective_checkpoint_path(self._topology, target)
             if self._published_target is not None and self._published_target != local_target:
                 raise ValueError("restart snapshot was already published to another target")
         except BaseException as error:
@@ -1419,16 +1412,9 @@ class RestartV3:
         from ._checkpoint_contract import require_checkpoint_resource_budget
 
         topology = checkpoint_topology(runtime)
-        local_target = canonical_checkpoint_path(path)
-        target = Path(root_value(topology, "restart target selection", lambda: str(local_target)))
-        target_error = (
-            None
-            if target == local_target
-            else ValueError(
-                "restart target differs across ranks: local %s, rank-0 %s" % (local_target, target)
-            )
+        target = collective_checkpoint_path(
+            topology, path, phase_prefix="restart"
         )
-        consensus(topology, "restart target agreement", error=target_error)
         root_payload = b""
         archive_budget = require_checkpoint_resource_budget(runtime).max_archive_bytes
 

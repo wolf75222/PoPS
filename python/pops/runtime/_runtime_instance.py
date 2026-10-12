@@ -2337,9 +2337,14 @@ class RuntimeInstance:
         try:
             operation = self._restart_operation()
             extension = operation.consumer_data()["extension"]
-            from pops.output._checkpoint_collective import canonical_checkpoint_path
+            from pops.output._checkpoint_collective import (
+                checkpoint_topology,
+                collective_checkpoint_path,
+            )
 
-            target = canonical_checkpoint_path(path, extension=extension)
+            target = collective_checkpoint_path(
+                checkpoint_topology(self), path, extension=extension
+            )
             snapshot = operation.snapshot(self, target.parent)
             operation.validate_snapshot(snapshot)
             try:

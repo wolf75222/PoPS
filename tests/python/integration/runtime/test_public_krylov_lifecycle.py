@@ -14,7 +14,7 @@ from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import DiscretizationPlan, FiniteVolume, reconstruction, riemann, variables
 from pops.physics import Density
 from pops.representations import Conservative
-from pops.solvers import GMRES
+from pops.solvers import GMRES, Richardson
 from pops.spaces import CellState
 from pops.time import FailRun, FixedDt, SolveRequest, SolveUnknown
 from tests.python.support.native_execution_context import artifact_execution_context
@@ -23,7 +23,9 @@ from tests.python.support.native_execution_context import artifact_execution_con
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 
 
-def _public_diagonal_krylov_case(*, general_request=False):
+def _public_diagonal_krylov_case(
+    *, general_request=False, solver=None, operator_scale=2.0, seed_scale=3.0,
+):
     frame = Rectangle(
         "public_krylov_square", lower=(0.0, 0.0), upper=(1.0, 1.0)
     ).frame(Cartesian2D())
@@ -65,7 +67,7 @@ def _public_diagonal_krylov_case(*, general_request=False):
     operator = program.matrix_free_operator(
         "double_identity", domain="state", range_="state", ncomp=1
     )
-    program.set_apply(operator, lambda _program, _out, value: 2.0 * value)
+    program.set_apply(operator, lambda _program, _out, value: operator_scale * value)
     problem = LinearProblem(
             operator,
             temporal.n,
@@ -73,17 +75,16 @@ def _public_diagonal_krylov_case(*, general_request=False):
             nullspace=None,
         )
     if general_request:
-        # This nonzero seed differs from both the RHS and the exact answer. It must
-        # initialize the iteration without changing the frozen equation 2 I x = b.
-        seed = program.value("independent_seed", 3.0 * temporal.n)
+        # Authored seeds initialize the iteration without changing the frozen linear equation.
+        seed = program.value("independent_seed", seed_scale * temporal.n)
         problem = SolveRequest(
             problem, unknowns=(SolveUnknown("inventory", temporal.n),),
             equation_inputs={"operator": operator, "rhs": temporal.n},
             seeds={"inventory": seed},
-            problem_metadata={"physical_equation": "2 inventory = inventory_n"})
+            problem_metadata={"physical_equation": f"{operator_scale} inventory = inventory_n"})
     solution = program.solve(
         problem,
-        solver=GMRES(max_iter=4, restart=2, rel_tol=1.0e-13),
+        solver=solver if solver is not None else GMRES(max_iter=4, restart=2, rel_tol=1.0e-13),
         name="diagonal_solution",
     ).consume(action=FailRun())
     if general_request:
@@ -136,3 +137,50 @@ def test_general_request_validate_resolve_compile_bind_run_with_independent_seed
     assert report.accepted_steps == 1
     actual = np.asarray(runtime.state_global("tracer"), dtype=np.float64).reshape(1, 4, 4)
     np.testing.assert_allclose(actual, 0.5 * initial, rtol=0.0, atol=2.0e-15)
+
+
+@pytest.mark.parametrize("maximum", [1, 2])
+def test_public_richardson_accepts_identity_solution_at_the_iteration_cap(
+    isolated_native_cache, native_cxx, kokkos_root, maximum,
+):
+    del isolated_native_cache, native_cxx, kokkos_root
+    case, layout = _public_diagonal_krylov_case(
+        general_request=True, operator_scale=1.0, seed_scale=0.0,
+        solver=Richardson(max_iter=maximum, omega=1.0, rel_tol=0.0, abs_tol=1.0e-12),
+    )
+    artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
+    initial = np.arange(1, 17, dtype=np.float64).reshape(1, 4, 4) / 16.0
+    runtime = pops.bind(
+        artifact, initial_state={"tracer": initial.copy()},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
+    report = pops.run(runtime, t_end=0.125, max_steps=1)
+
+    # The explicit zero seed requires one native Richardson correction. With max_iter=1,
+    # that correction is also the last allowed one, and its exact solution must be committed.
+    assert report.accepted_steps == 1
+    assert runtime.time() == 0.125
+    np.testing.assert_array_equal(runtime.state_global("tracer"), initial)
+
+
+def test_public_richardson_rejects_an_unconverged_last_correction_without_publication(
+    isolated_native_cache, native_cxx, kokkos_root,
+):
+    del isolated_native_cache, native_cxx, kokkos_root
+    case, layout = _public_diagonal_krylov_case(
+        general_request=True, operator_scale=1.0, seed_scale=0.0,
+        solver=Richardson(max_iter=1, omega=0.5, rel_tol=0.0, abs_tol=1.0e-12),
+    )
+    artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
+    initial = np.ones((1, 4, 4), dtype=np.float64)
+    runtime = pops.bind(
+        artifact, initial_state={"tracer": initial.copy()},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
+    before = np.asarray(runtime.state_global("tracer")).copy()
+    before_time = runtime.time()
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="solve_linear"):
+            pops.run(runtime, t_end=0.125, max_steps=1)
+        np.testing.assert_array_equal(runtime.state_global("tracer"), before)
+        assert runtime.time() == before_time

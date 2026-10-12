@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -88,21 +89,29 @@ std::vector<double> energy_bump(const pops::Extent<Dim>& shape) {
 }
 
 template <int Dim>
-std::vector<pops::AmrPatch<Dim>> run_selector(const std::string& variable) {
+std::unique_ptr<pops::AmrSystem<Dim>> make_selector(const std::string& variable,
+                                                    int tag_buffer = 0) {
   pops::AmrSystemConfig<Dim> config;
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 32;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.tag_selection_buffer[axis] = tag_buffer;
   config.regrid_every = 1;
-  pops::AmrSystem<Dim> system(config);
-  pops::test::install_amr_runtime_authority(system, "test.amr-regrid-variable/runtime@1");
-  system.install_block_state_route("gas", "state/gas");
+  auto system = std::make_unique<pops::AmrSystem<Dim>>(config);
+  pops::test::install_amr_runtime_authority(*system, "test.amr-regrid-variable/runtime@1");
+  system->install_block_state_route("gas", "state/gas");
   pops::add_compiled_model<Dim>(
-      system, "gas", EulerModel<Dim>{}, "minmod", "rusanov", "conservative", "explicit",
+      *system, "gas", EulerModel<Dim>{}, "minmod", "rusanov", "conservative", "explicit",
       static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
       static_cast<double>(pops::kWenoEpsilon), false, "test.amr-regrid-variable/physical-flux");
-  system.set_conservative_state("gas", energy_bump(config.shape));
-  pops::test::install_prepared_threshold_union(system, {{"gas", variable, 4.0}});
-  return system.patch_boxes();
+  system->set_conservative_state("gas", energy_bump(config.shape));
+  pops::test::install_prepared_threshold_union(*system, {{"gas", variable, 4.0}});
+  return system;
+}
+
+template <int Dim>
+std::vector<pops::AmrPatch<Dim>> run_selector(const std::string& variable) {
+  return make_selector<Dim>(variable)->patch_boxes();
 }
 
 template <int Dim>
@@ -135,5 +144,36 @@ TEST(test_amr_regrid_variable, UnknownVariableFailsBeforeHierarchyPublication) {
     FAIL() << "unknown conservative tagging variables must fail before hierarchy publication";
   } catch (const std::invalid_argument& error) {
     EXPECT_STREQ(error.what(), "AMR tagging names an unknown conservative variable");
+  }
+}
+
+TEST(test_amr_regrid_variable, FixedRefineRequestsDoNotRedilateExistingBuffer) {
+  constexpr int Dim = pops::kNativeDimension;
+  auto system = make_selector<Dim>("E", 1);
+  const auto initial = system->patch_boxes();
+  ASSERT_FALSE(initial.empty());
+  for (int cycle = 0; cycle < 4; ++cycle) {
+    system->regrid_from_prepared_tagging(0);
+    EXPECT_EQ(system->patch_boxes(), initial) << "buffer accumulated at tagging cycle " << cycle;
+  }
+}
+
+TEST(test_amr_regrid_variable, KeepRetainsPreviousBufferWithoutRedilatingIt) {
+  constexpr int Dim = pops::kNativeDimension;
+  auto system = make_selector<Dim>("E", 1);
+  const auto initial = system->patch_boxes();
+  ASSERT_FALSE(initial.empty());
+  // Remove every positive refine tag on the parent. No Coarsen predicate is authored, so every
+  // existing refined parent cell (including its original buffer) now receives Keep.
+  pops::Extent<Dim> shape{};
+  for (int axis = 0; axis < Dim; ++axis)
+    shape[axis] = 32;
+  auto state = energy_bump(shape);
+  const auto cells = cell_count(shape);
+  std::fill(state.begin() + static_cast<std::size_t>(Dim + 1) * cells, state.end(), 2.5);
+  system->set_conservative_state("gas", state);
+  for (int cycle = 0; cycle < 4; ++cycle) {
+    system->regrid_from_prepared_tagging(0);
+    EXPECT_EQ(system->patch_boxes(), initial) << "Keep changed coverage at tagging cycle " << cycle;
   }
 }

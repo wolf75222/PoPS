@@ -10272,6 +10272,7 @@ struct AmrSystem<Dim>::Impl {
       child = engine->hierarchy().layout(static_cast<std::size_t>(parent_level + 1));
     const std::vector<char> current = child_coverage_on_parent(layout, child);
     std::vector<char> target = current;
+    std::vector<char> buffer_seeds(target.size(), char{0});
     for (std::size_t ordinal = 0; ordinal < target.size(); ++ordinal) {
       bool requests_refine = refine[ordinal] != 0;
       bool requests_coarsen = coarsen[ordinal] != 0;
@@ -10288,17 +10289,22 @@ struct AmrSystem<Dim>::Impl {
       const bool desired = requests_refine    ? true
                            : requests_coarsen ? false
                                               : current[ordinal] != 0;
-      if (desired == (current[ordinal] != 0))
-        continue;
-      const Index<Dim> cell = unflatten(layout.domain(), ordinal);
-      typename runtime::amr::PersistentTaggingState<Dim>::CellKey key{parent_level, cell};
-      if (!staged_state.transition_allowed(key, tagging_spec->min_cycles))
-        continue;
-      target[ordinal] = desired ? char{1} : char{0};
-      staged_state.record(key,
-                          desired ? runtime::amr::PersistentTaggingState<Dim>::Decision::Refine
+      if (desired != (current[ordinal] != 0)) {
+        const Index<Dim> cell = unflatten(layout.domain(), ordinal);
+        typename runtime::amr::PersistentTaggingState<Dim>::CellKey key{parent_level, cell};
+        if (staged_state.transition_allowed(key, tagging_spec->min_cycles)) {
+          target[ordinal] = desired ? char{1} : char{0};
+          staged_state.record(key,
+                              desired
+                                  ? runtime::amr::PersistentTaggingState<Dim>::Decision::Refine
                                   : runtime::amr::PersistentTaggingState<Dim>::Decision::Coarsen,
-                          tagging_spec->min_cycles);
+                              tagging_spec->min_cycles);
+        }
+      }
+      // Retained coverage already includes previous buffers and clustering extras. Preserve that
+      // coverage for Keep/hysteresis without making it a new source of buffer dilation. Only an
+      // effective, accepted Refine request seeds the authored reach in this tagging cycle.
+      buffer_seeds[ordinal] = requests_refine && target[ordinal] != 0 ? char{1} : char{0};
     }
 
     std::array<std::size_t, Dim> reach{};
@@ -10314,8 +10320,8 @@ struct AmrSystem<Dim>::Impl {
                                           "AMR tagging transition neighborhood exceeds size_t");
     }
     std::vector<char> buffered = target;
-    for (std::size_t ordinal = 0; ordinal < target.size(); ++ordinal) {
-      if (target[ordinal] == 0)
+    for (std::size_t ordinal = 0; ordinal < buffer_seeds.size(); ++ordinal) {
+      if (buffer_seeds[ordinal] == 0)
         continue;
       const Index<Dim> center = unflatten(layout.domain(), ordinal);
       for (std::size_t neighbor = 0; neighbor < neighborhood; ++neighbor) {

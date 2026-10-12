@@ -882,9 +882,8 @@ inline SolveReport solve_richardson(const PreparedAffineLinearProblem<Dim>& prob
       return report_physical(normalization, measurement.physical, iteration - 1,
                              SolveStatus::kInvalidEvaluation);
     ScaledFieldAlgebra::axpy(iterate, normalized_relaxation, residual);
-    if (iteration == controls.max_iterations)
-      return terminal_candidate_report(normalization, measurement, iteration,
-                                       SolveStatus::kIterationLimit);
+    // Richardson has no recursive residual estimate after its correction. Measure the candidate
+    // even at the iteration cap so a successful final update is reported before exhaustion.
     measurement = physical_true_residual_measurement(problem, workspace, residual, rhs, iterate);
     if (!finite(measurement.physical))
       return report_physical(normalization, measurement.physical, iteration,

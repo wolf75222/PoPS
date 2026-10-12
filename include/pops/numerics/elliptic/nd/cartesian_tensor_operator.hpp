@@ -9,6 +9,11 @@
 
 #include <array>
 #include <cstddef>
+#include <cmath>
+
+#if defined(POPS_HAS_KOKKOS)
+#include <Kokkos_MathematicalFunctions.hpp>
+#endif
 
 namespace pops::elliptic::nd {
 
@@ -60,12 +65,21 @@ POPS_HD inline Real harmonic_tensor_face_average(Real left, Real right) {
   return denominator != Real(0) ? Real(2) * left * right / denominator : Real(0);
 }
 
+POPS_HD inline Real tensor_face_sqrt(Real value) {
+#if defined(POPS_HAS_KOKKOS)
+  return Kokkos::sqrt(value);
+#else
+  return std::sqrt(value);
+#endif
+}
+
 /// Exact conservative Cartesian ``+/- div(A grad(phi))`` stencil at one cell.
 ///
-/// Diagonal coefficients use harmonic face averaging. Off-diagonal coefficients use arithmetic
-/// face averaging and centered tangential derivatives formed from both cells adjacent to the
-/// normal face. ``Coefficients`` is a non-owning packed or split adapter; constructing and applying
-/// this object never allocates or repacks storage.
+/// Harmonic normal faces retain the scalar FV law. Cross fluxes average coefficient-weighted
+/// one-sided gradients after a diagonal congruence to those same normal-face coefficients.
+/// For periodic symmetric positive tensors the energy is the mean of the positive quadratic
+/// forms over every orientation of the one-sided gradient. Constant tensors retain the centered
+/// stencil. ``Coefficients`` is non-owning; applying this object never allocates or repacks.
 template <int Dim, CartesianTensorDivergenceSign Sign, class Coefficients>
 struct CartesianTensorOperator {
   static_assert(Dim >= 1 && Dim <= 3, "CartesianTensorOperator supports dimensions 1, 2, and 3");
@@ -87,26 +101,74 @@ struct CartesianTensorOperator {
            cell[axis] == (side == 0 ? domain.lo[axis] : domain.hi[axis]);
   }
 
+  POPS_HD Real normal_face(const Index<Dim>& cell, int axis, int side) const {
+    if (on_face(cell, axis, side, options.zero_flux_faces))
+      return Real(0);
+    Index<Dim> neighbor = cell;
+    neighbor[axis] += side == 0 ? -1 : 1;
+    const Real center = coefficients.at(cell, axis, axis);
+    if (options.arithmetic_diagonal && on_face(cell, axis, side, options.dirichlet_faces)) {
+      Index<Dim> interior = cell;
+      interior[axis] += side == 0 ? 1 : -1;
+      return Real(1.5) * center - Real(0.5) * coefficients.at(interior, axis, axis);
+    }
+    return diagonal_face(center, coefficients.at(neighbor, axis, axis));
+  }
+
+  template <class Values>
+  POPS_HD Real weighted_tangent(const Index<Dim>& cell, int row, int column, Real normal,
+                                const Values& values) const {
+    const Real cross = coefficients.at(cell, row, column);
+    if (cross == Real(0) || normal == Real(0))
+      return Real(0);
+    Index<Dim> lower = cell, upper = cell;
+    --lower[column];
+    ++upper[column];
+    if (options.arithmetic_diagonal)
+      return cross * (values(upper, 0) - values(lower, 0)) * (Real(0.5) * inverse_spacing[column]);
+
+    // Each oriented tensor is D A D, D_ii=sqrt(H_i/A_ii), hence remains positive.
+    // The row direction uses this very face, so only tangential neighbors (including corners)
+    // are needed at its two endpoints: the coefficient and solution footprint stays radius one.
+    const Real row_scale =
+        tensor_face_sqrt(normal) / tensor_face_sqrt(coefficients.at(cell, row, row));
+    const Real lower_scale = tensor_face_sqrt(normal_face(cell, column, 0)) /
+                             tensor_face_sqrt(coefficients.at(cell, column, column));
+    const Real upper_scale = tensor_face_sqrt(normal_face(cell, column, 1)) /
+                             tensor_face_sqrt(coefficients.at(cell, column, column));
+    // Take roots before division: H/A may underflow although sqrt(H)/sqrt(A) is representable.
+    const Real tangent = (Real(0.5) * inverse_spacing[column]) *
+                         (upper_scale * (values(upper, 0) - values(cell, 0)) +
+                          lower_scale * (values(cell, 0) - values(lower, 0)));
+    return (cross * row_scale) * tangent;
+  }
+
   // Both faces use positive coordinate-axis orientation. Keep their arithmetic shared with
   // the level image so coarse/fine replacement retains every tensor cross derivative and
   // the exact physical-face coefficient and zero-conormal laws.
   POPS_HD std::array<Real, 2> face_fluxes(const Index<Dim>& cell, int row) const {
+    return face_fluxes_with_values(cell, row, phi);
+  }
+
+  template <class Values>
+  POPS_HD std::array<Real, 2> face_fluxes_with_values(const Index<Dim>& cell, int row,
+                                                      const Values& values) const {
     Index<Dim> lower = cell;
     Index<Dim> upper = cell;
     --lower[row];
     ++upper[row];
     Real lower_flux = Real(0);
     Real upper_flux = Real(0);
+    const Real lower_normal = normal_face(cell, row, 0);
+    const Real upper_normal = normal_face(cell, row, 1);
     for (int column = 0; column < Dim; ++column) {
       const Real center_coefficient = coefficients.at(cell, row, column);
       const Real lower_coefficient = coefficients.at(lower, row, column);
       const Real upper_coefficient = coefficients.at(upper, row, column);
-      Real lower_face =
-          row == column ? diagonal_face(lower_coefficient, center_coefficient)
-                        : Real(0.5) * (lower_coefficient + center_coefficient);
-      Real upper_face =
-          row == column ? diagonal_face(center_coefficient, upper_coefficient)
-                        : Real(0.5) * (center_coefficient + upper_coefficient);
+      Real lower_face = row == column ? diagonal_face(lower_coefficient, center_coefficient)
+                                      : Real(0.5) * (lower_coefficient + center_coefficient);
+      Real upper_face = row == column ? diagonal_face(center_coefficient, upper_coefficient)
+                                      : Real(0.5) * (center_coefficient + upper_coefficient);
       // Smooth coordinate metrics are sampled at physical faces by linear one-sided
       // extrapolation; coefficient ghosts carry an extrapolation law, not a face location.
       if (options.arithmetic_diagonal) {
@@ -117,8 +179,8 @@ struct CartesianTensorOperator {
           upper_face = Real(1.5) * center_coefficient - Real(0.5) * lower_coefficient;
       }
       if (row == column) {
-        lower_flux += lower_face * (phi(cell, 0) - phi(lower, 0)) * inverse_spacing[column];
-        upper_flux += upper_face * (phi(upper, 0) - phi(cell, 0)) * inverse_spacing[column];
+        lower_flux += lower_normal * (values(cell, 0) - values(lower, 0)) * inverse_spacing[column];
+        upper_flux += upper_normal * (values(upper, 0) - values(cell, 0)) * inverse_spacing[column];
         continue;
       }
 
@@ -135,14 +197,23 @@ struct CartesianTensorOperator {
       --upper_lower[column];
       ++upper_upper[column];
       const Real tangent_scale = Real(0.25) * inverse_spacing[column];
-      const Real lower_tangent =
-          (phi(cell_upper, 0) - phi(cell_lower, 0) + phi(lower_upper, 0) - phi(lower_lower, 0)) *
-          tangent_scale;
-      const Real upper_tangent =
-          (phi(cell_upper, 0) - phi(cell_lower, 0) + phi(upper_upper, 0) - phi(upper_lower, 0)) *
-          tangent_scale;
-      lower_flux += lower_face * lower_tangent;
-      upper_flux += upper_face * upper_tangent;
+      const Real lower_tangent = (values(cell_upper, 0) - values(cell_lower, 0) +
+                                  values(lower_upper, 0) - values(lower_lower, 0)) *
+                                 tangent_scale;
+      const Real upper_tangent = (values(cell_upper, 0) - values(cell_lower, 0) +
+                                  values(upper_upper, 0) - values(upper_lower, 0)) *
+                                 tangent_scale;
+      // Retain explicitly selected one-sided physical-face metric sampling. Interior cross
+      // fluxes must average the weighted gradients, rather than multiply two averages.
+      const unsigned physical = options.zero_flux_faces | options.dirichlet_faces;
+      lower_flux += options.arithmetic_diagonal && on_face(cell, row, 0, physical)
+                        ? lower_face * lower_tangent
+                        : Real(0.5) * (weighted_tangent(cell, row, column, lower_normal, values) +
+                                       weighted_tangent(lower, row, column, lower_normal, values));
+      upper_flux += options.arithmetic_diagonal && on_face(cell, row, 1, physical)
+                        ? upper_face * upper_tangent
+                        : Real(0.5) * (weighted_tangent(cell, row, column, upper_normal, values) +
+                                       weighted_tangent(upper, row, column, upper_normal, values));
     }
     if (on_face(cell, row, 0, options.zero_flux_faces))
       lower_flux = Real(0);
@@ -168,36 +239,40 @@ struct CartesianTensorOperator {
 
   /// Return the exact center coefficient of the selected signed operator.
   POPS_HD Real diagonal(const Index<Dim>& cell) const {
-    Real negative_divergence_diagonal = Real(0);
-    for (int axis = 0; axis < Dim; ++axis) {
-      Index<Dim> lower = cell;
-      Index<Dim> upper = cell;
-      --lower[axis];
-      ++upper[axis];
-      const Real center = coefficients.at(cell, axis, axis);
-      Real lower_factor = on_face(cell, axis, 0, options.zero_flux_faces) ? Real(0) : Real(1);
-      Real upper_factor = on_face(cell, axis, 1, options.zero_flux_faces) ? Real(0) : Real(1);
-      if (on_face(cell, axis, 0, options.dirichlet_faces))
-        lower_factor = Real(2);
-      if (on_face(cell, axis, 1, options.dirichlet_faces))
-        upper_factor = Real(2);
-      Real lower_face = diagonal_face(coefficients.at(lower, axis, axis), center);
-      Real upper_face = diagonal_face(center, coefficients.at(upper, axis, axis));
-      if (options.arithmetic_diagonal) {
-        const unsigned physical = options.zero_flux_faces | options.dirichlet_faces;
-        if (on_face(cell, axis, 0, physical))
-          lower_face = Real(1.5) * center - Real(0.5) * coefficients.at(upper, axis, axis);
-        if (on_face(cell, axis, 1, physical))
-          upper_face = Real(1.5) * center - Real(0.5) * coefficients.at(lower, axis, axis);
-      }
-      negative_divergence_diagonal +=
-          (lower_factor * lower_face + upper_factor * upper_face) *
-          inverse_spacing[axis] * inverse_spacing[axis];
+    const CenterInfluence basis{cell, domain, options};
+    Real divergence = Real(0);
+    for (int row = 0; row < Dim; ++row) {
+      const auto flux = face_fluxes_with_values(cell, row, basis);
+      divergence += (flux[1] - flux[0]) * inverse_spacing[row];
     }
-    if constexpr (Sign == CartesianTensorDivergenceSign::positive_divergence)
-      return -negative_divergence_diagonal;
-    return negative_divergence_diagonal;
+    if constexpr (Sign == CartesianTensorDivergenceSign::negative_divergence)
+      return -divergence;
+    return divergence;
   }
+
+ private:
+  struct CenterInfluence {
+    Index<Dim> center{};
+    Box<Dim> domain{};
+    CartesianTensorStencilOptions options{};
+
+    POPS_HD Real operator()(Index<Dim> point, int) const {
+      Real sign = Real(1);
+      for (int axis = 0; axis < Dim; ++axis) {
+        const int side = point[axis] < domain.lo[axis] ? 0 : 1;
+        if (point[axis] >= domain.lo[axis] && point[axis] <= domain.hi[axis])
+          continue;
+        const unsigned face = 1u << (2 * axis + side);
+        if ((options.dirichlet_faces & face) != 0) {
+          point[axis] = side == 0 ? domain.lo[axis] : domain.hi[axis];
+          sign = -sign;
+        } else if ((options.zero_flux_faces & face) != 0) {
+          point[axis] = side == 0 ? domain.lo[axis] : domain.hi[axis];
+        }
+      }
+      return point == center ? sign : Real(0);
+    }
+  };
 };
 
 template <int Dim>
