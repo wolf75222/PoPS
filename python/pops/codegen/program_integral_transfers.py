@@ -17,7 +17,7 @@ def emit_integral_declarations(program) -> list[str]:
     ]
 
 
-def emit_integral_transfers(program, var, *, region=None) -> list[str]:
+def emit_integral_transfers(program, var, *, region=None, model_authority=None) -> list[str]:
     from pops.codegen.program_transport_quadrature import accepted_transport_quadrature
 
     captured = {key[1]: item for key, item in var.items()
@@ -34,7 +34,8 @@ def emit_integral_transfers(program, var, *, region=None) -> list[str]:
         from pops.codegen.program_emit_diffusion import _resolved_diffusive_trace_selection
 
         for value, _ in accepted_diffusive_quadrature(
-                program, partition_stability_checked=var.get(("partition_stability_checked",), ())):
+                program, model_authority=model_authority,
+                partition_stability_checked=var.get(("partition_stability_checked",), ())):
             if value.id in requested and value.id in var:
                 captured[value.id] = (value, None, *_resolved_diffusive_trace_selection(value))
                 selected.add(value.id)

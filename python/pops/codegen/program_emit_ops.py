@@ -1702,12 +1702,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         else:
             var[v.id] = "u%d" % v.id  # an intermediate stage state (scratch, zero-initialized)
             # A scalar_field combine (ADC-427: the phi^{n+1} extrapolation) has no block, so it has no
-            # base block-state to shape the scratch: template it on the FIRST scalar input instead (a
-            # 1-component field, same (ba, dm)). A State combine shapes it on the block base as before.
+            # base block-state to shape the scratch: inherit the exact first field input, including
+            # every component of a coupled field tuple. A State combine uses the block base as before.
             template = var[terms[0][0].id] if v.vtype == "scalar_field" else var[base.id]
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.%s(%d, 0, %s%s);"
                          % (var[v.id], "scalar_scratch" if v.vtype == "scalar_field" else "scratch_state",
-                            int(v.id), template, ", 1, 1" if v.vtype == "scalar_field" else ""))
+                            int(v.id), template, ", (%s).ncomp(), 1" % template
+                            if v.vtype == "scalar_field" else ""))
             output_setup_end = len(lines)
             for inp, coeff in terms:
                 lines.append("ctx.axpy(%s, %s, %s, dt, %s);"

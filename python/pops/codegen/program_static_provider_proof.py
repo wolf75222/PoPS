@@ -12,6 +12,91 @@ from pops.time.input_fields import runtime_input_pack
 CONTRACT = "pops.accepted-static-provider-read@1"
 
 
+def _static_read_keys(authority, block, module, pack, selected, reads):
+    """Close exact derived recipes over the observed immutable input surface."""
+    from pops._ir.expr import (
+        Abs, Add, Const, Div, Exp, Maximum, Minimum, Mul, Neg, Pow, Sqrt, Sub,
+    )
+    from pops._ir.handle_expr import ValueExpr
+    from pops.fields.aux import DerivedAux
+    from .component_provider_packs import (
+        _component_key_for_auxiliary_reference, auxiliary_component_slot,
+        canonical_emitter_carrier_value, require_emitter_provider_carrier,
+    )
+    from .program_emit_kernels import _model_impl
+
+    keys = set(selected)
+    # The plan compares current recipe data with its issued source payload;
+    # the emitter witness separately authenticates the executable descriptors.
+    _, plan, _ = authority._resolved_provider_sources[block.local_id]
+    packs = plan.require_provider_packs(module)
+    emitter = _model_impl(authority.model_for_block(block))
+    require_emitter_provider_carrier(emitter, where="static derived provider proof")
+    routes = packs.auxiliary_routes
+    if canonical_emitter_carrier_value(routes) != canonical_emitter_carrier_value(
+            emitter._auxiliary_provider_routes):
+        raise ValueError("static derived provider recipes differ from the actual emitter")
+    owner = str(module.owner_path.canonical())
+    # Resolve every source coordinate, including directly observed reads, through
+    # the qualified ambiguity-refusing projection used by the native emitter.
+    by_slot = {pack.lookup(key).slot: key for key in pack}
+    read_keys = {by_slot[auxiliary_component_slot(pack, owner_qid=owner, name=read)]
+                 for read in reads}
+    if read_keys <= keys:
+        return keys
+    index = module.declaration_index()
+    visiting = set()
+
+    def expression_dependencies(expression):
+        if type(expression) is Const:
+            return ()
+        if type(expression) is ValueExpr:
+            handle = expression.handle
+            if handle.kind not in {"aux", "field"} or handle.is_instance \
+                    or str(handle.owner_path.canonical()) != owner:
+                raise ValueError("static derived provider has a foreign or non-static capture")
+            index.authenticate(handle)
+            return (_component_key_for_auxiliary_reference(module, packs.complete, handle),)
+        if type(expression) in (Add, Sub, Mul, Div, Pow, Minimum, Maximum):
+            return tuple(dict.fromkeys(expression_dependencies(expression.a)
+                                       + expression_dependencies(expression.b)))
+        if type(expression) in (Neg, Sqrt, Exp, Abs):
+            return expression_dependencies(expression.a)
+        raise ValueError("static derived provider has an unknown expression operation")
+
+    def close(key):
+        if key.owner_qid != owner:
+            raise ValueError("static derived provider dependency has a foreign owner")
+        if key in keys:
+            return
+        if key in visiting:
+            raise ValueError("static derived provider dependency graph contains a cycle")
+        entry = pack.lookup(key)
+        route = routes.get(key)
+        if route is None or set(route) != {"kind", "producer", "dependencies", "contracts", "boundary"} \
+                or route["kind"] != "derived" or type(route["producer"]) is not DerivedAux:
+            raise ValueError("static provider observation does not cover the constitutive read union")
+        producer = route["producer"]
+        target = module.aux_handle(producer.target)
+        index.authenticate(target)
+        if key != ComponentKey(owner, "aux", target.local_id, target.local_id) \
+                or entry.producer != "derived:" + target.local_id:
+            raise ValueError("static derived provider changes its qualified producer target")
+        dependencies = expression_dependencies(producer.expression)
+        if dependencies != route["dependencies"] or route["contracts"] != tuple(
+                pack.contract(dependency) for dependency in dependencies):
+            raise ValueError("static derived provider changes its exact dependency recipe")
+        visiting.add(key)
+        for dependency in dependencies:
+            close(dependency)
+        visiting.remove(key)
+        keys.add(key)
+
+    for key in read_keys:
+        close(key)
+    return keys
+
+
 def prove_static_provider_read(program, observation, rate, reads, authority, issued):
     from .program_models import ProgramModelGraph
     from pops.fields._program_publication import validate_field_publication
@@ -67,11 +152,9 @@ def prove_static_provider_read(program, observation, rate, reads, authority, iss
             or context.stage_sources != ((state.block, state.id),) \
             or context.outputs != tuple(observation.space.components) or rate.field_context != context:
         raise ValueError("static provider observation changes exact FieldContext/read coverage")
-    selected = runtime_input_pack(authority.resolved_provider_pack_for_block(state.block),
-                                  field, observation.space)
-    if not reads <= {key.component for key in selected}:
-        raise ValueError("static provider observation does not cover the constitutive read union")
-    keys = set(selected)
+    pack = authority.resolved_provider_pack_for_block(state.block)
+    selected = runtime_input_pack(pack, field, observation.space)
+    keys = _static_read_keys(authority, state.block, module, pack, selected, reads)
     for value in issued.values():
         if value.op != "field_publication":
             continue
