@@ -1,0 +1,12 @@
+{
+  "source_commit": "a17fe0e98955220bc0a1719a981d8a80a40c3743",
+  "package": "<qualification-env>/lib/python3.12/site-packages/pops/__init__.py",
+  "native": "<qualification-env>/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+  "native_sha256": "dbf1f7de0d4309ae5607028432604493f2a4c4f7140a8d0f94446a1438909d08",
+  "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.3.34.2);std=202002L;headers=f395e0ac974a8c9ea34c30fb5bd6edcb337a3b0e11feaad8bc35e63d66045172;kokkos=1;stdlib=libc++_220106;mpi=1;mpi_abi=40d6e65d7f79f247f867711ee0854b6220e3b9c1950da10f38add6e0977b9e89;dim=2",
+  "abi_version": 13,
+  "dimension": 2,
+  "mpi": true,
+  "kokkos": true,
+  "parallel_hdf5": true
+}

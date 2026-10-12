@@ -1,0 +1,183 @@
+Test project <repository>/build-mpi
+      Start    8: test_mapped_disk_tensor.discontinuous_spd_tensor_retains_positive_fourier_energy
+ 1/61 Test    #8: test_mapped_disk_tensor.discontinuous_spd_tensor_retains_positive_fourier_energy ..........................................   Passed    0.03 sec
+      Start    9: test_mapped_disk_tensor.congruence_retains_representable_extreme_coefficient_contrast
+ 2/61 Test    #9: test_mapped_disk_tensor.congruence_retains_representable_extreme_coefficient_contrast .....................................   Passed    0.03 sec
+      Start   10: test_mapped_disk_tensor.localized_tensor_jump_averages_weighted_gradients
+ 3/61 Test   #10: test_mapped_disk_tensor.localized_tensor_jump_averages_weighted_gradients .................................................   Passed    0.03 sec
+      Start   11: test_mapped_disk_tensor.variable_tensor_is_symmetric_and_has_the_exact_center_diagonal
+ 4/61 Test   #11: test_mapped_disk_tensor.variable_tensor_is_symmetric_and_has_the_exact_center_diagonal ....................................   Passed    0.02 sec
+      Start   12: test_mapped_disk_tensor.tensor_center_diagonal_includes_physical_corner_ghost_influences
+ 5/61 Test   #12: test_mapped_disk_tensor.tensor_center_diagonal_includes_physical_corner_ghost_influences ..................................   Passed    0.02 sec
+      Start   13: test_mapped_disk_tensor.smooth_variable_tensor_retains_second_order_consistency
+ 6/61 Test   #13: test_mapped_disk_tensor.smooth_variable_tensor_retains_second_order_consistency ...........................................   Passed    0.03 sec
+      Start   14: test_mapped_disk_tensor.homogeneous_neumann_suppresses_the_complete_tensor_flux
+ 7/61 Test   #14: test_mapped_disk_tensor.homogeneous_neumann_suppresses_the_complete_tensor_flux ...........................................   Passed    0.03 sec
+      Start   15: test_mapped_disk_tensor.conducting_disk_modes_converge_without_a_central_hole
+ 8/61 Test   #15: test_mapped_disk_tensor.conducting_disk_modes_converge_without_a_central_hole .............................................   Passed    0.08 sec
+      Start  588: test_composite_fac_tensor.full_tensor_composite_retains_refinement_accuracy
+ 9/61 Test  #588: test_composite_fac_tensor.full_tensor_composite_retains_refinement_accuracy ...............................................   Passed   86.27 sec
+      Start  589: test_composite_fac_tensor.periodic_coarse_fine_seams_retain_translation_and_accuracy
+10/61 Test  #589: test_composite_fac_tensor.periodic_coarse_fine_seams_retain_translation_and_accuracy ......................................   Passed   96.63 sec
+      Start  590: test_composite_fac_tensor.tensor_boundary_point_refresh_is_collective_and_transactional
+11/61 Test  #590: test_composite_fac_tensor.tensor_boundary_point_refresh_is_collective_and_transactional ...................................   Passed    0.06 sec
+      Start  591: test_composite_fac_tensor.discontinuous_spd_tensor_solves_the_positive_energy_mode
+12/61 Test  #591: test_composite_fac_tensor.discontinuous_spd_tensor_solves_the_positive_energy_mode ........................................***Failed    0.05 sec
+Note: Google Test filter = test_composite_fac_tensor.discontinuous_spd_tensor_solves_the_positive_energy_mode
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_composite_fac_tensor
+[ RUN      ] test_composite_fac_tensor.discontinuous_spd_tensor_solves_the_positive_energy_mode
+unknown file: Failure
+C++ exception with description "hierarchy tensor provider failed on at least one MPI rank" thrown in the test body.
+
+[  FAILED  ] test_composite_fac_tensor.discontinuous_spd_tensor_solves_the_positive_energy_mode (9 ms)
+[----------] 1 test from test_composite_fac_tensor (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 0 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] test_composite_fac_tensor.discontinuous_spd_tensor_solves_the_positive_energy_mode
+
+ 1 FAILED TEST
+
+      Start  592: test_composite_fac_tensor.periodic_tensor_fac_applies_mean_zero_gauge
+13/61 Test  #592: test_composite_fac_tensor.periodic_tensor_fac_applies_mean_zero_gauge .....................................................   Passed    0.93 sec
+      Start  743: test_krylov_workspace_reentrancy.provider_workspace_with_only_one_core_field_is_rejected_before_materialization
+14/61 Test  #743: test_krylov_workspace_reentrancy.provider_workspace_with_only_one_core_field_is_rejected_before_materialization ...........   Passed    0.51 sec
+      Start  744: test_krylov_workspace_reentrancy.trusted_prepare_exceptions_propagate_but_hot_apply_exceptions_publish_failure_status
+15/61 Test  #744: test_krylov_workspace_reentrancy.trusted_prepare_exceptions_propagate_but_hot_apply_exceptions_publish_failure_status .....   Passed    0.05 sec
+      Start  745: test_krylov_workspace_reentrancy.repeated_prepare_and_bind_refresh_sessions_without_rematerializing_their_source
+16/61 Test  #745: test_krylov_workspace_reentrancy.repeated_prepare_and_bind_refresh_sessions_without_rematerializing_their_source ..........   Passed    0.05 sec
+      Start  746: test_krylov_workspace_reentrancy.workspace_rebind_reserves_mutation_during_blocking_operator_prepare
+17/61 Test  #746: test_krylov_workspace_reentrancy.workspace_rebind_reserves_mutation_during_blocking_operator_prepare ......................   Passed    0.05 sec
+      Start  747: test_krylov_workspace_reentrancy.problem_prepare_reserves_mutation_during_blocking_resource_freeze
+18/61 Test  #747: test_krylov_workspace_reentrancy.problem_prepare_reserves_mutation_during_blocking_resource_freeze ........................   Passed    0.05 sec
+      Start  748: test_krylov_workspace_reentrancy.rank_local_problem_construction_failure_is_published_before_lane_unwind
+19/61 Test  #748: test_krylov_workspace_reentrancy.rank_local_problem_construction_failure_is_published_before_lane_unwind ..................***Skipped   0.06 sec
+      Start  749: test_krylov_workspace_reentrancy.shared_problem_allocation_and_input_failures_converge_before_constructor_and_retry
+20/61 Test  #749: test_krylov_workspace_reentrancy.shared_problem_allocation_and_input_failures_converge_before_constructor_and_retry .......   Passed    0.06 sec
+      Start  750: test_krylov_workspace_reentrancy.shared_workspace_allocation_and_input_failures_converge_before_constructor_and_retry
+21/61 Test  #750: test_krylov_workspace_reentrancy.shared_workspace_allocation_and_input_failures_converge_before_constructor_and_retry .....   Passed    0.05 sec
+      Start  751: test_krylov_workspace_reentrancy.distinct_workspaces_run_fresh_operator_and_preconditioner_sessions_concurrently
+22/61 Test  #751: test_krylov_workspace_reentrancy.distinct_workspaces_run_fresh_operator_and_preconditioner_sessions_concurrently ..........   Passed    0.08 sec
+      Start  752: test_krylov_workspace_reentrancy.identical_provider_reason_larger_than_the_old_fixed_capacity_is_published_exactly
+23/61 Test  #752: test_krylov_workspace_reentrancy.identical_provider_reason_larger_than_the_old_fixed_capacity_is_published_exactly ........   Passed    0.05 sec
+      Start  753: test_krylov_workspace_reentrancy.authored_numerical_actions_preserve_cg_failure_rollback_and_terminal_evaluation_guards
+24/61 Test  #753: test_krylov_workspace_reentrancy.authored_numerical_actions_preserve_cg_failure_rollback_and_terminal_evaluation_guards ...   Passed    0.05 sec
+      Start  754: test_krylov_workspace_reentrancy.richardson_confirms_the_last_allowed_correction_before_staged_publication
+25/61 Test  #754: test_krylov_workspace_reentrancy.richardson_confirms_the_last_allowed_correction_before_staged_publication ................   Passed    0.05 sec
+      Start  755: test_krylov_workspace_reentrancy.richardson_late_convergence_and_iteration_limit_preserve_acceptance_controls
+26/61 Test  #755: test_krylov_workspace_reentrancy.richardson_late_convergence_and_iteration_limit_preserve_acceptance_controls .............   Passed    0.05 sec
+      Start  756: test_krylov_workspace_reentrancy.richardson_last_correction_retains_invalid_controls_and_nonfinite_guards
+27/61 Test  #756: test_krylov_workspace_reentrancy.richardson_last_correction_retains_invalid_controls_and_nonfinite_guards .................   Passed    0.05 sec
+      Start  757: test_krylov_workspace_reentrancy.numerical_actions_do_not_downgrade_explicit_provider_failure_or_false_convergence
+28/61 Test  #757: test_krylov_workspace_reentrancy.numerical_actions_do_not_downgrade_explicit_provider_failure_or_false_convergence ........Subprocess aborted***Exception:   0.17 sec
+Note: Google Test filter = test_krylov_workspace_reentrancy.numerical_actions_do_not_downgrade_explicit_provider_failure_or_false_convergence
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from test_krylov_workspace_reentrancy
+[ RUN      ] test_krylov_workspace_reentrancy.numerical_actions_do_not_downgrade_explicit_provider_failure_or_false_convergence
+<repository>/tests/cpp/unit/elliptic/test_krylov_workspace_reentrancy.cpp:1488: Failure
+Expected equality of these values:
+  exact_but_failed.report().action
+    Which is: 4-byte object <01-00 00-00>
+  SolveAction::kRejectAttempt
+    Which is: 4-byte object <02-00 00-00>
+
+PoPS contract violation: SolveOutcome destroyed before explicit consumption
+
+      Start  758: test_krylov_workspace_reentrancy.exclusive_operator_rejects_overlapping_materialized_invocations_uniformly
+29/61 Test  #758: test_krylov_workspace_reentrancy.exclusive_operator_rejects_overlapping_materialized_invocations_uniformly ................   Passed    0.05 sec
+      Start  759: test_krylov_workspace_reentrancy.exclusive_operator_lease_is_shared_by_provider_copies_across_prepared_problems
+30/61 Test  #759: test_krylov_workspace_reentrancy.exclusive_operator_lease_is_shared_by_provider_copies_across_prepared_problems ...........   Passed    0.06 sec
+      Start  760: test_krylov_workspace_reentrancy.public_problem_sessions_reject_overlap_with_independent_workspace_invocation
+31/61 Test  #760: test_krylov_workspace_reentrancy.public_problem_sessions_reject_overlap_with_independent_workspace_invocation .............   Passed    0.06 sec
+      Start  761: test_krylov_workspace_reentrancy.exclusive_source_lease_is_released_after_prepare_exception_across_problems
+32/61 Test  #761: test_krylov_workspace_reentrancy.exclusive_source_lease_is_released_after_prepare_exception_across_problems ...............   Passed    0.06 sec
+      Start  762: test_krylov_workspace_reentrancy.workspace_bind_rejects_affine_zero_response_drift_between_provider_sessions
+33/61 Test  #762: test_krylov_workspace_reentrancy.workspace_bind_rejects_affine_zero_response_drift_between_provider_sessions ..............   Passed    0.05 sec
+      Start  763: test_krylov_workspace_reentrancy.workspace_bind_publishes_rank_local_zero_response_comparison_failure_uniformly
+34/61 Test  #763: test_krylov_workspace_reentrancy.workspace_bind_publishes_rank_local_zero_response_comparison_failure_uniformly ...........   Passed    0.05 sec
+      Start  764: test_krylov_workspace_reentrancy.prepared_problem_and_workspace_execute_on_an_embedding_owned_congruent_communicator
+35/61 Test  #764: test_krylov_workspace_reentrancy.prepared_problem_and_workspace_execute_on_an_embedding_owned_congruent_communicator ......***Skipped   0.05 sec
+      Start  765: test_krylov_workspace_reentrancy.noncongruent_split_communicator_is_rejected_explicitly
+36/61 Test  #765: test_krylov_workspace_reentrancy.noncongruent_split_communicator_is_rejected_explicitly ...................................***Skipped   0.05 sec
+      Start  766: test_krylov_workspace_reentrancy.gmres_confirms_true_residual_before_classifying_the_iteration_cap
+37/61 Test  #766: test_krylov_workspace_reentrancy.gmres_confirms_true_residual_before_classifying_the_iteration_cap ........................   Passed    0.06 sec
+      Start  767: test_krylov_workspace_reentrancy.gmres_infinity_stopping_keeps_euclidean_arnoldi
+38/61 Test  #767: test_krylov_workspace_reentrancy.gmres_infinity_stopping_keeps_euclidean_arnoldi ..........................................   Passed    0.29 sec
+      Start  768: test_krylov_workspace_reentrancy.gmres_infinity_relative_reference_is_independent_of_warm_start
+39/61 Test  #768: test_krylov_workspace_reentrancy.gmres_infinity_relative_reference_is_independent_of_warm_start ...........................   Passed    0.05 sec
+      Start  769: test_krylov_workspace_reentrancy.gmres_infinity_affine_reference_precedes_normalization
+40/61 Test  #769: test_krylov_workspace_reentrancy.gmres_infinity_affine_reference_precedes_normalization ...................................   Passed    0.05 sec
+      Start  770: test_krylov_workspace_reentrancy.physical_stopping_norm_is_authenticated_before_callbacks
+41/61 Test  #770: test_krylov_workspace_reentrancy.physical_stopping_norm_is_authenticated_before_callbacks .................................   Passed    0.05 sec
+      Start  771: test_krylov_workspace_reentrancy.gmres_infinity_refuses_nonfinite_physical_input
+42/61 Test  #771: test_krylov_workspace_reentrancy.gmres_infinity_refuses_nonfinite_physical_input ..........................................   Passed    0.05 sec
+      Start  772: test_krylov_workspace_reentrancy.gmres_infinity_refuses_prepared_nullspace_before_callbacks
+43/61 Test  #772: test_krylov_workspace_reentrancy.gmres_infinity_refuses_prepared_nullspace_before_callbacks ...............................   Passed    0.05 sec
+      Start  773: test_krylov_workspace_reentrancy.gmres_single_column_recovers_masked_representable_stagnation
+44/61 Test  #773: test_krylov_workspace_reentrancy.gmres_single_column_recovers_masked_representable_stagnation .............................   Passed    2.82 sec
+      Start  774: test_krylov_workspace_reentrancy.gmres_damps_a_rejected_single_column_rounding_cycle
+45/61 Test  #774: test_krylov_workspace_reentrancy.gmres_damps_a_rejected_single_column_rounding_cycle ......................................   Passed    1.49 sec
+      Start  775: test_krylov_workspace_reentrancy.scaled_stagnation_update_preserves_masks_and_exponent_guards
+46/61 Test  #775: test_krylov_workspace_reentrancy.scaled_stagnation_update_preserves_masks_and_exponent_guards .............................   Passed    0.05 sec
+      Start  776: test_krylov_workspace_reentrancy.gmres_coordinates_coupled_representable_updates
+47/61 Test  #776: test_krylov_workspace_reentrancy.gmres_coordinates_coupled_representable_updates ..........................................   Passed    0.31 sec
+      Start  777: test_krylov_workspace_reentrancy.gmres_rejects_unrepresentable_permuted_equations
+48/61 Test  #777: test_krylov_workspace_reentrancy.gmres_rejects_unrepresentable_permuted_equations .........................................   Passed    0.29 sec
+      Start  778: test_krylov_workspace_reentrancy.gmres_remembers_promotions_across_rejected_single_columns
+49/61 Test  #778: test_krylov_workspace_reentrancy.gmres_remembers_promotions_across_rejected_single_columns ................................   Passed    0.20 sec
+      Start 1125: test_amr_seed_no_refine.CoarseOnlyWithoutPreparedTaggingAuthority
+50/61 Test #1125: test_amr_seed_no_refine.CoarseOnlyWithoutPreparedTaggingAuthority .........................................................   Passed    0.50 sec
+      Start 1126: test_amr_seed_no_refine.TransitionNeighborhoodOverflowFailsBeforeHierarchyAllocation
+51/61 Test #1126: test_amr_seed_no_refine.TransitionNeighborhoodOverflowFailsBeforeHierarchyAllocation ......................................   Passed    0.04 sec
+      Start 1127: test_amr_seed_no_refine.TagSelectionRejectsLegacyAndRankedOverflowBeforeAllocation
+52/61 Test #1127: test_amr_seed_no_refine.TagSelectionRejectsLegacyAndRankedOverflowBeforeAllocation ........................................   Passed    0.04 sec
+      Start 1128: test_amr_seed_no_refine.AutomaticBootstrapRefusesFieldLeafBeforeMaterialization
+53/61 Test #1128: test_amr_seed_no_refine.AutomaticBootstrapRefusesFieldLeafBeforeMaterialization ...........................................   Passed    0.05 sec
+      Start 1129: test_amr_seed_no_refine.PreparedTaggingSeedsExactGeometryWithoutReadMutation
+54/61 Test #1129: test_amr_seed_no_refine.PreparedTaggingSeedsExactGeometryWithoutReadMutation ..............................................   Passed    0.05 sec
+      Start 1130: test_amr_seed_no_refine.AcceptedCadencePublishesTagDerivedRegridOnlyWhenDue
+55/61 Test #1130: test_amr_seed_no_refine.AcceptedCadencePublishesTagDerivedRegridOnlyWhenDue ...............................................   Passed    0.06 sec
+      Start 1131: test_amr_seed_no_refine.RegridRetainsEvolvedFineCellsAndLinearlyProlongsNewCells
+56/61 Test #1131: test_amr_seed_no_refine.RegridRetainsEvolvedFineCellsAndLinearlyProlongsNewCells ..........................................   Passed    0.06 sec
+      Start 1132: test_amr_seed_no_refine.OneHierarchySweepAgesHysteresisOnceAndCheckpointRestoreIsTransactional
+57/61 Test #1132: test_amr_seed_no_refine.OneHierarchySweepAgesHysteresisOnceAndCheckpointRestoreIsTransactional ............................   Passed    0.07 sec
+      Start 1133: test_amr_regrid_variable.AuthoredVariableSelectsTheExactConservativeComponent
+58/61 Test #1133: test_amr_regrid_variable.AuthoredVariableSelectsTheExactConservativeComponent .............................................   Passed    0.50 sec
+      Start 1134: test_amr_regrid_variable.UnknownVariableFailsBeforeHierarchyPublication
+59/61 Test #1134: test_amr_regrid_variable.UnknownVariableFailsBeforeHierarchyPublication ...................................................   Passed    0.05 sec
+      Start 1135: test_amr_regrid_variable.FixedRefineRequestsDoNotRedilateExistingBuffer
+60/61 Test #1135: test_amr_regrid_variable.FixedRefineRequestsDoNotRedilateExistingBuffer ...................................................   Passed    0.07 sec
+      Start 1136: test_amr_regrid_variable.KeepRetainsPreviousBufferWithoutRedilatingIt
+61/61 Test #1136: test_amr_regrid_variable.KeepRetainsPreviousBufferWithoutRedilatingIt .....................................................   Passed    0.07 sec
+
+97% tests passed, 2 tests failed out of 61
+
+Label Time Summary:
+amr                                            =   1.56 sec*proc (12 tests)
+cpp-target:test_amr_regrid_variable            =   0.69 sec*proc (4 tests)
+cpp-target:test_amr_seed_no_refine             =   0.87 sec*proc (8 tests)
+cpp-target:test_composite_fac_tensor           = 183.95 sec*proc (5 tests)
+cpp-target:test_krylov_workspace_reentrancy    =   7.54 sec*proc (36 tests)
+cpp-target:test_mapped_disk_tensor             =   0.26 sec*proc (8 tests)
+elliptic                                       = 191.76 sec*proc (49 tests)
+fast                                           = 191.76 sec*proc (49 tests)
+integration                                    =   1.56 sec*proc (12 tests)
+medium                                         =   1.56 sec*proc (12 tests)
+unit                                           = 191.76 sec*proc (49 tests)
+
+Total Test time (real) = 193.41 sec
+
+The following tests did not run:
+	748 - test_krylov_workspace_reentrancy.rank_local_problem_construction_failure_is_published_before_lane_unwind (Skipped)
+	764 - test_krylov_workspace_reentrancy.prepared_problem_and_workspace_execute_on_an_embedding_owned_congruent_communicator (Skipped)
+	765 - test_krylov_workspace_reentrancy.noncongruent_split_communicator_is_rejected_explicitly (Skipped)
+
+The following tests FAILED:
+	591 - test_composite_fac_tensor.discontinuous_spd_tensor_solves_the_positive_energy_mode (Failed) cpp-target:test_composite_fac_tensor elliptic fast unit
+	757 - test_krylov_workspace_reentrancy.numerical_actions_do_not_downgrade_explicit_provider_failure_or_false_convergence (Subprocess aborted) cpp-target:test_krylov_workspace_reentrancy elliptic fast unit
+Errors while running CTest

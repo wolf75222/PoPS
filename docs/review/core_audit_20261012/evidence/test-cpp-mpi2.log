@@ -1,0 +1,16 @@
+Test project <repository>/build-mpi
+    Start 1484: test_krylov_workspace_reentrancy_np2
+1/2 Test #1484: test_krylov_workspace_reentrancy_np2 ...   Passed    0.36 sec
+    Start 1487: test_tensor_coarse_gmres_np2
+2/2 Test #1487: test_tensor_coarse_gmres_np2 ...........   Passed   47.86 sec
+
+100% tests passed out of 2
+
+Label Time Summary:
+backend                                        =  96.44 sec*proc (2 tests)
+cpp-target:test_krylov_workspace_reentrancy    =   0.72 sec*proc (1 test)
+cpp-target:test_tensor_coarse_gmres            =  95.72 sec*proc (1 test)
+medium                                         =  96.44 sec*proc (2 tests)
+mpi                                            =  96.44 sec*proc (2 tests)
+
+Total Test time (real) =  48.27 sec

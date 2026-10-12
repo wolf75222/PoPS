@@ -1,0 +1,13 @@
+Test project <repository>/build-mpi
+    Start 591: test_composite_fac_tensor.discontinuous_spd_tensor_solves_the_positive_energy_mode
+1/1 Test #591: test_composite_fac_tensor.discontinuous_spd_tensor_solves_the_positive_energy_mode ...   Passed    2.36 sec
+
+100% tests passed out of 1
+
+Label Time Summary:
+cpp-target:test_composite_fac_tensor    =   2.36 sec*proc (1 test)
+elliptic                                =   2.36 sec*proc (1 test)
+fast                                    =   2.36 sec*proc (1 test)
+unit                                    =   2.36 sec*proc (1 test)
+
+Total Test time (real) =   2.44 sec
