@@ -1,0 +1,290 @@
+{
+  "schema": "pops.composite-transport-ledger-reception@1",
+  "installed_python_commit": "2e0d2eaffe64311b6987ae11ae303192f6f2d84a",
+  "native_cpp_commit": "6b50905b5e51770cbcb545d890d82945d616fd25",
+  "mpi_world_size": 1,
+  "passed": true,
+  "duration_seconds": 83.9023758330004,
+  "test_source_sha256": "0f4db2efa886a6e20d948670ed6615b0bc49c3f1de0d93bcfe529b2cafbec866",
+  "rank_xml_sha256": "592335d0628ab092395b7f679d7a864bdf628f8f22b257a1df78347bd453745f",
+  "reports": {
+    "adc942-periodic-n16.json": {
+      "accepted_exchange_count": 320,
+      "accepted_steps": 6,
+      "backend": {
+        "evidence": "pops.compiled-component-metadata.v1",
+        "value": "production"
+      },
+      "case": "periodic_fourier",
+      "coarse_fine_basis": {
+        "provider/1": {
+          "x": {
+            "coarse_count": 32,
+            "coarse_weighted_measure": 0.0020143884892086343,
+            "fine_count": 128,
+            "fine_weighted_measure": 0.0020143884892086343,
+            "signed_reconciliation_defect": 0.0
+          },
+          "y": {
+            "coarse_count": 32,
+            "coarse_weighted_measure": 0.0020143884892086343,
+            "fine_count": 128,
+            "fine_weighted_measure": 0.0020143884892086343,
+            "signed_reconciliation_defect": 0.0
+          }
+        },
+        "provider/4": {
+          "x": {
+            "coarse_count": 32,
+            "coarse_weighted_measure": 0.0020143884892086343,
+            "fine_count": 128,
+            "fine_weighted_measure": 0.0020143884892086343,
+            "signed_reconciliation_defect": 0.0
+          },
+          "y": {
+            "coarse_count": 32,
+            "coarse_weighted_measure": 0.0020143884892086343,
+            "fine_count": 128,
+            "fine_weighted_measure": 0.0020143884892086343,
+            "signed_reconciliation_defect": 0.0
+          }
+        }
+      },
+      "communicator": "MPI_COMM_WORLD",
+      "continuous_mass_drift": 0.0,
+      "device": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7b6ecdbd91bd605fd8b535d26b64b3cda0e8afdd4394e65de42a40bdbe94b765",
+        "value": "cpu"
+      },
+      "dt": 0.0017985611510791368,
+      "exchange_inventory": {
+        "active_incidence_count": 9216,
+        "composite_exterior_count": 320,
+        "covered_boundary_incidence_count": 0,
+        "evaluation_frame": {
+          "generation": 2,
+          "space": "pops.amr-program.face-evidence-space.v1:sha256:4615cb6db4ebe991f8470d0fac4ce1429dd6ba9c9a0a2cad673c476755d29908",
+          "topology_epoch": 2
+        },
+        "operator_evaluation_groups": 6,
+        "raw_incidence_count": 9216,
+        "raw_pre_reflux_incidence_amount": 8.813122664241832e-06
+      },
+      "final_run_accepted": 1,
+      "final_time": 0.01,
+      "first_run_accepted": 5,
+      "grid": {
+        "base_cells": [
+          16,
+          16
+        ],
+        "dimension": 2,
+        "levels": 2,
+        "ratio": 2
+      },
+      "l2_bound": 0.0015625,
+      "l2_error": 0.0005005701125451849,
+      "last_step_exchange_mass_defect": -2.220446049250313e-16,
+      "last_step_mass_change": 2.220446049250313e-16,
+      "last_step_raw_boundary_incidence_amount": 3.0095529563457127e-06,
+      "last_step_reflux_mass_delta": -8.813122664241832e-06,
+      "last_step_signed_exchange": 3.0095529563457127e-06,
+      "mpi_ranks": 1,
+      "native_has_mpi": true,
+      "reflux_inventory": {
+        "fragment_count": 640,
+        "native_payload_sha256": "07250b57fc8f5f349e1171ed5b706c8634248a52148a67443e73d9bc1e099f9f",
+        "reconciled_face_groups": 128,
+        "signed_mass_delta": -8.813122664241832e-06
+      },
+      "rejected_steps": 0,
+      "restart_bit_exact": true,
+      "restart_level_sha256": [
+        "6694dd0c6f150e149a77bdb7909baaee82c8af2f3565379102d8496f8ff82d76",
+        "abdb8f13c1128e109028fdbd71508906e224c2d896131b674f387eb09a1c7edd"
+      ],
+      "restarted_mass_drift": 0.0,
+      "schema": "pops.adc942.amr-transport-diffusion.v1",
+      "target": {
+        "evidence": "pops.compiled-component-metadata.v1",
+        "value": "amr_system"
+      }
+    },
+    "adc942-physical-n16.json": {
+      "accepted_steps": 6,
+      "backend": {
+        "evidence": "pops.compiled-component-metadata.v1",
+        "value": "production"
+      },
+      "boundary_mass_defect": 3.5914196963582334e-19,
+      "case": "physical_linear_steady",
+      "coarse_fine_basis": {
+        "provider/4": {
+          "x": {
+            "coarse_count": 16,
+            "coarse_weighted_measure": 0.0010071942446043172,
+            "fine_count": 64,
+            "fine_weighted_measure": 0.0010071942446043172,
+            "signed_reconciliation_defect": 0.0
+          }
+        }
+      },
+      "communicator": "MPI_COMM_WORLD",
+      "composite_mass_change": 0.0,
+      "device": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7b6ecdbd91bd605fd8b535d26b64b3cda0e8afdd4394e65de42a40bdbe94b765",
+        "value": "cpu"
+      },
+      "final_patch_boxes": [
+        [
+          1,
+          [
+            14,
+            0
+          ],
+          [
+            31,
+            31
+          ]
+        ]
+      ],
+      "final_time": 0.01,
+      "grid": {
+        "base_cells": [
+          16,
+          16
+        ],
+        "dimension": 2,
+        "levels": 2,
+        "ratio": 2
+      },
+      "initial_patch_boxes": [
+        [
+          1,
+          [
+            14,
+            0
+          ],
+          [
+            31,
+            31
+          ]
+        ]
+      ],
+      "last_accepted_step_patch_boxes": {
+        "after": [
+          [
+            1,
+            [
+              14,
+              0
+            ],
+            [
+              31,
+              31
+            ]
+          ]
+        ],
+        "before": [
+          [
+            1,
+            [
+              14,
+              0
+            ],
+            [
+              31,
+              31
+            ]
+          ]
+        ]
+      },
+      "last_dt": 0.0010071942446043172,
+      "level_support_changes": [
+        0,
+        0
+      ],
+      "max_state_error": 2.220446049250313e-16,
+      "mpi_ranks": 1,
+      "native_has_mpi": true,
+      "net_weighted_boundary_amount": 3.5914196963582334e-19,
+      "physical_boundary": {
+        "axis0_side0": {
+          "composite_count": 16,
+          "covered_coarse_count": 0,
+          "expected_flux": 0.05,
+          "expected_integrated_amount": -5.035971223021586e-05,
+          "integrated_amount": -5.035971223021551e-05,
+          "max_flux_defect": 3.469446951953614e-16,
+          "raw_count": 16,
+          "raw_level_counts": {
+            "0": 16,
+            "1": 0
+          },
+          "raw_max_flux_defect": 3.469446951953614e-16,
+          "raw_weighted_area": 0.0010071942446043172,
+          "weighted_area": 0.0010071942446043172
+        },
+        "axis0_side1": {
+          "composite_count": 64,
+          "covered_coarse_count": 0,
+          "expected_flux": 0.05,
+          "expected_integrated_amount": 5.035971223021586e-05,
+          "integrated_amount": 5.035971223021587e-05,
+          "max_flux_defect": 6.938893903907228e-18,
+          "raw_count": 64,
+          "raw_level_counts": {
+            "0": 0,
+            "1": 64
+          },
+          "raw_max_flux_defect": 6.938893903907228e-18,
+          "raw_weighted_area": 0.0010071942446043172,
+          "weighted_area": 0.0010071942446043172
+        },
+        "axis1_side0": {
+          "composite_count": 43,
+          "covered_coarse_count": 0,
+          "expected_flux": 0.0,
+          "expected_integrated_amount": -0.0,
+          "integrated_amount": 0.0,
+          "max_flux_defect": 0.0,
+          "raw_count": 43,
+          "raw_level_counts": {
+            "0": 7,
+            "1": 36
+          },
+          "raw_max_flux_defect": 0.0,
+          "raw_weighted_area": 0.0010071942446043172,
+          "weighted_area": 0.0010071942446043172
+        },
+        "axis1_side1": {
+          "composite_count": 43,
+          "covered_coarse_count": 0,
+          "expected_flux": 0.0,
+          "expected_integrated_amount": 0.0,
+          "integrated_amount": 0.0,
+          "max_flux_defect": 0.0,
+          "raw_count": 43,
+          "raw_level_counts": {
+            "0": 7,
+            "1": 36
+          },
+          "raw_max_flux_defect": 0.0,
+          "raw_weighted_area": 0.0010071942446043172,
+          "weighted_area": 0.0010071942446043172
+        }
+      },
+      "rejected_steps": 0,
+      "schema": "pops.adc942.amr-transport-diffusion.v1",
+      "target": {
+        "evidence": "pops.compiled-component-metadata.v1",
+        "value": "amr_system"
+      }
+    }
+  },
+  "limitations": [
+    "Only n16 periodic and stationary physical-boundary cases were run.",
+    "MPI multi-rank replication was not executed in this reception."
+  ],
+  "oracles": "Active incidences plus independently reconstructed wire-A reflux; original mass/L2/restart tolerances retained, stationary accepted tags retain topology."
+}

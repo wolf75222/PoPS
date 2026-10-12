@@ -10,6 +10,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[4]
 EXAMPLE = ROOT / "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py"
@@ -51,6 +53,12 @@ def test_example_runs_and_every_scientific_format_reopens(tmp_path: Path) -> Non
     assert report["checkpoint_restart_bit_identical"] is True
     assert report["continuation_bit_identical"] is True
     assert report["manual_preset_bit_identical"] is True
+    assert report["temporal_ratio"] == 1
+    assert report["spatial_ratio"] == 2
+    assert report["recursive_stage_mapping_ratio2_refused"] is True
+    assert report["recursive_stage_mapping_refusal"] == (
+        "AMR stage mapping requires common-time continuation for recursive subcycling"
+    )
     assert report["rejected_attempt_rollback"] is True
     assert report["rejected_attempt_error"].startswith(
         "step attempt rejected during "
@@ -71,6 +79,7 @@ def test_example_runs_and_every_scientific_format_reopens(tmp_path: Path) -> Non
 
     output = tmp_path / "published"
     assert not tuple((output / "rejected").rglob("*"))
+    assert not tuple((output / "recursive_refused").rglob("*"))
     readers = {".h5": read_hdf5, ".npz": read_npz, ".vtu": read_paraview}
     for suffix, reader in readers.items():
         # Scientific writers use the stable ``consumer__clock__step`` stem. Checkpoints are also
@@ -82,11 +91,14 @@ def test_example_runs_and_every_scientific_format_reopens(tmp_path: Path) -> Non
     assert tuple(output.rglob("manual_restart*.npz"))
 
 
-def test_resolved_amr_lowering_report_covers_every_executed_authority() -> None:
+@pytest.mark.parametrize("temporal_ratio", (1, 2))
+def test_resolved_amr_lowering_report_covers_every_executed_authority(temporal_ratio) -> None:
     import pops
 
     example = _load_example()
-    target = example.build_final_case()
+    # Both profiles retain exact declared authority; the runtime test separately
+    # qualifies ratio one and requires the explicit ratio-two mapping refusal.
+    target = example.build_final_case(temporal_ratio=temporal_ratio)
     resolved = pops.resolve(
         pops.validate(target.authoring.case),
         layout=target.layout,
@@ -135,7 +147,7 @@ def test_resolved_amr_lowering_report_covers_every_executed_authority() -> None:
         "amr-runtime-transfer-operation:recompute:coarse_fine_fill",
     }
     assert any(
-        target == "amr-runtime-clock-relation:0-1:2/1"
+        target == "amr-runtime-clock-relation:0-1:%d/1" % temporal_ratio
         for row in amr_rows
         for target in row.targets
     )
@@ -205,5 +217,6 @@ def test_normative_example_uses_only_the_final_root_lifecycle() -> None:
         and node.func.value.id == "pops"
         and node.func.attr == "run"
     ]
-    # Rejected proof, accepted manual step, both continuations and preset parity.
-    assert len(root_run) == 5
+    # Unsupported-profile refusal, singular rejection, accepted manual step,
+    # both continuations and preset parity all use the public root lifecycle.
+    assert len(root_run) == 6

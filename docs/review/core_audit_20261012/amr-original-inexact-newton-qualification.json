@@ -1,0 +1,87 @@
+{
+  "schema": "pops.amr-original-inexact-newton-fixture-reception@1",
+  "target": "tests/python/integration/runtime/test_public_amr_original_field.py::test_public_original_amr_saved_reaction_and_exact_restart[32-order2-declared_zero]",
+  "mpi_world_size": 1,
+  "passed": true,
+  "elapsed_seconds": 368.84106616699137,
+  "watchdog_seconds": 840,
+  "installed_python_commit": "2e0d2eaffe64311b6987ae11ae303192f6f2d84a",
+  "native_cpp_commit": "6b50905b5e51770cbcb545d890d82945d616fd25",
+  "scientific_receipt": {
+    "artifact": "pops.artifact.v1:sha256:4d1c7b4e5639b0b26999d29426a6eb3baf104216a4953a5e286cdf71c55e3303",
+    "native_dimension": 2,
+    "mpi_size": 1,
+    "cells": 32,
+    "order": [
+      2,
+      0,
+      1
+    ],
+    "native_sha256": "f67ecd7e90e11842db84950da92edf93610f0076ca8dbb2228b66581d3c36403",
+    "saved_sha256": "0e008f554999d5a7c31e33cf36587bd1d861b5702def0030cef003bd0ffd7eda",
+    "errors": [
+      8.326672684688674e-17,
+      8.326672684688674e-17
+    ],
+    "original_constant_solution_reaction_residuals": [
+      1.1102230246251565e-16,
+      1.1102230246251565e-16
+    ],
+    "tolerance": 3e-08,
+    "fixture_contract": "sol61.public-original-amr-fixture@5",
+    "fixture_sha256": "ea7928e95b798f926baad59f2fdb4adf51f3f232207cd74baf504a8582f629bf",
+    "initialization": {
+      "kind": "declared_zero",
+      "components": 3
+    },
+    "finite_difference_step": 1e-06,
+    "finite_difference_step_binary64": "0x1.0c6f7a0b5ed8dp-20",
+    "solver_controls": {
+      "tolerance": 1e-10,
+      "max_iterations": 20,
+      "linear_tolerance": 1e-06,
+      "linear_max_iterations": 240,
+      "restart": 60
+    },
+    "inner_tolerance_contract": "fd_inexact_newton_32",
+    "excluded_prior_32_inner_tolerance": 1e-08,
+    "native_original_work": {
+      "amr_original_field_7.finite_difference_jvps": 654.0,
+      "amr_original_field_7.full_residual_evaluations": 1314.0
+    },
+    "native_original_report": {
+      "amr_original_field_7.reference_residual_norm": 0.44847162617372166,
+      "amr_original_field_7.rel_residual": 4.633742176932022e-15,
+      "amr_original_field_7.residual_norm": 2.078101889358465e-15
+    },
+    "right_preconditioner": "SpatialBasisJacobi@1",
+    "rank_xml_sha256": "d2265680c27a6eb33357c3cae673638fc3e46c18d545dcce1c37864bc50d48cd"
+  },
+  "source_oracle_equivalence": {
+    "baseline_head": "6fb3f783b470c248114a1761882cf5ea4dfc1e3a",
+    "fixture": "tests/python/integration/runtime/test_public_amr_original_field.py",
+    "oracles": {
+      "check_original_saved": {
+        "baseline_ast_sha256": "20a3019fbca3fb5c10ef6c02d131653cb54c1a36996994d5a5b3dfcc726667e5",
+        "current_ast_sha256": "20a3019fbca3fb5c10ef6c02d131653cb54c1a36996994d5a5b3dfcc726667e5",
+        "unchanged": true
+      },
+      "capture": {
+        "baseline_ast_sha256": "b7dd1d2b90c157271cc5fcdd16ab9c47805b41000f57702e2dcebd1ae24afcd6",
+        "current_ast_sha256": "b7dd1d2b90c157271cc5fcdd16ab9c47805b41000f57702e2dcebd1ae24afcd6",
+        "unchanged": true
+      },
+      "continuous_and_exact_restart": {
+        "baseline_ast_sha256": "ec8f0b1a46e6a1bed90eecd9e293c7c62afd35398504b9f9ca4600ba2d49f606",
+        "current_ast_sha256": "ec8f0b1a46e6a1bed90eecd9e293c7c62afd35398504b9f9ca4600ba2d49f606",
+        "unchanged": true
+      }
+    }
+  },
+  "excluded_historical_failures": [
+    "original-amr-seeded32-2e0d2ea-mpi1: cells32 declared-zero FD1e-6",
+    "original-amr-initialization-2e0d2ea-mpi1: cells32 physical0.1 FD1e-6",
+    "original-amr-fd4e6-2e0d2ea-mpi1: cells32 declared-zero FD4e-6 inner1e-8"
+  ],
+  "limitation": "The former inner tolerance1e-8 on cells32 is not qualified. Only this fixture realizes inexact Newton with inner1e-6; original nonlinear criterion1e-10 and all independent physical/NPZ/continuation/restart oracles are retained. No production solver/algorithm edit."
+}

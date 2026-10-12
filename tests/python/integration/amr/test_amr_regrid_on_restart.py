@@ -314,6 +314,30 @@ def _assert_same_accepted_image(runtime, expected):
             np.testing.assert_array_equal(current, recorded)
 
 
+def _expected_regrid_continuation(source_run, restored_run, authority):
+    """Reconstruct the checkpoint owner epoch separately from the restored run."""
+    from pops.identity import Identity, make_identity
+    assert type(source_run) is Identity and source_run.domain == "run"
+    assert type(restored_run) is Identity and restored_run.domain == "run"
+    owners = []
+    for row in authority["owners"]:
+        owner = {"owner_path": tuple(row["owner_path"])}
+        for name in ("previous_owner_run", "previous_owner_lineage"):
+            token = row[name]
+            owner[name] = None if token is None else Identity.from_token(token).to_data()
+        owners.append(owner)
+    epoch = make_identity("run", {
+        "continuation": "checkpoint_restart_epoch@1",
+        "source_run_identity": source_run.to_data(),
+        "owner_authorities": owners,
+    })
+    return make_identity("run", {
+        "continuation": "checkpoint_regrid_epoch@1",
+        "owner_epoch": epoch.to_data(),
+        "source_run_identity": restored_run.to_data(),
+    })
+
+
 def _accepted_tagging_hysteresis(payload):
     """Extract the canonical persistent-tagging image from accepted Program state."""
     encoded = bytes(payload)
@@ -519,6 +543,10 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     restarted = _bind(artifact)
     rollback_image = _accepted_image(restarted)
     rollback_hysteresis = _runtime_tagging_hysteresis(restarted)
+    from tests.python.integration.runtime.test_public_evolved_original_stage import (
+        checkpoint_restart_authority,
+    )
+    rollback_authority = checkpoint_restart_authority(restarted)
     from pops.runtime import _amr_checkpoint_v3 as checkpoint_codec
 
     original_conservation_check = checkpoint_codec._require_restart_conservation
@@ -549,6 +577,7 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     assert transformed_hysteresis[0] != source_hysteresis
     _assert_same_accepted_image(restarted, rollback_image)
     assert _runtime_tagging_hysteresis(restarted) == rollback_hysteresis
+    assert checkpoint_restart_authority(restarted) == rollback_authority
     assert restarted._executor.last_restart_regrid_receipt() is None
 
     monkeypatch.setattr(
@@ -598,7 +627,14 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
         atol=2.0e-13,
     )
 
-    continuation_identity = restarted.last_run_identity
+    restored_source_run = restarted.last_run_identity
+    continuation_identity = _expected_regrid_continuation(
+        source_run_identity, restored_source_run, rollback_authority)
+    restored_authority = checkpoint_restart_authority(restarted)
+    assert [row["owner_path"] for row in restored_authority["owners"]] == [
+        row["owner_path"] for row in rollback_authority["owners"]]
+    assert all(row["previous_owner_lineage"] == continuation_identity.token
+               for row in restored_authority["owners"])
     continued = pops.run(
         restarted,
         t_end=source_time + DT,
@@ -609,6 +645,7 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     assert float(restarted.time()) == pytest.approx(source_time + DT)
     assert restarted._executor.last_run_manifest.continuation_identity == continuation_identity
     assert continued.run_identity != source_run_identity
+    assert continued.run_identity != restored_source_run
     assert _runtime_tagging_hysteresis(restarted) == transformed_hysteresis[0]
     assert all(
         np.all(np.isfinite(np.asarray(restarted.history_global(name, level, slot))))

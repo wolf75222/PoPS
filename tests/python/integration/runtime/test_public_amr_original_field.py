@@ -245,20 +245,53 @@ def check_original_saved(rows, cells, width, time):
 @pytest.mark.compiler
 @pytest.mark.kokkos
 @pytest.mark.native_loader
-@pytest.mark.parametrize("cells,order,seed", [(16, (0,), False), (16, (0, 1, 2), False), (32, (2, 0, 1), True)])
-def test_public_original_amr_saved_reaction_and_exact_restart(isolated_native_cache, tmp_path, record_property, cells, order, seed):
+@pytest.mark.parametrize("cells,order,initialization", [
+    (16, (0,), "implicit_zero"),
+    (16, (0, 1, 2), "declared_zero"),
+    (32, (2, 0, 1), "declared_zero"),
+])
+def test_public_original_amr_saved_reaction_and_exact_restart(isolated_native_cache, tmp_path, record_property, cells, order, initialization):
     del isolated_native_cache
     native, world = native_profile(scope="public original AMR field")
     rank, size = rank_and_size(world)
     record_property("native_abi_version", native.__abi_version__)
     record_property("native_profile", "MPI" if world is not None else "Serial")
-    runtime, artifact = bind_case(world, cells, order, seed=seed, right_preconditioner="SpatialBasisJacobi@1")
+    assert initialization in ("implicit_zero", "declared_zero")
+    # A central full-residual FD JVP has a roundoff floor. The 32-cell
+    # descriptor uses an inexact Newton inner tolerance above that floor;
+    # publication still requires the original nonlinear tolerance of 1e-10.
+    # The default descriptor remains unchanged for the 16-cell cases.
+    solver = (Newton(tolerance=1e-10, max_iterations=20, linear_tolerance=1e-6,
+        linear_max_iterations=240, restart=60, right_preconditioner="SpatialBasisJacobi@1")
+        if cells == 32 else None)
+    runtime, artifact = bind_case(world, cells, order, seed=initialization == "declared_zero",
+        solver=solver, right_preconditioner="SpatialBasisJacobi@1")
     directory = collective_directory(world, tmp_path / "original-amr-field")
     collective_call(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
     accepted = capture(world, runtime)
     checkpoint = collective_call(world, lambda: runtime.checkpoint(directory / "accepted-checkpoint"))
     with collective_check(world):
         assert accepted[3][:2] == (DT, 1)
+        work = {name:value for name,value in accepted[2][1]
+                if name.endswith((".full_residual_evaluations", ".finite_difference_jvps"))}
+        assert np.all(TARGET[:len(order)] != 0), "the zero seed is not the exact solution"
+        for suffix, minimum in ((".full_residual_evaluations", 1), (".finite_difference_jvps", 0)):
+            values = [value for name,value in work.items() if name.endswith(suffix)]
+            assert len(values) == 1 and np.isfinite(values[0])
+            assert values[0] == int(values[0]) and values[0] > minimum, "original Newton work required"
+        original_report = {name:value for name,value in accepted[2][1]
+            if name.startswith("amr_original_field_") and name.endswith(
+                (".residual_norm", ".reference_residual_norm", ".rel_residual"))}
+        if cells == 32:
+            def report_value(suffix):
+                values = [value for name,value in original_report.items() if name.endswith(suffix)]
+                assert len(values) == 1 and np.isfinite(values[0]) and values[0] >= 0
+                return values[0]
+            residual = report_value(".residual_norm")
+            reference = report_value(".reference_residual_norm")
+            report_value(".rel_residual")
+            assert reference > 0, "original full nonlinear residual required"
+            assert residual <= 1e-10 * max(1, reference), "original nonlinear publication criterion"
         if rank == 0:
             payload = {"level%d_%s" % (level, name): value for level, row in enumerate(accepted[0])
                        for name, value in zip(("response", "forcing", "parameter", "active"), row, strict=True)}
@@ -273,7 +306,18 @@ def test_public_original_amr_saved_reaction_and_exact_restart(isolated_native_ca
                 "native_path": str(native.__file__), "native_sha256": hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest(),
                 "saved_sha256": hashlib.sha256(saved.read_bytes()).hexdigest(), "errors": errors,
                 "original_constant_solution_reaction_residuals": residuals, "tolerance": TOL,
-                "fixture_contract": "sol61.public-original-amr-fixture@2",
+                "fixture_contract": "sol61.public-original-amr-fixture@5",
+                "fixture_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                "initialization": {"kind":initialization, "components":len(order)},
+                "finite_difference_step": 1e-6,
+                "finite_difference_step_binary64": float(1e-6).hex(),
+                "solver_controls": {"tolerance":1e-10, "max_iterations":20,
+                    "linear_tolerance":1e-6 if cells == 32 else 1e-8,
+                    "linear_max_iterations":240, "restart":60},
+                "inner_tolerance_contract": "fd_inexact_newton_32" if cells == 32 else "original_16",
+                "excluded_prior_32_inner_tolerance":1e-8 if cells == 32 else None,
+                "native_original_work":work,
+                "native_original_report":original_report,
                 "right_preconditioner": "SpatialBasisJacobi@1"}, indent=2) + "\n")
     collective_call(world, lambda: pops.run(runtime, t_end=2*DT, max_steps=1, console=False))
     continuous = capture(world, runtime)

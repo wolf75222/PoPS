@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from fractions import Fraction
+from collections import Counter
 import hashlib
 import json
 import math as pmath
 import os
+import struct
 from pathlib import Path
 from unittest.mock import patch
 
@@ -52,7 +54,9 @@ from tests.python.support.amr_snapshots import (
     composite_active_mask,
     level_valid_mask,
 )
+from tests.python.support.amr_accepted_state import accepted_tagging_hysteresis_span
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.public_native_profile import native_profile, profile_gather_value
 
 
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
@@ -167,10 +171,8 @@ def _bind(artifact):
 
 def _compile(resolved, *, route):
     """Publish once when this same matrix is launched under two MPI ranks."""
-    from pops import _pops
-
-    comm = _pops.mpi_world()
-    if int(comm.size) == 1:
+    _native, comm = native_profile(scope="AMR transport-diffusion compiler")
+    if comm is None or int(comm.size) == 1:
         return pops.compile(resolved)
     from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 
@@ -178,10 +180,8 @@ def _compile(resolved, *, route):
 
 
 def _collective_path(path):
-    from pops import _pops
-
-    comm = _pops.mpi_world()
-    if int(comm.size) == 1:
+    _native, comm = native_profile(scope="AMR transport-diffusion checkpoint")
+    if comm is None or int(comm.size) == 1:
         return path
     from pops._native_collectives import broadcast_value
 
@@ -190,13 +190,15 @@ def _collective_path(path):
 
 
 def _evidence(artifact, n, payload, *, record_property, name):
-    from pops import _pops
+    native, comm = native_profile(scope="AMR transport-diffusion evidence")
 
     platform = artifact.platform_manifest.to_data()
     row = {
         "schema": "pops.adc942.amr-transport-diffusion.v1",
         "grid": {"dimension": 2, "base_cells": [n, n], "levels": 2, "ratio": 2},
-        "mpi_ranks": int(_pops.mpi_world().size),
+        "mpi_ranks": None if comm is None else int(comm.size),
+        "communicator": "Serial" if comm is None else "MPI_COMM_WORLD",
+        "native_has_mpi": native.__has_mpi__,
         "backend": platform["backend"],
         "target": platform["target"],
         "device": platform["device"],
@@ -205,7 +207,7 @@ def _evidence(artifact, n, payload, *, record_property, name):
     encoded = json.dumps(row, sort_keys=True)
     record_property(name, encoded)
     destination = os.environ.get("POPS_DIFFUSION_QUALIFICATION_EVIDENCE_DIR")
-    if destination and int(_pops.mpi_world().rank) == 0:
+    if destination and (comm is None or int(comm.rank) == 0):
         path = Path(destination)
         path.mkdir(parents=True, exist_ok=True)
         (path / (name + ".json")).write_text(json.dumps(row, indent=2, sort_keys=True) + "\n")
@@ -241,10 +243,288 @@ def _assert_physical_linear_profile(runtime, level, *, n):
     return valid, float(np.max(np.abs(state[valid] - exact[valid])))
 
 
+def _accepted_frame(runtime):
+    """Read only the bounded prefix of the actual native A image, never fabricate one."""
+    image = bytes(runtime._executor.program_accepted_state())
+    assert image[:8] == b"POPSANDA" and len(image) >= 32
+    assert int.from_bytes(image[8:16], "little") == 2
+    size = int.from_bytes(image[16:24], "little")
+    assert 0 < size <= len(image) - 40
+    contract = image[24:24 + size]
+    cursor = 24 + size
+    return {
+        "space": "pops.amr-program.face-evidence-space.v1:sha256:" + hashlib.sha256(contract).hexdigest(),
+        "topology_epoch": int.from_bytes(image[cursor:cursor + 8], "little"),
+        "generation": int.from_bytes(image[cursor + 8:cursor + 16], "little"),
+    }
+
+
+def _exchange_support(runtime):
+    """Capture the exact evaluation hierarchy before macro completion may regrid it."""
+    return {
+        "frame": _accepted_frame(runtime),
+        "active": tuple(composite_active_mask(runtime, level, refinement_ratio=2).copy()
+                        for level in range(runtime.n_levels())),
+        "valid": tuple(level_valid_mask(runtime, level, refinement_ratio=2).copy()
+                       for level in range(runtime.n_levels())),
+    }
+
+
+def _composite_boundary_exchanges(runtime, n, support):
+    """Keep all physical traces of the evaluation support; interface reflux is separate.
+
+    Native diffusion records every oriented active cell/face incidence. Internal
+    coarse/fine contributions have not yet been reconciled in that raw sum. The
+    composite conservation law uses exterior traces and the authenticated reflux ledger.
+    """
+    _native, world = native_profile(scope="AMR transport-diffusion exchange inventory")
+    local_records = []
+    identities = set()
+    for record in runtime._executor._program_exchange_records():
+        identity = tuple(record[key] for key in ("operation_identity", "occurrence_identity",
+                                                 "evaluation_context", "quadrature_identity"))
+        assert all(identity) and identity not in identities
+        identities.add(identity)
+        cell, axis, side = _quadrature(record)
+        level = _exchange_level(record["evaluation_context"])
+        assert len(cell) == 2 and axis in (0, 1) and side in (0, 1)
+        assert 0 <= level < len(support["valid"])
+        level_n = n * 2**level
+        assert all(0 <= coordinate < level_n for coordinate in cell)
+        index = tuple(reversed(cell))
+        assert support["valid"][level][index]
+        assert record["orientation"] in (-1, 1)
+        assert record["face_measure"] == 1.0 / level_n
+        expected_amount = (record["orientation"] * record["face_measure"] * record["numerical_flux"]
+                           * record["temporal_weight"] * record["multiplicity"])
+        assert record["integrated_amount"] == expected_amount and pmath.isfinite(expected_amount)
+        local_records.append(record)
+    gathered = ((local_records,) if world is None or int(world.size) == 1
+                else profile_gather_value(world, local_records))
+    # The native accepted ledger may expose rank shards or collective replicas.
+    # Identical occurrences are one incidence; conflicting replicas fail closed.
+    unique = {}
+    for shard in gathered:
+        for record in shard:
+            key = tuple(record[name] for name in ("operation_identity", "occurrence_identity",
+                                                  "evaluation_context", "quadrature_identity"))
+            assert key not in unique or unique[key] == record, "accepted exchange replicas disagree"
+            unique[key] = record
+    active_records, physical = [], []
+    covered_boundary_count = 0
+    for record in unique.values():
+        cell, axis, side = _quadrature(record)
+        level = _exchange_level(record["evaluation_context"])
+        exterior = cell[axis] == (0 if side == 0 else n * 2**level - 1)
+        if not support["active"][level][tuple(reversed(cell))]:
+            covered_boundary_count += int(exterior)
+            continue
+        active_records.append(record)
+        if exterior:
+            physical.append(record)
+    selected = tuple(physical)
+    assert selected
+    assert len({tuple(record[key] for key in ("operation_identity", "occurrence_identity",
+                                              "evaluation_context", "quadrature_identity"))
+                for record in selected}) == len(selected)
+    # Every operator/evaluation group supplies the complete exterior quadrature
+    # for its finest-owner support, including both periodic boundary partners.
+    groups = {}
+    for record in selected:
+        key = tuple(record[name] for name in ("operation_identity", "occurrence_identity", "evaluation_context"))
+        groups.setdefault(key, []).append(record)
+    for key, records in groups.items():
+        quadrature = {_quadrature(record) for record in records}
+        # +div and -div use opposite polarizations. Consume the authored sign
+        # and require a coherent opposite-face orientation within each evaluation.
+        for axis in (0, 1):
+            polarizations = {record["orientation"] * (-1 if _quadrature(record)[2] == 0 else 1)
+                             for record in records if _quadrature(record)[1] == axis}
+            assert len(polarizations) <= 1
+        level = _exchange_level(key[2])
+        active = support["active"][level]
+        level_n = n * 2**level
+        expected = set()
+        for y, x in np.argwhere(active):
+            cell = (int(x), int(y))
+            for axis in (0, 1):
+                for side in (0, 1):
+                    if cell[axis] == (0 if side == 0 else level_n - 1):
+                        expected.add((cell, axis, side))
+        assert quadrature == expected, "accepted exterior quadrature omitted or added a composite face"
+    return selected, {
+        "evaluation_frame": support["frame"],
+        "raw_incidence_count": len(unique),
+        "active_incidence_count": len(active_records),
+        "raw_pre_reflux_incidence_amount": pmath.fsum(row["integrated_amount"] for row in active_records),
+        "covered_boundary_incidence_count": covered_boundary_count,
+        "composite_exterior_count": len(selected),
+        "operator_evaluation_groups": len(groups),
+    }
+
+
+def _accepted_face_fragments(image):
+    """Inspect actual scalar A fragments using the native writer's bounded layout."""
+    assert image[:8] == b"POPSANDA" and int.from_bytes(image[8:16], "little") == 2
+    tagging, offset = accepted_tagging_hysteresis_span(image, dimension=2)
+    cursor = offset + len(tagging)
+
+    def take(count):
+        nonlocal cursor
+        assert 0 <= count <= len(image) - cursor, "accepted face fragment is truncated"
+        data = image[cursor:cursor + count]
+        cursor += count
+        return data
+
+    def word(signed=False):
+        return int.from_bytes(take(8), "little", signed=signed)
+
+    def real():
+        value, = struct.unpack("<d", take(8))
+        assert pmath.isfinite(value)
+        return value
+
+    def text():
+        return take(word()).decode("utf-8")
+
+    def rational():
+        numerator, denominator = word(True), word(True)
+        assert denominator > 0
+        value = Fraction(numerator, denominator)
+        assert (value.numerator, value.denominator) == (numerator, denominator)
+        return value
+
+    assert text() and text()  # exact native flux-budget and coupling contracts
+    start = cursor
+    fragments = []
+    for axis in range(2):
+        count = word()
+        assert count <= (len(image) - cursor) // 240
+        for _ in range(count):
+            owner, state = text(), text()
+            levels = word(True), word(True)
+            assert owner == "heat" and levels == (0, 1)
+            assert state.startswith("pops.handle.v1::case:qualified-amr-diffusion-case/block:heat/"
+                                    "model_definition:qualified-amr-diffusion-model@pops.module%3Asha256%3A")
+            assert state.endswith("::state::U")
+            module_digest = state.rsplit("%3A", 1)[1].removesuffix("::state::U")
+            assert len(module_digest) == 64 and all(char in "0123456789abcdef" for char in module_digest)
+            assert word() == 0 and word(True) == axis  # face centering, stored axis
+            face = word(True), word(True)
+            coarse_face = word(True), word(True)
+            clock_level, macro_step = word(True), word(True)
+            phase, physical_time = rational(), real()
+            family, stage, attempt = text(), text(), word()
+            role, contribution = word(), word()
+            weight, begin, end = rational(), rational(), rational()
+            duration, measure = real(), real()
+            assert family and stage and attempt > 0 and role in (0, 1) and contribution == 0
+            assert family.startswith("pops.program-flux-family.v1:sha256:")
+            family_digest = family.rsplit(":", 1)[1]
+            assert len(family_digest) == 64 and all(char in "0123456789abcdef" for char in family_digest)
+            assert stage.startswith(tuple("pops.program-flux-expression.v1/provider/%d/rhs/" % provider
+                                          for provider in (1, 4)))
+            assert clock_level == levels[role] and macro_step >= 0 and 0 <= phase <= 1
+            assert weight > 0 and 0 <= begin < end <= 1 and duration > 0 and measure > 0
+            assert word() == 1  # this authored state has one real scalar component
+            flux = real()
+            fragments.append({"owner": owner, "state": state, "levels": levels, "axis": axis,
+                "face": face, "coarse_face": coarse_face, "macro_step": macro_step,
+                "family": family, "stage": stage, "attempt": attempt, "role": role,
+                "clock_level": clock_level, "phase": phase, "physical_time": physical_time,
+                "weight": weight, "begin": begin, "end": end,
+                "duration": duration, "measure": measure, "flux": flux})
+    identities = [tuple(row[name] for name in ("owner", "state", "levels", "axis", "face", "coarse_face",
+                  "clock_level", "macro_step", "phase", "physical_time", "family", "stage", "attempt", "role"))
+                  for row in fragments]
+    assert len(identities) == len(set(identities)), "accepted face payload duplicated an exact fragment"
+    if fragments:
+        assert len({row["state"] for row in fragments}) == 1
+        assert len({(row["attempt"], row["macro_step"]) for row in fragments}) == 1
+        prefix_size = int.from_bytes(image[16:24], "little")
+        attempt_offset = 24 + prefix_size + 16
+        assert attempt_offset + 8 <= len(image)
+        assert fragments[0]["attempt"] == int.from_bytes(image[attempt_offset:attempt_offset + 8], "little")
+    return fragments, hashlib.sha256(image[start:cursor]).hexdigest()
+
+
+def _accepted_reflux_mass_delta(runtime, n, support):
+    """Reconstruct the signed native reflux correction independently from accepted payloads."""
+    fragments, payload_digest = _accepted_face_fragments(bytes(runtime._executor.program_accepted_state()))
+    _native, world = native_profile(scope="AMR accepted reflux payloads")
+    if world is not None and int(world.size) > 1:
+        # Native face payloads are collective replicas, not additive rank shards.
+        digests = profile_gather_value(world, payload_digest)
+        assert all(digest == payload_digest for digest in digests)
+    groups = {}
+    for fragment in fragments:
+        assert fragment["measure"] == 1.0 / (n * 2**fragment["role"])
+        face, coarse_face, axis = fragment["face"], fragment["coarse_face"], fragment["axis"]
+        assert 0 <= coarse_face[axis] <= n and 0 <= coarse_face[1 - axis] < n
+        if fragment["role"] == 0:
+            assert face == coarse_face
+        else:
+            assert face[axis] == 2 * coarse_face[axis]
+            assert face[1 - axis] - 2 * coarse_face[1 - axis] in (0, 1)
+        key = tuple(fragment[name] for name in ("owner", "state", "levels", "axis", "coarse_face",
+                                               "attempt", "macro_step", "family"))
+        groups.setdefault(key, ([], []))[fragment["role"]].append(fragment)
+    # These public metadata rows independently authenticate every parsed owner,
+    # clock, stage, temporal weight and metric, although they do not expose F.
+    manifest = tuple(tuple(map(str, row)) for row in runtime._executor.program_flux_ledger_manifest())
+    assert all(len(row) == 17 for row in manifest)
+    projected = [(row["owner"], row["state"], row["stage"], "numerical_flux", row["clock_level"],
+                  row["macro_step"], row["phase"], row["weight"], row["axis"], row["role"],
+                  row["measure"], row["duration"]) for row in fragments]
+    diagnostic = [(row[0], row[1], row[2], row[3], int(row[4]), int(row[5]),
+                   Fraction(int(row[6]), int(row[7])), Fraction(int(row[8]), int(row[9])),
+                   ord(row[10][0]) - ord("x"), int(row[10].endswith("_fine")), float(row[11]), float(row[12]))
+                  for row in manifest]
+    assert Counter(projected) == Counter(diagnostic), "wire payload and public face metadata disagree"
+    correction = 0.0
+    for key, (coarse, fine) in groups.items():
+        assert coarse and fine
+        # This authored ForwardEuler has one accepted stage over the macro
+        # interval and two fine substeps on each of its two tangential faces.
+        assert len(coarse) == 1 and len(fine) == 4
+        assert coarse[0]["begin"] == 0 and coarse[0]["end"] == 1
+        assert all(item["weight"] == 1 and item["phase"] == item["begin"] for item in coarse + fine)
+        fine_faces = {item["face"] for item in fine}
+        assert len(fine_faces) == 2
+        for fine_face in fine_faces:
+            slices = [(item["begin"], item["end"]) for item in fine if item["face"] == fine_face]
+            assert sorted(slices) == [(Fraction(0), Fraction(1, 2)), (Fraction(1, 2), Fraction(1))]
+        assert all(abs(item["duration"] - coarse[0]["duration"] / 2) <= 5.0e-16
+                   for item in fine)
+        axis, face = key[3], key[4]
+        left, right = list(face), list(face)
+        left[axis] = (left[axis] - 1) % n
+        right[axis] %= n
+        active = support["active"][0]
+        left_active = bool(active[tuple(reversed(left))])
+        right_active = bool(active[tuple(reversed(right))])
+        assert left_active != right_active, "accepted reflux face has no unique active coarse neighbor"
+        normal = 1 if left_active else -1
+
+        def integral(group):
+            return pmath.fsum(item["flux"] * item["weight"] * item["duration"] * item["measure"]
+                              for item in group)
+
+        # metric_reflux forms I_f-I_c and applies + to the coarse lower side,
+        # - to its upper side. Volume cancels in the composite mass correction.
+        correction += normal * (integral(coarse) - integral(fine))
+    return correction, {"fragment_count": len(fragments), "reconciled_face_groups": len(groups),
+                        "native_payload_sha256": payload_digest, "signed_mass_delta": correction}
+
+
 def _coarse_fine_basis_oracle(runtime, providers=("provider/1", "provider/4")):
     rows = tuple(tuple(map(str, row)) for row in runtime._executor.program_flux_ledger_manifest())
     assert all(len(row) == 17 for row in rows)
     assert runtime.n_levels() == 2
+    frame = _accepted_frame(runtime)
+    assert all(row[13] == frame["space"] and int(row[14]) == frame["topology_epoch"]
+               and int(row[15]) == frame["generation"] and int(row[16]) == runtime.n_levels()
+               for row in rows), "accepted reflux rows have a foreign topology/materialization frame"
     coarse_active = composite_active_mask(runtime, 0, refinement_ratio=2)
     if not coarse_active.any():
         # A fully covered coarse level has no coarse/fine interface to reconcile.
@@ -345,6 +625,7 @@ def test_periodic_full_refinement_restart_and_face_inventory(
     before_last_time = step_times[-1]
     first_report = pops.run(continuous, t_end=before_last_time, max_steps=steps, console=False)
     mass_before_last = _mass(continuous, n)
+    last_step_support = _exchange_support(continuous)
     final_report = pops.run(continuous, t_end=FINAL_TIME, max_steps=2, console=False)
     pops.run(restarted_source, t_end=half_time, max_steps=half_steps, console=False)
     checkpoint = restarted_source.checkpoint(_collective_path(tmp_path / ("diffusion-n%d" % n)))
@@ -368,11 +649,14 @@ def test_periodic_full_refinement_restart_and_face_inventory(
             restarted_level,
         )
         restart_hashes.append(hashlib.sha256(continuous_level.tobytes()).hexdigest())
-    exchanges = continuous._executor._program_exchange_records()
+    assert final_report.accepted_steps == 1
+    exchanges, exchange_inventory = _composite_boundary_exchanges(continuous, n, last_step_support)
     assert exchanges and max(abs(row["numerical_flux"]) for row in exchanges) > 0
     signed_exchange = sum(row["integrated_amount"] for row in exchanges)
     accepted_mass_change = final_mass - mass_before_last
-    assert abs(signed_exchange - accepted_mass_change) < 8.0e-11
+    reflux_delta, reflux_inventory = _accepted_reflux_mass_delta(continuous, n, last_step_support)
+    raw_exchange = exchange_inventory["raw_pre_reflux_incidence_amount"]
+    assert abs(raw_exchange + reflux_delta - accepted_mass_change) < 8.0e-11
     basis = _coarse_fine_basis_oracle(continuous)
     _evidence(
         artifact,
@@ -393,8 +677,12 @@ def test_periodic_full_refinement_restart_and_face_inventory(
             "restart_level_sha256": restart_hashes,
             "last_step_signed_exchange": signed_exchange,
             "last_step_mass_change": accepted_mass_change,
-            "last_step_exchange_mass_defect": signed_exchange - accepted_mass_change,
+            "last_step_raw_boundary_incidence_amount": signed_exchange,
+            "last_step_reflux_mass_delta": reflux_delta,
+            "last_step_exchange_mass_defect": raw_exchange + reflux_delta - accepted_mass_change,
+            "reflux_inventory": reflux_inventory,
             "accepted_exchange_count": len(exchanges),
+            "exchange_inventory": exchange_inventory,
             "coarse_fine_basis": basis,
         },
         record_property=record_property,
@@ -440,8 +728,10 @@ def test_physical_diffusion_boundary_is_steady_across_refinement_and_subcycling(
         int(np.count_nonzero(before[0] != after[0]))
         for before, after in zip(before_profiles, after_profiles, strict=True)
     )
-    assert before_boxes != after_boxes
-    assert any(support_changes)
+    # This exact linear solution is stationary. Its physical tags and one-cell
+    # numerical buffer remain stationary through scheduled regrids.
+    assert before_boxes == after_boxes
+    assert not any(support_changes)
     assert report.accepted_steps > 0
     assert len(accepted_step_topologies) == report.accepted_steps
     last_step_topology_before, last_step_topology_after = accepted_step_topologies[-1]
