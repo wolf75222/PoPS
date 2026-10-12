@@ -1077,7 +1077,13 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
   const auto psi_rhs = make_poisson_rhs_v2(IncidencePsiRhs{});
   system.set_block_elliptic_field_v2("material", "phi", "test.amr-aux.phi-rhs",
     "test.amr-aux.phi-binding", "test.amr-aux.phi-consumer", 0,
-    [&observed, phi_rhs](const Inputs& inputs, Field& rhs) {
+    [&observed, phi_rhs, extra](const Inputs& inputs, Field& rhs) {
+      // Only the iteration-limit witness starts from an exact zero bootstrap solve.
+      // The produced positive-dt request still evaluates the actual state RHS.
+      if (extra == IncidenceRestoreWitness::scaled_phi_failure && inputs.boundary_point().dt == 0) {
+        rhs.set_val(Real(0));
+        return;
+      }
       phi_rhs(inputs, rhs);
       if (inputs.boundary_point().dt > 0)
         observed.phi_points.at(static_cast<std::size_t>(inputs.level())) = inputs.boundary_point();
@@ -1147,12 +1153,27 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
     const auto library = dynlib::open(POPS_TEST_FIELD_RHS_AUX_INCIDENCE_PROGRAM_SO);
     ASSERT_TRUE(dynlib::valid(library));
     using HierarchySolve = std::array<SolveReport, 2> (*)(AmrSystem<D>*, std::int64_t,
-                                                       std::int64_t, double, int, int);
+                                                       std::int64_t, double, int, int,
+                                                       std::array<std::optional<SolveReport>, 2>*);
     const auto hierarchy_solve = reinterpret_cast<HierarchySolve>(
         dynlib::sym(library, "pops_test_aux_incidence_scaled_fields"));
     ASSERT_NE(hierarchy_solve, nullptr);
-    EXPECT_THROW((void)hierarchy_solve(&system, 7, 8, .25, 16, 17), std::exception);
+    std::array<std::optional<SolveReport>, 2> actual_reports;
+    bool failed = false;
+    try { (void)hierarchy_solve(&system, 7, 8, .25, 16, 17, &actual_reports); }
+    catch (const std::exception& error) {
+      failed = true;
+      if (context.prepared_execution_lane().size() == 1)
+        EXPECT_NE(std::string(error.what()).find("incidence phi solve failed:"), std::string::npos);
+    }
     dynlib::close(library);
+    EXPECT_TRUE(failed);
+    ASSERT_TRUE(actual_reports[0].has_value()) << "the real failed phi Outcome must be consumed";
+    EXPECT_FALSE(actual_reports[0]->solved_value_available());
+    EXPECT_EQ(actual_reports[0]->status, SolveStatus::kIterationLimit);
+    EXPECT_EQ(actual_reports[0]->action, SolveAction::kFailRun);
+    EXPECT_GT(actual_reports[0]->iters, 0);
+    EXPECT_FALSE(actual_reports[1].has_value()) << "phi failure must precede psi consumption";
     for (int level = 0; level < 2; ++level) {
       ASSERT_TRUE(observed.phi_points[level].has_value());
       EXPECT_EQ(observed.phi_points[level]->stage, 16);
@@ -1437,11 +1458,12 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
     const auto library = dynlib::open(POPS_TEST_FIELD_RHS_AUX_INCIDENCE_PROGRAM_SO);
     ASSERT_TRUE(dynlib::valid(library));
     using HierarchySolve = std::array<SolveReport, 2> (*)(AmrSystem<D>*, std::int64_t,
-                                                       std::int64_t, double, int, int);
+                                                       std::int64_t, double, int, int,
+                                                       std::array<std::optional<SolveReport>, 2>*);
     const auto hierarchy_solve = reinterpret_cast<HierarchySolve>(
         dynlib::sym(library, "pops_test_aux_incidence_scaled_fields"));
     ASSERT_NE(hierarchy_solve, nullptr);
-    const auto doubled = hierarchy_solve(&system, 7, 8, .25, 16, 17);
+    const auto doubled = hierarchy_solve(&system, 7, 8, .25, 16, 17, nullptr);
     dynlib::close(library); // The installed Program retains the real DSO and Context.
     ASSERT_TRUE(doubled[0].solved_value_available()) << doubled[0].reason;
     ASSERT_TRUE(doubled[1].solved_value_available()) << doubled[1].reason;

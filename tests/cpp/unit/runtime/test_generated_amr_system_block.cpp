@@ -1686,6 +1686,21 @@ TEST(GeneratedAmrSystemBlock, ProgramContextOwnsOneExactHierarchyTensorAuthority
       context->solve_hierarchy_tensor(0, 1, pops::Real(1.0e-8), pops::Real(0), 8);
   ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
   EXPECT_TRUE(outcome.consume(pops::SolveConsumption::kAccept).solved());
+
+  // A consumed tensor result is owned by its exact selected block at each active level.
+  // Endpoint algebra may allocate a registered scalar from that provider allocation.
+  context->for_each_program_resource_level([&](int level) {
+    auto& solution = context->hierarchy_solution();
+    auto& endpoint = context->scalar_scratch(36, 0, solution, 1, 1);
+    EXPECT_NO_THROW(context->require_scalar_sampling_layout(0, solution, endpoint, 0));
+    EXPECT_EQ(endpoint.layout(), solution.layout());
+    EXPECT_EQ(endpoint.distribution(), solution.distribution());
+    EXPECT_EQ(endpoint.local_rank(), solution.local_rank());
+    pops::MultiFab<Dim> detached(solution);
+    EXPECT_THROW((void)context->scalar_scratch(37, 0, detached, 1, 1), std::invalid_argument);
+    if (level != 0)
+      EXPECT_THROW((void)context->scalar_scratch(38, 0, *first_solution, 1, 1), std::invalid_argument);
+  });
 }
 
 TEST(GeneratedAmrSystemBlock, ProgramContextEvaluatesExactStageStateWithoutPublishingIt) {

@@ -445,7 +445,14 @@ field_type& persistent_scratch_(ScratchKind kind, std::int64_t value_id, int sub
   if (value_id < 0 || subslot < 0)
     throw std::invalid_argument("AMR Program scratch identity must be non-negative");
   refresh_resources_();
-  const int runtime_owner = scratch_prototype_owner_(prototype);
+  int runtime_owner = -1;
+  try {
+    runtime_owner = scratch_prototype_owner_(prototype);
+  } catch (const std::invalid_argument& error) {
+    throw std::invalid_argument(std::string(error.what()) + " (value=" +
+        std::to_string(value_id) + ", subslot=" + std::to_string(subslot) +
+        ", level=" + std::to_string(active_level_) + ")");
+  }
   const ScratchKey key{kind, active_level_, runtime_owner, value_id, subslot};
   auto found = scratches_.find(key);
   if (found == scratches_.end()) {
@@ -486,6 +493,20 @@ int scratch_prototype_owner_(const field_type& prototype) const {
   for (const auto& [key, scratch] : scratches_)
     if (&prototype == &scratch && std::get<1>(key) == active_level_)
       record(std::get<2>(key));
+  // This prepared tensor request explicitly binds its solution to one Program block. Its
+  // backend allocation is not an SSA scratch, but it is an exact owned allocation prototype.
+  // Independent hierarchy fields have no contributing block owner and retain their solve-key API.
+  if (hierarchy_tensor_selection_ && hierarchy_tensor_solver_ && active_level_ >= 0 &&
+      active_level_ < hierarchy_tensor_solver_->level_count() &&
+      hierarchy_tensor_solver_->execution_path() == HierarchyTensorSolverExecutionPath::DirectProvider &&
+      hierarchy_tensor_solver_->provider_identity() == hierarchy_tensor_selection_->provider_identity &&
+      hierarchy_tensor_topology_epoch_ == runtime_->topology_epoch() &&
+      hierarchy_tensor_materialization_generation_ == runtime_->materialization_generation() &&
+      &prototype == &hierarchy_tensor_solver_->solution(active_level_)) {
+    if (prototype.ncomp() != hierarchy_tensor_selection_->components)
+      throw std::invalid_argument("AMR tensor solution prototype changed its selected field space");
+    record(sys_block(hierarchy_tensor_selection_->program_block));
+  }
   const auto& manager = runtime_state().hist_;
   for (const auto& [key, ring] : manager.histories) {
     const bool is_history_slot = std::any_of(
