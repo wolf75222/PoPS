@@ -31,6 +31,8 @@
 #include <pops/runtime/program/prepared_resource_cache.hpp>
 #include <pops/runtime/program/prepared_integral_capture.hpp>
 #include <pops/runtime/program/program_value_authority.hpp>
+#include <pops/runtime/program/prepared_program_field_stages.hpp>
+#include <pops/runtime/program/prepared_hierarchy_barrier.hpp>
 #include <pops/runtime/program/spatial_direct_interaction.hpp>
 #include <pops/runtime/program/prepared_tensor_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
@@ -239,20 +241,7 @@ private:
   struct RhsInputTraceRecord;
 
 public:
-  /// Invocation-owned input authority for a generated synchronous RHS evaluation.
-  class RhsInputTrace {
-  public:
-    RhsInputTrace(const RhsInputTrace&) = default;
-    RhsInputTrace(RhsInputTrace&&) = default;
-
-  private:
-    friend class AmrProgramContext;
-    RhsInputTrace() = default;
-    const AmrProgramContext* owner_ = nullptr;
-    const field_type* input_ = nullptr;
-    std::shared_ptr<const RhsInputTraceRecord> current_;
-    std::shared_ptr<const RhsInputTraceRecord> parent_;
-  };
+  class RhsInputTrace;
 
   struct RhsGroupRequest {
     RhsGroupRequest(int block_value, field_type* state_value, field_type* rhs_value,

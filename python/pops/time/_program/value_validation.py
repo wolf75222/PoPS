@@ -6,9 +6,7 @@ from typing import Any
 from pops.time.values import ProgramValue, _Affine
 from pops.time.points import point_clock
 from pops.time.value_support import require_owned_value
-
-
-TOP_LEVEL_REGION = 0
+from pops.time.value_scope import TOP_LEVEL_REGION, require_top_level
 
 
 _BLOCK_KEYS = (
@@ -122,19 +120,6 @@ def validate_input_clocks(
             "%s: value %r belongs to clock %r but the result belongs to clock %r; "
             "insert an explicit Program synchronization node"
             % (where, value.name, value.clock.name, expected.name))
-
-
-def require_top_level(program: Any, value: Any, where: str) -> ProgramValue:
-    value = require_owned(program, value, where)
-    if value.region != TOP_LEVEL_REGION:
-        if "problem_identity" in value.attrs:
-            from pops.time.solve_request import SolveRequestError
-
-            raise SolveRequestError(
-                "result_scope", "solved value cannot escape its authoring region", where=where)
-        raise ValueError(
-            "%s: sub-block value %r cannot escape its authoring region" % (where, value.name))
-    return value
 
 
 def require_region(program: Any, value: Any, region: int, where: str, *, vtype: Any = None,

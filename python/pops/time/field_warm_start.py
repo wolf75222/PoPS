@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.fields import FieldOutput
-from pops.time._program.value_validation import require_top_level
+from pops.time.value_scope import require_top_level
+from pops.time.value_support import require_owned_value
 from pops.time.field_context import field_provenance_contains, require_field_read
 from pops.time.references import bind_field_reference, canonical_handle
 
@@ -29,7 +29,7 @@ def _consumed_linear_sources(value: Any) -> tuple[Any, ...]:
     return tuple(result)
 
 
-def validate_warm_start(value: Any, *, model_graph: Any = None, field_plans: Any = None) -> Any:
+def warm_start_context(value: Any) -> Any:
     if value.op != "field_warm_start" or value.vtype != "effect" or len(value.inputs) != 4:
         raise ValueError("field warm start has an invalid effect contract")
     scalar, fields, template, target = value.inputs
@@ -47,32 +47,20 @@ def validate_warm_start(value: Any, *, model_graph: Any = None, field_plans: Any
     if not solves or any(solve.prog is not value.prog or solve.block != target.block
                          for solve in solves):
         raise ValueError("field warm start requires a consumed scalar linear solve dependency")
-    from pops.time.field_sampling import storage_contract
+    require_owned_value(value.prog, template, "scalar field template")
+    return context
 
-    if model_graph is None:
-        field, _, _, _ = bind_field_reference(value.prog, template.block, context.field,
-                                               values=(template,))
-        registration = field._field_registry.resolved_registration(field)
-        operator = registration.operator
-        module = None
-    else:
-        from pops.codegen.program_emit_field_routes import resolved_field_route
-        owner = model_graph.owner_for_block(target.block)
-        module = model_graph.source_module_for_owner(owner)
-        _slot, plan = resolved_field_route(context.field, field_plans)
-        operator = plan.operator
-    output = operator.outputs[0] if operator.outputs else None
-    if not isinstance(output, FieldOutput) or tuple(scalar.space.components) != (output.name,):
-        raise ValueError("field warm start must seed the solved unknown, not a derived output")
-    contract = storage_contract(value.prog, template, scalar.attrs.get("scalar_storage"),
-                                 scalar.space, source_module=module)
-    if any(scalar.attrs.get(key) != item for key, item in contract.items()):
-        raise ValueError("field warm start changed its scalar storage authority")
-    unknown = scalar.attrs["scalar_storage"].unknowns[0]
-    if canonical_handle(unknown.declaration_ref or unknown) != canonical_handle(
-            operator.unknown.declaration_ref or operator.unknown) \
-            or canonical_handle(operator.unknown.block_ref) != canonical_handle(target.block):
-        raise ValueError("field warm start storage is not the exact solved field carrier")
+
+def validate_warm_start(value: Any) -> Any:
+    """Authenticate the live Case field after generic temporal provenance checks."""
+    context = warm_start_context(value)
+    template = value.inputs[2]
+    field, _, _, _ = bind_field_reference(value.prog, template.block, context.field,
+                                          values=(template,))
+    registration = field._field_registry.resolved_registration(field)
+    from pops.problem._field_observations import validate_warm_start_storage
+
+    validate_warm_start_storage(value, registration.operator)
     return context.field
 
 
@@ -85,4 +73,4 @@ def publish_field_warm_start(program: Any, field: Any, scalar: Any, *, fields: A
     validate_warm_start(node)
 
 
-__all__ = ["publish_field_warm_start", "validate_warm_start"]
+__all__ = ["publish_field_warm_start", "validate_warm_start", "warm_start_context"]

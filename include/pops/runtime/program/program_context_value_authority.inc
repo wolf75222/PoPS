@@ -20,24 +20,7 @@ void install_program_value_plan(ProgramValuePlan plan) const {
     candidate_state = std::move(candidate.state_);
     if (program_values_.state_->installed && program_values_.state_->plan != plan)
       throw std::logic_error("Program value plan is immutable after installation");
-    ExactContractBuilder proof;
-    proof.text("pops.ProgramValuePlan@1").text(plan.program_identity);
-    proof.scalar(plan.producers.size());
-    for (const auto& producer : plan.producers) {
-      proof.scalar(producer.ssa).scalar(producer.program_block).scalar(producer.storage)
-          .scalar(producer.storage_id).scalar(producer.subslot).text(producer.history)
-          .scalar(producer.lag).scalar(producer.inputs.size());
-      for (auto input : producer.inputs) proof.scalar(input);
-      proof.scalar(producer.input_branches.size());
-      for (const auto& branch : producer.input_branches) {
-        proof.scalar(branch.size());
-        for (auto input : branch) proof.scalar(input);
-      }
-    }
-    proof.scalar(plan.fields.size());
-    for (const auto& edge : plan.fields)
-      proof.scalar(edge.field_node).scalar(edge.program_block).scalar(edge.source).scalar(edge.accepted_only);
-    contract = std::move(proof).release();
+    contract = plan.exact_contract();
   } catch (...) { error = std::current_exception(); }
   collectively_rethrow_exception(error,lane,"Program SSA plan preparation failed collectively");
   if (!all_ranks_agree_exact_ordered_byte_pairs({{"pops.ProgramValuePlan@1",contract}},lane))

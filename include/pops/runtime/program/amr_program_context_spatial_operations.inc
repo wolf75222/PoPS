@@ -707,25 +707,7 @@ void prepare_condensed_prior(int program_block, field_type& field) const {
 void laplacian(field_type& output, field_type& input) const {
   require_scalar_stencil_(output, input, 1, "AMR Program Laplacian");
   fill_boundary(input);
-  const Geometry<Dim> geom = geometry();
-  for (std::size_t local = 0; local < output.local_size(); ++local) {
-    const FieldView<Real, Dim> result = output.fab(local).view();
-    const FieldView<const Real, Dim> value = std::as_const(input).fab(local).view();
-    for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-      Real image = Real(0);
-      for (int axis = 0; axis < Dim; ++axis) {
-        Index<Dim> lower = cell;
-        Index<Dim> upper = cell;
-        --lower[axis];
-        ++upper[axis];
-        const Real spacing = geom.spacing(axis);
-        image +=
-            (value(upper, 0) - Real(2) * value(cell, 0) + value(lower, 0)) / (spacing * spacing);
-      }
-      result(cell, 0) = image;
-    });
-  }
-  count_kernel_();
+  laplacian_without_fill_(output, input, geometry());
 }
 
 void laplacian(field_type& output, field_type& input,
@@ -743,21 +725,7 @@ void laplacian(field_type& output, field_type& input, const scalar_boundary_sess
 void gradient(field_type& output, field_type& input) const {
   require_scalar_stencil_(output, input, Dim, "AMR Program gradient");
   fill_boundary(input);
-  const Geometry<Dim> geom = geometry();
-  for (std::size_t local = 0; local < output.local_size(); ++local) {
-    const FieldView<Real, Dim> result = output.fab(local).view();
-    const FieldView<const Real, Dim> value = std::as_const(input).fab(local).view();
-    for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-      for (int axis = 0; axis < Dim; ++axis) {
-        Index<Dim> lower = cell;
-        Index<Dim> upper = cell;
-        --lower[axis];
-        ++upper[axis];
-        result(cell, axis) = (value(upper, 0) - value(lower, 0)) / (Real(2) * geom.spacing(axis));
-      }
-    });
-  }
-  count_kernel_();
+  gradient_without_fill_(output, input, geometry());
 }
 
 void gradient(field_type& output, field_type& input,

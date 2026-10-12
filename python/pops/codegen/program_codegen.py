@@ -646,8 +646,8 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
     )
     _validate_matrix_free_contract(v, node_model)
     if v.op == "field_warm_start":
-        from pops.time.field_warm_start import validate_warm_start
-        validate_warm_start(v, model_graph=model, field_plans=field_plans)
+        from pops.codegen.program_field_observations import validate_resolved_warm_start
+        validate_resolved_warm_start(v, model_graph=model, field_plans=field_plans)
         return
     if v.op == "spatial_interaction":
         from pops.time._program.spatial_interaction import interaction_contract

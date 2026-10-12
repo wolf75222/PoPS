@@ -330,6 +330,7 @@ sdk-support pops/runtime/program/amr_program_context_history_checkpoint_runtime.
 sdk-support pops/runtime/program/amr_program_context_history_checkpoint_services.inc
 sdk-root pops/runtime/program/amr_program_context.hpp
 sdk-support pops/runtime/program/amr_program_context_value_authority.inc
+sdk-support pops/runtime/program/prepared_program_field_stages.hpp
 sdk-support pops/runtime/program/amr_program_context_spatial.inc
 sdk-support pops/runtime/program/amr_program_context_rhs_input_trace.inc
 sdk-support pops/runtime/program/amr_program_context_path_rhs.inc
@@ -337,6 +338,7 @@ sdk-support pops/runtime/program/amr_program_context_spatial_operations.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_interaction.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_operations_services.inc
 sdk-support pops/runtime/program/amr_program_context_hierarchy_barriers.inc
+sdk-support pops/runtime/program/prepared_hierarchy_barrier.hpp
 sdk-support pops/runtime/program/amr_program_context_mapping_continuation.inc
 sdk-support pops/runtime/program/amr_program_context_subcycling_runtime.inc
 sdk-support pops/runtime/program/cache_manager.hpp

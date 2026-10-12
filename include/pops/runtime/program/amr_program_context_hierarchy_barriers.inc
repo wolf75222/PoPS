@@ -55,25 +55,10 @@ void suspend_hierarchy_barrier(HierarchyBarrierKind kind, std::int64_t operation
   const auto root = multiblock_subcycling_->synchronized_level_group(0);
   if (root.empty())
     throw std::logic_error("AMR hierarchy barrier has no root clock authority");
-  ExactContractBuilder contract;
-  contract.text("pops.amr-hierarchy-barrier.v1")
-      .scalar(static_cast<std::uint8_t>(kind))
-      .scalar(operation_id)
-      .text(compiled_program_hash)
-      .bytes(exact_dependency_contract)
-      .scalar(numerator)
-      .scalar(denominator)
-      .scalar(active_subcycling_attempt_)
-      .scalar(frame.internal_sequence)
-      .bytes(frame.hierarchy_authority);
-  // Every level names the common root window; a level ordinal is not a different operation.
-  for (const auto& clock : {root.front().window.begin, root.front().window.end})
-    contract.scalar(std::int32_t{clock.level})
-        .scalar(clock.macro_step)
-        .scalar(clock.phase.numerator)
-        .scalar(clock.phase.denominator)
-        .scalar(clock.physical_time);
-  port.identity = std::move(contract).release();
+  port.identity = PreparedHierarchyBarrier::operation_contract(
+      static_cast<std::uint8_t>(kind),operation_id,compiled_program_hash,exact_dependency_contract,
+      numerator,denominator,active_subcycling_attempt_,frame.internal_sequence,
+      frame.hierarchy_authority,root.front().window);
   port.kind = kind == HierarchyBarrierKind::linear_solve ? MappingPortKind::linear_solve
               : kind == HierarchyBarrierKind::field_publication
                   ? MappingPortKind::field_publication
@@ -85,9 +70,7 @@ void suspend_hierarchy_barrier(HierarchyBarrierKind kind, std::int64_t operation
 }
 
 private:
-enum class MappingPortKind : std::uint8_t {
-  complete, map, linear_solve, field_publication, spatial_rhs, named_field_solve, field_warm_start
-};
+using MappingPortKind = PreparedHierarchyBarrier::PortKind;
 
 void detach_qualified_hierarchy_barrier_group_() const {
   // This prepared hierarchy is the engine's exact authority, including a fresh restart/regrid
@@ -152,43 +135,5 @@ void prepare_mapping_barrier_authority_() const {
 
 void agree_continuation_ports_() const {
   auto& frame = *mapping_continuation_;
-  const auto& first = frame.ports.front();
-  const bool map = first.kind == MappingPortKind::map;
-  const bool internal = first.kind == MappingPortKind::linear_solve ||
-                        first.kind == MappingPortKind::field_publication ||
-                        first.kind == MappingPortKind::spatial_rhs ||
-                        first.kind == MappingPortKind::named_field_solve ||
-                        first.kind == MappingPortKind::field_warm_start;
-  std::exception_ptr error;
-  try {
-    for (std::size_t level = 0; level < frame.ports.size(); ++level) {
-      const auto& port = frame.ports[level];
-      if (port.kind != first.kind || port.identity != first.identity ||
-          (map && port.target != first.target) || (port.field != nullptr) != map ||
-          static_cast<bool>(port.next) != (map || internal) ||
-          static_cast<bool>(port.once) != internal ||
-          ((map || internal) && port.identity.empty()) ||
-          (!map && !internal && !port.identity.empty()))
-        throw std::logic_error("AMR levels reached different qualified continuation barriers");
-      frame.fields[level] = port.field;
-    }
-  } catch (...) {
-    error = std::current_exception();
-  }
-  collectively_rethrow_exception(error, prepared_execution_lane(),
-                                 "AMR continuation barrier agreement failed collectively");
-  const auto category =
-      map ? (first.target ? "map-target" : "map-source")
-      : internal
-          ? (first.kind == MappingPortKind::linear_solve ? "linear-solve"
-             : first.kind == MappingPortKind::field_publication ? "field-publication"
-             : first.kind == MappingPortKind::spatial_rhs ? "spatial-rhs"
-             : first.kind == MappingPortKind::named_field_solve ? "named-field-solve"
-                                                               : "field-warm-start")
-          : "complete";
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("amr-continuation-contract"), first.identity},
-           {std::string_view("amr-continuation-kind"), std::string_view(category)}},
-          prepared_execution_lane()))
-    throw std::logic_error("AMR continuation barrier differs between ranks");
+  PreparedHierarchyBarrier::agree_ports(frame.ports,frame.fields,prepared_execution_lane());
 }

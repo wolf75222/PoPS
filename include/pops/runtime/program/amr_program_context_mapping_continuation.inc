@@ -95,8 +95,7 @@ struct MappingContinuation {
 mutable std::unique_ptr<MappingContinuation> mapping_continuation_;
 
 void cancel_mapping_hierarchy_() const noexcept {
-  staged_named_field_values_.clear();
-  staged_field_warm_starts_.clear();
+  prepared_field_stages_.clear();
   program_values_.revoke_();
   staged_path_rhs_.clear();
   rhs_input_traces_.clear();
@@ -198,7 +197,7 @@ void resume_mapping_hierarchy_(std::shared_ptr<AmrProgramContext> owner) const {
         return;
       }
       prepare_spatial_collectively([&] {
-        if (!staged_path_rhs_.empty() || !staged_named_field_values_.empty() || !staged_field_warm_starts_.empty())
+        if (!staged_path_rhs_.empty() || !prepared_field_stages_.empty())
           throw std::logic_error("AMR hierarchy completed with an unpublished hierarchy stage");
       });
       multiblock_subcycling_->finish_synchronized(

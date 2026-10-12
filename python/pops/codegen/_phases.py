@@ -378,7 +378,7 @@ def resolve(
 
     program_field_plans = capture_program_field_plans(
         problem, detached_frozen, target=target, layout_plan=layout_plan, program=resolved_time)
-    from pops.time.field_sampling import validate_resolved_scalar_storage
+    from pops.codegen.program_field_observations import validate_resolved_scalar_storage
     validate_resolved_scalar_storage(resolved_time, layout_plan, target=target)
     from pops.codegen._physical_mapping_resolution import validate_physical_mapping_program
     validate_physical_mapping_program(layout_plan, resolved_time, program_field_plans,

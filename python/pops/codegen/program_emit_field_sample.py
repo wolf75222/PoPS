@@ -1,6 +1,6 @@
 """Copy one authenticated cell provider/State component to explicitly bound scalar storage."""
 from pops.codegen.program_emit_kernels import _prepare_provider_values, program_provider_consumer_qid
-from pops.time.field_sampling import emitted_sample_contract
+from pops.codegen.program_field_observations import emitted_sample_contract
 
 
 def emit_field_sample(value, var, lines, prelude, model, provider_plans, block_index, target,

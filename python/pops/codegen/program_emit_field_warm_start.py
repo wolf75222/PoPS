@@ -2,13 +2,13 @@
 from pops.identity import make_identity
 from pops.codegen.cpp_strings import cpp_string_expression
 from pops.codegen.program_emit_field_routes import resolved_field_route
-from pops.time.field_warm_start import validate_warm_start
+from pops.codegen.program_field_observations import validate_resolved_warm_start
 
 
 def emit_field_warm_start(value, var, lines, *, target, model_graph, field_plans, block_index):
     if target not in ("system", "amr_system"):
         raise NotImplementedError("field warm start requires its qualified Uniform native route")
-    field = validate_warm_start(value, model_graph=model_graph, field_plans=field_plans)
+    field = validate_resolved_warm_start(value, model_graph=model_graph, field_plans=field_plans)
     slot, plan = resolved_field_route(field, field_plans)
     scalar, _fields, _template, _state = value.inputs
     from pops.time._evaluation_point import evaluation_stage_fraction

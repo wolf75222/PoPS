@@ -246,6 +246,20 @@ def _polynomial(data: Any) -> dict[int, Fraction]:
     return result
 
 
+def _affine_coefficients(data: Any, *, unknown_effect: str) -> Any:
+    """Admit only affine coefficients and canonical pointwise storage metadata."""
+    if set(data) not in ({"coeffs"}, {"coeffs", "stencil_access"}):
+        raise ValueError(unknown_effect)
+    if "stencil_access" in data:
+        from pops.time.canonical_data import CanonicalData
+        from pops.time.stencil import StencilAccess
+        pointwise = CanonicalData(StencilAccess.pointwise().to_data(),
+                                  where="pointwise stencil access").to_data()
+        if data["stencil_access"] != pointwise:
+            raise ValueError("RK affine value lacks canonical pointwise stencil access")
+    return data["coeffs"]
+
+
 def _point_offset(point: Any) -> Fraction:
     if hasattr(point, "time"):
         point = point.time
@@ -347,9 +361,9 @@ def certify_program_graph(graph: Any) -> ProgramMethodCertificate:
                 raise ValueError("RK affine value has an unknown state/rate representation")
             payload = node.attrs.to_data()
             data = payload.get("attrs", payload)
-            if set(data) != {"coeffs"}:
-                raise ValueError("RK affine value has an unknown evaluation effect")
-            for ref, encoded in zip(node.references(), data["coeffs"], strict=True):
+            coefficients = _affine_coefficients(data,
+                unknown_effect="RK affine value has an unknown evaluation effect")
+            for ref, encoded in zip(node.references(), coefficients, strict=True):
                 polynomial = _polynomial(encoded)
                 # Visit even zero-weight inputs: an unknown effect or unavailable
                 # rate is not made safe by algebraic cancellation of its value.
@@ -381,9 +395,9 @@ def certify_program_graph(graph: Any) -> ProgramMethodCertificate:
                 raise ValueError("graph contains an unknown affine representation")
             payload = node.attrs.to_data()
             data = payload.get("attrs", payload)
-            if set(data) != {"coeffs"}:
-                raise ValueError("graph contains an unknown affine evaluation effect")
-            for _, encoded in zip(node.references(), data["coeffs"], strict=True):
+            coefficients = _affine_coefficients(data,
+                unknown_effect="graph contains an unknown affine evaluation effect")
+            for _, encoded in zip(node.references(), coefficients, strict=True):
                 _polynomial(encoded)
         if _point_offset(states[0].point) != 0 or _point_offset(commits[0].point) != 1:
             raise ValueError("RK graph does not span its initial-to-next step window")

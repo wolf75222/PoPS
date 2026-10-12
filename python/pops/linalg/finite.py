@@ -212,9 +212,9 @@ class FiniteMeasure:
         if not isinstance(left, FiniteVector) or not isinstance(right, FiniteVector) \
                 or left.support != self.support or right.support != self.support:
             raise ValueError("finite pairing requires the measure's exact ordered support")
-        total = _wrap(0)
+        total = _retain_scalar(0)
         for weight, x, y in zip(self.weights, left, right, strict=True):
-            total = total + _wrap(weight) * x * y
+            total = total + _retain_scalar(weight) * x * y
         return total
 
 
@@ -260,7 +260,7 @@ class FiniteSymmetricInteraction:
         return self.map.apply(value)
 
     def energy(self, density: FiniteVector):
-        return _wrap(0.5) * self.measure.pair(density, self.apply(density))
+        return _retain_scalar(0.5) * self.measure.pair(density, self.apply(density))
 
     def directional_derivative(self, density: FiniteVector, direction: FiniteVector):
         return self.measure.pair(direction, self.apply(density))
