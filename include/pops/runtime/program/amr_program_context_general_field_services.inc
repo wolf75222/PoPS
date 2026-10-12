@@ -1,3 +1,18 @@
+template <class Function>
+void with_current_or_prepared_attempt_level_(int selected, Function&& function) const {
+  if (!multiblock_subcycling_ || !multiblock_subcycling_->has_synchronized_groups() ||
+      active_attempt_states_.empty())
+    throw std::logic_error("AMR field authority requires prepared synchronized level envelopes");
+  if (selected < 0 || selected >= nlev())
+    throw std::out_of_range("AMR field authority level lies outside its hierarchy");
+  // Reauthentication borrows the envelope already owned by a per-level observer.
+  if (selected == active_level_) {
+    std::forward<Function>(function)();
+    return;
+  }
+  with_program_attempt_level(selected, std::forward<Function>(function));
+}
+
 std::unique_ptr<hierarchy_tensor_solver_type> prepare_hierarchy_field_solver_(
     const HierarchyFieldResource& resource) const {
   const auto& selection = resource.selection;

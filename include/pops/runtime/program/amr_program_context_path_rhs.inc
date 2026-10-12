@@ -443,15 +443,8 @@ void publish_staged_path_rhs(int rate_id) const {
         targets.emplace_back(request.runtime_block, level);
       }
     });
-    auto at_level = [&](int level, auto&& operation) {
-      // The once callback already owns the root envelope; it must not try to acquire it twice.
-      if (level == active_level_)
-        std::forward<decltype(operation)>(operation)();
-      else
-        with_program_attempt_level(level, std::forward<decltype(operation)>(operation));
-    };
     for (int level = 0; level < nlev(); ++level)
-      at_level(level, [&] {
+      with_current_or_prepared_attempt_level_(level, [&] {
         auto& publication = publications[static_cast<std::size_t>(level)];
         auto& request = *publication.request;
         const auto* parent = rhs_input_parent_(request.runtime_block, *request.input, rate_id,
@@ -466,7 +459,7 @@ void publish_staged_path_rhs(int rate_id) const {
       });
     canonicalize_path_interfaces_(publications.front().request->runtime_block, evaluations);
     for (int level = 0; level < nlev(); ++level)
-      at_level(level, [&] {
+      with_current_or_prepared_attempt_level_(level, [&] {
         auto& publication = publications[static_cast<std::size_t>(level)];
         auto& request = *publication.request;
         publication.frequency = validate_path_stage_values_(request, *publication.evaluation);

@@ -129,7 +129,7 @@ AmrFieldResidualAuthority original_hierarchy_field_authority(
     authority.capture_identities = capture_identities;
     authority.capture_components = capture_components;
     for (int level = 0; level < nlev(); ++level)
-      with_program_attempt_level(level, [&] {
+      with_current_or_prepared_attempt_level_(level, [&] {
         for (int runtime_block = 0; runtime_block < facade_->n_blocks(); ++runtime_block)
           if (facade_->prepared_amr_block_level_active_mask(runtime_block, level))
             throw std::invalid_argument(
