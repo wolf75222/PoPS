@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import hashlib
 import os
 import fcntl
+import stat
 
 import numpy as np
 import pytest
@@ -95,7 +96,12 @@ def _transaction_for(runtime, target, *, attempts=2, publisher=None):
 
 
 def _no_private_files(directory):
-    assert list(directory.glob('.pops-restart-*')) == []
+    for container in directory.glob('.pops-restart-*'):
+        # Portable cleanup retains an empty private container rather than remove a public name
+        # whose directory inode could have been substituted after authentication.
+        assert container.name.startswith('.pops-restart-cleanup-')
+        assert container.is_dir() and not tuple(container.iterdir())
+        assert stat.S_IMODE(container.stat().st_mode) == 0o700
 
 
 def test_retry_after_real_publication_uses_the_same_sealed_bytes_once(monkeypatch, tmp_path):

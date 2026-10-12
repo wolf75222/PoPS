@@ -37,6 +37,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -262,8 +263,10 @@ template <int Dim>
 struct MaskResidualKernel {
   FieldView<Real, Dim> residual{};
   FieldView<const Real, Dim> covered{};
+  FieldView<const Real, Dim> active{};
   POPS_HD void operator()(const Index<Dim>& index) const {
-    if (covered(index, 0) >= Real(0.5))
+    if (covered(index, 0) >= Real(0.5) ||
+        (active.data != nullptr && active(index, 0) < Real(0.5)))
       residual(index, 0) = Real(0);
   }
 };
@@ -1079,8 +1082,14 @@ class CompositeFacPoisson {
         return last_report_;
       }
     }
-    report.mark_failed(SolveStatus::kIterationLimit, SolveAction::kFailRun,
-                       "partitioned_fac_iteration_limit");
+    std::ostringstream failure;
+    failure.precision(std::numeric_limits<Real>::max_digits10);
+    failure << "partitioned_fac_iteration_limit residual=" << report.residual_norm
+            << " reference=" << report.reference_residual_norm
+            << " requested=" << requested_stop << " applied=" << stop;
+    if (report.residual_evaluation)
+      failure << " evaluation_bound=" << report.residual_evaluation->evaluation_bound;
+    report.mark_failed(SolveStatus::kIterationLimit, SolveAction::kFailRun, failure.str());
     last_report_ = report;
     return last_report_;
   }
@@ -1620,10 +1629,13 @@ class CompositeFacPoisson {
               parent_residual.box(local),
               fac_detail::AddKernel<Dim>{parent_residual.fab(local).view(),
                                          std::as_const(parent_scratch).fab(local).view()});
+          // Flux replacement belongs to the active composite equations. Covered
+          // parents and field-domain conductor rows have no residual authority.
           for_each_cell(parent_residual.box(local),
                         fac_detail::MaskResidualKernel<Dim>{
                             parent_residual.fab(local).view(),
-                            std::as_const(parent->covered).fab(local).view()});
+                            std::as_const(parent->covered).fab(local).view(),
+                            std::as_const(parent->active).fab(local).view()});
         }
         Kokkos::fence();
       });

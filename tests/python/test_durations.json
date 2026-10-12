@@ -5073,6 +5073,7 @@
   "tests/python/unit/runtime/test_atomic_diagnostic_checkpoint_candidate.py": 5,
   "tests/python/unit/runtime/test_bound_initial_checkpoint_envelope.py": 5,
   "tests/python/unit/runtime/test_checkpoint_candidate_engine_routing.py": 300,
+  "tests/python/unit/runtime/test_checkpoint_private_filesystem.py": 5,
   "tests/python/unit/runtime/test_checkpoint_sealed_replay.py": 5,
   "tests/python/unit/runtime/test_collective_fixture_checks.py": 5,
   "tests/python/unit/runtime/test_computed_program_frontier.py": 5,

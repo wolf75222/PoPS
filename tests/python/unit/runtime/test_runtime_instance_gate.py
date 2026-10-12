@@ -1332,8 +1332,6 @@ def test_checkpoint_never_reacquires_created_at_ownership_from_a_valid_replaceme
 
 
 def test_checkpoint_eexist_same_inode_never_grants_expected_entry_ownership(monkeypatch, tmp_path):
-    from pops.output._writers import common
-
     plan, _, _ = _with_graph(
         tmp_path,
         kind=ConsumerKind.CHECKPOINT,
@@ -1344,12 +1342,12 @@ def test_checkpoint_eexist_same_inode_never_grants_expected_entry_ownership(monk
     runtime._executor._last_run_identity = make_identity(
         "run", {"test": "checkpoint-eexist-same-inode"}
     )
-    original_rename = common._rename_no_replace
+    original_link = os.link
     evidence = {}
 
-    def create_same_inode_entry_before_rename(source, destination, *args, **kwargs):
+    def create_same_inode_entry_before_link(source, destination, *args, **kwargs):
         if destination == "native.npz" and source.endswith(".runtime-instance.tmp"):
-            os.link(
+            original_link(
                 source,
                 destination,
                 src_dir_fd=kwargs["src_dir_fd"],
@@ -1362,9 +1360,9 @@ def test_checkpoint_eexist_same_inode_never_grants_expected_entry_ownership(monk
                 follow_symlinks=False,
             )
             evidence["inode"] = (int(linked.st_dev), int(linked.st_ino))
-        return original_rename(source, destination, *args, **kwargs)
+        return original_link(source, destination, *args, **kwargs)
 
-    monkeypatch.setattr(common, "_rename_no_replace", create_same_inode_entry_before_rename)
+    monkeypatch.setattr(os, "link", create_same_inode_entry_before_link)
 
     with pytest.raises(OSError, match="appeared during envelope publication") as caught:
         runtime.checkpoint(tmp_path / "restart")
@@ -1742,8 +1740,9 @@ def test_checkpoint_discard_transport_failure_performs_no_second_collective(monk
     assert not tuple(tmp_path.glob(".pops-restart-transaction.*"))
 
 
-def test_checkpoint_reseal_fails_closed_when_atomic_quarantine_is_unavailable(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize("unsupported_errno", (None, 22, 38, 95))
+def test_checkpoint_private_lifecycle_does_not_require_atomic_quarantine(
+    monkeypatch, tmp_path, unsupported_errno
 ):
     from pops.output._writers import common
 
@@ -1759,20 +1758,19 @@ def test_checkpoint_reseal_fails_closed_when_atomic_quarantine_is_unavailable(
     )
 
     def unavailable(*_args, **_kwargs):
+        if unsupported_errno is not None:
+            raise OSError(unsupported_errno, "injected unsupported filesystem rename flags")
         raise RuntimeError("injected atomic rename primitive unavailable")
 
     monkeypatch.setattr(common, "_rename_no_replace", unavailable)
 
-    with pytest.raises(RuntimeError, match="atomic rename primitive unavailable") as caught:
-        runtime.checkpoint(tmp_path / "restart")
+    runtime.checkpoint(tmp_path / "restart")
 
-    (transaction,) = tuple(tmp_path.glob(".pops-restart-transaction.*"))
-    assert (transaction / "native.npz").is_file()
-    assert tuple(transaction.glob("*.runtime-instance.tmp"))
-    notes = getattr(caught.value, "__notes__", ())
-    assert any("failed runtime checkpoint staging cleanup" in note for note in notes)
-    assert any("transaction directory is not empty" in note for note in notes)
-    assert not (tmp_path / "restart.npz").exists()
+    assert (tmp_path / "restart.npz").is_file()
+    assert not tuple(tmp_path.glob(".pops-restart-transaction.*"))
+    containers = tuple(tmp_path.glob(".pops-restart-cleanup-*"))
+    assert containers
+    assert all(container.is_dir() and not tuple(container.iterdir()) for container in containers)
 
 
 def test_runtime_instance_has_one_authored_execution_route():

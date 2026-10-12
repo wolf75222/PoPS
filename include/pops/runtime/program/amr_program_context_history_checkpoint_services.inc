@@ -26,6 +26,8 @@ void store_history_(const std::string& name, const field_type& value) const {
         if (found == manager.histories.end() || found->second.empty())
           throw std::out_of_range("AMR Program history is not registered on the active level");
         require_same_field_contract_(found->second.front(), value, "AMR Program history store");
+        if (found->second.front().ghosts() != value.ghosts())
+          throw std::invalid_argument("AMR Program history store fields have different declared halos");
         if (!std::isfinite(current_dt_) || !(current_dt_ > 0.0))
           throw std::logic_error("AMR Program history store has no positive exact interval");
         const auto flux_found = history_flux_expressions_.find(staged.key);

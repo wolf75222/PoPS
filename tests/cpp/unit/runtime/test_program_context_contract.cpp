@@ -2791,12 +2791,41 @@ TEST(ProgramContextContract, AmrHistoryDeclaredScalarHaloPreservesExactStorageCo
   const auto& stored = context->history("scalar_observation", 0, 0);
   EXPECT_EQ(stored.ghosts(), value.ghosts());
   EXPECT_EQ(difference_sum_sq_all(stored, value), Real(0));
+  const auto before_initialized = system->history_initialized("scalar_observation", 0);
+  const auto before_fill = system->history_fill_count("scalar_observation", 0);
+  const auto before_samples = system->history_sample_identity("scalar_observation", 0);
+  const std::array<std::vector<double>, 2> before_values{
+      system->history_global("scalar_observation", 0, 0),
+      system->history_global("scalar_observation", 0, 1)};
+  const std::array<double, 2> before_dts{
+      system->history_slot_dt("scalar_observation", 0, 0),
+      system->history_slot_dt("scalar_observation", 0, 1)};
+  const auto require_unchanged = [&] {
+    EXPECT_EQ(context->history("scalar_observation", 0, 0).ghosts(), value.ghosts());
+    EXPECT_EQ(system->history_initialized("scalar_observation", 0), before_initialized);
+    EXPECT_EQ(system->history_fill_count("scalar_observation", 0), before_fill);
+    EXPECT_EQ(system->history_sample_identity("scalar_observation", 0), before_samples);
+    for (int slot = 0; slot < 2; ++slot) {
+      EXPECT_EQ(system->history_global("scalar_observation", 0, slot), before_values[slot]);
+      EXPECT_EQ(system->history_slot_dt("scalar_observation", 0, slot), before_dts[slot]);
+    }
+  };
   auto wider = context->alloc_scalar_field(1, 1);
   wider.set_val(Real(6));
-  EXPECT_ANY_THROW(context->store_history("scalar_observation", wider, 0));
+  expect_collective_exception<std::invalid_argument>(context->prepared_execution_lane(),
+      [&] { context->store_history("scalar_observation", wider, 0); });
+  require_unchanged();
+  // One participant's wrong halo must refuse every participant before any ring slot moves.
+  const auto& lane = context->prepared_execution_lane();
+  auto rank_local_mismatch = context->alloc_scalar_field(1, lane.rank() == 0 ? 1 : 0);
+  rank_local_mismatch.set_val(Real(11));
+  expect_collective_exception<std::invalid_argument>(lane,
+      [&] { context->store_history("scalar_observation", rank_local_mismatch, 0); });
+  require_unchanged();
   EXPECT_THROW(context->register_history("scalar_observation", 1, 1, 0,
       "scalar-history:scalar_observation", "scalar-field", "clock.topology", "none", 1),
       std::runtime_error);
+  require_unchanged();
 }
 
 auto prepare_topology_regrid(TopologySystem& system, TopologyContext& context) {

@@ -723,6 +723,55 @@ void expect_periodic_partition_independence(int refinement_case, int partition_p
   }
 }
 
+void expect_field_domain_interface_residual() {
+  auto hierarchy = make_request<2>();
+  for (auto& level : hierarchy.levels) {
+    std::array<PhysicalBoundaryFace, 4> faces{};
+    faces.fill({PhysicalBoundaryKind::dirichlet, Real(0)});
+    level.boundary = {BoundaryTopology<2>::physical(), faces,
+                      RealVector<2>{level.geometry.spacing(0), level.geometry.spacing(1)}};
+  }
+  pops::elliptic::mg::GeometricMultigridOptions geometric;
+  geometric.smoother = pops::elliptic::mg::GeometricSmoother::red_black_gauss_seidel;
+  geometric.field_domain = pops::elliptic::mg::CellCentreBallDomain{
+      2, {Real(0.5), Real(0.5), Real(0)}, Real(0.4)};
+  geometric.roundoff_aware_residual = true;
+  geometric.minimum_coarse_extent = 2;
+  geometric.bottom_sweeps = 50;
+  pops::CompositeFacOptions options;
+  options.max_iters = 50;
+  options.fine_sweeps = 4;
+  options.rel_tol = Real(1e-8);
+  options.abs_tol = Real(0);
+  options.coarse_cycles = 50;
+  CompositeFacPoisson<2> solver(std::move(hierarchy), options, Real(0), nullptr,
+                               false, false, geometric);
+  for (int level = 0; level < solver.n_levels(); ++level)
+    solver.rhs_level(level).set_val(Real(1));
+  const auto report = solver.solve();
+  EXPECT_TRUE(report.solved()) << report.reason;
+  EXPECT_LE(report.residual_norm, options.rel_tol * report.reference_residual_norm);
+  const auto& coarse = solver.linear_image_level(0);
+  const auto& active = solver.linear_active_level(0);
+  Real inactive_residual = Real(0);
+  for (std::size_t local = 0; local < coarse.local_size(); ++local) {
+    auto values = coarse.fab(local).create_host_mirror();
+    auto mask = active.fab(local).create_host_mirror();
+    coarse.fab(local).copy_to_host(values);
+    active.fab(local).copy_to_host(mask);
+    for (std::size_t cell = 0; cell < values.size(); ++cell)
+      if (mask(cell) == Real(0))
+        inactive_residual = std::max(inactive_residual, std::abs(values(cell)));
+  }
+  EXPECT_EQ(inactive_residual, Real(0))
+      << "coarse/fine flux replacement must not create equations on conductor or covered rows";
+  if (pops::my_rank() == 0)
+    std::cout << std::setprecision(17) << "field-domain FAC status=" << report.reason
+              << " iters=" << report.iters << " residual=" << report.residual_norm
+              << " reference=" << report.reference_residual_norm
+              << " inactive_residual=" << inactive_residual << std::endl;
+}
+
 int run_partitioned_fac_matrix(int argc, char** argv) {
   pops::comm_init(&argc, &argv);
   int result = 0;
@@ -730,6 +779,7 @@ int run_partitioned_fac_matrix(int argc, char** argv) {
     Kokkos::ScopeGuard kokkos(argc, argv);
     EXPECT_EQ(pops::n_ranks(), 2);
     if (pops::n_ranks() == 2) {
+      expect_field_domain_interface_residual();
       expect_partitioned_fac<1>();
       expect_partitioned_fac<2>();
       expect_partitioned_fac<3>();
