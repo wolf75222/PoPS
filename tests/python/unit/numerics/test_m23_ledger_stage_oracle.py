@@ -2,6 +2,7 @@
 import ast
 from pathlib import Path
 import re
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,15 +13,24 @@ FUNCTION = next(node for node in TREE.body if isinstance(node, ast.FunctionDef) 
 NAMESPACE = {"re": re}
 exec(compile(ast.Module(body=[FUNCTION], type_ignores=[]), str(SOURCE), "exec"), NAMESPACE)
 STATES = NAMESPACE["_stage_states"]
+POINTS = ("accepted TimePoint", "predictor StagePoint")
+PROGRAM = SimpleNamespace(_values=tuple(
+    SimpleNamespace(id=identity, op="diffusive_rhs", point=point,
+                    inputs=(SimpleNamespace(op=operation, point=point),))
+    for identity, point, operation in zip((1, 4), POINTS, ("state", "linear_combine"))
+))
 
 
 def context(stage):
-    return f"pops.exchange.frame.v1/runtime/StagePoint(name='ssprk2_stage_{stage}', retained_coordinates)/evaluation:{stage+1}"
+    point = POINTS[stage] if stage in (0, 1) else "unknown StagePoint"
+    identity = (1, 4)[stage] if stage in (0, 1) else 9
+    tag = f"stage:{point}/evaluation:{identity}"
+    return f"pops.exchange.frame.v1/runtime/{len(tag.encode('utf-8'))}:{tag}"
 
 
 def test_stage_oracle_is_independent_of_record_insertion_order():
     initial, predictor = object(), object()
-    result = STATES((context(1), context(0)), initial, predictor)
+    result = STATES(PROGRAM, (context(1), context(0)), initial, predictor)
     assert result[context(0)] is initial
     assert result[context(1)] is predictor
 
@@ -33,4 +43,4 @@ def test_stage_oracle_is_independent_of_record_insertion_order():
 ])
 def test_missing_duplicate_or_unknown_stage_is_refused(contexts):
     with pytest.raises(AssertionError):
-        STATES(contexts, object(), object())
+        STATES(PROGRAM, contexts, object(), object())

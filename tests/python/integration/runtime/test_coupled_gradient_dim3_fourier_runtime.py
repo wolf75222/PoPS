@@ -16,8 +16,9 @@ import pops
 import pytest
 
 from pops import math
-from pops._native_collectives import allgather_bytes, allgather_value
-from pops._native_selector import select_native_dimension
+from tests.python.support.public_native_profile import (
+    native_profile, rank_and_size, profile_gather_value, profile_gather_bytes,
+)
 from pops.domain import CartesianDomain
 from pops.frames import Cartesian3D
 from pops.initial import InitialCondition
@@ -28,7 +29,7 @@ from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import CoupledGradient, DiscretizationPlan
 from pops.projection import ConservativeCellAverage
 from pops.time import FixedDt
-from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
+from tests.python.support.public_native_profile import compile_profile_plan_once as compile_resolved_plan_once
 from tests.python.support.collective_checks import (
     collective_call,
     collective_check,
@@ -132,17 +133,13 @@ def _check_initial(initial):
     return variation
 
 
-def _ledger_oracle(records, order, initial, predictor):
+def _ledger_oracle(program, records, order, initial, predictor):
     assert len(records) == EXPECTED_RECORDS
     assert len({row["operation_identity"] for row in records}) == 1
     contexts = tuple(dict.fromkeys(row["evaluation_context"] for row in records))
     assert len(contexts) == 2
-    stages = {}
-    for context in contexts:
-        names = re.findall(r"StagePoint\(name='ssprk2_stage_([01])',", context)
-        assert len(names) == 1, context
-        stages[context] = int(names[0])
-    assert set(stages.values()) == {0, 1}
+    from tests.python.support.diffusion_ledger_stages import ssprk2_stage_indices
+    stages = ssprk2_stage_indices(program, contexts)
     constitutive = tuple(np.einsum("ab,bzyx->azyx", B, stage) for stage in (initial, predictor))
     increments = np.zeros_like(initial)
     incidences, observed_axes, observed_occurrences = set(), set(), set()
@@ -209,9 +206,9 @@ def test_dim3_fourier_faces_and_component_permutation(
     del isolated_native_cache
     package = Path(pops.__file__).resolve()
     assert package.is_relative_to(Path(sys.prefix).resolve()), f"installed PoPS required: {package}"
-    native = select_native_dimension(3)
+    native, world = native_profile(dimension=3, scope="coupled gradient Dim3")
+    rank, ranks = rank_and_size(world)
     assert native.__native_dimension__ == 3
-    world = native.mpi_world()
     resolved, subject = collective_call(world, lambda: _case(order))
     artifact = compile_resolved_plan_once(
         world, resolved, route="dim3 coupled gradient", compile_artifact=pops.compile
@@ -230,7 +227,7 @@ def test_dim3_fourier_faces_and_component_permutation(
     before = state_snapshots(runtime, world, ("mixture",))[0]
     directory = tmp_path / ("coupled-gradient-dim3-order-" + "".join(map(str, order)))
     with collective_check(world):
-        if world.rank == 0:
+        if rank == 0:
             directory.mkdir()
             initial = before.reshape(2, *reversed(CELLS))[np.argsort(order)]
             np.savez_compressed(
@@ -246,16 +243,16 @@ def test_dim3_fourier_faces_and_component_permutation(
     collective_call(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
     after = state_snapshots(runtime, world, ("mixture",))[0]
     local_records = collective_call(world, runtime._executor._program_exchange_records)
-    record_batches = allgather_value(world, local_records)
+    record_batches = profile_gather_value(world, local_records)
     local_wire = collective_call(world, runtime._executor._checkpoint_program_exchanges)
-    wire_batches = allgather_bytes(world, local_wire)
+    wire_batches = profile_gather_bytes(world, local_wire)
     native_time, native_step = collective_call(
         world, lambda: (runtime.time(), runtime.macro_step()))
     with collective_check(world):
         assert native_time == DT and native_step == 1
         # This graph has no IntegralState or moving geometry declaration.
         assert all(wire.startswith(b"POPSEX01") for wire in wire_batches)
-        if world.rank == 0:
+        if rank == 0:
             actual = after.reshape(2, *reversed(CELLS))[np.argsort(order)]
             predictor = initial + DT * _rate(initial)
             expected = 0.5 * (initial + predictor + DT * _rate(predictor))
@@ -283,7 +280,7 @@ def test_dim3_fourier_faces_and_component_permutation(
                 reversible=R,
                 occurrence_weights=WEIGHTS,
             )
-            increments, metrics = _ledger_oracle(records, order, initial, predictor)
+            increments, metrics = _ledger_oracle(resolved.time, records, order, initial, predictor)
             np.savez_compressed(
                 directory / "increments.npz",
                 native_face_amounts=increments,
@@ -298,7 +295,7 @@ def test_dim3_fourier_faces_and_component_permutation(
             )
             receipt = {
                 "native_dimension": native.__native_dimension__,
-                "ranks": int(world.size),
+                "ranks": int(ranks),
                 "package_path": str(package),
                 "native_path": str(Path(native.__file__).resolve()),
                 "native_sha256": hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest(),
@@ -345,5 +342,5 @@ def test_dim3_fourier_faces_and_component_permutation(
     record_property("coupled_gradient_dim3_receipts", str(directory))
     record_property("artifact_identity", artifact.artifact_identity.token)
     record_property("native_dimension", 3)
-    record_property("mpi_rank", world.rank)
-    record_property("mpi_size", world.size)
+    record_property("mpi_rank", rank)
+    record_property("mpi_size", ranks)

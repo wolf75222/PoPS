@@ -145,8 +145,16 @@ def _resolved(native_cxx, *, max_iterations=HIGH_BUDGET_MAX_ITERATIONS):
         )
     )
     threshold = case.param(RuntimeParam("reaction_refine_threshold", default=0.2))
+    # The reaction decreases u, so it cannot create new tags by itself. A
+    # separate declared diagnostic ODE grows the same initial Gaussian and
+    # requests new coverage, while the nonlinear reaction remains unchanged.
+    from tests.python.support.evolving_regrid_marker import add_growing_marker
+    marker = add_growing_marker(case, program, frame, growth=1.5, initial=Gaussian(
+        frame=frame, center={x_axis: 0.5, y_axis: 0.5}, background=0.1,
+        amplitude=0.9, inverse_width=80.0))
     transfer = AMRTransfer()
     transfer.state(instance, StateTransfer())
+    transfer.state(marker, StateTransfer())
     layout = AMR(
         grid=CartesianGrid(
             frame=frame,
@@ -156,7 +164,7 @@ def _resolved(native_cxx, *, max_iterations=HIGH_BUDGET_MAX_ITERATIONS):
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
             rules=(
-                Tag(ValueExpr(instance) > case.value(threshold)),
+                Tag(ValueExpr(marker) > case.value(threshold)),
                 Buffer(cells=1),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),

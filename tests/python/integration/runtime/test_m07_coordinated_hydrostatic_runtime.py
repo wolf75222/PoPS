@@ -3,6 +3,8 @@ import os
 import numpy as np
 import pops
 import pytest
+from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.public_native_profile import rank_and_size, profile_gather_bytes
 from tests.python.unit.numerics.test_m07_hydrostatic_public_gap import example, oracle
 
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
@@ -10,12 +12,12 @@ pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loade
 
 def _check(world, callback):
     failure = b""
-    if world.rank == 0:
+    if rank_and_size(world)[0] == 0:
         try:
             callback()
         except Exception as caught:
             failure = (type(caught).__name__+": "+str(caught)).encode()
-    failure = world.broadcast_bytes(failure, root=0)
+    failure = failure if world is None else world.broadcast_bytes(failure, root=0)
     assert not failure, failure.decode()
 
 
@@ -33,7 +35,7 @@ def test_full_time_wet_lake_keeps_true_averages_and_signed_topography(
     case, layout, _ = example.build_case(n, order=order)
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
     assert artifact.resolved_dimension == 1
-    execution = pops.ExecutionContext.mpi_world(artifact)
+    execution = artifact_execution_context(artifact)
     world = execution.communicator.handle
     runtime = pops.bind(artifact, initial_state={"lake": initial},
                         resources={"execution_context": execution})

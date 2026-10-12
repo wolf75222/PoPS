@@ -583,7 +583,7 @@
       ]
     },
     "ci_20260914_field_provider_install": "Conservative 5-second scheduling estimate for mocked field-provider installation contracts; not a measured CI duration. Replace from a complete per-file timing receipt.",
-    "estimated_count": 829,
+    "estimated_count": 828,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -651,7 +651,6 @@
       "tests/python/integration/native_loader/test_external_field_dispatch_faults_runtime.py",
       "tests/python/integration/native_loader/test_external_field_solver_runtime.py",
       "tests/python/integration/native_loader/test_external_interface_backend.py",
-      "tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py",
       "tests/python/integration/native_loader/test_native_abi_std.py",
       "tests/python/integration/native_loader/test_native_brick_typed_ctors.py",
       "tests/python/integration/native_loader/test_normalized_program_execution.py",
@@ -1513,7 +1512,7 @@
       "scope": "M0-M7 migration additions",
       "timing_limit": "The inherited scalar-advection pipeline estimate is not refreshed from the local OMP qualification, where a full run exceeded 4299 s. CI Serial hardware/cache behavior differs; no observed CI fit is claimed. Preserve the indivisible full scientific test and refresh its estimate from the next complete CI artifact."
     },
-    "total_files": 894,
+    "total_files": 893,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -4830,6 +4829,18 @@
         "tests/python/unit/codegen/test_m27_complete_program_review.py": "a03b491d68885f4e93ed01f114b92948561820477e2b3e59dc9a237e9e5f5481",
         "tests/python/unit/numerics/test_coordinated_face.py": "65edea674d02bb3199b7d3e38ef76e58704e2917663ee0f1d29e07aca7119e92"
       }
+    },
+    "declared_hardware_profiles": {
+      "gpu": {
+        "files": [
+          "tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py"
+        ],
+        "case_count": 4,
+        "native_dimension": 2,
+        "estimated_seconds": 120,
+        "estimate_is_hardware_timing": false,
+        "basis": "Existing 120-second CPU scheduling estimate retained as provenance only; authentic CUDA/HIP device/managed Field storage is mandatory. No GPU execution or timing received. CPU plans exclude this exact manifest-declared profile; scripts/ci_python_hardware.py --hardware gpu --execute fails closed on CPU."
+      }
     }
   },
   "tests/python/integration/amr/test_accepted_halo_extent_binding.py": 600,
@@ -4841,7 +4852,6 @@
   "tests/python/integration/amr/test_public_tag_selection_native.py": 600,
   "tests/python/integration/amr/test_symbolic_path_amr_runtime.py": 600,
   "tests/python/integration/native_loader/test_external_field_dispatch_faults_runtime.py": 120,
-  "tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py": 120,
   "tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py": 600,
   "tests/python/integration/runtime/test_affine_push_forward_runtime.py": 600,
   "tests/python/integration/runtime/test_amr_gather_object_bytes_runtime.py": 600,

@@ -12,10 +12,11 @@ import numpy as np
 import pops
 import pytest
 
-from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
+from tests.python.support.public_native_profile import compile_profile_plan_once as compile_resolved_plan_once
 from tests.python.support.collective_checks import collective_call, collective_check, collective_attempt
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.public_native_profile import rank_and_size
 from tests.python.support.spatial_interaction_receipts import (
     CELLS, DT, GAMMA, WORKSPACE, build, bound_initial_values, capture, arrays, same, digest,
 )
@@ -73,7 +74,7 @@ def save_origins(artifact, directory):
 
 def save(world, native, artifact, directory, images, checkpoints, *, width, adaptive, selected, failure=None, failure_errors=()):
     with collective_check(world):
-        if world.rank == 0:
+        if rank_and_size(world)[0] == 0:
             phases = {}
             for name, image in images.items():
                 path = directory/(name+".npz")
@@ -88,7 +89,7 @@ def save(world, native, artifact, directory, images, checkpoints, *, width, adap
             receipt = {"schema": "pops.spatial-interaction-native-fixture@1", "dimension": 2,
                 "width": width, "components": selected, "cells": CELLS, "adaptive": adaptive,
                 "dt": DT, "gamma": GAMMA, "workspace": 1 if failure == "budget" else WORKSPACE, "failure": failure,
-                "rank": world.rank, "size": world.size, "phases": phases, "checkpoints": checkpoints,
+                "rank": rank_and_size(world)[0], "size": rank_and_size(world)[1], "phases": phases, "checkpoints": checkpoints,
                 "failure_errors": failure_errors,
                 "fixture_sources": [{"path": str(path), "sha256": digest(path)} for path in
                     (Path(__file__).resolve(), Path(sys.modules[build.__module__].__file__).resolve())],
@@ -159,8 +160,8 @@ def test_public_spatial_interaction_saved_history_and_exact_replay(
     save(world, native, artifact, directory,
          dict(initial=initial, accepted=accepted, continuous=continuous, reloaded=reloaded, replay=replay),
          checkpoints, width=width, adaptive=adaptive, selected=selected)
-    for key, value in (("evidence_path", str(directory)), ("dimension", 2), ("rank", world.rank),
-                       ("size", world.size), ("adaptive", adaptive), ("width", width),
+    for key, value in (("evidence_path", str(directory)), ("dimension", 2), ("rank", rank_and_size(world)[0]),
+                       ("size", rank_and_size(world)[1]), ("adaptive", adaptive), ("width", width),
                        ("fixture_schema", "pops.spatial-interaction-native-fixture@1")):
         record_property(key, value)
 
@@ -188,6 +189,6 @@ def test_public_spatial_interaction_refuses_without_publication(
     checkpoints["rejected"] = checkpoint(world, runtime, directory, "rejected")
     save(world, native, artifact, directory, dict(initial=initial, rejected=rejected), checkpoints,
          width=1, adaptive=False, selected=selected, failure=failure, failure_errors=errors)
-    for key, value in (("evidence_path", str(directory)), ("rank", world.rank), ("size", world.size), ("failure", failure),
+    for key, value in (("evidence_path", str(directory)), ("rank", rank_and_size(world)[0]), ("size", rank_and_size(world)[1]), ("failure", failure),
                        ("fixture_schema", "pops.spatial-interaction-native-fixture@1")):
         record_property(key, value)

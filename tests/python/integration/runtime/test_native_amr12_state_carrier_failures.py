@@ -8,20 +8,20 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-import sys
 import struct
 
 import numpy as np
 import pops
 import pytest
 
-from pops._native_collectives import allgather_value
+from tests.python.support.evolved_stage_v_capture import world_rank, world_size
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 from tests.python.integration.runtime.test_public_evolved_stage_amr import capture, same_images
 from tests.python.support.collective_checks import collective_attempt, collective_call, collective_check
 from tests.python.support.evolved_stage_amr import DT, build
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.public_native_profile import native_profile, profile_gather_value as world_allgather
 
 
 def _snapshot(world, runtime, width, *, capture_image=True):
@@ -60,7 +60,7 @@ def _refused(world, operation, *, boundary):
     _, failures = collective_attempt(world, operation)
     with collective_check(world):
         # A missing binding, import failure or assertion does not receive the refusal.
-        assert len(failures) == world.size and all(failures), failures
+        assert len(failures) == world_size(world) and all(failures), failures
         assert all(row[0] in ("ValueError", "TypeError", "RuntimeError") for row in failures), failures
         assert all(boundary in row[1] for row in failures), failures
     return failures
@@ -72,12 +72,12 @@ def _record_snapshot(directory, world, name, snapshot):
     for key in ("state_bytes", "diagnostics_bytes"):
         if snapshot[key] is None:
             continue
-        path = directory/(name+"-rank%d-" % world.rank+key+".bin")
+        path = directory/(name+"-rank%d-" % world_rank(world)+key+".bin")
         path.write_bytes(snapshot[key])
         files[key] = {"path":str(path.resolve()), "sha256":hashlib.sha256(path.read_bytes()).hexdigest()}
     arrays = []
     for level, row in enumerate(snapshot["projection"][0]):
-        path = directory/(name+"-rank%d-level%d.npz" % (world.rank, level))
+        path = directory/(name+"-rank%d-level%d.npz" % (world_rank(world), level))
         np.savez(path, **row)
         arrays.append({"path":str(path.resolve()), "sha256":hashlib.sha256(path.read_bytes()).hexdigest()})
     return {"files":files, "levels":arrays, "metadata":snapshot["projection"][1],
@@ -91,21 +91,20 @@ def test_native_amr12_state_carrier_refusals_and_exact_rollback(
     isolated_native_cache, tmp_path, record_property,
 ):
     del isolated_native_cache
-    from pops._native_selector import select_native_dimension
     from pops.runtime._checkpoint_state_carriers import (
         STATE_CARRIERS_KEY, prepare_checkpoint_state_carriers,
     )
-    native = select_native_dimension(2)
-    world = native.mpi_world()
+    native, world = native_profile(scope="public AMR12 state carrier refusal")
+    record_property("native_abi_version", native.__abi_version__)
+    record_property("native_profile", "MPI" if world is not None else "Serial")
     with collective_check(world):
-        assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
-        assert world.size in (1, 2), "this receipt is deliberately Serial/MPI2 only"
+        assert world_size(world) in (1, 2), "this receipt is deliberately Serial/MPI2 only"
     # Reuse the actual physical model, constants and composite AMR stage.
     cells, width = 8, 2
     case, layout = collective_call(world, lambda: build(cells, width))
     resolved = collective_call(world, lambda: pops.resolve(pops.validate(case), layout=layout))
-    artifact = compile_resolved_plan_once(world, resolved, route="AMR12 independent carrier refusals",
-        compile_artifact=pops.compile)
+    artifact = (pops.compile(resolved) if world is None else compile_resolved_plan_once(
+        world, resolved, route="AMR12 independent carrier refusals", compile_artifact=pops.compile))
     context = collective_call(world, lambda: artifact_execution_context(artifact))
     runtime = collective_call(world, lambda: pops.bind(artifact, resources={"execution_context":context}))
     engine = runtime._executor._s
@@ -121,7 +120,7 @@ def test_native_amr12_state_carrier_refusals_and_exact_rollback(
         assert baseline["projection"][1][-1][:2] == (2*DT, 2)
         assert len(baseline["projection"][0]) == 2
     image = baseline["state_bytes"]
-    digests = collective_call(world, lambda: allgather_value(world, hashlib.sha256(image).hexdigest()))
+    digests = collective_call(world, lambda: world_allgather(world, hashlib.sha256(image).hexdigest()))
     with collective_check(world):
         assert len(set(digests)) == 1, "capture must be a canonical all-source archive"
     collective_call(world, lambda: engine.validate_checkpoint_state_carriers(image))
@@ -134,7 +133,7 @@ def test_native_amr12_state_carrier_refusals_and_exact_rollback(
         ("native-array-shape", np.frombuffer(image, dtype=np.uint8).reshape(1, -1),
          "state carrier checkpoint payload must be exact bytes"),
     ):
-        injected = payload if world.rank == 0 else image
+        injected = payload if world_rank(world) == 0 else image
         refusals[name] = _refused(world, lambda injected=injected:
             engine.validate_checkpoint_state_carriers(injected), boundary=reason)
         _same(world, baseline, _snapshot(world, runtime, width))
@@ -142,15 +141,15 @@ def test_native_amr12_state_carrier_refusals_and_exact_rollback(
     raw = np.frombuffer(image, dtype=np.uint8)
     for name, payload in (("transport-dtype", raw.astype(np.int16)),
                           ("transport-shape", raw.reshape(1, -1))):
-        injected = payload if world.rank == 0 else raw
+        injected = payload if world_rank(world) == 0 else raw
         refusals[name] = _refused(world, lambda injected=injected:
             prepare_checkpoint_state_carriers(runtime, engine, {STATE_CARRIERS_KEY:injected}),
             boundary="one-dimensional uint8")
         _same(world, baseline, _snapshot(world, runtime, width))
-    if world.size == 2:
+    if world_size(world) == 2:
         # One genuine rank gets a structurally valid but different byte image.
         # The last archive byte belongs to the last IEEE word, not a schema field.
-        divergent = image[:-1]+bytes((image[-1]^1,)) if world.rank == 0 else image
+        divergent = image[:-1]+bytes((image[-1]^1,)) if world_rank(world) == 0 else image
         refusals["rank-zero-divergent-archive"] = _refused(world,
             lambda: engine.validate_checkpoint_state_carriers(divergent), boundary="differs between destination ranks")
         _same(world, baseline, _snapshot(world, runtime, width))
@@ -168,10 +167,10 @@ def test_native_amr12_state_carrier_refusals_and_exact_rollback(
         _same(world, baseline, _snapshot(world, runtime, width, capture_image=False))
         before = np.asarray(collective_call(world,
             lambda: runtime.block_level_state_global("Q0", 0))).copy()
-        local = np.nextafter(before, np.inf) if world.rank == 0 else before
+        local = np.nextafter(before, np.inf) if world_rank(world) == 0 else before
         collective_call(world, lambda: engine.set_block_level_state("Q0", 0, local))
         mutated = _snapshot(world, runtime, width, capture_image=False)
-        changed = collective_call(world, lambda: allgather_value(world,
+        changed = collective_call(world, lambda: world_allgather(world,
             baseline["projection"][1][1] != mutated["projection"][1][1]))
         with collective_check(world):
             assert changed[0], "rank0 must own actual mutated coarse state storage"
@@ -207,18 +206,18 @@ def test_native_amr12_state_carrier_refusals_and_exact_rollback(
         fixture = Path(__file__).resolve()
         native_path = Path(native.__file__).resolve()
         receipt = {"schema":"sol61.amr12.native-carrier-failures@1", "dimension":2,
-            "rank":world.rank, "size":world.size, "cells":cells, "width":width,
+            "rank":world_rank(world), "size":world_size(world), "cells":cells, "width":width,
             "fixture":{"path":str(fixture), "sha256":hashlib.sha256(fixture.read_bytes()).hexdigest()},
             "native":{"path":str(native_path), "sha256":hashlib.sha256(native_path.read_bytes()).hexdigest()},
             "artifact":artifact.artifact_identity.token, "platform":artifact.platform_manifest.to_data(),
             "snapshots":snapshots, "refusals":refusals,
-            "rank_divergence_executed":world.size == 2,
+            "rank_divergence_executed":world_size(world) == 2,
             "limits":["Direct codec refused/rolled back within genuine native restart transaction.",
                       "Accepted POPSCAR1/POPSDIA1 images; active transactions compare native full-carrier hashes and diagnostic IEEE bits.",
                       "No GPU/device failure/OOM injection, regrid or topology redistribution.",
                       "Full public commit/finalize coverage belongs to the existing AMR restart fixture."]}
-        path = directory/("receipt-rank%d.json" % world.rank)
+        path = directory/("receipt-rank%d.json" % world_rank(world))
         path.write_text(json.dumps(receipt, sort_keys=True, indent=2)+"\n")
     record_property("amr12_carrier_failure_receipt", str(path))
     record_property("native_dimension", 2)
-    record_property("mpi_size", world.size)
+    record_property("mpi_size", world_size(world))

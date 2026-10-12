@@ -25,11 +25,14 @@ def build():
     matrix[x][y],matrix[y][x]=a.OMEGA,-a.OMEGA
     operator=model.operator('selected_skew',returns=model.local_linear_operator('selected_skew',on=selected,matrix=tuple(map(tuple,matrix))))
     program=a.pops.Program('second_state_explicit_affine')
-    spectator=program.state(blocks['spectator'][dummy]);q=program.state(blocks['population'][selected])
+    # Observe the bound spectator to retain its exact read-only binary block route.
+    program.state(blocks['spectator'][dummy]).n
+    q=program.state(blocks['population'][selected])
     midpoint=program.solve(a.LocalLinear(operator=program.I-(program.dt/2)*program.linear_source(operator),rhs=q.n),solver=a.DenseLU()).consume(action=a.FailRun())
     mean=program.value('endpoint',2*midpoint-q.n,at=q.n.point)
     pushed=program.affine_moment_update(q.n,mean,linear_operator=operator,theta_dt=program.dt/2,basis=a.BASIS,components=a.BINDING)
-    program.commit(spectator.next,program.value('spectator_unchanged',spectator.n,at=spectator.next.point))
+    # The unrelated bound State has no update. A named Program.value would be a
+    # numerical affine materialization, whose addition does not preserve -0.0 bits.
     program.commit(q.next,program.value('accepted',pushed+program.dt*rates['population'](pushed),at=q.next.point))
     program.step_strategy(a.FixedDt(a.DT));case.program(program)
     transfer=a.AMRTransfer();subjects={}

@@ -1,0 +1,7 @@
+{
+  "schema": "pops.historical-sdk-header@1",
+  "source_commit": "1e579f3b90f752b8d9341f659265d3c517e582f0",
+  "source_path": "include/pops/runtime/system/auxiliary_checkpoint.hpp",
+  "sha256": "c2c52732430ab6347011366bcde8569cc6a922de18a1a0ade05048d749d71350",
+  "bytes": 25394
+}

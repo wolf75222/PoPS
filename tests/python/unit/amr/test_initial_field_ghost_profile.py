@@ -174,6 +174,60 @@ def test_field_profile_drivers_keep_every_declared_native_group_and_world(tmp_pa
     assert sum(call["ranks"] * sum(call["expected_cases"].values()) for call in calls) == 54
 
 
+def test_checkpoint_profile_drivers_keep_all_seventeen_cases_in_each_world(tmp_path, monkeypatch):
+    import importlib
+    from tests.python.support import public_checkpoint_profile_mpi as profile
+
+    expected_counts = {"accepted_halo": 2, "scalar_bound_capture": 4,
+                       "imex_checkpoint": 2, "amr12_carrier": 1, "typed_newton": 8}
+    assert set(profile.GROUPS) == set(expected_counts)
+    calls = []
+    monkeypatch.setattr(profile, "run_fixture_world", lambda **arguments: calls.append(arguments))
+    for group, count in expected_counts.items():
+        for ranks in (1, 2):
+            module = importlib.import_module(
+                "tests.python.integration.mpi.test_public_%s_mpi%d" % (group, ranks))
+            getattr(module, "test_public_%s_on_authenticated_mpi%d_world" % (group, ranks))(tmp_path)
+            call = calls[-1]
+            assert call["ranks"] == ranks
+            assert call["tests"] is profile.GROUPS[group][0]
+            assert call["expected_cases"] is profile.GROUPS[group][1]
+            assert sum(call["expected_cases"].values()) == count
+            assert {selector.split("::", 1)[1] for selector in call["tests"]} == set(call["expected_cases"])
+            assert call["expected_rank_env"] == "POPS_TEST_PUBLIC_NATIVE_EXPECT_RANKS"
+            assert call["timeout_seconds"] == 840
+    assert sum(sum(call["expected_cases"].values()) for call in calls) == 34
+    assert sum(call["ranks"] * sum(call["expected_cases"].values()) for call in calls) == 51
+
+
+@pytest.mark.parametrize("ranks", (1, 2))
+@pytest.mark.parametrize("family", ("accepted_halo", "scalar_bound_capture", "imex_checkpoint",
+                                  "amr12_carrier", "typed_newton"))
+def test_checkpoint_receipts_refuse_missing_parameter_skip_and_duplicate(tmp_path, ranks, family):
+    from tests.python.support.mpi_fixture_driver import require_rank_results
+    from tests.python.support.public_checkpoint_profile_mpi import GROUPS
+
+    expected = GROUPS[family][1]
+    for rank in range(ranks):
+        root = ET.Element("testsuite")
+        for name, count in expected.items():
+            for parameter in range(count):
+                ET.SubElement(root, "testcase", name="%s[%d]" % (name, parameter))
+        ET.ElementTree(root).write(tmp_path / ("rank%d.xml" % rank))
+    require_rank_results(tmp_path, ranks, expected, purpose=family)
+    receipt = tmp_path / "rank0.xml"
+    root = ET.parse(receipt).getroot()
+    ET.SubElement(root.find("testcase"), "skipped")
+    ET.ElementTree(root).write(receipt)
+    with pytest.raises(AssertionError, match="mandatory outcomes"):
+        require_rank_results(tmp_path, ranks, expected, purpose=family)
+    root.find("testcase").remove(root.find("testcase/skipped"))
+    root.remove(root.find("testcase"))
+    ET.ElementTree(root).write(receipt)
+    with pytest.raises(AssertionError, match="case inventory differs"):
+        require_rank_results(tmp_path, ranks, expected, purpose=family)
+
+
 @pytest.mark.parametrize("ranks", (1, 2))
 @pytest.mark.parametrize("family", ("amr", "evolved_original", "captured_diffusion"))
 def test_public_receipts_cover_every_parameter_on_every_rank(tmp_path, ranks, family):

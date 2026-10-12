@@ -4,6 +4,8 @@ import os
 import numpy as np
 import pops
 import pytest
+from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.public_native_profile import rank_and_size, profile_gather_bytes
 
 from tests.python.unit.moments.test_m15_axial_reception import _load, oracle
 
@@ -18,18 +20,18 @@ def _compile(order):
     case, layout, _ = example.build_case(N, order=order, dt=DT)
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
     assert artifact.resolved_dimension == 1
-    execution = pops.ExecutionContext.mpi_world(artifact)
+    execution = artifact_execution_context(artifact)
     return artifact, execution, execution.communicator.handle
 
 
 def _check(world, callback):
     error = b""
-    if world.rank == 0:
+    if rank_and_size(world)[0] == 0:
         try:
             callback()
         except Exception as caught:
             error = (type(caught).__name__+": "+str(caught)).encode()
-    error = world.broadcast_bytes(error, root=0)
+    error = error if world is None else world.broadcast_bytes(error, root=0)
     assert not error, error.decode()
 
 
@@ -67,7 +69,7 @@ def test_axial_b1_inadmissible_initial_state_is_refused_without_publication(
                             oracle.initial_averages(N)[list(oracle.ORDERS[1])])},
                         resources={"execution_context": execution})
     control_report = pops.run(control, t_end=DT, max_steps=1, console=False)
-    control_counts = world.allgather_bytes(str(control_report.accepted_steps).encode())
+    control_counts = profile_gather_bytes(world, str(control_report.accepted_steps).encode())
     assert all(count == b"1" for count in control_counts), control_counts
     initial = np.ascontiguousarray(oracle.invalid_states(N)[label][list(oracle.ORDERS[1])])
     runtime = None
@@ -79,8 +81,8 @@ def test_axial_b1_inadmissible_initial_state_is_refused_without_publication(
         reason = str(caught)
     else:
         reason = ""
-    reasons = world.allgather_bytes(reason.encode())
-    bound = world.allgather_bytes(b"bound" if runtime is not None else b"unbound")
+    reasons = profile_gather_bytes(world, reason.encode())
+    bound = profile_gather_bytes(world, b"bound" if runtime is not None else b"unbound")
     assert len(set(bound)) == 1, "bind did not converge across ranks"
     after = np.asarray(runtime.state_global("moments")) if runtime is not None else None
 

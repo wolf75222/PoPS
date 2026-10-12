@@ -33,6 +33,7 @@ def test_scientific_dim1_runtime_files_keep_their_declared_geometry():
         "tests/python/integration/runtime/test_m15_axial_b1_runtime.py",
         "tests/python/integration/runtime/test_m23_hall_fourier_runtime.py",
         "tests/python/integration/runtime/test_coupled_gradient_exchange_runtime.py",
+        "tests/python/integration/runtime/test_public_ns_conduction.py",
     ]
     assert runner.partition(paths, contract) == {1: paths}
 

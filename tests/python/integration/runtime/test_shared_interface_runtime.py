@@ -1298,6 +1298,33 @@ def test_frozen_two_level_generated_program_executes_shared_interface_implicit_p
         np.testing.assert_array_equal(solved_packed, initial)
 
 
+def _assert_sparse_interface_coverage(fine_boxes, fine_shape):
+    # Clustering may tile a complete interface face with several patches.  The
+    # numerical requirement is coverage of every face cell, irrespective of
+    # those patch boundaries; the two central columns must still stay coarse.
+    coverage = np.zeros(tuple(fine_shape), dtype=bool)
+    for lower, upper in fine_boxes:
+        coverage[tuple(slice(int(lo), int(hi) + 1)
+                       for lo, hi in zip(lower, upper, strict=True))] = True
+    assert fine_boxes
+    assert np.all(coverage[0, :]), "fine x-low interface face is not fully tiled"
+    assert np.all(coverage[-1, :]), "fine x-high interface face is not fully tiled"
+    central_indices = (fine_shape[0] // 2 - 1, fine_shape[0] // 2)
+    assert not np.any(coverage[list(central_indices), :]), "fine interior lost its coarse gap"
+
+
+def test_sparse_interface_coverage_oracle_accepts_tiling_and_rejects_holes():
+    # Four corner patches tile both interface bands without a single full-height
+    # box. A missing top corner and an interior bridge are distinct violations.
+    tiled = (((0, 0), (1, 3)), ((0, 4), (1, 7)),
+             ((6, 0), (7, 3)), ((6, 4), (7, 7)))
+    _assert_sparse_interface_coverage(tiled, (8, 8))
+    with pytest.raises(AssertionError, match="x-low interface face"):
+        _assert_sparse_interface_coverage(tiled[1:], (8, 8))
+    with pytest.raises(AssertionError, match="fine interior"):
+        _assert_sparse_interface_coverage((*tiled, ((3, 0), (4, 7))), (8, 8))
+
+
 def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     # Retrying an identical failed invocation is supported when it owns no external
     # consumer lifecycle. The separate restart scenario below retains checkpoint coverage.
@@ -1369,23 +1396,7 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
         for box_level, lower, upper in runtime.patch_boxes()
         if int(box_level) == fine_level
     )
-    assert fine_boxes
-    assert any(
-        int(lower[0]) == 0 and int(lower[1]) == 0 and int(upper[1]) == fine_shape[1] - 1
-        for lower, upper in fine_boxes
-    )
-    assert any(
-        int(upper[0]) == fine_shape[0] - 1
-        and int(lower[1]) == 0
-        and int(upper[1]) == fine_shape[1] - 1
-        for lower, upper in fine_boxes
-    )
-    central_indices = (fine_shape[0] // 2 - 1, fine_shape[0] // 2)
-    assert not any(
-        int(lower[0]) <= center <= int(upper[0])
-        for lower, upper in fine_boxes
-        for center in central_indices
-    )
+    _assert_sparse_interface_coverage(fine_boxes, fine_shape)
     initial_left = runtime.integral("tracer")
     initial_right = runtime.integral("right")
     initial_integral = initial_left + initial_right

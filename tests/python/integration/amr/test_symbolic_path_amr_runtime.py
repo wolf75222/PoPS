@@ -97,7 +97,7 @@ def _one_step(initial, cells):
     return initial + DT * rhs
 
 
-def _bind(levels, *, hot_stage=False):
+def _bind(levels, *, hot_stage=False, with_update_id=False):
     resolved, state = _resolved(levels, hot_stage=hot_stage)
     assert resolved.target == "amr_system"
     artifact = pops.compile(resolved)
@@ -107,6 +107,11 @@ def _bind(levels, *, hot_stage=False):
     assert runtime.n_levels() == levels
     coarse = np.asarray(runtime.block_level_state_global("transport", 0)).reshape(initial.shape)
     np.testing.assert_array_equal(coarse, initial)
+    if with_update_id:
+        # Detached artifacts retain the exact IR hash, not a live Program builder.
+        assert artifact.plan.time_identity["_ir_hash"] == resolved.time._ir_hash()
+        update, = resolved.time._commits.values()
+        return runtime, initial, update.id
     return runtime, initial
 
 
@@ -157,13 +162,21 @@ def test_symbolic_path_partial_two_level_amr_conserves_v_and_evolves_nonconserva
 def test_symbolic_path_actual_stage_cfl_failure_keeps_two_level_accepted_state(
         isolated_native_cache, native_cxx, kokkos_root):
     del isolated_native_cache, native_cxx, kokkos_root
-    runtime, _ = _bind(2, hot_stage=True)
+    from pops._bootstrap import StepAttemptRejected
+    runtime, _, update_id = _bind(2, hot_stage=True, with_update_id=True)
     before = tuple(np.asarray(runtime.block_level_state_global("transport", level)).copy()
                    for level in range(2))
     boxes = runtime.patch_boxes()
     assert boxes
-    with pytest.raises(RuntimeError, match="actual face CFL exceeds authored Courant"):
+    with pytest.raises(StepAttemptRejected) as rejected:
         pops.run(runtime, t_end=DT, max_steps=1)
+    assert rejected.value.status == "invalid_evaluation"
+    assert rejected.value.disposition == "retry"
+    assert rejected.value.phase == "native_evaluation"
+    assert rejected.value.reason_code == 503
+    # The convex stability budget is checked at its consuming update, not at the RHS call.
+    assert ("user_face_numerical_stability block=0 evaluation=%d reason_code=503"
+            % update_id) in rejected.value.detail
     assert runtime.time() == 0.
     assert runtime.macro_step() == 0
     assert runtime.patch_boxes() == boxes

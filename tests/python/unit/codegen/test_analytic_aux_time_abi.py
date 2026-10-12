@@ -1,7 +1,7 @@
 """Source guards for the changed internal C++ point; no Native module is loaded."""
 import hashlib
+import json
 from pathlib import Path
-import subprocess
 import pytest
 from pops.codegen import abi, toolchain
 
@@ -11,14 +11,26 @@ CHANGED = ('pops/runtime/system/derived_aux_provider.hpp',
            'pops/runtime/system/auxiliary_checkpoint.hpp')
 
 
+def historical_header(relative):
+    fixture = ROOT/'tests/python/support/fixtures'/f'{Path(relative).stem}_1e579f3.hpp'
+    receipt = json.loads(fixture.with_suffix('.json').read_text())
+    assert receipt['schema'] == 'pops.historical-sdk-header@1'
+    assert receipt['source_commit'] == BASE
+    assert receipt['source_path'] == 'include/'+relative
+    data = fixture.read_bytes()
+    assert len(data) == receipt['bytes']
+    assert hashlib.sha256(data).hexdigest() == receipt['sha256']
+    assert data != (ROOT/'include'/relative).read_bytes()
+    return data
+
+
 def header_signatures():
     current = toolchain.pops_header_signature(ROOT / 'include')
     entries = []
     rows = toolchain._installed_pops_header_rows(ROOT / 'include')
     assert all(('sdk-support', path) in rows for path in CHANGED)
     for category, relative in rows:
-        data = subprocess.check_output(['git', '-C', str(ROOT), 'show',
-            BASE + ':include/' + relative]) if relative in CHANGED else (ROOT/'include'/relative).read_bytes()
+        data = historical_header(relative) if relative in CHANGED else (ROOT/'include'/relative).read_bytes()
         entries.append('%s %s\n%s\n' % (category, relative, hashlib.sha256(data).hexdigest()))
     previous = hashlib.sha256(''.join(entries).encode()).hexdigest()
     assert previous != current

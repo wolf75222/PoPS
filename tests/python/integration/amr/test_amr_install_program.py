@@ -63,13 +63,18 @@ def test_resolved_amr_program_emits_only_the_amr_install_entry() -> None:
     assert "ctx.for_each_program_resource_level(" in amr_source
     assert "ctx.set_level(" not in amr_source
     assert "_refresh_level_programs();" in amr_source
-    assert "ctx.advance_hierarchy(dt, _advance_level)" in amr_source
+    assert "ctx.advance_mapping_hierarchy(dt, [=](double level_dt)" in amr_source
     assert "}, ctx_owner, [=]() { _refresh_level_programs(); }," in amr_source
     assert "[=]() { _refresh_level_programs(true); });" in amr_source
-    level_advance = amr_source.split("auto _advance_level", 1)[1].split("};", 1)[0]
-    assert level_advance.index("_refresh_level_programs();") < level_advance.index(
-        "_level_programs->at"
-    ), "a transactional regrid must refresh resources before the first level-bundle access"
+    level_advance = amr_source.split("ctx.advance_mapping_hierarchy", 1)[1].split(
+        "}, ctx_owner", 1)[0]
+    access = level_advance.index("_level_programs->at")
+    for authority in ("*_level_program_epoch != topology.epoch",
+                      "*_level_program_generation != topology.generation",
+                      "_level_programs->size() != static_cast<std::size_t>(topology.levels)",
+                      "throw std::logic_error"):
+        assert level_advance.index(authority) < access, (
+            "the refreshed continuation must authenticate its exact hierarchy before bundle access")
     assert "pops_install_program(" in system_source
     assert "pops_install_program_amr" not in system_source
 

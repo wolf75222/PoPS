@@ -11,8 +11,9 @@ import pops
 import pytest
 
 from pops import math
-from pops._native_collectives import allgather_value
-from pops._native_selector import select_native_dimension
+from tests.python.support.public_native_profile import (
+    native_profile, rank_and_size, profile_gather_value, profile_gather_bytes,
+)
 from pops.domain import CartesianDomain
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
@@ -23,9 +24,10 @@ from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import CoupledGradient, DiscretizationPlan
 from pops.projection import ConservativeCellAverage
 from pops.time import FixedDt
-from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
+from tests.python.support.public_native_profile import compile_profile_plan_once as compile_resolved_plan_once
 from tests.python.support.collective_checks import collective_call, collective_check, state_snapshots
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.diffusion_ledger_stages import ssprk2_stage_indices
 
 
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
@@ -91,8 +93,8 @@ def _rate(values):
 def test_dim2_fourier_faces_and_component_permutation(isolated_native_cache, native_cxx,
         kokkos_root, tmp_path, order):
     del isolated_native_cache, native_cxx, kokkos_root
-    native = select_native_dimension(2)
-    world = native.mpi_world()
+    native, world = native_profile(dimension=2, scope="coupled gradient Dim2")
+    rank, ranks = rank_and_size(world)
     resolved, subject = collective_call(world, lambda: _case(order))
     artifact = compile_resolved_plan_once(world, resolved,
         route="dim2 coupled gradient", compile_artifact=pops.compile)
@@ -104,12 +106,12 @@ def test_dim2_fourier_faces_and_component_permutation(isolated_native_cache, nat
     collective_call(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
     actual = state_snapshots(runtime, world, ("mixture",))[0]
     local_records = collective_call(world, runtime._executor._program_exchange_records)
-    batches = allgather_value(world, local_records)
+    batches = profile_gather_value(world, local_records)
     with collective_check(world):
         records = [row for batch in batches for row in batch]
         assert runtime.time() == DT and runtime.macro_step() == 1
         assert len(records) == 2 * NX * NY * 2 * 2 * 2 * 2
-        if world.rank == 0:
+        if rank == 0:
             predictor = initial + DT * _rate(initial)
             expected = .5 * (initial + predictor + DT * _rate(predictor))
             actual = actual.reshape(2, NY, NX)[np.argsort(order)]
@@ -117,11 +119,9 @@ def test_dim2_fourier_faces_and_component_permutation(isolated_native_cache, nat
             assert len({row["operation_identity"] for row in records}) == 1
             contexts = tuple(dict.fromkeys(row["evaluation_context"] for row in records))
             assert len(contexts) == 2
-            stages = {}
-            for context_name in contexts:
-                names = re.findall(r"StagePoint\(name='ssprk2_stage_([01])',", context_name)
-                assert len(names) == 1, context_name
-                stages[context_name] = (initial, predictor)[int(names[0])]
+            indices = ssprk2_stage_indices(resolved.time, contexts)
+            stages = {context_name: (initial, predictor)[index]
+                      for context_name, index in indices.items()}
             assert len({id(value) for value in stages.values()}) == 2
             increments = np.zeros_like(initial)
             incidences = set()

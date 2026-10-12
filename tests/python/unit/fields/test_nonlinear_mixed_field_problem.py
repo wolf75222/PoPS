@@ -1,5 +1,6 @@
 """Original coupled spatial residuals, exact captures and untouched legacy routes."""
 from dataclasses import replace
+import re
 
 import pops
 import pytest
@@ -153,9 +154,10 @@ def test_input_slot_forgery_refused(bad):
         validate_nonlinear_field_request(program, forged)
 
 
-def test_wrong_seed_width_refuses_atomically():
-    _, field, program, _, request, *_ = mixed_case()
-    seed = program.scalar_field("foreign-width", ncomp=3)
+@pytest.mark.parametrize("width", (2, 3))
+def test_wrong_seed_width_refuses_atomically(width):
+    _, field, program, _, request, *_ = mixed_case(tuple(range(width)), width=width)
+    seed = program.scalar_field("foreign-width", ncomp=width + 1)
     before = (program._next_id, tuple(program._values))
     with pytest.raises(SolveRequestError, match="unknown_type_mismatch"):
         program.solve(replace(request, seeds={"field_tuple": seed}), solver=field.default_program_solver())
@@ -205,6 +207,61 @@ def test_public_native_fixture_resolves_and_emits_without_execution(order, failu
     for node in solves:
         assert "auto field_residual_%d_output =" % node.id in code
         assert "copy(*field_residual_%d_output, field_residual_%d_workspace->candidate())" % (node.id,node.id) in code
+
+
+@pytest.mark.parametrize("order", ((0, 1), (2, 0, 1)))
+def test_scaled_original_field_tuple_seed_inherits_all_components(order):
+    from tests.python.integration.runtime.test_nonlinear_mixed_field_runtime import prepared_case
+
+    resolved, _, _ = prepared_case(order)
+    width = len(order)
+    first, second = [node for node in resolved.time._values if node.op == "solve_spatial_field"]
+    seed = next(node for node in resolved.time._values if node.name == "scaled-first-solution-seed")
+    source, = seed.inputs
+    assert seed.vtype == "scalar_field" and seed.op == "linear_combine"
+    assert source.op == "solve_outcome_component" and source.attrs["ncomp"] == width
+    assert source.inputs[0].inputs[0].id == first.id
+    assert first.attrs["ncomp"] == second.attrs["ncomp"] == width
+    assert second.inputs[second.attrs["seed_index"]].id == seed.id
+    assert first.attrs["solve_request"]["equation_identity"] == second.attrs["solve_request"]["equation_identity"]
+    assert first.attrs["solve_request"]["initialization_identity"] != second.attrs["solve_request"]["initialization_identity"]
+    assert tuple(seed.attrs["coeffs"][0]) == (0,)
+    # Preserve the authored binary64 coefficient, including its exact metadata.
+    assert float(seed.attrs["coeffs"][0][0]) == .8
+    numerator, denominator = (.8).as_integer_ratio()
+
+    code = emit_cpp_program(resolved.time, model=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
+    source_pointer = "field_residual_%d_output" % first.id
+    assert re.search(r"auto\s+" + source_pointer + r"\s*=.*ctx\.alloc_scalar_field\(" +
+                     str(width) + r",\s*0\)", code)
+    template = "(*%s)" % source_pointer
+    allocation = re.search(
+        r"pops::MultiFab<pops::kNativeDimension>&\s+(?P<output>\w+)\s*=\s*"
+        r"ctx\.scalar_scratch\(" + str(seed.id) + r",\s*0,\s*" + re.escape(template) +
+        r",\s*" + re.escape("(%s).ncomp()" % template) + r",\s*1\);", code)
+    assert allocation is not None, "the seed scratch must inherit the complete first solved tuple"
+    assert "ctx.axpy(%s, static_cast<pops::Real>(0.8), %s, dt, {{0, %d, %d}});" % (
+        allocation.group("output"), template, numerator, denominator) in code
+
+
+def test_scalar_field_combination_refuses_same_shaped_foreign_layout_atomically():
+    from pops.fields import FieldStorageBinding
+    from tests.python.unit.time.test_field_sampling import sample_case
+
+    _, program, temporal, auxiliary, spaces, bindings, authority = sample_case()
+    builder, layouts = authority
+    selected = bindings[0]
+    foreign_layout = builder.layout("same-shaped-other", layouts[selected.layout])
+    assert foreign_layout != selected.layout
+    first = program.field_sample(auxiliary, template=temporal.n, storage=selected, space=spaces[0])
+    other_storage = FieldStorageBinding(selected.unknowns, foreign_layout, selected.observation_axes)
+    second = program.field_sample(auxiliary, template=temporal.n, storage=other_storage, space=spaces[0])
+    assert first.space == second.space
+    assert first.attrs["scalar_storage"].layout != second.attrs["scalar_storage"].layout
+    before = (program._next_id, tuple(program._values))
+    with pytest.raises(ValueError, match="different layout/owner bindings"):
+        program.value("foreign-layout-combination", .8 * first + .2 * second, at=first.point)
+    assert (program._next_id, tuple(program._values)) == before
 
 
 def test_manufactured_data_close_all_original_equations():

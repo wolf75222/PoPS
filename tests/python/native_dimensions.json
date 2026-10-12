@@ -15,6 +15,7 @@
     "tests/python/integration/runtime/test_coupled_gradient_dim3_fourier_runtime.py": 3,
     "tests/python/integration/runtime/test_m15_axial_b1_runtime.py": 1,
     "tests/python/integration/runtime/test_m23_hall_fourier_runtime.py": 1,
-    "tests/python/integration/runtime/test_coupled_gradient_exchange_runtime.py": 1
+    "tests/python/integration/runtime/test_coupled_gradient_exchange_runtime.py": 1,
+    "tests/python/integration/runtime/test_public_ns_conduction.py": 1
   }
 }

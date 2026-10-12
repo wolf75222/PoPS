@@ -82,6 +82,19 @@ def _blob(amp=0.5, w=0.12):
     )
 
 
+def _advecting_tag_front():
+    """A declared transport front crosses 1.2 without any retained-buffer growth.
+
+    The downstream cell starts 0.001 below the tag threshold. Its upstream
+    neighbour is 1.5, so the positive physical x flux raises it across the
+    threshold before the first scheduled regrid at step two.
+    """
+    value = np.ones((N, N), dtype=np.float64)
+    value[:, N // 2 - 1:N // 2 + 1] = 1.5
+    value[:, N // 2 + 1] = 1.199
+    return value
+
+
 def _build(regrid_every, refine_thr, u0, tag, native_cxx):
     model = _euler_model("rg_blk_%s" % tag)
     plan_name = "rg_ab2_%s" % tag
@@ -194,7 +207,7 @@ def test_real_regrid_stable_and_layout_consistent(
     refluxed live state, ADC-631 x ADC-639, acceptance e). This is the tracked concession: the tolerance
     was 2e-4 (average_down-only v1) and is tightened to 1e-8 with the reflux."""
     del isolated_native_cache, kokkos_root
-    u0 = _blob(amp=0.5)
+    u0 = _advecting_tag_front()
     a = _build(regrid_every=2, refine_thr=1.2, u0=u0, tag="real", native_cxx=native_cxx)
     boxes_before = tuple(a.patch_boxes())
     regrids_before = a.amr.explain_regrid().regrid_count

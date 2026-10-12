@@ -51,6 +51,8 @@ CPP_BROAD_FILES = {
     "CMakePresets.json",
     "scripts/ci_include_graph.py",
     "scripts/ci_python_module_objects.py",
+    "scripts/ci_python_mpi.py",
+    "scripts/ci_python_hardware.py",
     "scripts/ci_route_mode.py",
     "scripts/ci_plan.py",
     "scripts/ci_components.toml",
@@ -79,6 +81,8 @@ PYTHON_BROAD_FILES = {
     "scripts/ci_import_closure.py",
     "scripts/ci_pytest_timings.py",
     "scripts/ci_python_dimensions.py",
+    "scripts/ci_python_mpi.py",
+    "scripts/ci_python_hardware.py",
     "tests/python/native_dimensions.json",
     "scripts/ci_python_module_objects.py",
     "scripts/ci_route_mode.py",
@@ -599,6 +603,48 @@ def manifest_python_mpi_orchestrators(manifest: dict) -> list[dict]:
     return sorted(orchestrators, key=lambda item: item["path"])
 
 
+def manifest_python_hardware_entrypoints(manifest: dict) -> list[dict]:
+    """Keep tests requiring real device storage outside CPU plans, with exact coverage."""
+    entries: list[dict] = []
+    seen = {row['path'] for row in manifest_python_mpi_entrypoints(manifest)}
+    seen.update(row['path'] for row in manifest_python_mpi_orchestrators(manifest))
+    for suite in manifest.get('python', {}).get('suite', []):
+        name = str(suite.get('name', ''))
+        owner = normalize(str(suite.get('path', ''))).rstrip('/')
+        raw_entries = suite.get('hardware_entrypoints', [])
+        if not isinstance(raw_entries, list):
+            raise SystemExit('Python hardware_entrypoints requires a TOML array')
+        for raw in raw_entries:
+            if not isinstance(raw, dict) or set(raw) != {'path', 'hardware', 'native_dimension', 'expected_cases'}:
+                raise SystemExit('Python hardware entrypoint has an incomplete or unknown contract')
+            path = normalize(str(raw['path']))
+            candidate = Path(path)
+            if (not path or candidate.is_absolute() or '..' in candidate.parts
+                    or '\t' in path or '\n' in path or candidate.suffix != '.py'
+                    or not candidate.name.startswith('test_')):
+                raise SystemExit('Python hardware entrypoint has an invalid path')
+            if not name or not owner or not path.startswith(owner + '/'):
+                raise SystemExit('Python hardware entrypoint is outside its owning suite')
+            if not (ROOT / path).is_file():
+                raise SystemExit('Python hardware entrypoint does not exist: ' + path)
+            if raw['hardware'] != 'gpu':
+                raise SystemExit('Python hardware entrypoint requires a declared gpu profile')
+            dimension = raw['native_dimension']
+            if type(dimension) is not int or dimension not in (1, 2, 3):
+                raise SystemExit('Python hardware entrypoint requires an exact native dimension')
+            cases = raw['expected_cases']
+            if (not isinstance(cases, dict) or not cases
+                    or any(not isinstance(key, str) or not key.startswith('test_')
+                           or type(count) is not int or count <= 0 for key, count in cases.items())):
+                raise SystemExit('Python hardware entrypoint requires exact positive case counts')
+            if path in seen:
+                raise SystemExit('duplicate Python hardware contract: ' + path)
+            seen.add(path)
+            entries.append({'suite': name, 'path': path, 'hardware': raw['hardware'],
+                            'native_dimension': dimension, 'expected_cases': cases})
+    return sorted(entries, key=lambda row: row['path'])
+
+
 def manifest_python_suites(manifest: dict) -> list[dict]:
     # CI selects the repository snapshot, not arbitrary untracked scratch files in a developer
     # checkout.  This also keeps local plans stable when editors create suffixed copies beside a
@@ -621,6 +667,9 @@ def manifest_python_suites(manifest: dict) -> list[dict]:
         orchestrator["path"]
         for orchestrator in manifest_python_mpi_orchestrators(manifest)
     )
+    dedicated_hardware_paths = {
+        row['path'] for row in manifest_python_hardware_entrypoints(manifest)
+    }
     suites: list[dict] = []
     for suite in manifest.get("python", {}).get("suite", []):
         name = str(suite.get("name", ""))
@@ -639,6 +688,7 @@ def manifest_python_suites(manifest: dict) -> list[dict]:
             for p in suite_path.rglob("test_*.py")
             if (tracked is None or str(p.relative_to(ROOT)) in tracked)
             and str(p.relative_to(ROOT)) not in dedicated_mpi_paths
+            and str(p.relative_to(ROOT)) not in dedicated_hardware_paths
         )
         if not files:
             raise SystemExit(f"Python suite {name} has no test_*.py files under {path}")
@@ -1985,6 +2035,7 @@ def plan_python(args: argparse.Namespace) -> int:
             "full_reasons": full_reasons,
             "selected_count": len(selected_tests),
             "total_count": len(all_tests),
+            "hardware_exclusions": manifest_python_hardware_entrypoints(load_manifest()),
             "shard_index": args.shard_index,
             "shard_total": args.shard_total,
             "sharded_count": len(sharded),

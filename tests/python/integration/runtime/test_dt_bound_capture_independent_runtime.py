@@ -22,6 +22,8 @@ from tests.python.support.collective_checks import (
     collective_attempt, collective_call, collective_check, state_snapshots,
 )
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.public_native_profile import native_profile
+from tests.python.support.evolved_stage_v_capture import world_rank
 
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 CELLS = 4
@@ -98,8 +100,8 @@ def compiled_capture(world, capture, order=(0, 1, 2)):
         case, layout, _, _, _ = authored_capture(capture, order)
         return pops.resolve(pops.validate(case), layout=layout)
     resolved = collective_call(world, resolve)
-    return compile_resolved_plan_once(world, resolved, route="independent dt bound " + capture,
-                                      compile_artifact=pops.compile)
+    return (pops.compile(resolved) if world is None else compile_resolved_plan_once(
+        world, resolved, route="independent dt bound " + capture, compile_artifact=pops.compile))
 
 
 def initialized_runtime(world, artifact, initial, query=None):
@@ -111,7 +113,7 @@ def initialized_runtime(world, artifact, initial, query=None):
     before = state_snapshots(runtime, world, names)
     with collective_check(world):
         assert runtime.time() == 0. and runtime.macro_step() == 0
-        if world.rank == 0:
+        if world_rank(world) == 0:
             np.testing.assert_array_equal(before[0].reshape(initial.shape), initial)
             if query is not None:
                 np.testing.assert_array_equal(before[1].reshape(query.shape), query)
@@ -122,8 +124,7 @@ def initialized_runtime(world, artifact, initial, query=None):
 def test_native_public_bound_capture_route_and_permutation(
         isolated_native_cache, native_cxx, kokkos_root, capture):
     del isolated_native_cache, native_cxx, kokkos_root
-    from pops._native_selector import select_native_dimension
-    world = select_native_dimension(2).mpi_world()
+    _native, world = native_profile(scope="public independent dt-bound capture")
     for order in ((0, 1, 2), (2, 0, 1)):
         artifact = compiled_capture(world, capture, order)
         initial, query = collective_call(world, lambda order=order: arrays(order))
@@ -145,7 +146,7 @@ def test_native_public_bound_capture_route_and_permutation(
         with collective_check(world):
             assert report.accepted_steps == 2 and report.rejected_steps == 0
             assert runtime.time() == endpoint and runtime.macro_step() == 2
-            if world.rank == 0:
+            if world_rank(world) == 0:
                 np.testing.assert_array_equal(after[0].reshape(initial.shape),
                                                initial * factors * factors)
                 if capture == "query_only":
@@ -155,8 +156,7 @@ def test_native_public_bound_capture_route_and_permutation(
 def test_native_dot_all_invalid_bound_input_does_not_publish(
         isolated_native_cache, native_cxx, kokkos_root):
     del isolated_native_cache, native_cxx, kokkos_root
-    from pops._native_selector import select_native_dimension
-    world = select_native_dimension(2).mpi_world()
+    _native, world = native_profile(scope="public independent dt-bound capture")
     artifact = compiled_capture(world, "query_only")
     initial, query = collective_call(world, lambda: arrays((0, 1, 2)))
     with collective_check(world):

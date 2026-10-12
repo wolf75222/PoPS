@@ -488,6 +488,10 @@ def test_ctest_python_mpi_projection_matches_the_manifest_and_dim2_contract():
     assert manifest_orchestrators == (
         "tests/python/integration/mpi/test_amr_rank_change_restart.py",
         "tests/python/integration/mpi/test_initial_field_ghost_mpi.py",
+        "tests/python/integration/mpi/test_public_accepted_halo_mpi1.py",
+        "tests/python/integration/mpi/test_public_accepted_halo_mpi2.py",
+        "tests/python/integration/mpi/test_public_amr12_carrier_mpi1.py",
+        "tests/python/integration/mpi/test_public_amr12_carrier_mpi2.py",
         "tests/python/integration/mpi/test_public_amr_original_field_mpi1.py",
         "tests/python/integration/mpi/test_public_amr_original_field_mpi2.py",
         "tests/python/integration/mpi/test_public_amr_profile_mpi1.py",
@@ -498,12 +502,18 @@ def test_ctest_python_mpi_projection_matches_the_manifest_and_dim2_contract():
         "tests/python/integration/mpi/test_public_completed_original_interaction_mpi2.py",
         "tests/python/integration/mpi/test_public_evolved_original_stage_mpi1.py",
         "tests/python/integration/mpi/test_public_evolved_original_stage_mpi2.py",
+        "tests/python/integration/mpi/test_public_imex_checkpoint_mpi1.py",
+        "tests/python/integration/mpi/test_public_imex_checkpoint_mpi2.py",
         "tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi1.py",
         "tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi2.py",
         "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi1.py",
         "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi2.py",
+        "tests/python/integration/mpi/test_public_scalar_bound_capture_mpi1.py",
+        "tests/python/integration/mpi/test_public_scalar_bound_capture_mpi2.py",
         "tests/python/integration/mpi/test_public_spatial_interaction_mpi1.py",
         "tests/python/integration/mpi/test_public_spatial_interaction_mpi2.py",
+        "tests/python/integration/mpi/test_public_typed_newton_mpi1.py",
+        "tests/python/integration/mpi/test_public_typed_newton_mpi2.py",
     )
     assert cmake_entrypoints("_pops_py_mpi_orchestrators") == manifest_orchestrators
     assert (

@@ -23,6 +23,7 @@ from tests.python.integration._final_field_program import (
     scalar_advection_model,
 )
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.integration.amr.test_amr_history_regrid import _advecting_tag_front
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -74,8 +75,7 @@ def _compile(native_cxx: str) -> tuple[Any, Any, Any]:
         cxx=native_cxx,
         include=str(ROOT / "include"),
         strict_restart=True,
-        # Refine-only decisions retain and rebuffer old padding on every regrid. Recompute the
-        # blob's footprint so the checkpoint and continuation retain real coarse/fine interfaces.
+        # Recompute physical tags; retained numerical padding is not a tag source.
         coarsen_below_threshold=True,
     )
     bindings = tuple(plan.initial_condition_plan.bindings)
@@ -169,7 +169,7 @@ def _program_accepted_state(path: str | Path) -> tuple[tuple[str, bytes], ...]:
 
 
 def _accepted_state_history_flux(payload: bytes) -> tuple[list[dict[str, Any]], bytes]:
-    """Inspect the POPSAND7/8 + POPSFLX4 envelope, retaining exact byte boundaries.
+    """Inspect the versioned POPSAND + POPSFLX4 envelope, retaining exact byte boundaries.
 
     This is deliberately a test-side reader: it proves the wire image contains actual retained
     expressions and also catches accidental offset drift before a checkpoint reaches native restore.
@@ -199,11 +199,11 @@ def _accepted_state_history_flux(payload: bytes) -> tuple[list[dict[str, Any]], 
         return payload[nonlocal_cursor : nonlocal_cursor + size].decode("utf-8")
 
     version = payload[:8]
-    assert version in (b"POPSAND7", b"POPSAND8", b"POPSAND9")
+    assert version in (b"POPSAND7", b"POPSAND8", b"POPSAND9", b"POPSANDA")
     cursor = 8 + 8
     skip(read_u64())  # spatial contract
     skip(16)  # topology epoch, materialization generation
-    if version in (b"POPSAND8", b"POPSAND9"):
+    if version in (b"POPSAND8", b"POPSAND9", b"POPSANDA"):
         read_u64()  # committed attempt, independent of face-ledger contents
     for _ in range(read_u64()):
         skip(40)
@@ -214,14 +214,14 @@ def _accepted_state_history_flux(payload: bytes) -> tuple[list[dict[str, Any]], 
         skip(8)
         for _identity in range(4):
             read_string()
-        skip(16)
+        skip(24 if version == b"POPSANDA" else 16)  # depth, components, then A's ghost depth
     for _ in range(read_u64()):
         read_string()
         skip(72)  # five provenance words plus four exact sample-identity words
     for _ in range(read_u64()):
         read_string()
         skip(12 * 8)
-        if version == b"POPSAND9":
+        if version in (b"POPSAND9", b"POPSANDA"):
             skip(6 * 8)
             skip(read_u64())
     history_flux_size = read_u64()
@@ -374,7 +374,7 @@ def test_strict_restart_preserves_ab2_history_flux_and_reflux_continuation(
     record_property: Any,
 ) -> None:
     del isolated_native_cache, kokkos_root
-    initial = _blob()
+    initial = _advecting_tag_front()
     compiled = _compile(native_cxx)
     uninterrupted = _bind(compiled, initial)
     initial_boxes = tuple((int(level), tuple(lower), tuple(upper))

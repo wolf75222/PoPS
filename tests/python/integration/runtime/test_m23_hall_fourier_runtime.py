@@ -10,8 +10,8 @@ pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 
 
 def test_hall_fourier_signed_phase_norm_permutations_and_zero_limit(tmp_path, monkeypatch):
-    from pops._native_selector import select_native_dimension
-    native = select_native_dimension(1)
+    from tests.python.support.public_native_profile import native_profile, rank_and_size
+    native, world = native_profile(dimension=1, scope="saved-state Dim1 reception")
     examples = Path(__file__).resolve().parents[4] / "examples/migration/scientific"
     monkeypatch.syspath_prepend(str(examples))
     witness = importlib.import_module("api040_m23_hall_fourier")
@@ -24,14 +24,13 @@ def test_hall_fourier_signed_phase_norm_permutations_and_zero_limit(tmp_path, mo
     }
     assert all(row["continuous_phase"] == -.24 for row in records if row["eta_h"] == .3)
     assert all(row["continuous_phase"] == 0 for row in records if row["eta_h"] == 0)
-    world = native.mpi_world()
     failure = b""
-    if world.rank == 0:
+    if rank_and_size(world)[0] == 0:
         try:
             assert (tmp_path / "receipt.json").is_file()
             assert len(list(tmp_path.glob("state_*.npz"))) == 5
         except Exception as exception:
             failure = (type(exception).__name__+": "+str(exception)).encode()
-    failure = world.broadcast_bytes(failure, root=0)
+    failure = failure if world is None else world.broadcast_bytes(failure, root=0)
     if failure:
         raise AssertionError(failure.decode())

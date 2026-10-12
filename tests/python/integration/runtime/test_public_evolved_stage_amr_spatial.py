@@ -11,7 +11,9 @@ from tests.python.support.original_field_acceptance import selected_native_mixed
 
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 from tests.python.integration.runtime.test_public_captured_diffusion import bounded_bytes
-from tests.python.integration.runtime.test_public_evolved_original_stage import checkpoint_provenance, compare_checkpoint_replay
+from tests.python.integration.runtime.test_public_evolved_original_stage import (
+    checkpoint_provenance, checkpoint_restart_authority, compare_checkpoint_replay_v2,
+)
 from tests.python.support.amr_snapshots import level_valid_mask
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.evolved_stage_amr_spatial import (
@@ -98,9 +100,13 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux(isolated_na
     registry_phases = {"initial": {"rows_by_rank": collective_call(world, lambda: world_allgather(world, initial[1][1]))}}
     paths, seals, authorities, phases = {}, {}, {}, {}
     for phase, owner in (("accepted", runtime), ("continuous", runtime), ("replay", None)):
+        restart_authority = None
         if phase == "replay":
             owner = collective_call(world, bind)
+            restart_authority = collective_call(world, lambda: checkpoint_restart_authority(owner))
             collective_call(world, lambda owner=owner: owner.restart(paths["accepted"]))
+            restart_authority["restored_source_run"] = collective_call(world,
+                lambda: owner.last_run_identity.token)
             reloaded = capture(world, owner, width)
             with collective_check(world):
                 same_images(reloaded, phases["accepted"])
@@ -110,7 +116,8 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux(isolated_na
         collective_call(world, lambda owner=owner, end=end: pops.run(owner, t_end=end, max_steps=1, console=False))
         path = collective_call(world, lambda owner=owner, phase=phase: owner.checkpoint(directory/(phase+"-checkpoint")))
         seals[phase] = collective_call(world, lambda path=path: hashlib.sha256(bounded_bytes(path)).hexdigest())
-        authorities[phase] = collective_call(world, lambda owner=owner, path=path: checkpoint_provenance(owner, path))
+        authorities[phase] = collective_call(world, lambda owner=owner, path=path:
+            checkpoint_provenance(owner, path, restart_authority=restart_authority))
         paths[phase] = path
         phases[phase] = capture(world, owner, width)
         registry_phases[phase] = {"rows_by_rank": collective_call(world, lambda phase=phase: world_allgather(world, phases[phase][1][1]))}
@@ -122,7 +129,7 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux(isolated_na
             for name in (*tuple("T%d" % i for i in range(width)), *(("z",) if width == 2 else ())):
                 np.testing.assert_array_equal(row[name+"-previous"], old[name])
         if rank == 0:
-            equivalent = compare_checkpoint_replay(paths, authorities)
+            equivalent = compare_checkpoint_replay_v2(paths, authorities)
             observations, stored_images = {}, {}
             for phase, image in (("initial", initial), *phases.items()):
                 files, reloaded_rows = [], []

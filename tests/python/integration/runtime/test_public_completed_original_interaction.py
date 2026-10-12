@@ -12,7 +12,9 @@ import pytest
 
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 from tests.python.integration.runtime.test_public_captured_diffusion import bounded_bytes
-from tests.python.integration.runtime.test_public_evolved_original_stage import checkpoint_provenance, compare_checkpoint_replay
+from tests.python.integration.runtime.test_public_evolved_original_stage import (
+    checkpoint_provenance, checkpoint_restart_authority, compare_checkpoint_replay_v2,
+)
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.completed_original_interaction import (
     ACCEPTANCE, CELLS, CONTROLS, KINDS, SCHEMA, WORKSPACE,
@@ -123,9 +125,13 @@ def test_public_completed_original_interaction_exact_restart_and_saved_reduction
     phases = {"initial":capture(world,runtime,width,initial=True)}
     provenance = {}
     for phase, owner in (("accepted",runtime),("continuous",runtime),("replay",None)):
+        restart_authority = None
         if phase == "replay":
             owner = collective_call(world, bind)
+            restart_authority = collective_call(world, lambda: checkpoint_restart_authority(owner))
             collective_call(world, lambda owner=owner: owner.restart(checkpoints["accepted"]["path"]))
+            restart_authority["restored_source_run"] = collective_call(world,
+                lambda: owner.last_run_identity.token)
             checkpoints["reloaded"] = checkpoint(world,owner,directory,"reloaded")
             phases["reloaded"] = capture(world,owner,width)
             with collective_check(world):
@@ -134,7 +140,7 @@ def test_public_completed_original_interaction_exact_restart_and_saved_reduction
         collective_call(world, lambda owner=owner,end=end: pops.run(owner,t_end=end,max_steps=1,console=False))
         checkpoints[phase] = checkpoint(world,owner,directory,phase)
         provenance[phase] = collective_call(world, lambda owner=owner,phase=phase:
-            checkpoint_provenance(owner,checkpoints[phase]["path"]))
+            checkpoint_provenance(owner,checkpoints[phase]["path"],restart_authority=restart_authority))
         phases[phase] = capture(world,owner,width)
     with collective_check(world):
         same(phases["continuous"],phases["replay"])
@@ -148,7 +154,7 @@ def test_public_completed_original_interaction_exact_restart_and_saved_reduction
                 np.testing.assert_array_equal(latest[name+"-previous"],previous[name])
         if rank == 0:
             import tests.python.support.evolved_stage_amr as original_helper
-            equivalence = compare_checkpoint_replay({phase:row["path"] for phase,row in checkpoints.items()},provenance)
+            equivalence = compare_checkpoint_replay_v2({phase:row["path"] for phase,row in checkpoints.items()},provenance)
             observations = {}
             for phase, image in phases.items():
                 expected, metrics = (None,None) if phase == "initial" else check(image,phases["initial"],

@@ -1389,6 +1389,10 @@ mpi_entrypoints = [
 mpi_orchestrators = [
   { path = "tests/python/integration/mpi/test_amr_rank_change_restart.py" },
   { path = "tests/python/integration/mpi/test_initial_field_ghost_mpi.py" },
+  { path = "tests/python/integration/mpi/test_public_accepted_halo_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_accepted_halo_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_amr12_carrier_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_amr12_carrier_mpi2.py" },
   { path = "tests/python/integration/mpi/test_public_amr_original_field_mpi1.py" },
   { path = "tests/python/integration/mpi/test_public_amr_original_field_mpi2.py" },
   { path = "tests/python/integration/mpi/test_public_amr_profile_mpi1.py" },
@@ -1399,18 +1403,27 @@ mpi_orchestrators = [
   { path = "tests/python/integration/mpi/test_public_completed_original_interaction_mpi2.py" },
   { path = "tests/python/integration/mpi/test_public_evolved_original_stage_mpi1.py" },
   { path = "tests/python/integration/mpi/test_public_evolved_original_stage_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_imex_checkpoint_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_imex_checkpoint_mpi2.py" },
   { path = "tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi1.py" },
   { path = "tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi2.py" },
   { path = "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi1.py" },
   { path = "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_scalar_bound_capture_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_scalar_bound_capture_mpi2.py" },
   { path = "tests/python/integration/mpi/test_public_spatial_interaction_mpi1.py" },
   { path = "tests/python/integration/mpi/test_public_spatial_interaction_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_typed_newton_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_typed_newton_mpi2.py" },
 ]
 
 [[python.suite]]
 name = "pops_python_integration_native_loader"
 path = "tests/python/integration/native_loader"
 labels = ["integration", "python", "native_loader", "compiler", "medium"]
+hardware_entrypoints = [
+  { path = "tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py", hardware = "gpu", native_dimension = 2, expected_cases = { test_installed_gpu_external_field_dispatch_rollback_retry = 4 } },
+]
 
 [[python.suite]]
 name = "pops_python_integration_runtime"

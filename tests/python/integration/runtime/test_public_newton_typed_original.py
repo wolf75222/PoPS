@@ -2,10 +2,10 @@
 from pathlib import Path
 import hashlib
 import json
-import sys
 import numpy as np
 import pops
 from pops._generated_release_contract import NATIVE_ABI_VERSION
+from tests.python.support.public_native_profile import native_profile, rank_and_size
 import pytest
 from pops.solvers import Newton
 from pops.solvers.tolerances import Relative, AbsoluteFloor, Absolute
@@ -39,13 +39,12 @@ def snapshot(world, runtime, backend):
 @pytest.mark.parametrize("policy", ("relative", "floor", "absolute", "overflow"))
 def test_public_typed_original_policy(isolated_native_cache, tmp_path, record_property, backend, policy):
     del isolated_native_cache
-    from pops._native_selector import select_native_dimension
+    native, world = native_profile(scope="public typed original Newton policy")
+    rank, size = rank_and_size(world)
     package = Path(pops.__file__).resolve()
-    assert package.is_relative_to(Path(sys.prefix).resolve()), package
-    native = select_native_dimension(2)
-    assert type(native.__abi_version__) is int
     assert native.__abi_version__ == NATIVE_ABI_VERSION
-    world = native.mpi_world()
+    record_property("native_abi_version", native.__abi_version__)
+    record_property("native_profile", "MPI" if world is not None else "Serial")
     selected = solver(backend, policy)
     if backend == "uniform":
         runtime, artifact, target, loads, coefficient = uniform.bind_native(world, native, (0, 1), solver=selected)
@@ -65,11 +64,11 @@ def test_public_typed_original_policy(isolated_native_cache, tmp_path, record_pr
     if backend == "uniform" and policy != "overflow" and not any(failures):
         for run in range(2):
             values = [collective_call(world, lambda c=c, run=run: runtime.history_global(f"solve{run}_component{c}", 1)) for c in range(2)]
-            if world.rank == 0:
+            if rank == 0:
                 solved.append(np.asarray(values).reshape(2, *reversed(uniform.CELLS)))
     # Persist rank-local exact images before any admission assertion.
     with collective_check(world):
-        directory = tmp_path / (backend + "-" + policy + "-rank" + str(world.rank))
+        directory = tmp_path / (backend + "-" + policy + "-rank" + str(rank))
         directory.mkdir()
         path = directory / "states.npz"
         np.savez(path, **{f"before{i}": a for i, a in enumerate(before)},
@@ -81,7 +80,7 @@ def test_public_typed_original_policy(isolated_native_cache, tmp_path, record_pr
         receipt = {"schema": "sol61.newton-typed-original-native@1", "backend": backend, "policy": policy,
             "package_path": str(package), "native_path": str(Path(native.__file__).resolve()),
             "native_sha256": hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest(),
-            "native_abi_version": native.__abi_version__, "rank": world.rank, "size": world.size,
+            "native_abi_version": native.__abi_version__, "rank": rank, "size": size,
             "artifact_identity": artifact.artifact_identity.token,
             "states_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "carrier_sha256": ({phase: hashlib.sha256((directory / (phase+"-carriers.bin")).read_bytes()).hexdigest()
@@ -109,11 +108,11 @@ def test_public_typed_original_policy(isolated_native_cache, tmp_path, record_pr
             if backend == "uniform":
                 for lhs, rhs in zip(before, after, strict=True):
                     same_bits(lhs, rhs)
-            if backend == "amr" and world.rank == 0:
+            if backend == "amr" and rank == 0:
                 amr.check_original_saved([tuple(after[i:i+4]) for i in range(0, len(after), 4)], 16, 3, .01)
     if policy != "overflow" and backend == "uniform":
         with collective_check(world):
-            if world.rank == 0:
+            if rank == 0:
                 # Reopen genuine saved state. This validates bytes, not only in-memory arrays.
                 with np.load(path, allow_pickle=False) as image:
                     saved_solutions = [image[f"solution{i}"] for i in range(2)]

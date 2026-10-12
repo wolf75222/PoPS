@@ -90,6 +90,10 @@ class _CheckpointOperation:
         self.publisher = publisher
         self.captures = []
 
+    def consumer_data(self):
+        # This controlled operation does not advertise a sealed replay capability.
+        return {"publication_retry_contract": None}
+
     def snapshot(self, owner, directory, *, prepared_capture):
         assert owner is self.publisher._owner
         state = self.publisher.diagnostic_restart_state()

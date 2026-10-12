@@ -239,8 +239,14 @@ def _guarded_imex_program(
     )
     fields = fields_operator(field_state).consume(action=RejectAttempt())
     fields = program.value("imex-euler_fields_0", fields, at=point)
+    # Read the exact issued State that supplied the field solve.  Its value is
+    # the implicit-stage snapshot; the explicit operator keeps its separately
+    # authored ARK evaluation coordinate c=0.
+    with evaluation_partition(program, "explicit"):
+        explicit_evaluation = explicit_operator(field_state, fields)
+    explicit_evaluation = program._replace_value(explicit_evaluation, point=point)
     explicit_rate = program.value(
-        "imex-euler_k_exp_0", explicit_operator(stage, fields), at=point,
+        "imex-euler_k_exp_0", explicit_evaluation, at=point,
     )
     with evaluation_partition(program, "implicit"):
         implicit_rate = program.value(

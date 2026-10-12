@@ -48,6 +48,50 @@ def test_mixed_conservative_occurrences_require_an_exact_discriminator():
         _resolved_diffusive_trace_selection(evaluation)
 
 
+@pytest.mark.parametrize("kind", ("uniform", "amr2"))
+def test_detached_diffusive_integral_relay_retains_exact_source_graph(kind):
+    from pops.codegen._orchestration_compile import build_program_model_graph
+    from pops.codegen.program_integral_transfers import emit_integral_transfers
+    from pops.time._program.detach import detach_compiled_program
+
+    case, layout, _, _, _ = build_diffusion_integral_case(kind)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    graph = build_program_model_graph(resolved)
+    detached = detach_compiled_program(resolved.time)
+    assert detached._ir_hash() == resolved.time._ir_hash()
+    variables = {value.id: "rate_%d" % value.id
+                 for value in detached._values if value.op == "diffusive_rhs"}
+    with pytest.raises(ValueError, match="detached accepted proof requires.*source authority"):
+        emit_integral_transfers(detached, variables)
+    expected = emit_integral_transfers(resolved.time, variables, model_authority=graph)
+    actual = emit_integral_transfers(detached, variables, model_authority=graph)
+    assert actual == expected
+    assert len(actual) == 2
+    original = emit_cpp_program(resolved.time, model_graph=graph,
+                                field_plans=resolved.field_plans, target=resolved.target)
+    compiled = emit_cpp_program(detached, model_graph=graph,
+                                field_plans=resolved.field_plans, target=resolved.target)
+    assert compiled == original
+
+    # Another layout of the same physical Module is a valid source authority.
+    # A distinct Module owner with a same-named State must remain foreign.
+    from pops.layouts import Uniform
+    grid = layout.mesh if kind == "uniform" else layout.grid
+    foreign_model = pops.Model("foreign_diffusive_proof_owner", frame=grid.frame)
+    foreign_state = foreign_model.state("U", components=("density",))
+    foreign_case = pops.Case("foreign_diffusive_proof")
+    foreign_block = foreign_case.block("fluid", foreign_model)
+    foreign_program = pops.Program("foreign_identity")
+    foreign_temporal = foreign_program.state(foreign_block[foreign_state])
+    foreign_program.commit(foreign_temporal.next, foreign_program.value(
+        "unchanged", foreign_temporal.n, at=foreign_temporal.next.point))
+    foreign_case.program(foreign_program)
+    foreign = pops.resolve(pops.validate(foreign_case), layout=Uniform(grid))
+    with pytest.raises(ValueError):
+        emit_integral_transfers(detached, variables,
+                                model_authority=build_program_model_graph(foreign))
+
+
 def test_production_diffusion_metadata_supplies_exact_consumable_ledger(tmp_path):
     """Extend the existing production producer host harness with the actual ledger.
 

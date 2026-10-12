@@ -4,7 +4,7 @@
 A compiled time Program lowers its macro-step body referencing ONLY the variable ``ctx`` (never the
 type ``ProgramContext``). The SAME generated body therefore compiles against ``AmrProgramContext``, a
 duck-typed structural mirror that drives the body recursively over the AMR hierarchy. The
-``{amr_install}`` codegen slot passes the identical body to ``advance_hierarchy``.
+``{amr_install}`` codegen slot passes the identical body to the authenticated hierarchy continuation.
 
 This is deliberately an internal native-facade parity test: it imports ``_system`` and
 ``_engine_descriptors`` to compare the two C++ contexts directly. It is not presented as public DSL
@@ -14,7 +14,7 @@ This test asserts:
 
   1) (host-side, no compiler) the codegen emits a recursive install wrapper for ``target='amr_system'``
      (the fail-loud is gone): ``pops_install_program_amr`` builds an ``AmrProgramContext`` and runs the
-     body through ``ctx.advance_hierarchy(dt, body)``;
+     body through ``ctx.advance_mapping_hierarchy(dt, body)``;
 
   2) (Kokkos-gated, the must-pass GATE 4.1a) BIT-IDENTICAL parity -- the SAME SSPRK2 Program installed
      on a single-level ``System`` (``ProgramContext``) and on a single-level ``AmrSystem``
@@ -207,8 +207,16 @@ def test_codegen_emits_amr_install_wrapper():
         "the AMR install selects its execution provider from the typed AmrSystem facade")
     chk("AmrProgramContext& ctx" not in body,
         "generated code does not select the concrete AMR context")
-    chk("ctx.advance_hierarchy(dt, _advance_level)" in body,
-        "the wrapper delegates to the explicit parent/child clock driver")
+    chk("ctx.advance_mapping_hierarchy(dt, [=](double level_dt)" in body,
+        "the wrapper delegates to the explicit parent/child continuation clock driver")
+    advance = body.split("ctx.advance_mapping_hierarchy", 1)[1].split("}, ctx_owner", 1)[0]
+    access = advance.index("_level_programs->at")
+    chk(all(advance.index(authority) < access for authority in (
+        "*_level_program_epoch != topology.epoch",
+        "*_level_program_generation != topology.generation",
+        "_level_programs->size() != static_cast<std::size_t>(topology.levels)",
+        "throw std::logic_error")),
+        "every continuation authenticates the refreshed hierarchy before level-bundle access")
     chk("ctx.set_stage_time(0, 1)" in body and "ctx.set_stage_time(1, 1)" in body,
         "exact SSPRK2 stage abscissae are emitted")
     chk("_make_level_program" in body and "ctx.program_resource_topology()" in body

@@ -36,9 +36,11 @@ def _field_dependent_flux_model(name: str, *, with_provider: bool = True) -> Mod
     model.primitive_vars(rho=rho)
     model.conservative_from([rho])
     model.flux(x=[rho * grad_x], y=[rho * grad_x])
-    model.eigenvalues(x=(Const(1.0),), y=(Const(1.0),))
+    model.eigenvalues(x=(grad_x,), y=(grad_x,))
     if with_provider:
-        model.elliptic_rhs(rho + Const(0.0) * phi)
+        # Potential is an output of this solve, not a hidden input to its RHS.
+        # Keep it before grad_x so the field ordinal differs from the flux pack.
+        model.elliptic_field("fields_from_state", rho, aux=["phi", "grad_x", "grad_y"])
     return model
 
 

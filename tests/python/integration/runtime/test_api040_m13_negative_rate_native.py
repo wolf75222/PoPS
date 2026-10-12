@@ -10,6 +10,7 @@ from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
 from pops.mesh import CartesianGrid, PeriodicAxes
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 EXAMPLES = Path(__file__).resolve().parents[4] / "examples/migration/scientific"
@@ -31,7 +32,7 @@ def test_negative_rebound_rate_rejected_before_native_publication(
         CartesianGrid(frame=frame, cells=(4, 4),
                       periodic=PeriodicAxes(frame.axes)))))
     initial = cell_mean_initial((4, 4), ("A", "B", "C"))
-    context = pops.ExecutionContext.mpi_world(artifact)
+    context = artifact_execution_context(artifact)
     simulation = pops.bind(artifact, initial_state={"reactor": initial.copy()},
                            params={parameters[0]: -10., parameters[1]: .4},
                            resources={"execution_context": context})

@@ -4,7 +4,11 @@
 The public Case -> compile -> bind lifecycle supplies every state route and the exact checkpoint
 resource budget. The original N16 two-level geometry is retained throughout. Original active-regrid graphs retain
 their 2:1 temporal relation; separately labeled frozen-grid replay positives use 1:1 level clocks.
-AB2 Dense history supports active regridding and bit-identical full restart. Three- and five-slot
+New-coverage refusal controls seed one coarse cell outside the initial refined zone just below
+the tag threshold; the existing physical source raises it above that threshold before regridding.
+The tested source dynamics and retained history policies remain unchanged. Ordinary checkpoint
+positives retain their original initial array and physical tag source. Numerical padding does not create tags.
+AB2 Dense history runs scheduled regrids with bit-identical full restart. Three- and five-slot
 Interval state histories support affine replay on a frozen 1:1 hierarchy, including exact omitted slots.
 Frozen 2:1 selective restart is explicitly refused with exact rollback: whole-macro replay cannot
 reconstruct one child-level lag without an additional per-level reconstruction contract.
@@ -77,7 +81,7 @@ def _passive_source_model(name):
     """One scalar with zero transport and a linear source ``S = _C * rho``.
 
     The field-free dynamics make checkpoint replay independent of solver warm starts, which is the
-    provably bit-exact replay class. Refinement tags read the density level itself.
+    provably bit-exact replay class. Refinement tags read the physical density itself.
     """
     frame = Rectangle("%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
     x_axis, y_axis = frame.axes
@@ -187,8 +191,20 @@ def _blob():
     return 1.0 + 0.5 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / (0.15**2))
 
 
+def _new_coverage_blob():
+    """One real coarse sample crosses 1.2 under the unchanged ODE U'=_C*U.
+
+    Cell (1, N//2) lies outside the initial central tagged region and its one-cell
+    numerical buffer. It starts at 1.199 and exceeds 1.2 after one DT step; the
+    declared cadence then requests genuinely new fine coverage from physical tags.
+    """
+    values = _blob()
+    values[1, N // 2] = 1.199
+    return values
+
+
 def _compile_checkpoint_program(model, authored, *, regrid_every, initials, program_cadence=None,
-                                temporal_ratio=2):
+                                temporal_ratio=2, new_coverage=False):
     """Compile the full Case that owns the Program, hierarchy and checkpoint resources."""
     from pops.amr import (
         AMRClockRelation, AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging,
@@ -206,6 +222,8 @@ def _compile_checkpoint_program(model, authored, *, regrid_every, initials, prog
     from pops.projection import ConservativeCellAverage
     from pops.params import RuntimeParam
 
+    if new_coverage and regrid_every <= 0:
+        raise ValueError("new-coverage control requires scheduled regrids")
     program, case, *extra = authored
     ledger = extra[0] if extra else None
     if program_cadence is not None:
@@ -301,14 +319,16 @@ def _bind_checkpoint_artifact(compiled, initials):
 _COMPILED_CASES = {}
 
 
-def _build(program_factory, regrid_every=2, program_cadence=None, *, temporal_ratio=2):
-    key = (program_factory, regrid_every, program_cadence, temporal_ratio)
-    initials = {"blk": _blob()}
+def _build(program_factory, regrid_every=2, program_cadence=None, *, temporal_ratio=2,
+           new_coverage=False):
+    key = (program_factory, regrid_every, program_cadence, temporal_ratio, new_coverage)
+    initials = {"blk": _new_coverage_blob() if new_coverage else _blob()}
     if key not in _COMPILED_CASES:
         model = _passive_source_model("%s_model" % program_factory.__name__.lstrip("_"))
         _COMPILED_CASES[key] = _compile_checkpoint_program(
             model, program_factory(model), regrid_every=regrid_every,
             initials=initials, program_cadence=program_cadence, temporal_ratio=temporal_ratio,
+            new_coverage=new_coverage,
         )
     return _bind_checkpoint_artifact(_COMPILED_CASES[key], initials), None
 
@@ -469,7 +489,7 @@ def _run_case(program_factory, nsteps, half, label, regrid_every=2, *, temporal_
 
 
 def test_ab2_dense_checkpoint_bit_identical():
-    print("== (1) AB2 Dense: mid-regrid v5 ckpt -> restart -> bit-identical continuation ==")
+    print("== (1) AB2 Dense: mid-regrid checkpoint -> restart -> bit-identical continuation ==")
     out, err = _run_case(_ab2_program, nsteps=6, half=3, label="ab2")
     assert out is not None, err
     ref, got, cont_rings, rest_rings, stored_info, _report = out
@@ -571,7 +591,7 @@ def test_state3_original_active_regrid_refuses_without_mutation():
     # Original clean-window (12/8) and straddling-window (10/6) graphs both request unsupported
     # new fine coverage before their checkpoint. Keep their N16/depth3/regrid4 configurations.
     for nsteps, half in ((12, 8), (10, 6)):
-        live, _ = _build(_state3_program, regrid_every=4)
+        live, _ = _build(_state3_program, regrid_every=4, new_coverage=True)
         _assert_new_coverage_refusal(live, nsteps=nsteps, label="state3-%d-ckpt%d" % (nsteps, half))
 
 
@@ -610,7 +630,7 @@ def test_state5_frozen_multiple_anchor_gaps_replay_by_index_bit_identical():
 
 
 def test_state5_original_active_regrid_refuses_without_mutation():
-    live, _ = _build(_state5_program, regrid_every=6)
+    live, _ = _build(_state5_program, regrid_every=6, new_coverage=True)
     _assert_new_coverage_refusal(live, nsteps=15, label="state5-15-ckpt11")
 
 

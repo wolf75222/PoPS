@@ -1,0 +1,7 @@
+{
+  "schema": "pops.historical-sdk-header@1",
+  "source_commit": "1e579f3b90f752b8d9341f659265d3c517e582f0",
+  "source_path": "include/pops/runtime/system/derived_aux_provider.hpp",
+  "sha256": "20a71aeb222f71b383055d44d33570e6a854132f98deeb6b14340297384aade0",
+  "bytes": 23603
+}

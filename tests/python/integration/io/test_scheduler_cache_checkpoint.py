@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strict-v5 scheduler-cache checkpoint preflight (Spec 3 section 30, ADC-458).
+"""Legacy-v8 scheduler-cache metadata preflight (Spec 3 section 30, ADC-458).
 
 A compiled `Program` with a held schedule (`every(N).hold` / `accumulate_dt`) caches the System aux /
 a scratch per node so the field solve runs only when DUE. The cache lives in the System
@@ -7,9 +7,10 @@ a scratch per node so the field solve runs only when DUE. The cache lives in the
 `(run, checkpoint, restart, continue)` run bit-for-bit identical to a continuous run -- without it the
 first post-restart step would cold-start the held node off its cadence.
 
-This test sends a complete strict-v5 NPZ payload through the production
+This test sends a complete legacy-v8 metadata payload through the production
 ``preflight_uniform_restart`` route, then proves that a listed cache node whose value array is absent
-is rejected by that same route. It does not reimplement the guard in test code.
+is rejected by that same route. It separately verifies that the current v9
+preflight requires native state carriers; it does not invent a native carrier blob.
 
 The full compiled-`.so` held-schedule continuous == restart RUN is Kokkos-only AOT (ROMEO); the
 CacheManager serialize/restore round-trip is unit-tested host-side by
@@ -21,7 +22,7 @@ import tempfile
 import pytest
 
 
-def test_cache_v5_preflight_accepts_complete_payload_and_rejects_truncation():
+def test_cache_metadata_legacy8_preflight_accepts_complete_payload_and_rejects_truncation():
     try:
         import numpy as np
     except Exception as exc:  # noqa: BLE001 -- numpy unavailable in this interpreter
@@ -35,7 +36,7 @@ def test_cache_v5_preflight_accepts_complete_payload_and_rejects_truncation():
     value = np.arange(ncomp * ny * nx, dtype=np.float64).reshape(ncomp, ny, nx)
     out = {
         "pops_checkpoint_version": np.array(
-            UNIFORM_CHECKPOINT_PAYLOAD_VERSION, dtype=np.int64
+            8, dtype=np.int64
         ),
         "t": np.array(0.3, dtype=np.float64),
         "macro_step": np.array(3, dtype=np.int64),
@@ -69,6 +70,13 @@ def test_cache_v5_preflight_accepts_complete_payload_and_rejects_truncation():
         with np.load(path, allow_pickle=False) as payload:
             preflight_uniform_restart(payload)
 
+    # This positive fixture qualifies only legacy metadata/cache completeness.
+    # A current native v9 restart must carry the real native state image.
+    current = dict(out)
+    current["pops_checkpoint_version"] = np.array(UNIFORM_CHECKPOINT_PAYLOAD_VERSION, dtype=np.int64)
+    with pytest.raises(ValueError, match="missing state_carriers_checkpoint"):
+        preflight_uniform_restart(current)
+
     truncated = {k: v for k, v in out.items() if k != "cache_value_%d" % nid}
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "truncated.npz")
@@ -83,5 +91,5 @@ def test_cache_v5_preflight_accepts_complete_payload_and_rejects_truncation():
 
 
 if __name__ == "__main__":
-    test_cache_v5_preflight_accepts_complete_payload_and_rejects_truncation()
+    test_cache_metadata_legacy8_preflight_accepts_complete_payload_and_rejects_truncation()
     print("OK test_scheduler_cache_checkpoint")
