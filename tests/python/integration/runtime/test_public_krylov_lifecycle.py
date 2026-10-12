@@ -149,7 +149,9 @@ def test_public_richardson_accepts_identity_solution_at_the_iteration_cap(
         solver=Richardson(max_iter=maximum, omega=1.0, rel_tol=0.0, abs_tol=1.0e-12),
     )
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
-    initial = np.arange(1, 17, dtype=np.float64).reshape(1, 4, 4) / 16.0
+    # The RHS-one audit witness has a dyadic L2 norm (4), so Richardson's solve-scale
+    # normalization preserves this exact identity correction without a round-off oracle.
+    initial = np.ones((1, 4, 4), dtype=np.float64)
     runtime = pops.bind(
         artifact, initial_state={"tracer": initial.copy()},
         resources={"execution_context": artifact_execution_context(artifact)},
