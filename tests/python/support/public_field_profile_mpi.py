@@ -8,9 +8,13 @@ GROUPS = {
         (
             "tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_saved_history_and_exact_replay",
             "tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_refuses_without_publication",
+            "tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_ignores_inactive_source_pole",
+            "tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_nonperiodic_amr_refuses_at_bind",
         ),
         {"test_public_spatial_interaction_saved_history_and_exact_replay": 3,
-         "test_public_spatial_interaction_refuses_without_publication": 3},
+         "test_public_spatial_interaction_refuses_without_publication": 3,
+         "test_public_spatial_interaction_ignores_inactive_source_pole": 1,
+         "test_public_spatial_interaction_nonperiodic_amr_refuses_at_bind": 1},
     ),
     "completed_original": (
         (

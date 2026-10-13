@@ -336,6 +336,7 @@ sdk-support pops/runtime/program/amr_program_context_rhs_input_trace.inc
 sdk-support pops/runtime/program/amr_program_context_path_rhs.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_operations.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_interaction.inc
+sdk-support pops/runtime/program/amr_program_context_spatial_history_snapshot.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_operations_services.inc
 sdk-support pops/runtime/program/amr_program_context_hierarchy_barriers.inc
 sdk-support pops/runtime/program/prepared_hierarchy_barrier.hpp

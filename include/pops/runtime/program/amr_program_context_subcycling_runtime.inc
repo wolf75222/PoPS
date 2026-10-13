@@ -126,8 +126,10 @@ void advance_prepared_hierarchy_(double dt, Body&& body, std::string_view operat
     logical_substep_ = prior_substep;
     stage_time_ = prior_stage;
     clear_active_multiblock_group_();
+    revoke_interaction_history_snapshots_();
     throw;
   }
+  revoke_interaction_history_snapshots_();
   rhs_input_traces_.clear();
   active_level_ = prior_level;
   current_dt_ = prior_dt;

@@ -22,10 +22,10 @@ LOWER, UPPER = (.3, -.4), (2.3, 2.6)
 DT, GAMMA, WORKSPACE = .01, .2, 8 << 20
 
 
-def build(width, *, adaptive=False, failure=None):
+def build(width, *, adaptive=False, failure=None, amr_periodic=False):
     from pops.domain import CartesianDomain
     from pops.frames import Cartesian2D
-    from pops.mesh import CartesianGrid
+    from pops.mesh import CartesianGrid, PeriodicAxes
     from pops.mesh.geometry import Disc, EmbeddedBoundary
     from pops.mesh.masks import CutCell
     from pops.boundary import TransportBoundarySet, ZeroFlux
@@ -59,11 +59,13 @@ def build(width, *, adaptive=False, failure=None):
     numerics = DiscretizationPlan()
     numerics.rates.add(rate, FiniteVolume(flux=flux, variables=variables.Conservative(rho),
         reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov()))
-    numerics.boundaries.add(TransportBoundarySet({
-        boundary: NoFlux(state=block[rho]) for boundary in
-        (frame.boundaries.x_min, frame.boundaries.x_max,
-         frame.boundaries.y_min, frame.boundaries.y_max)}))
+    if not (adaptive and amr_periodic):
+        numerics.boundaries.add(TransportBoundarySet({
+            boundary: NoFlux(state=block[rho]) for boundary in
+            (frame.boundaries.x_min, frame.boundaries.x_max,
+             frame.boundaries.y_min, frame.boundaries.y_max)}))
     case.numerics(numerics, block=block)
+    source_operator = block[model.module.operator_handle(reaction.reg_name)]
     program = Program("actual_direct_interaction")
     u = program.state(block[rho])
     program.keep_history(u, depth=1)
@@ -79,21 +81,24 @@ def build(width, *, adaptive=False, failure=None):
         # The IC stays finite and identical on every rank. A cell with rho=3
         # probes whether native activity is checked before this source law.
         accepted_source = program.value("invalid_issued",
-            u.n+program.dt*rate(u.n), at=u.next.point)
+            u.n+program.dt*program.source(source_operator, state=u.n), at=u.next.point)
         accepted_scope = "issued"
     for name, source, scope in (("I_accepted", accepted_source, accepted_scope), ("I_history", u.prev, "issued")):
         field = program.spatial_interaction(source, kernel, output_space=output, components=selected,
             measure=CellVolumeMeasure(), quadrature=CellMidpoint(), realization=realization, source_scope=scope)
         program.store_history(name, field, depth=1)
-    # The physical rate selects the declared named reaction. DefaultSource()
-    # would select this model's empty composite source instead.
-    candidate = program.value("decayed", u.n+program.dt*rate(u.n),
+    # Every authored flux is zero on finite states, and every wave is exactly
+    # zero, so this is the declared balance's exact Euler update on that domain.
+    # The named source retains its typed owner;
+    # DefaultSource() would select this model's empty composite source instead.
+    candidate = program.value("decayed", u.n+program.dt*program.source(source_operator, state=u.n),
                               at=u.next.point)
     program.commit(u.next, candidate)
     program.step_strategy(FixedDt(DT))
     case.program(program)
     case.initials.add(InitialCondition(state=block[rho], value=BindArray(), projection=ConservativeCellAverage()))
-    grid = CartesianGrid(frame=frame, cells=CELLS)
+    grid = CartesianGrid(frame=frame, cells=CELLS,
+        periodic=PeriodicAxes(frame.axes) if adaptive and amr_periodic else None)
     embedded = EmbeddedBoundary(Disc(center=(1.3, 1.1), radius=1.1), CutCell(), ZeroFlux())
     layout = Uniform(grid, embedded_boundary=embedded)
     if adaptive:

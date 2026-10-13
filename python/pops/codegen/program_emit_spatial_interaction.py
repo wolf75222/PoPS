@@ -11,6 +11,35 @@ def closed_interaction_identity(value):
                        "point":_json_ready(value.point), "source":value.inputs[0].id},
                       sort_keys=True, separators=(",", ":"))
 
+def emit_history_source_declarations(program, block_indices, *, target):
+    """Seal composite History@2 sources before any per-level step callback."""
+    if target != "amr_system":
+        return []
+    from pops.codegen.program_lowerability import all_ops
+    from pops.codegen.program_history_identity import history_space_identity
+    declarations = []
+    for value in all_ops(program):
+        if value.op != "spatial_interaction" or value.attrs.get("contract") != "pops.spatial-interaction@2":
+            continue
+        source, _dimension, _kernel, budget, _components = interaction_contract(value)
+        seed = value.attrs["history_source"]
+        if value.block not in block_indices:
+            raise ValueError("history interaction has no exact Program block route")
+        interpolation = json.dumps(_json_ready(source.attrs["history_contract"])["interpolation"],
+                                   sort_keys=True, separators=(",", ":"))
+        identity = json.dumps({"attrs": _json_ready(value.attrs), "point": _json_ready(value.point),
+                               "space": _json_ready(value.space), "source": source.id},
+                              sort_keys=True, separators=(",", ":"))
+        declarations.append(
+            "ctx.declare_spatial_interaction_history_source(%d, %d, %s, %d, %s, %s, %s, %s, %dULL, %s);"
+            % (value.id, block_indices[value.block], json.dumps(seed["history"]), seed["lag"],
+               json.dumps(seed["state"].qualified_id),
+               json.dumps(history_space_identity(program, seed["history"])),
+               json.dumps(source.clock.qualified_id), json.dumps(interpolation), budget,
+               json.dumps(identity)))
+    return declarations
+
+
 def emit_spatial_interaction(value, variables, lines, *, block_indices, target):
     source, dimension, kernel, budget, components = interaction_contract(value)
     if target not in ("system", "amr_system"):

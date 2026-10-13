@@ -30,8 +30,9 @@ def bind(world, artifact, width, *, failure=None):
                                                    resources={"execution_context": context}))
 
 
-def prepare(world, width, adaptive, failure):
-    case, layout, selected, _ = collective_call(world, lambda: build(width, adaptive=adaptive, failure=failure))
+def prepare(world, width, adaptive, failure, *, amr_periodic=False):
+    case, layout, selected, _ = collective_call(world, lambda: build(
+        width, adaptive=adaptive, failure=failure, amr_periodic=amr_periodic))
     resolved = collective_call(world, lambda: pops.resolve(pops.validate(case), layout=layout))
     artifact = compile_resolved_plan_once(world, resolved, route="direct native spatial interaction",
                                           compile_artifact=pops.compile)
@@ -100,6 +101,9 @@ def save(world, native, artifact, directory, images, checkpoints, *, width, adap
                     "accepted": "initial", "continuous": "accepted", "reloaded": "initial", "replay": "reloaded"},
                 "history_source_contract": "pops.spatial-interaction-history-source@1",
                 "raw_coverage_semantics": "true_is_covered", "coordinate_authority": "bound-normalized-native-Cartesian",
+                "transport_boundary_profile": "periodic" if adaptive else "physical_no_flux",
+                "interaction_domain_profile": "bounded_cartesian_cell_midpoint_without_periodic_images",
+                "amr_qualification_scope": "periodic transport topology only; active nonperiodic EB is refused at bind" if adaptive else None,
                 "association": "fixture-recorded actual execution; ROOT owner approval pending",
                 "aggregate_cryptographic_binding": False, "m26_pde_qualification": False}
             (directory/"receipt.json").write_text(json.dumps(receipt, sort_keys=True, indent=2)+"\n")
@@ -114,7 +118,7 @@ def test_public_spatial_interaction_saved_history_and_exact_replay(
         isolated_native_cache, tmp_path, record_property, width, adaptive):
     del isolated_native_cache
     world, native = world_and_native()
-    artifact, selected = prepare(world, width, adaptive, None)
+    artifact, selected = prepare(world, width, adaptive, None, amr_periodic=adaptive)
     runtime = bind(world, artifact, width)
     directory = collective_directory(world, tmp_path/"spatial-interaction")
     initial = capture(world, runtime, width, adaptive=adaptive, step=0)
@@ -149,6 +153,10 @@ def test_public_spatial_interaction_saved_history_and_exact_replay(
     checkpoints["replay"] = checkpoint(world, restored, directory, "replay")
     with collective_check(world):
         same(continuous, replay)
+        for image in (initial, accepted, continuous, reloaded, replay):
+            assert all(np.all(np.isfinite(np.asarray(piece["values"])))
+                for level in image["levels"] for copy in level["copies"]
+                for piece in copy["pieces"]["rho"]), "zero-flux source-only domain must stay finite"
         assert accepted["clock"] == (DT, 1) and continuous["clock"] == (2*DT, 2)
         for old, new in zip(accepted["levels"], continuous["levels"], strict=True):
             for first, second in zip(old["copies"], new["copies"], strict=True):
@@ -261,3 +269,37 @@ def test_public_spatial_interaction_ignores_inactive_source_pole(
             (directory/"receipt.json").write_text(json.dumps(receipt, sort_keys=True, indent=2)+"\n")
     record_property("evidence_path", str(directory))
     record_property("fixture_schema", "pops.spatial-source-inactive-pole-native-fixture@1")
+
+
+@pytest.mark.compiler
+@pytest.mark.kokkos
+@pytest.mark.native_loader
+def test_public_spatial_interaction_nonperiodic_amr_refuses_at_bind(
+        isolated_native_cache, tmp_path, record_property):
+    del isolated_native_cache
+    world, native = world_and_native()
+    artifact, _selected = prepare(world, 3, True, None, amr_periodic=False)
+    context = collective_call(world, lambda: artifact_execution_context(artifact))
+    values = collective_call(world, lambda: bound_initial_values(artifact.plan.initial_condition_plan, 3))
+    result, errors = collective_attempt(world, lambda: pops.bind(
+        artifact, initial_values=values, resources={"execution_context": context}))
+    with collective_check(world):
+        assert result is None
+        guard = "active AMR embedded transport has no EB-qualified physical-boundary provider"
+        assert all(error is not None and guard in error[1] for error in errors), errors
+    directory = collective_directory(world, tmp_path/"spatial-interaction-nonperiodic-amr-bind-refusal")
+    with collective_check(world):
+        if rank_and_size(world)[0] == 0:
+            receipt = dict(schema="pops.spatial-amr-nonperiodic-bind-refusal@1",
+                dimension=2, width=3, rank=0, size=rank_and_size(world)[1],
+                transport_boundary_profile="physical_no_flux", embedded_boundary_profile="cutcell_zero_flux",
+                interaction_domain_profile="bounded_cartesian_cell_midpoint_without_periodic_images",
+                qualification_scope="nonperiodic active AMR EB intentionally unsupported; bind must fail before runtime publication",
+                failure_errors=errors, artifact_identity=artifact.artifact_identity.token,
+                platform=artifact.platform_manifest.to_data(), components_origins=save_origins(artifact, directory),
+                native=dict(path=str(native.__file__), sha256=digest(native.__file__)),
+                fixture_sources=[dict(path=str(path), sha256=digest(path)) for path in
+                    (Path(__file__).resolve(), Path(sys.modules[build.__module__].__file__).resolve())])
+            (directory/"receipt.json").write_text(json.dumps(receipt, sort_keys=True, indent=2)+"\n")
+    record_property("evidence_path", str(directory))
+    record_property("fixture_schema", "pops.spatial-amr-nonperiodic-bind-refusal@1")

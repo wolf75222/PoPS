@@ -155,7 +155,13 @@ def test_field_profile_drivers_keep_every_declared_native_group_and_world(tmp_pa
         "spatial_interaction": "test_public_spatial_interaction",
     }
     expected_counts = {"completed_original": 2, "amr_original": 4,
-                       "imex_time": 1, "nonlinear_mixed": 5, "spatial_interaction": 6}
+                       "imex_time": 1, "nonlinear_mixed": 5, "spatial_interaction": 8}
+    assert profile.GROUPS["spatial_interaction"][1] == {
+        "test_public_spatial_interaction_saved_history_and_exact_replay": 3,
+        "test_public_spatial_interaction_refuses_without_publication": 3,
+        "test_public_spatial_interaction_ignores_inactive_source_pole": 1,
+        "test_public_spatial_interaction_nonperiodic_amr_refuses_at_bind": 1,
+    }
     calls = []
     monkeypatch.setattr(profile, "run_fixture_world", lambda **arguments: calls.append(arguments))
     for group, stem in stems.items():
@@ -169,9 +175,11 @@ def test_field_profile_drivers_keep_every_declared_native_group_and_world(tmp_pa
             assert sum(call["expected_cases"].values()) == expected_counts[group]
             assert call["tests"] is profile.GROUPS[group][0]
             assert call["expected_cases"] is profile.GROUPS[group][1]
+            assert {selector.split("::", 1)[1] for selector in call["tests"]} == set(call["expected_cases"])
+            assert call["expected_rank_env"] == "POPS_TEST_PUBLIC_NATIVE_EXPECT_RANKS"
             assert call["timeout_seconds"] == 840
-    assert sum(sum(call["expected_cases"].values()) for call in calls) == 36
-    assert sum(call["ranks"] * sum(call["expected_cases"].values()) for call in calls) == 54
+    assert sum(sum(call["expected_cases"].values()) for call in calls) == 40
+    assert sum(call["ranks"] * sum(call["expected_cases"].values()) for call in calls) == 60
 
 
 def test_checkpoint_profile_drivers_keep_all_seventeen_cases_in_each_world(tmp_path, monkeypatch):
@@ -229,16 +237,18 @@ def test_checkpoint_receipts_refuse_missing_parameter_skip_and_duplicate(tmp_pat
 
 
 @pytest.mark.parametrize("ranks", (1, 2))
-@pytest.mark.parametrize("family", ("amr", "evolved_original", "captured_diffusion"))
+@pytest.mark.parametrize("family", ("amr", "evolved_original", "captured_diffusion", "spatial_interaction"))
 def test_public_receipts_cover_every_parameter_on_every_rank(tmp_path, ranks, family):
     from tests.python.support.mpi_fixture_driver import require_rank_results as require_all
     from tests.python.support.public_amr_profile_mpi import EXPECTED_CASES as AMR_CASES
     from tests.python.support.public_uniform_profile_mpi import (
         EVOLVED_ORIGINAL_CASES, CAPTURED_DIFFUSION_CASES,
     )
+    from tests.python.support.public_field_profile_mpi import GROUPS as FIELD_CASES
 
     expected_cases = {"amr": AMR_CASES, "evolved_original": EVOLVED_ORIGINAL_CASES,
-                      "captured_diffusion": CAPTURED_DIFFUSION_CASES}[family]
+                      "captured_diffusion": CAPTURED_DIFFUSION_CASES,
+                      "spatial_interaction": FIELD_CASES["spatial_interaction"][1]}[family]
 
     for rank in range(ranks):
         root = ET.Element("testsuite")

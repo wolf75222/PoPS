@@ -26,6 +26,7 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/amr_program_context_value_authority.inc",
         "pops/runtime/program/amr_program_context_principal.inc",
         "pops/runtime/program/amr_program_context_spatial_interaction.inc",
+        "pops/runtime/program/amr_program_context_spatial_history_snapshot.inc",
         "pops/runtime/program/amr_program_context_spatial.inc",
         "pops/runtime/program/amr_program_context_rhs_input_trace.inc",
         "pops/runtime/program/amr_program_context_path_rhs.inc",
@@ -73,6 +74,9 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
     }),
     "spatial_interaction": frozenset({
         "pops/runtime/program/amr_program_context_spatial_interaction.inc",
+    }),
+    "spatial_history_snapshot": frozenset({
+        "pops/runtime/program/amr_program_context_spatial_history_snapshot.inc",
     }),
     "rhs_input_trace": frozenset(
         {"pops/runtime/program/amr_program_context_rhs_input_trace.inc"}
@@ -161,6 +165,7 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     "value_authority": 320,
     "principal_publication": 80,
     "spatial_interaction": 640,
+    "spatial_history_snapshot": 240,
     # Immutable same-SSA parent inputs and synchronized conservative/NCP face publication
     # are new, separate responsibilities; both remain in the counted semantic closure.
     "rhs_input_trace": 150,
@@ -224,7 +229,8 @@ PROGRAM_CONTRACT_EXTENSIONS = {
 }
 PROGRAM_NEW_CONTRACT_BUDGET = (
     sum(PROGRAM_RESPONSIBILITY_BUDGETS[name] for name in (
-        "value_authority", "principal_publication", "spatial_interaction"))
+        "value_authority", "principal_publication", "spatial_interaction",
+        "spatial_history_snapshot"))
     + sum(budget for budget, _ in PROGRAM_CONTRACT_EXTENSIONS.values())
 )
 # Intentional Phase 0 policy envelopes: fragment and scaffolding growth remain
@@ -271,6 +277,11 @@ CONTEXT_RESOURCE_SCAFFOLDING_BUDGET = 32
 SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET = 200
 # Typed hierarchy tensor selection, retained boundaries and generation identities.
 HIERARCHY_TENSOR_SCAFFOLDING_BUDGET = 64
+# Macro-attempt keeper snapshots add typed declaration/image structs and a registry.
+# Their 24 root lines and the separately owned 240-line body remain fully counted.
+# The prior responsibility/resource caps remain unchanged; fragment/semantic aggregate
+# limits gain only the explicit 240-line snapshot foundation, with no excluded region.
+SPATIAL_HISTORY_SNAPSHOT_SCAFFOLDING_BUDGET = 24
 # Typed integral captures, retained composite sources, stage scopes and resource
 # leases add 134 net lines to the ranked root since b849289. Numerical bodies
 # remain in their independently counted fragments/upstream contracts.
@@ -279,6 +290,7 @@ PROGRAM_SCAFFOLDING_BUDGET = (
     1_850 + CONTEXT_RESOURCE_SCAFFOLDING_BUDGET
     + SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET
     + HIERARCHY_TENSOR_SCAFFOLDING_BUDGET
+    + SPATIAL_HISTORY_SNAPSHOT_SCAFFOLDING_BUDGET
 )
 PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
     9_580 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
@@ -437,7 +449,8 @@ def _resource_authority_scaffolding_lines() -> int:
         (root, "  class StageEvaluationScope", "  class LogicalEvaluationScope"),
         (root, "  template <class Resource, class Matches, class... Args>\n  PreparedResourceLease<Resource>",
          "  // Class-scope responsibility fragments"),
-        (root, "  void reached_duration(", "  template <int TestDim>"),
+        (root, "  void reached_duration(",
+         "  template <int TestDim>\n  friend struct detail::AmrProgramHistoryRemapCollectiveTestAccess;"),
     ))
     source = (INCLUDE / root).read_text(encoding="utf-8")
     declarations = (

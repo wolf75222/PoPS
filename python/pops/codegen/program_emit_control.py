@@ -461,6 +461,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                           json.dumps(state_identity), json.dumps(space_identity),
                           json.dumps(row["clock"]), json.dumps(interpolation),
                           history_ghost_depth(program, name)))
+    from pops.codegen.program_emit_spatial_interaction import emit_history_source_declarations
+    prelude.extend(emit_history_source_declarations(program, block_idx, target=target))
     from pops.codegen.program_balance_due import (
         emit_balance_due_guards,
         prepare_balance_due_lowering,

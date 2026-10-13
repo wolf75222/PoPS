@@ -95,6 +95,7 @@ struct MappingContinuation {
 mutable std::unique_ptr<MappingContinuation> mapping_continuation_;
 
 void cancel_mapping_hierarchy_() const noexcept {
+  revoke_interaction_history_snapshots_();
   prepared_field_stages_.clear();
   program_values_.revoke_();
   staged_path_rhs_.clear();
@@ -220,6 +221,7 @@ void resume_mapping_hierarchy_(std::shared_ptr<AmrProgramContext> owner) const {
       clear_active_multiblock_group_();
       swap_level_attempt_envelope_(frame.prior);
       auto completed = std::move(frame.completed);
+      revoke_interaction_history_snapshots_();
       mapping_continuation_.reset();
       if (completed)
         completed();

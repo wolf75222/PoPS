@@ -148,11 +148,11 @@ void require_hierarchy_tensor_binding_(int program_block, int components) const 
     throw std::logic_error(
         "AMR hierarchy tensor block/component binding differs from its prepared solver");
 }
-
 void synchronize_resource_generation_() const {
   if (resource_epoch_ != runtime_->topology_epoch() ||
       resource_generation_ != runtime_->materialization_generation()) {
     program_values_.revoke_();
+    revoke_interaction_history_snapshots_();
     prepared_resources_.clear();
     prepared_resources_.drain();
     drain_program_value_writes_();
@@ -197,6 +197,7 @@ void refresh_resources_() const {
       if (!active_attempt_states_.empty())
         throw std::logic_error(
             "AMR Program hierarchy refresh cannot rebind a runtime during an active attempt");
+      revoke_interaction_history_snapshots_();
       runtime_ = live_runtime;
     }
     facade_->refresh_prepared_amr_levels();
