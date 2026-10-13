@@ -13,6 +13,7 @@
       "test_amr_hierarchy_field_scratch",
       "test_amr_history_flux_snapshot",
       "test_amr_history_remap_collective",
+      "test_amr_interaction_history_snapshot",
       "test_amr_layout_transfer",
       "test_amr_path_rhs_barrier",
       "test_amr_program_diffusion",
@@ -84,7 +85,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 204,
+    "target_count": 205,
     "v12_estimate_source": "No per-target cold-build receipt exists. History snapshot and AMR transition use the 300 s heavy-template tier; collective rejection uses the 2 s parallel-share floor. Replace from the next complete cold-CI build timing artifact.",
     "unit_seconds": "modeled shard wall time: measured serial-pool TU or parallel-share floor",
     "v18_estimate_source": "Unmeasured scheduling estimates: AMR publication and general composite solver use the existing 300 s heavy-template tier; small runtime contracts use the 2 s parallel-share floor. Replace from the next complete CI timing artifact; no local timing measurements are claimed.",
@@ -109,6 +110,11 @@
       ],
       "ci_source": "PR #680 source 4adfddfb7a68212a008269b36a0dfd3c06cdb78d, Kokkos Serial shard 6, 2026-09-22; watchdog 420 s expired during the fourth case",
       "refresh": "Replace after a complete CI build/test receipt for this target; preserve all nine cases and the unchanged watchdog."
+    },
+    "ci_20261013_interaction_history_snapshot": {
+      "target": "test_amr_interaction_history_snapshot",
+      "estimated_seconds": 309.79,
+      "basis": "Unmeasured cold-CI scheduling estimate added 2026-10-13: 309.79 s copied from test_amr_hierarchy_barrier_continuation. The fixture instantiates the compiled AMR model and full AmrProgramContext for real two-level partial hierarchy history capture, collective refusal and rollback. No provider DSO build is added. The existing local incremental build log includes runtime dependencies and does not establish a target-only or cold-CI duration. Replace from the next complete cold-CI per-target timing artifact."
     }
   },
   "test_amr_compiled_model": 2.0,
@@ -118,6 +124,7 @@
   "test_amr_distribute_coarse_serial": 26.7,
   "test_amr_history_flux_snapshot": 300.0,
   "test_amr_history_ring": 302.32,
+  "test_amr_interaction_history_snapshot": 309.79,
   "test_amr_multiblock_compiled": 51.01,
   "test_amr_multiblock_coupled_source": 304.11,
   "test_amr_multiblock_implicit_transaction": 14.73,

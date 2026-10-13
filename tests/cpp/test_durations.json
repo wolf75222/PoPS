@@ -13,6 +13,7 @@
       "test_amr_hierarchy_field_scratch",
       "test_amr_history_flux_snapshot",
       "test_amr_history_remap_collective",
+      "test_amr_interaction_history_snapshot",
       "test_amr_layout_transfer",
       "test_amr_path_rhs_barrier",
       "test_amr_program_diffusion",
@@ -83,7 +84,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 204,
+    "target_count": 205,
     "unit_seconds": "aggregate CTest wall time per build target",
     "v12_estimate_source": "The edd85c10f6184e7b14b048ee16d5cc39bc606b62 full CTest diagnostic observed approximately 0.7 s history-snapshot, 0.52 s AMR-transition, and 0.5 s collective-rejection aggregate work. Each is conservatively scheduled at 1 s; these are scheduling estimates, not controlled performance measurements.",
     "v18_estimate_source": "Unmeasured analogous-target scheduling estimates: AMR publication uses test_amr_program_diffusion; general composite field uses test_composite_fac_variable_k; physical support transfer uses test_nd_transfer; prepared resource cache uses test_cache_manager. Replace from the next complete CI timing artifact; no local timing measurements are claimed.",
@@ -113,6 +114,11 @@
       ],
       "ci_source": "PR #680 source 4adfddfb7a68212a008269b36a0dfd3c06cdb78d, Kokkos Serial shard 6, 2026-09-22; watchdog 420 s expired during the fourth case",
       "refresh": "Replace after a complete CI build/test receipt for this target; preserve all nine cases and the unchanged watchdog."
+    },
+    "ci_20261013_interaction_history_snapshot": {
+      "target": "test_amr_interaction_history_snapshot",
+      "estimated_seconds": 5.0,
+      "basis": "Conservative unmeasured CI scheduling estimate added 2026-10-13: 5.0 s, above the existing local macOS Dim2 CTest receipts for all fourteen Serial cases plus the MPI2 variant containing fourteen cases on each rank. The immutable a9297394-history-snapshot-cpp-receptions.json records command walls of 1.86 s Serial and 0.82 s MPI2 (2.68 s combined); this supports the seed but is not a Linux CI timing measurement or a fresh qualification. No native tests are rerun. Replace from the next complete CTest per-target timing artifact."
     }
   },
   "test_amr_compiled_model": 0.01,
@@ -122,6 +128,7 @@
   "test_amr_distribute_coarse_serial": 8.75,
   "test_amr_history_flux_snapshot": 1.0,
   "test_amr_history_ring": 0.18,
+  "test_amr_interaction_history_snapshot": 5.0,
   "test_amr_multiblock_compiled": 0.18,
   "test_amr_multiblock_coupled_source": 0.05,
   "test_amr_multiblock_implicit_transaction": 0.44,
