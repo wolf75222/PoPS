@@ -101,6 +101,12 @@ void materialize_active_flux_expression_(
                     });
                   });
           if (!exact_operator_pack) {
+            std::string expected;
+            for (const auto& stage : stage_identities) {
+              if (!expected.empty())
+                expected += ", ";
+              expected += stage;
+            }
             std::string observed;
             for (const auto& entry : entries)
               if (same_coarse_face(entry)) {
@@ -112,7 +118,7 @@ void materialize_active_flux_expression_(
                 "AMR Program coarse/fine flux operator identities differ before face-flux "
                 "publication: expected " +
                 std::to_string(stage_identities.size()) + " stage(s), observed " +
-                std::to_string(coarse_count) + " [" + observed + "]");
+                std::to_string(coarse_count) + " [expected: " + expected + "; observed: " + observed + "]");
           }
         }
       }
