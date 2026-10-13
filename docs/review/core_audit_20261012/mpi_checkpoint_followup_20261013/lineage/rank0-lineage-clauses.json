@@ -1,0 +1,13 @@
+{
+  "rank": 0,
+  "selected_source_run": "pops.run.v1:sha256:aed3dd124656e872f55d8349af861bbc475408021341199706c33e3313300557",
+  "original_source_run": "pops.run.v1:sha256:48f8398cec38e1e8fc18d9c66a2ca1fd01fc3edf407c0da0d11de8b066a12880",
+  "expected_transformed_source_run": "pops.run.v1:sha256:aed3dd124656e872f55d8349af861bbc475408021341199706c33e3313300557",
+  "owner_history_lineage": "pops.run.v1:sha256:258a09c3979221efe59bcbff1d2b2d2795bb4c0391306da9f6d8a10fff5b973c",
+  "clauses": {
+    "legacy_source_equal": false,
+    "exact_transformed_source": true,
+    "exact_run_lineage": true,
+    "distinct_lineage": true
+  }
+}

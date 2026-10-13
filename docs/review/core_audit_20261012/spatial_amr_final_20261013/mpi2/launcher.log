@@ -1,0 +1,26 @@
+BOOT before import pops
+BOOT before import pops
+BOOT after import pops
+BOOT after import pops
+BOOT after Dim2 selection
+BOOT after Dim2 selection
+BOOT native MPI world 1 2
+BOOT native MPI world 0 2
+BOOT attested before pytest 0
+BOOT attested before pytest 1
+..                                                                        [100%]                                                                        [100%]
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_saved_history_and_exact_replay[partial-amr-cutcell]
+  tests/python/integration/runtime/test_public_spatial_interaction.py:112: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.compiler
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1 passed, 1 warning in 50.61s
+
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_saved_history_and_exact_replay[partial-amr-cutcell]
+  tests/python/integration/runtime/test_public_spatial_interaction.py:112: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.compiler
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1 passed, 1 warning in 50.61s

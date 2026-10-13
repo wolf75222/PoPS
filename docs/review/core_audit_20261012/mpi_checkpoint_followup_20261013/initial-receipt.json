@@ -1,0 +1,244 @@
+{
+  "source_revision": "c78c49f3621e0e2fc4ef1b5d074dcf68ab0efac9",
+  "science_freeze": "c78c49f-initial-declared-authority-science-freeze.json",
+  "launcher": "$AUDIT_ENV/bin/mpiexec",
+  "launcher_version": "HYDRA MPICH4.1.2",
+  "initial_native": {
+    "MPI1": {
+      "rank_results": [
+        {
+          "rank": 0,
+          "seconds": 49.873,
+          "identity": {
+            "native_sha256": "f80c77ee029f8ef8508187eec98d7e741ae1893573500c1b0cbdf4a7986ac859",
+            "package": "$AUDIT_ENV/lib/python3.12/site-packages/pops/__init__.py",
+            "header_signature": "d1a442e561deb4884c04ccf3ce6bac5bb267e0358ed6a3ac998dfc553eb2856f",
+            "rank": 0,
+            "ranks": 1
+          },
+          "events": {
+            "prepare": 2,
+            "initial-entry": 1,
+            "field-before-write": 1,
+            "tentative-write": 1,
+            "injected-failure": 1,
+            "destroy": 2
+          },
+          "proof": "initial-mpi1/proof-rank0.json",
+          "target_selection": [
+            {
+              "schema": "sol61.initial-ghost-selection-agreement@1",
+              "rows": [
+                {
+                  "carrier_sha256": "47fb4a70795b47c808f465e4e9ea23bc55e75d1639f043527f69ec3cb06bf82b",
+                  "dimension": 2,
+                  "eligible": [
+                    0
+                  ],
+                  "schema": "sol61.initial-ghost-owned-face-selection@1",
+                  "target": 0,
+                  "world_size": 1
+                }
+              ],
+              "agreed": {
+                "schema": "sol61.initial-ghost-owned-face-selection@1",
+                "dimension": 2,
+                "world_size": 1,
+                "carrier_sha256": "47fb4a70795b47c808f465e4e9ea23bc55e75d1639f043527f69ec3cb06bf82b",
+                "eligible": [
+                  0
+                ],
+                "target": 0
+              }
+            }
+          ],
+          "causal_failure": [
+            [
+              "RuntimeError",
+              "native boundary component apply_region_batch aborted the run: independent initial Ghost rank-local failure after Field read/write",
+              true
+            ]
+          ],
+          "outer_abort": true,
+          "nested_parent_rollback_certified": false,
+          "xml_sha256": "1f2778041577d2cbe20252aa331dfec5ddcccef27a39ac7822d85de4b7477d60",
+          "proof_sha256": "c6f6e878f062599580530ce1af9ddecc55bb7b2be0b7ff4702b3c9679ff6d200",
+          "xml": "initial-mpi1/rank0.xml"
+        }
+      ],
+      "cases": 1,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "log": "initial-mpi1/launch.log"
+    },
+    "MPI2": {
+      "rank_results": [
+        {
+          "rank": 0,
+          "seconds": 52.652,
+          "identity": {
+            "native_sha256": "f80c77ee029f8ef8508187eec98d7e741ae1893573500c1b0cbdf4a7986ac859",
+            "package": "$AUDIT_ENV/lib/python3.12/site-packages/pops/__init__.py",
+            "header_signature": "d1a442e561deb4884c04ccf3ce6bac5bb267e0358ed6a3ac998dfc553eb2856f",
+            "rank": 0,
+            "ranks": 2
+          },
+          "events": {
+            "prepare": 2,
+            "initial-entry": 1,
+            "field-before-write": 1,
+            "tentative-write": 1,
+            "injected-failure": 0,
+            "destroy": 2
+          },
+          "proof": "initial-mpi2/proof-rank0.json",
+          "target_selection": [
+            {
+              "schema": "sol61.initial-ghost-selection-agreement@1",
+              "rows": [
+                {
+                  "carrier_sha256": "cc94cf87030a360fcb88fb2979f0d7313b5ce5dc4d7fe80b1063c56b7c2a6ccc",
+                  "dimension": 2,
+                  "eligible": [
+                    0,
+                    1
+                  ],
+                  "schema": "sol61.initial-ghost-owned-face-selection@1",
+                  "target": 1,
+                  "world_size": 2
+                },
+                {
+                  "carrier_sha256": "cc94cf87030a360fcb88fb2979f0d7313b5ce5dc4d7fe80b1063c56b7c2a6ccc",
+                  "dimension": 2,
+                  "eligible": [
+                    0,
+                    1
+                  ],
+                  "schema": "sol61.initial-ghost-owned-face-selection@1",
+                  "target": 1,
+                  "world_size": 2
+                }
+              ],
+              "agreed": {
+                "schema": "sol61.initial-ghost-owned-face-selection@1",
+                "dimension": 2,
+                "world_size": 2,
+                "carrier_sha256": "cc94cf87030a360fcb88fb2979f0d7313b5ce5dc4d7fe80b1063c56b7c2a6ccc",
+                "eligible": [
+                  0,
+                  1
+                ],
+                "target": 1
+              }
+            }
+          ],
+          "causal_failure": [
+            [
+              "RuntimeError",
+              "AMR GhostBoundary callback failed collectively; rank 1: native boundary component apply_region_batch aborted the run: independent initial Ghost rank-local failure after Field read/write",
+              true
+            ],
+            [
+              "RuntimeError",
+              "AMR GhostBoundary callback failed collectively; rank 1: native boundary component apply_region_batch aborted the run: independent initial Ghost rank-local failure after Field read/write",
+              true
+            ]
+          ],
+          "outer_abort": true,
+          "nested_parent_rollback_certified": false,
+          "xml_sha256": "8ed52fd39a4360a6add38af4844a51a4980e044ee331010c878e728b13e33330",
+          "proof_sha256": "05eacf096705f9393d30ffc4e57e922018f3d0cfe51bb95e6491b231115da694",
+          "xml": "initial-mpi2/rank0.xml"
+        },
+        {
+          "rank": 1,
+          "seconds": 52.652,
+          "identity": {
+            "native_sha256": "f80c77ee029f8ef8508187eec98d7e741ae1893573500c1b0cbdf4a7986ac859",
+            "package": "$AUDIT_ENV/lib/python3.12/site-packages/pops/__init__.py",
+            "header_signature": "d1a442e561deb4884c04ccf3ce6bac5bb267e0358ed6a3ac998dfc553eb2856f",
+            "rank": 1,
+            "ranks": 2
+          },
+          "events": {
+            "prepare": 2,
+            "initial-entry": 1,
+            "field-before-write": 1,
+            "tentative-write": 1,
+            "injected-failure": 1,
+            "destroy": 2
+          },
+          "proof": "initial-mpi2/proof-rank1.json",
+          "target_selection": [
+            {
+              "schema": "sol61.initial-ghost-selection-agreement@1",
+              "rows": [
+                {
+                  "carrier_sha256": "cc94cf87030a360fcb88fb2979f0d7313b5ce5dc4d7fe80b1063c56b7c2a6ccc",
+                  "dimension": 2,
+                  "eligible": [
+                    0,
+                    1
+                  ],
+                  "schema": "sol61.initial-ghost-owned-face-selection@1",
+                  "target": 1,
+                  "world_size": 2
+                },
+                {
+                  "carrier_sha256": "cc94cf87030a360fcb88fb2979f0d7313b5ce5dc4d7fe80b1063c56b7c2a6ccc",
+                  "dimension": 2,
+                  "eligible": [
+                    0,
+                    1
+                  ],
+                  "schema": "sol61.initial-ghost-owned-face-selection@1",
+                  "target": 1,
+                  "world_size": 2
+                }
+              ],
+              "agreed": {
+                "schema": "sol61.initial-ghost-owned-face-selection@1",
+                "dimension": 2,
+                "world_size": 2,
+                "carrier_sha256": "cc94cf87030a360fcb88fb2979f0d7313b5ce5dc4d7fe80b1063c56b7c2a6ccc",
+                "eligible": [
+                  0,
+                  1
+                ],
+                "target": 1
+              }
+            }
+          ],
+          "causal_failure": [
+            [
+              "RuntimeError",
+              "AMR GhostBoundary callback failed collectively; rank 1: native boundary component apply_region_batch aborted the run: independent initial Ghost rank-local failure after Field read/write",
+              true
+            ],
+            [
+              "RuntimeError",
+              "AMR GhostBoundary callback failed collectively; rank 1: native boundary component apply_region_batch aborted the run: independent initial Ghost rank-local failure after Field read/write",
+              true
+            ]
+          ],
+          "outer_abort": true,
+          "nested_parent_rollback_certified": false,
+          "xml_sha256": "da6b7d0cfa88ac79aa5a546838a6e4b504295fa16ca640d72848e0fde0263983",
+          "proof_sha256": "3da3ef7f8bebc762320ccc2b07dba8d8aa6c7e9ec14dee6d363e5ac3038de529",
+          "xml": "initial-mpi2/rank1.xml"
+        }
+      ],
+      "cases": 2,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "log": "initial-mpi2/launch.log"
+    }
+  },
+  "scope": "Actual initial Ghost fault MPI1/MPI2 reaches prepublication owner and outer bootstrap abort. Nested parent rollback is not certified by this fixture. Prior failed/mixed-launcher attempts excluded.",
+  "source_receipt_origin": {
+    "ref": "external-evidence:ci/c78c49f-initial-ghost-fault-mpi-receipt.json",
+    "sha256": "614f8843d6c42018009a1c092c26b05cbb7e1b3e9837c3f67abc914b7540aaa4"
+  }
+}

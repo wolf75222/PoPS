@@ -1,0 +1,23 @@
+Note: Google Test filter = AmrSpatialMaterialization.DeclaredFamilyBindsStageWeightToMeasureAndRetainsPackSize:AmrSpatialMaterialization.DeclaredFamilyPreservesEveryOperatorOccurrenceDescriptor:AmrSpatialMaterialization.DeclaredFamilyPreservesMigratedQuadratureAndMetricClosure:AmrSpatialMaterialization.DeclaredFamilyRejectsMissingAndForeignFamilies:AmrSpatialMaterialization.DeclaredFamilyRequiresCompletePhysicalTemporalCoverage:AmrSpatialMaterialization.LegacyStillRequiresTheOriginalExactOperatorPack:AmrSpatialMaterialization.PendingProofSurvivesPublicationAndRejectsRankLocalDamage
+[==========] Running 7 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 7 tests from AmrSpatialMaterialization
+[ RUN      ] AmrSpatialMaterialization.PendingProofSurvivesPublicationAndRejectsRankLocalDamage
+[       OK ] AmrSpatialMaterialization.PendingProofSurvivesPublicationAndRejectsRankLocalDamage (27 ms)
+[ RUN      ] AmrSpatialMaterialization.DeclaredFamilyPreservesMigratedQuadratureAndMetricClosure
+[       OK ] AmrSpatialMaterialization.DeclaredFamilyPreservesMigratedQuadratureAndMetricClosure (1 ms)
+[ RUN      ] AmrSpatialMaterialization.DeclaredFamilyRejectsMissingAndForeignFamilies
+[       OK ] AmrSpatialMaterialization.DeclaredFamilyRejectsMissingAndForeignFamilies (6 ms)
+[ RUN      ] AmrSpatialMaterialization.DeclaredFamilyPreservesEveryOperatorOccurrenceDescriptor
+[       OK ] AmrSpatialMaterialization.DeclaredFamilyPreservesEveryOperatorOccurrenceDescriptor (5 ms)
+[ RUN      ] AmrSpatialMaterialization.DeclaredFamilyBindsStageWeightToMeasureAndRetainsPackSize
+[       OK ] AmrSpatialMaterialization.DeclaredFamilyBindsStageWeightToMeasureAndRetainsPackSize (2 ms)
+[ RUN      ] AmrSpatialMaterialization.DeclaredFamilyRequiresCompletePhysicalTemporalCoverage
+[       OK ] AmrSpatialMaterialization.DeclaredFamilyRequiresCompletePhysicalTemporalCoverage (6 ms)
+[ RUN      ] AmrSpatialMaterialization.LegacyStillRequiresTheOriginalExactOperatorPack
+[       OK ] AmrSpatialMaterialization.LegacyStillRequiresTheOriginalExactOperatorPack (2 ms)
+[----------] 7 tests from AmrSpatialMaterialization (52 ms total)
+
+[----------] Global test environment tear-down
+[==========] 7 tests from 1 test suite ran. (74 ms total)
+[  PASSED  ] 7 tests.

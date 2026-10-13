@@ -1,0 +1,1049 @@
+{
+  "dataset_export_case_collision_repaired_by_exact_private_copies": true,
+  "files": [
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "1d2e9dd4f650a59ab330fec480bcc3a0b77836937098d723c54ed790a365a876",
+      "original_private_reference": "$EVIDENCE/ci/public_npz_path_scan_restored.json",
+      "path": "NPZ_PATH_AUDIT.json",
+      "sanitized_public_sha256": "38b7aafa5bd2b1d45ce4b993ca8171009b322697c62be72ed6cc549a90adc76b"
+    },
+    {
+      "editorial_normalization": "Title punctuation normalized to repository documentation lint; qualification scope unchanged.",
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "390380b9b38090699ad6b17af719cba4a83def87adc4f342fa6b8d7d9fd1b29b",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/README.md",
+      "path": "README.md",
+      "sanitized_public_sha256": "ccf9ba17c984cf3a69d5878ceb71d69350f9eb7cac15cda3b8051b4ae997764a"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "82108b18960bb2d29016a108d3a2fdc3e9171dbdc744cca0f709c2f3f0d91f4a",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-amr-periodic-freeze/a9297394-amr-refusal-clean-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/27028f696b9a03774da4df7e9c4bc5925b57a31ee107649b6155743749eab2bf.so.pops-artifact.json",
+      "path": "datasets/refusal-mpi1/test_public_spatial_interactio0/spatial-interaction-nonperiodic-amr-bind-refusal/block-density-27028f696b9a03774da4df7e9c4bc5925b57a31ee107649b6155743749eab2bf.so.pops-artifact.json",
+      "sanitized_public_sha256": "82108b18960bb2d29016a108d3a2fdc3e9171dbdc744cca0f709c2f3f0d91f4a"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "6d64c1134778602729e1ecef4591154c5172ffe76344c7eb6b46d6ff961f9abf",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-amr-periodic-freeze/a9297394-amr-refusal-clean-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/dafac99afdd4bd28e2948887d85a59a20be897a04acae2f594dc6b25bf73f53a.so.pops-artifact.json",
+      "path": "datasets/refusal-mpi1/test_public_spatial_interactio0/spatial-interaction-nonperiodic-amr-bind-refusal/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-dafac99afdd4bd28e2948887d85a59a20be897a04acae2f594dc6b25bf73f53a.so.pops-artifact.json",
+      "sanitized_public_sha256": "6d64c1134778602729e1ecef4591154c5172ffe76344c7eb6b46d6ff961f9abf"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "97d29de48120752150ebcc4897dd7adeed4fee2b4389ebc10a65d265499903ff",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-amr-periodic-freeze/a9297394-amr-refusal-clean-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction-nonperiodic-amr-bind-refusal/program-1.cpp",
+      "path": "datasets/refusal-mpi1/test_public_spatial_interactio0/spatial-interaction-nonperiodic-amr-bind-refusal/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.cpp",
+      "sanitized_public_sha256": "97d29de48120752150ebcc4897dd7adeed4fee2b4389ebc10a65d265499903ff"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "ac22bd4a617dc8575bed4ff8732b49ec93e683aea6c8fb0b97ac9d836c2daf7c",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-amr-periodic-freeze/a9297394-amr-refusal-clean-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction-nonperiodic-amr-bind-refusal/program-1.ir.json",
+      "path": "datasets/refusal-mpi1/test_public_spatial_interactio0/spatial-interaction-nonperiodic-amr-bind-refusal/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.ir.json",
+      "sanitized_public_sha256": "0dfc353347e8beca7ef6a2054281b59eab7d30d7e936540e9dafaa20529bfdc8"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "d481905d95bd8828a323c32a39af0ba9442d77f979c3fa6374e5d249892c788f",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-amr-periodic-freeze/a9297394-amr-refusal-clean-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction-nonperiodic-amr-bind-refusal/receipt.json",
+      "path": "datasets/refusal-mpi1/test_public_spatial_interactio0/spatial-interaction-nonperiodic-amr-bind-refusal/receipt.json",
+      "sanitized_public_sha256": "fd3d901e72477e53c5444d4592b8b8fa7b9238482a15a735dd663f3c37126f78"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "894f202b998bc10e8b48aa0170595c1d4a8f5659a201dbf8f001d64494011574",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-amr-periodic-freeze/a9297394-amr-refusal-clean-mpi2/tmp/pytest-of-$USER/pytest-1/test_public_spatial_interactio0/pops-native-cache/27028f696b9a03774da4df7e9c4bc5925b57a31ee107649b6155743749eab2bf.so.pops-artifact.json",
+      "path": "datasets/refusal-mpi2/test_public_spatial_interactio0/spatial-interaction-nonperiodic-amr-bind-refusal/block-density-27028f696b9a03774da4df7e9c4bc5925b57a31ee107649b6155743749eab2bf.so.pops-artifact.json",
+      "sanitized_public_sha256": "894f202b998bc10e8b48aa0170595c1d4a8f5659a201dbf8f001d64494011574"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "6d64c1134778602729e1ecef4591154c5172ffe76344c7eb6b46d6ff961f9abf",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-amr-periodic-freeze/a9297394-amr-refusal-clean-mpi2/tmp/pytest-of-$USER/pytest-1/test_public_spatial_interactio0/pops-native-cache/dafac99afdd4bd28e2948887d85a59a20be897a04acae2f594dc6b25bf73f53a.so.pops-artifact.json",
+      "path": "datasets/refusal-mpi2/test_public_spatial_interactio0/spatial-interaction-nonperiodic-amr-bind-refusal/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-dafac99afdd4bd28e2948887d85a59a20be897a04acae2f594dc6b25bf73f53a.so.pops-artifact.json",
+      "sanitized_public_sha256": "6d64c1134778602729e1ecef4591154c5172ffe76344c7eb6b46d6ff961f9abf"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "97d29de48120752150ebcc4897dd7adeed4fee2b4389ebc10a65d265499903ff",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-amr-periodic-freeze/a9297394-amr-refusal-clean-mpi2/tmp/pytest-of-$USER/pytest-1/test_public_spatial_interactio0/spatial-interaction-nonperiodic-amr-bind-refusal/program-1.cpp",
+      "path": "datasets/refusal-mpi2/test_public_spatial_interactio0/spatial-interaction-nonperiodic-amr-bind-refusal/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.cpp",
+      "sanitized_public_sha256": "97d29de48120752150ebcc4897dd7adeed4fee2b4389ebc10a65d265499903ff"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "ac22bd4a617dc8575bed4ff8732b49ec93e683aea6c8fb0b97ac9d836c2daf7c",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-amr-periodic-freeze/a9297394-amr-refusal-clean-mpi2/tmp/pytest-of-$USER/pytest-1/test_public_spatial_interactio0/spatial-interaction-nonperiodic-amr-bind-refusal/program-1.ir.json",
+      "path": "datasets/refusal-mpi2/test_public_spatial_interactio0/spatial-interaction-nonperiodic-amr-bind-refusal/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.ir.json",
+      "sanitized_public_sha256": "0dfc353347e8beca7ef6a2054281b59eab7d30d7e936540e9dafaa20529bfdc8"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "82e25dd550a6862d147a5d23101c3eb62a6dd4e01ec22f710053db8fc210a75f",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-amr-periodic-freeze/a9297394-amr-refusal-clean-mpi2/tmp/pytest-of-$USER/pytest-1/test_public_spatial_interactio0/spatial-interaction-nonperiodic-amr-bind-refusal/receipt.json",
+      "path": "datasets/refusal-mpi2/test_public_spatial_interactio0/spatial-interaction-nonperiodic-amr-bind-refusal/receipt.json",
+      "sanitized_public_sha256": "f90de446dc6cc4e9c9fb4974c42cdbfe7d43f1ea0705b3b7ca0e22ce9e2fd8a3"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "735d3f83851a1c89acc31b0a2ec0ae8a90af1cdfe33d46616846c86772052e6e",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/c14220e6a3d6f21844febc3c1ca6bfed46de3922f85c2f7f3b653baf2aec4137.so.pops-artifact.json",
+      "path": "datasets/uniform-mpi1-controls/test_public_spatial_interactio0/spatial-interaction-nonfinite/block-density-c14220e6a3d6f21844febc3c1ca6bfed46de3922f85c2f7f3b653baf2aec4137.so.pops-artifact.json",
+      "sanitized_public_sha256": "735d3f83851a1c89acc31b0a2ec0ae8a90af1cdfe33d46616846c86772052e6e"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "0272ad5a86d3fed9807dfae2a78a6055cbbc732c32945641fd4867d1073bec34",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction-nonfinite/initial-checkpoint.npz",
+      "path": "datasets/uniform-mpi1-controls/test_public_spatial_interactio0/spatial-interaction-nonfinite/initial-checkpoint.npz",
+      "sanitized_public_sha256": "0272ad5a86d3fed9807dfae2a78a6055cbbc732c32945641fd4867d1073bec34"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "39792bfbe54ee3b5744b8de39d8119f96fb548f0f21a10bf6d90f2d674e62c94",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction-nonfinite/initial.npz",
+      "path": "datasets/uniform-mpi1-controls/test_public_spatial_interactio0/spatial-interaction-nonfinite/initial.npz",
+      "sanitized_public_sha256": "39792bfbe54ee3b5744b8de39d8119f96fb548f0f21a10bf6d90f2d674e62c94"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "f89a5fb058eeb0007f0f490581b36778b666067273d547db90992c0646fa9511",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/d73553adedb5695bced2ee76dff0e710f620c30765bd671785370afddb5385a4.so.pops-artifact.json",
+      "path": "datasets/uniform-mpi1-controls/test_public_spatial_interactio0/spatial-interaction-nonfinite/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-d73553adedb5695bced2ee76dff0e710f620c30765bd671785370afddb5385a4.so.pops-artifact.json",
+      "sanitized_public_sha256": "f89a5fb058eeb0007f0f490581b36778b666067273d547db90992c0646fa9511"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "a202f65c7b86b86f3ecd4275dbd1471d81f6036f79147955e7c37db423dd3301",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction-nonfinite/program-1.cpp",
+      "path": "datasets/uniform-mpi1-controls/test_public_spatial_interactio0/spatial-interaction-nonfinite/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.cpp",
+      "sanitized_public_sha256": "a202f65c7b86b86f3ecd4275dbd1471d81f6036f79147955e7c37db423dd3301"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "a2815c41f0103214d8abec6c0f8f1cbb5d943af51d6962d3e4b19a616e818af1",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction-nonfinite/program-1.ir.json",
+      "path": "datasets/uniform-mpi1-controls/test_public_spatial_interactio0/spatial-interaction-nonfinite/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.ir.json",
+      "sanitized_public_sha256": "45293ddb8a14dc77a08f4d55f94e8db619bd1a27e2d163ccc216dfc3ee74702d"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "bef9277c72d29fb5c74405928d6ba2dd85010cf6bc44a63f52e54876fbff662e",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction-nonfinite/receipt.json",
+      "path": "datasets/uniform-mpi1-controls/test_public_spatial_interactio0/spatial-interaction-nonfinite/receipt.json",
+      "sanitized_public_sha256": "fc01dd4c7549c48c7b56459a7623b16324b9725ebc7bc5f4538393a67540eb46"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "8fa1eb7d7c83fbc2a60f7b5e4201ed18b9a314d36a90f2a7af9429974f9739ff",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction-nonfinite/rejected-checkpoint.npz",
+      "path": "datasets/uniform-mpi1-controls/test_public_spatial_interactio0/spatial-interaction-nonfinite/rejected-checkpoint.npz",
+      "sanitized_public_sha256": "8fa1eb7d7c83fbc2a60f7b5e4201ed18b9a314d36a90f2a7af9429974f9739ff"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "39792bfbe54ee3b5744b8de39d8119f96fb548f0f21a10bf6d90f2d674e62c94",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction-nonfinite/rejected.npz",
+      "path": "datasets/uniform-mpi1-controls/test_public_spatial_interactio0/spatial-interaction-nonfinite/rejected.npz",
+      "sanitized_public_sha256": "39792bfbe54ee3b5744b8de39d8119f96fb548f0f21a10bf6d90f2d674e62c94"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "688dd32792aef8164577c382985d8e66d6b67e5f491a28e34706fa3fe13e5b7b",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction-inactive-pole/accepted-checkpoint.npz",
+      "path": "datasets/uniform-mpi1-controls/test_public_spatial_interactio1/spatial-interaction-inactive-pole/accepted-checkpoint.npz",
+      "sanitized_public_sha256": "688dd32792aef8164577c382985d8e66d6b67e5f491a28e34706fa3fe13e5b7b"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "4ed27a1783c71a1feff7388411c22704bee903dbbe8d094037dc5f3ab3691b52",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction-inactive-pole/accepted.npz",
+      "path": "datasets/uniform-mpi1-controls/test_public_spatial_interactio1/spatial-interaction-inactive-pole/accepted.npz",
+      "sanitized_public_sha256": "4ed27a1783c71a1feff7388411c22704bee903dbbe8d094037dc5f3ab3691b52"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "dbd392724b0d18a1f68b2508951291e827df35c3614e2199d82396baf8a0c8eb",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/pops-native-cache/c14220e6a3d6f21844febc3c1ca6bfed46de3922f85c2f7f3b653baf2aec4137.so.pops-artifact.json",
+      "path": "datasets/uniform-mpi1-controls/test_public_spatial_interactio1/spatial-interaction-inactive-pole/block-density-c14220e6a3d6f21844febc3c1ca6bfed46de3922f85c2f7f3b653baf2aec4137.so.pops-artifact.json",
+      "sanitized_public_sha256": "dbd392724b0d18a1f68b2508951291e827df35c3614e2199d82396baf8a0c8eb"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "fd5a90e5b034719b9ae411ab8c79faaeffb789e364ca1ca65918bf7fedf91579",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction-inactive-pole/initial-checkpoint.npz",
+      "path": "datasets/uniform-mpi1-controls/test_public_spatial_interactio1/spatial-interaction-inactive-pole/initial-checkpoint.npz",
+      "sanitized_public_sha256": "fd5a90e5b034719b9ae411ab8c79faaeffb789e364ca1ca65918bf7fedf91579"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "7575a683bd1bc93fbd7e1c088d12437e506abd6040f7874bc91840dcf26e7858",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction-inactive-pole/initial.npz",
+      "path": "datasets/uniform-mpi1-controls/test_public_spatial_interactio1/spatial-interaction-inactive-pole/initial.npz",
+      "sanitized_public_sha256": "7575a683bd1bc93fbd7e1c088d12437e506abd6040f7874bc91840dcf26e7858"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "f89a5fb058eeb0007f0f490581b36778b666067273d547db90992c0646fa9511",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/pops-native-cache/d73553adedb5695bced2ee76dff0e710f620c30765bd671785370afddb5385a4.so.pops-artifact.json",
+      "path": "datasets/uniform-mpi1-controls/test_public_spatial_interactio1/spatial-interaction-inactive-pole/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-d73553adedb5695bced2ee76dff0e710f620c30765bd671785370afddb5385a4.so.pops-artifact.json",
+      "sanitized_public_sha256": "f89a5fb058eeb0007f0f490581b36778b666067273d547db90992c0646fa9511"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "a202f65c7b86b86f3ecd4275dbd1471d81f6036f79147955e7c37db423dd3301",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction-inactive-pole/program-1.cpp",
+      "path": "datasets/uniform-mpi1-controls/test_public_spatial_interactio1/spatial-interaction-inactive-pole/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.cpp",
+      "sanitized_public_sha256": "a202f65c7b86b86f3ecd4275dbd1471d81f6036f79147955e7c37db423dd3301"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "a2815c41f0103214d8abec6c0f8f1cbb5d943af51d6962d3e4b19a616e818af1",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction-inactive-pole/program-1.ir.json",
+      "path": "datasets/uniform-mpi1-controls/test_public_spatial_interactio1/spatial-interaction-inactive-pole/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.ir.json",
+      "sanitized_public_sha256": "45293ddb8a14dc77a08f4d55f94e8db619bd1a27e2d163ccc216dfc3ee74702d"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "346228df9fd9008636e50de629d762d6f932b92eb7e5f6fe5743ac91832b5e71",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction-inactive-pole/receipt.json",
+      "path": "datasets/uniform-mpi1-controls/test_public_spatial_interactio1/spatial-interaction-inactive-pole/receipt.json",
+      "sanitized_public_sha256": "9ababcd1af5235e6175e4bbe6083c82a94079ac2da7ae30bff1165b6b13a26a6"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "81ee89c3a4c317b629e8c211115e2cf7e362712469dd408fd8a2bbbc0224705f",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/accepted-checkpoint.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio0/spatial-interaction/accepted-checkpoint.npz",
+      "sanitized_public_sha256": "81ee89c3a4c317b629e8c211115e2cf7e362712469dd408fd8a2bbbc0224705f"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "01d22571951af50c8d18ed2c66f30fbad42b95aaf60c14688c12fe1ea5fa5d0c",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/accepted.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio0/spatial-interaction/accepted.npz",
+      "sanitized_public_sha256": "01d22571951af50c8d18ed2c66f30fbad42b95aaf60c14688c12fe1ea5fa5d0c"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "978171fcad2475b6b15698bbfd4bba1e79103d41a44c2f594771b36c82d6b2b8",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/99f525d22232484d8953541e5426becc8ad8d07b3ee2d9ad982c1c2d85f89f95.so.pops-artifact.json",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio0/spatial-interaction/block-density-99f525d22232484d8953541e5426becc8ad8d07b3ee2d9ad982c1c2d85f89f95.so.pops-artifact.json",
+      "sanitized_public_sha256": "978171fcad2475b6b15698bbfd4bba1e79103d41a44c2f594771b36c82d6b2b8"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "d948969c7b483f4da87308e53efcf0c62ffa239d5081cb1f142f1c580dcb9c0c",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/continuous-checkpoint.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio0/spatial-interaction/continuous-checkpoint.npz",
+      "sanitized_public_sha256": "d948969c7b483f4da87308e53efcf0c62ffa239d5081cb1f142f1c580dcb9c0c"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "7f8034f10c06afce3d463546692a029ad0841a14d9dae390458f03e6b7751e83",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/continuous.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio0/spatial-interaction/continuous.npz",
+      "sanitized_public_sha256": "7f8034f10c06afce3d463546692a029ad0841a14d9dae390458f03e6b7751e83"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "38ee39286ccfc98bd0bb31facca15e87e21554be9cbbef4ca7d434949e5b3485",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/initial-checkpoint.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio0/spatial-interaction/initial-checkpoint.npz",
+      "sanitized_public_sha256": "38ee39286ccfc98bd0bb31facca15e87e21554be9cbbef4ca7d434949e5b3485"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "1df1bb66749041b030302bca9b403ac7387e44af86287b0e2911d3c52aa90c8d",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/initial.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio0/spatial-interaction/initial.npz",
+      "sanitized_public_sha256": "1df1bb66749041b030302bca9b403ac7387e44af86287b0e2911d3c52aa90c8d"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "4c3864a3f09524a35336ba727e18d05e38f9843a5c8530b4a97e9f12843aabdc",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/3b9c6c9ac1c1c4a7eb4b083a0d82e55a463a210f91ad645e3414951d724055b9.so.pops-artifact.json",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio0/spatial-interaction/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-3b9c6c9ac1c1c4a7eb4b083a0d82e55a463a210f91ad645e3414951d724055b9.so.pops-artifact.json",
+      "sanitized_public_sha256": "4c3864a3f09524a35336ba727e18d05e38f9843a5c8530b4a97e9f12843aabdc"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "f8b591d4b050c925b373a4f433fa6e2c0d6d49e9ab09d7d19e7447a91576d2c2",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/program-1.cpp",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio0/spatial-interaction/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.cpp",
+      "sanitized_public_sha256": "f8b591d4b050c925b373a4f433fa6e2c0d6d49e9ab09d7d19e7447a91576d2c2"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "f00ecfa3cdf0f6311d4fd567609b3e312b26b877e8f6febee954d4ac577fc310",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/program-1.ir.json",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio0/spatial-interaction/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.ir.json",
+      "sanitized_public_sha256": "c5ee2bd606060d3c101667e4f73277bb2a0a3986987f44908c16e8cfe9d6c0af"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "a12d6e08367923d13ae2c21146f33fa2071359a02c27ca863cffe67455123511",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/receipt.json",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio0/spatial-interaction/receipt.json",
+      "sanitized_public_sha256": "be19dae33187f5239b40d825ca18ccf97ab243d27d454fdfc5f928b14301137f"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "81ee89c3a4c317b629e8c211115e2cf7e362712469dd408fd8a2bbbc0224705f",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/reloaded-checkpoint.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio0/spatial-interaction/reloaded-checkpoint.npz",
+      "sanitized_public_sha256": "81ee89c3a4c317b629e8c211115e2cf7e362712469dd408fd8a2bbbc0224705f"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "01d22571951af50c8d18ed2c66f30fbad42b95aaf60c14688c12fe1ea5fa5d0c",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/reloaded.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio0/spatial-interaction/reloaded.npz",
+      "sanitized_public_sha256": "01d22571951af50c8d18ed2c66f30fbad42b95aaf60c14688c12fe1ea5fa5d0c"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "092078dcfd1b627f8aad858c108766b1434af9a2f9c599d574ad7307fb68cfcb",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/replay-checkpoint.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio0/spatial-interaction/replay-checkpoint.npz",
+      "sanitized_public_sha256": "092078dcfd1b627f8aad858c108766b1434af9a2f9c599d574ad7307fb68cfcb"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "7f8034f10c06afce3d463546692a029ad0841a14d9dae390458f03e6b7751e83",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/replay.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio0/spatial-interaction/replay.npz",
+      "sanitized_public_sha256": "7f8034f10c06afce3d463546692a029ad0841a14d9dae390458f03e6b7751e83"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "a6887d05b584855ef603677670c14b2656a883aed648090597c45f664d844338",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/accepted-checkpoint.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio1/spatial-interaction/accepted-checkpoint.npz",
+      "sanitized_public_sha256": "a6887d05b584855ef603677670c14b2656a883aed648090597c45f664d844338"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "7f011161697c7dabbe780ef0526e0ba4b38c002d42343cc6b91cdb2c012729f5",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/accepted.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio1/spatial-interaction/accepted.npz",
+      "sanitized_public_sha256": "7f011161697c7dabbe780ef0526e0ba4b38c002d42343cc6b91cdb2c012729f5"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "8a95ce522cdb1790f31cf78cbda231b3857b4bae1efa7d5e8df218eb5b70aaa8",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/pops-native-cache/5f1ee70ed470070c14d3b2293478df5af30380ddc456ff1bd3f6e48b9b3507c5.so.pops-artifact.json",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio1/spatial-interaction/block-density-5f1ee70ed470070c14d3b2293478df5af30380ddc456ff1bd3f6e48b9b3507c5.so.pops-artifact.json",
+      "sanitized_public_sha256": "8a95ce522cdb1790f31cf78cbda231b3857b4bae1efa7d5e8df218eb5b70aaa8"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "83394bdc72beb9d6aa904c308278eec19d988cc76e7815ce4cd872b9d3471916",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/continuous-checkpoint.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio1/spatial-interaction/continuous-checkpoint.npz",
+      "sanitized_public_sha256": "83394bdc72beb9d6aa904c308278eec19d988cc76e7815ce4cd872b9d3471916"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "c982444a037992068867156a16aa23aeab5ce586a79c724e31a47aa60dd2c94e",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/continuous.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio1/spatial-interaction/continuous.npz",
+      "sanitized_public_sha256": "c982444a037992068867156a16aa23aeab5ce586a79c724e31a47aa60dd2c94e"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "a128238853072f018ec05120eebda15109e90705c09b9ef1a3ca08bc7514990c",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/initial-checkpoint.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio1/spatial-interaction/initial-checkpoint.npz",
+      "sanitized_public_sha256": "a128238853072f018ec05120eebda15109e90705c09b9ef1a3ca08bc7514990c"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "f5833bc07e34645c01b1c21cfc1176c09dc2e86bf0634f733e8f543b1496613b",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/initial.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio1/spatial-interaction/initial.npz",
+      "sanitized_public_sha256": "f5833bc07e34645c01b1c21cfc1176c09dc2e86bf0634f733e8f543b1496613b"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "961e82391d46e01fef9add7c0db563c8ade7dca33ff974b222cce46a16dc453d",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/pops-native-cache/2607a1fb5271509dcbc8fcd76e0b3a68e96057d5d34007756c72bbf87f4bdea9.so.pops-artifact.json",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio1/spatial-interaction/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-2607a1fb5271509dcbc8fcd76e0b3a68e96057d5d34007756c72bbf87f4bdea9.so.pops-artifact.json",
+      "sanitized_public_sha256": "961e82391d46e01fef9add7c0db563c8ade7dca33ff974b222cce46a16dc453d"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "f7d486d0fc86810b34ab66ae78112ea5c8ef6db73d36413e0b570b9238edddbe",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/program-1.cpp",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio1/spatial-interaction/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.cpp",
+      "sanitized_public_sha256": "f7d486d0fc86810b34ab66ae78112ea5c8ef6db73d36413e0b570b9238edddbe"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "381cb7457a2223fffaf305eb762ced3b267a08ed8470f9806530bdbac93c218f",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/program-1.ir.json",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio1/spatial-interaction/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.ir.json",
+      "sanitized_public_sha256": "baa5b88bb642568622d381e89e191c84b9f8667ed2c0fd2c9be812e452cb6feb"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "0df8c8f7d48d5bc9c8392c54725e4a5dc02d650dfeb80b5e9c553884d996d057",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/receipt.json",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio1/spatial-interaction/receipt.json",
+      "sanitized_public_sha256": "9ce90cf9965b8a7c0582e0c84b2f2fe42aedf7647bb9854b6e5af65d7e0ea48c"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "a6887d05b584855ef603677670c14b2656a883aed648090597c45f664d844338",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/reloaded-checkpoint.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio1/spatial-interaction/reloaded-checkpoint.npz",
+      "sanitized_public_sha256": "a6887d05b584855ef603677670c14b2656a883aed648090597c45f664d844338"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "7f011161697c7dabbe780ef0526e0ba4b38c002d42343cc6b91cdb2c012729f5",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/reloaded.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio1/spatial-interaction/reloaded.npz",
+      "sanitized_public_sha256": "7f011161697c7dabbe780ef0526e0ba4b38c002d42343cc6b91cdb2c012729f5"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "5217513146634ba377aa45b408cfc53597394bc47c7a3a0656696fae2898c8ee",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/replay-checkpoint.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio1/spatial-interaction/replay-checkpoint.npz",
+      "sanitized_public_sha256": "5217513146634ba377aa45b408cfc53597394bc47c7a3a0656696fae2898c8ee"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "c982444a037992068867156a16aa23aeab5ce586a79c724e31a47aa60dd2c94e",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/replay.npz",
+      "path": "datasets/uniform-mpi1-positive/test_public_spatial_interactio1/spatial-interaction/replay.npz",
+      "sanitized_public_sha256": "c982444a037992068867156a16aa23aeab5ce586a79c724e31a47aa60dd2c94e"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "87ee89c5a37f54364136ba9c0aacf4aa9b71e159417f015d10c55d81aa6f0475",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/accepted-checkpoint.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio0/spatial-interaction/accepted-checkpoint.npz",
+      "sanitized_public_sha256": "87ee89c5a37f54364136ba9c0aacf4aa9b71e159417f015d10c55d81aa6f0475"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "b635802dc7019a9eba6c984b32dfc3b3a73db1cef49c1e7c15895675f15e9b14",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/accepted.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio0/spatial-interaction/accepted.npz",
+      "sanitized_public_sha256": "b635802dc7019a9eba6c984b32dfc3b3a73db1cef49c1e7c15895675f15e9b14"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "bcfbda0121d153abd680ef7da60b802931d4249eecdd72db5c47a07be4c1a683",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/99f525d22232484d8953541e5426becc8ad8d07b3ee2d9ad982c1c2d85f89f95.so.pops-artifact.json",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio0/spatial-interaction/block-density-99f525d22232484d8953541e5426becc8ad8d07b3ee2d9ad982c1c2d85f89f95.so.pops-artifact.json",
+      "sanitized_public_sha256": "bcfbda0121d153abd680ef7da60b802931d4249eecdd72db5c47a07be4c1a683"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "bc5bf84354c62b4968140954a818308be9c8ee8ef68691e488a598541e3030d7",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/continuous-checkpoint.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio0/spatial-interaction/continuous-checkpoint.npz",
+      "sanitized_public_sha256": "bc5bf84354c62b4968140954a818308be9c8ee8ef68691e488a598541e3030d7"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "db1b4e20b92dae16b29a0ebf2c5c63fc55e53af45b82fb905caa12b3d49b555e",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/continuous.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio0/spatial-interaction/continuous.npz",
+      "sanitized_public_sha256": "db1b4e20b92dae16b29a0ebf2c5c63fc55e53af45b82fb905caa12b3d49b555e"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "3f8853ed898e654966c6fb40281d0c42db2947a5981b5eab081a7b858c5658e4",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/initial-checkpoint.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio0/spatial-interaction/initial-checkpoint.npz",
+      "sanitized_public_sha256": "3f8853ed898e654966c6fb40281d0c42db2947a5981b5eab081a7b858c5658e4"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "234e025264dcefd0c11eb34a5ab8a8a5fc04bd52d06a5d6e4e4be249b1fc9be6",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/initial.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio0/spatial-interaction/initial.npz",
+      "sanitized_public_sha256": "234e025264dcefd0c11eb34a5ab8a8a5fc04bd52d06a5d6e4e4be249b1fc9be6"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "4c3864a3f09524a35336ba727e18d05e38f9843a5c8530b4a97e9f12843aabdc",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/3b9c6c9ac1c1c4a7eb4b083a0d82e55a463a210f91ad645e3414951d724055b9.so.pops-artifact.json",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio0/spatial-interaction/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-3b9c6c9ac1c1c4a7eb4b083a0d82e55a463a210f91ad645e3414951d724055b9.so.pops-artifact.json",
+      "sanitized_public_sha256": "4c3864a3f09524a35336ba727e18d05e38f9843a5c8530b4a97e9f12843aabdc"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "f8b591d4b050c925b373a4f433fa6e2c0d6d49e9ab09d7d19e7447a91576d2c2",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/program-1.cpp",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio0/spatial-interaction/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.cpp",
+      "sanitized_public_sha256": "f8b591d4b050c925b373a4f433fa6e2c0d6d49e9ab09d7d19e7447a91576d2c2"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "f00ecfa3cdf0f6311d4fd567609b3e312b26b877e8f6febee954d4ac577fc310",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/program-1.ir.json",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio0/spatial-interaction/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.ir.json",
+      "sanitized_public_sha256": "c5ee2bd606060d3c101667e4f73277bb2a0a3986987f44908c16e8cfe9d6c0af"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "d7e46189d424f1fe222e3411bc08bfc71e3e3b23b4aa56c69a17691aaaab4b88",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/receipt.json",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio0/spatial-interaction/receipt.json",
+      "sanitized_public_sha256": "c656b34525af08881954b91197bb3a4a6c6f65c795c8f3b321c4459039511c75"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "87ee89c5a37f54364136ba9c0aacf4aa9b71e159417f015d10c55d81aa6f0475",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/reloaded-checkpoint.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio0/spatial-interaction/reloaded-checkpoint.npz",
+      "sanitized_public_sha256": "87ee89c5a37f54364136ba9c0aacf4aa9b71e159417f015d10c55d81aa6f0475"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "b635802dc7019a9eba6c984b32dfc3b3a73db1cef49c1e7c15895675f15e9b14",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/reloaded.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio0/spatial-interaction/reloaded.npz",
+      "sanitized_public_sha256": "b635802dc7019a9eba6c984b32dfc3b3a73db1cef49c1e7c15895675f15e9b14"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "2af1865bb19b329d18e3efad75ebdca8809677a0baa0649e9055df3f14d16155",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/replay-checkpoint.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio0/spatial-interaction/replay-checkpoint.npz",
+      "sanitized_public_sha256": "2af1865bb19b329d18e3efad75ebdca8809677a0baa0649e9055df3f14d16155"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "db1b4e20b92dae16b29a0ebf2c5c63fc55e53af45b82fb905caa12b3d49b555e",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/replay.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio0/spatial-interaction/replay.npz",
+      "sanitized_public_sha256": "db1b4e20b92dae16b29a0ebf2c5c63fc55e53af45b82fb905caa12b3d49b555e"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "c2a397c7236a22951e1eabab0b71bb6745a40ee87777200348e5cb52bad46f35",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/accepted-checkpoint.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio1/spatial-interaction/accepted-checkpoint.npz",
+      "sanitized_public_sha256": "c2a397c7236a22951e1eabab0b71bb6745a40ee87777200348e5cb52bad46f35"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "68a92250960ac2699b9b065d643cb04d1f507cea83012faaedc8d1c3bdfdc590",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/accepted.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio1/spatial-interaction/accepted.npz",
+      "sanitized_public_sha256": "68a92250960ac2699b9b065d643cb04d1f507cea83012faaedc8d1c3bdfdc590"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "c6c2aa7dc876f37bde2c47a2dde95acaaab58e0f4373069d021870345f8eba6d",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/pops-native-cache/5f1ee70ed470070c14d3b2293478df5af30380ddc456ff1bd3f6e48b9b3507c5.so.pops-artifact.json",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio1/spatial-interaction/block-density-5f1ee70ed470070c14d3b2293478df5af30380ddc456ff1bd3f6e48b9b3507c5.so.pops-artifact.json",
+      "sanitized_public_sha256": "c6c2aa7dc876f37bde2c47a2dde95acaaab58e0f4373069d021870345f8eba6d"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "8d437c30759882b2090efc734ad73200b3884274dc7834d681ed4427706ce8c0",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/continuous-checkpoint.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio1/spatial-interaction/continuous-checkpoint.npz",
+      "sanitized_public_sha256": "8d437c30759882b2090efc734ad73200b3884274dc7834d681ed4427706ce8c0"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "7e48af60d234fda9393428c4005b053d1e956d0d2899b0db553bc39c9bc2928d",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/continuous.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio1/spatial-interaction/continuous.npz",
+      "sanitized_public_sha256": "7e48af60d234fda9393428c4005b053d1e956d0d2899b0db553bc39c9bc2928d"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "627d0a807f0d4efb762e39762156126e2f02c0f6788e47424151e4f19b464714",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/initial-checkpoint.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio1/spatial-interaction/initial-checkpoint.npz",
+      "sanitized_public_sha256": "627d0a807f0d4efb762e39762156126e2f02c0f6788e47424151e4f19b464714"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "0d3ef283dea11d04d1ad73fa3eb79ae0da69d0efc8c33ca56821a1f284b8cb80",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/initial.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio1/spatial-interaction/initial.npz",
+      "sanitized_public_sha256": "0d3ef283dea11d04d1ad73fa3eb79ae0da69d0efc8c33ca56821a1f284b8cb80"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "961e82391d46e01fef9add7c0db563c8ade7dca33ff974b222cce46a16dc453d",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/pops-native-cache/2607a1fb5271509dcbc8fcd76e0b3a68e96057d5d34007756c72bbf87f4bdea9.so.pops-artifact.json",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio1/spatial-interaction/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-2607a1fb5271509dcbc8fcd76e0b3a68e96057d5d34007756c72bbf87f4bdea9.so.pops-artifact.json",
+      "sanitized_public_sha256": "961e82391d46e01fef9add7c0db563c8ade7dca33ff974b222cce46a16dc453d"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "f7d486d0fc86810b34ab66ae78112ea5c8ef6db73d36413e0b570b9238edddbe",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/program-1.cpp",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio1/spatial-interaction/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.cpp",
+      "sanitized_public_sha256": "f7d486d0fc86810b34ab66ae78112ea5c8ef6db73d36413e0b570b9238edddbe"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "381cb7457a2223fffaf305eb762ced3b267a08ed8470f9806530bdbac93c218f",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/program-1.ir.json",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio1/spatial-interaction/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.ir.json",
+      "sanitized_public_sha256": "baa5b88bb642568622d381e89e191c84b9f8667ed2c0fd2c9be812e452cb6feb"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "c93d8d96b1cc6526c180cde2099d4c33b3bd8aaaa05a0b2be5625c84fcedb5eb",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/receipt.json",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio1/spatial-interaction/receipt.json",
+      "sanitized_public_sha256": "209ddef0e11a343192ede74f13e087f4e4734c367e0ad88a94e2ea55ebc3e339"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "c2a397c7236a22951e1eabab0b71bb6745a40ee87777200348e5cb52bad46f35",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/reloaded-checkpoint.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio1/spatial-interaction/reloaded-checkpoint.npz",
+      "sanitized_public_sha256": "c2a397c7236a22951e1eabab0b71bb6745a40ee87777200348e5cb52bad46f35"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "68a92250960ac2699b9b065d643cb04d1f507cea83012faaedc8d1c3bdfdc590",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/reloaded.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio1/spatial-interaction/reloaded.npz",
+      "sanitized_public_sha256": "68a92250960ac2699b9b065d643cb04d1f507cea83012faaedc8d1c3bdfdc590"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "3b6d8e7a022f3186135261e4d91aa0363a713372ad08a3c96096afd7cb758c43",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/replay-checkpoint.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio1/spatial-interaction/replay-checkpoint.npz",
+      "sanitized_public_sha256": "3b6d8e7a022f3186135261e4d91aa0363a713372ad08a3c96096afd7cb758c43"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "7e48af60d234fda9393428c4005b053d1e956d0d2899b0db553bc39c9bc2928d",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction/replay.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio1/spatial-interaction/replay.npz",
+      "sanitized_public_sha256": "7e48af60d234fda9393428c4005b053d1e956d0d2899b0db553bc39c9bc2928d"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "ef2ad746988040d305c5bf85ee7a1daf199a2eeee1398e194493a76f0e12657d",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio2/pops-native-cache/c14220e6a3d6f21844febc3c1ca6bfed46de3922f85c2f7f3b653baf2aec4137.so.pops-artifact.json",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio2/spatial-interaction-nonfinite/block-density-c14220e6a3d6f21844febc3c1ca6bfed46de3922f85c2f7f3b653baf2aec4137.so.pops-artifact.json",
+      "sanitized_public_sha256": "ef2ad746988040d305c5bf85ee7a1daf199a2eeee1398e194493a76f0e12657d"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "69cafb7c5cb144b6616621e06660da79906da66e80741e927a2344c57ffce1a1",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio2/spatial-interaction-nonfinite/initial-checkpoint.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio2/spatial-interaction-nonfinite/initial-checkpoint.npz",
+      "sanitized_public_sha256": "69cafb7c5cb144b6616621e06660da79906da66e80741e927a2344c57ffce1a1"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "380bbf61b4dda781b84e6bb45003dc59cd5b636f43dbad0228a3b5a3a9d45706",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio2/spatial-interaction-nonfinite/initial.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio2/spatial-interaction-nonfinite/initial.npz",
+      "sanitized_public_sha256": "380bbf61b4dda781b84e6bb45003dc59cd5b636f43dbad0228a3b5a3a9d45706"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "f89a5fb058eeb0007f0f490581b36778b666067273d547db90992c0646fa9511",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio2/pops-native-cache/d73553adedb5695bced2ee76dff0e710f620c30765bd671785370afddb5385a4.so.pops-artifact.json",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio2/spatial-interaction-nonfinite/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-d73553adedb5695bced2ee76dff0e710f620c30765bd671785370afddb5385a4.so.pops-artifact.json",
+      "sanitized_public_sha256": "f89a5fb058eeb0007f0f490581b36778b666067273d547db90992c0646fa9511"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "a202f65c7b86b86f3ecd4275dbd1471d81f6036f79147955e7c37db423dd3301",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio2/spatial-interaction-nonfinite/program-1.cpp",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio2/spatial-interaction-nonfinite/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.cpp",
+      "sanitized_public_sha256": "a202f65c7b86b86f3ecd4275dbd1471d81f6036f79147955e7c37db423dd3301"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "a2815c41f0103214d8abec6c0f8f1cbb5d943af51d6962d3e4b19a616e818af1",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio2/spatial-interaction-nonfinite/program-1.ir.json",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio2/spatial-interaction-nonfinite/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.ir.json",
+      "sanitized_public_sha256": "45293ddb8a14dc77a08f4d55f94e8db619bd1a27e2d163ccc216dfc3ee74702d"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "461a59c17d88b1f64fc436d639fc73eb7cdbda021a9d7ad86642d08c3452845a",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio2/spatial-interaction-nonfinite/receipt.json",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio2/spatial-interaction-nonfinite/receipt.json",
+      "sanitized_public_sha256": "1f4ff575bd35d9407007995d5ca01c6aa6360b315e0bee194b361fde16d863ae"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "233c518fae73a5f0ca74e62b14dcefef3af7164f513f6b89b435e78f2689d807",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio2/spatial-interaction-nonfinite/rejected-checkpoint.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio2/spatial-interaction-nonfinite/rejected-checkpoint.npz",
+      "sanitized_public_sha256": "233c518fae73a5f0ca74e62b14dcefef3af7164f513f6b89b435e78f2689d807"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "380bbf61b4dda781b84e6bb45003dc59cd5b636f43dbad0228a3b5a3a9d45706",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio2/spatial-interaction-nonfinite/rejected.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio2/spatial-interaction-nonfinite/rejected.npz",
+      "sanitized_public_sha256": "380bbf61b4dda781b84e6bb45003dc59cd5b636f43dbad0228a3b5a3a9d45706"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "063727b3cf625affa56c1cc40adc95598ad133694c9dc45d43bea372a53340dd",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio3/spatial-interaction-inactive-pole/accepted-checkpoint.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio3/spatial-interaction-inactive-pole/accepted-checkpoint.npz",
+      "sanitized_public_sha256": "063727b3cf625affa56c1cc40adc95598ad133694c9dc45d43bea372a53340dd"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "16dca0784bfcfca20dd26157bf7cedcfcde4615cf69f35f91e22c31f0cabd04a",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio3/spatial-interaction-inactive-pole/accepted.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio3/spatial-interaction-inactive-pole/accepted.npz",
+      "sanitized_public_sha256": "16dca0784bfcfca20dd26157bf7cedcfcde4615cf69f35f91e22c31f0cabd04a"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "23ba69edc62e1dc76bfba4e64c314b3db0adedd7e5b02d60677888c2718fc42a",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio3/pops-native-cache/c14220e6a3d6f21844febc3c1ca6bfed46de3922f85c2f7f3b653baf2aec4137.so.pops-artifact.json",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio3/spatial-interaction-inactive-pole/block-density-c14220e6a3d6f21844febc3c1ca6bfed46de3922f85c2f7f3b653baf2aec4137.so.pops-artifact.json",
+      "sanitized_public_sha256": "23ba69edc62e1dc76bfba4e64c314b3db0adedd7e5b02d60677888c2718fc42a"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "d16859807bc194fbe5ff99901dadea2e06dbcd5c37bc10d92523ecc930c3e3db",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio3/spatial-interaction-inactive-pole/initial-checkpoint.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio3/spatial-interaction-inactive-pole/initial-checkpoint.npz",
+      "sanitized_public_sha256": "d16859807bc194fbe5ff99901dadea2e06dbcd5c37bc10d92523ecc930c3e3db"
+    },
+    {
+      "mode": "unchanged_binary",
+      "origin_file_sha256": "d9eba518ac3981c447d26daade5403c680ab1af72b68e0d86e97ee0e849ede89",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio3/spatial-interaction-inactive-pole/initial.npz",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio3/spatial-interaction-inactive-pole/initial.npz",
+      "sanitized_public_sha256": "d9eba518ac3981c447d26daade5403c680ab1af72b68e0d86e97ee0e849ede89"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "f89a5fb058eeb0007f0f490581b36778b666067273d547db90992c0646fa9511",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio3/pops-native-cache/d73553adedb5695bced2ee76dff0e710f620c30765bd671785370afddb5385a4.so.pops-artifact.json",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio3/spatial-interaction-inactive-pole/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-d73553adedb5695bced2ee76dff0e710f620c30765bd671785370afddb5385a4.so.pops-artifact.json",
+      "sanitized_public_sha256": "f89a5fb058eeb0007f0f490581b36778b666067273d547db90992c0646fa9511"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "a202f65c7b86b86f3ecd4275dbd1471d81f6036f79147955e7c37db423dd3301",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio3/spatial-interaction-inactive-pole/program-1.cpp",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio3/spatial-interaction-inactive-pole/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.cpp",
+      "sanitized_public_sha256": "a202f65c7b86b86f3ecd4275dbd1471d81f6036f79147955e7c37db423dd3301"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "a2815c41f0103214d8abec6c0f8f1cbb5d943af51d6962d3e4b19a616e818af1",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio3/spatial-interaction-inactive-pole/program-1.ir.json",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio3/spatial-interaction-inactive-pole/program-pops.handle.v1::case:actual_spatial_interaction::layout::default-program-1.ir.json",
+      "sanitized_public_sha256": "45293ddb8a14dc77a08f4d55f94e8db619bd1a27e2d163ccc216dfc3ee74702d"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "78117fc711be64f9be0e8fc3771384d05762776f346d56fbb0b443dbf1817b33",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio3/spatial-interaction-inactive-pole/receipt.json",
+      "path": "datasets/uniform-mpi2/test_public_spatial_interactio3/spatial-interaction-inactive-pole/receipt.json",
+      "sanitized_public_sha256": "3483de3d3824d34798cd9ea60a6c6b65036848ee3b6422425199c2ff872e5f78"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "4e3a3744b7c484681c288508807133a05a5c692e8a0f541e0f6f4e5d87636866",
+      "original_private_reference": "$EVIDENCE/ci/3261d081-spatial-mask-qualified-mpi1/result.json",
+      "path": "excluded/attempt0-result.json",
+      "sanitized_public_sha256": "ea16d612075cdc5ec8fa53e78db8deaed15a2808bda07a369f5f056b6faeff99"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "39d23d217429a1f3ff55fb133d0b8065cb94cb80f550fbf0bd355a921fcd1bd8",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/result.json",
+      "path": "excluded/attempt1-result.json",
+      "sanitized_public_sha256": "4fadbba661c061ef49f7843b22814b03a9426b26b605914319dbbe07d3828e28"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "27629f60ae1eda871259cfc45ff30ea99ba455c316952834c40d2b423d9c469f",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-amr-periodic-freeze/a9297394-spatial-amr-reception-mpi1/result.json",
+      "path": "excluded/attempt2-result.json",
+      "sanitized_public_sha256": "7f14cdbc8bb6f92670aab5e49fced16f73b46d0ce79a5d8d46d2ba0e3a1f8dd3"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "c41a73372cc6868990464ba163ca52339da3c449d040457fba187b0732a2f0a4",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-amr-periodic-freeze/a9297394-spatial-amr-refusal-mpi1/result.json",
+      "path": "excluded/attempt3-result.json",
+      "sanitized_public_sha256": "c41a73372cc6868990464ba163ca52339da3c449d040457fba187b0732a2f0a4"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "df74d7bab78c7565c4e0ad40c73df2dc39e1ebf4f05b9e3b12e0142d74762f95",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-amr-periodic-freeze/a9297394-spatial-amr-refusal-attempt2-mpi1/result.json",
+      "path": "excluded/attempt4-result.json",
+      "sanitized_public_sha256": "df74d7bab78c7565c4e0ad40c73df2dc39e1ebf4f05b9e3b12e0142d74762f95"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "a770d1ab99201eddcf2645dbc0544c0b2cc0acd8703acddd428d412b806503df",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-amr-periodic-freeze/runner/receipt.json",
+      "path": "proofs/amr-periodic-freeze.json",
+      "sanitized_public_sha256": "6cf1eae629f420136376237c8a287fa603b5a2983be68d73692236d1edd4e24f"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "ebd6220a35ede8b655764e49fbb125b073155e8731412420148b7ee8b57bd358",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-amr-periodic-freeze/initial-checkpoint-summary.json",
+      "path": "proofs/initial-checkpoint-summary.json",
+      "sanitized_public_sha256": "e027714285e48cddafe444280abd0c9691d043adc710acc235f1af2c5e7b3be0"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "bf99c43164c4e1fc20b1157d5928067408a5f4058d3c3f5e501e8523d4661dde",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-installed-dim2-identity.json",
+      "path": "proofs/installed-dim2-identity.json",
+      "sanitized_public_sha256": "62d30a4ce189f246c4ea4bc1f3ed4408967dd385453313f609b852e938671e1f"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "c37497e1723673153d6bad4e5ac88a3841cb807aadeb4c81d45dcbf3c5ef7d8e",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/periodic-profile-source-proof.json",
+      "path": "proofs/periodic-profile-source-proof.json",
+      "sanitized_public_sha256": "3ed369b0ad0ae31a560fa6b0dcad5a34ed7c43c88f78bec03c2ca3781b912b8c"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "4c3250eafa67a0bca734f11569b69976e18f4bc364ba18501719c00da3321815",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/source-proof.json",
+      "path": "proofs/source-only-finite-domain-proof.json",
+      "sanitized_public_sha256": "b29576077b4ef2720bac225dbd7586fdeaddc754428da4b4596a7d1ee906f165"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "11030aaaf19ed83b9c6b963316976c122ae8a496f105eed2c1b757eacf441249",
+      "original_private_reference": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/runner/receipt.json",
+      "path": "proofs/source-only-freeze.json",
+      "sanitized_public_sha256": "50ee47ee25915d5e8cbb45c761a37b7ef77e9dc9588752264d2f68034b8ad10b"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "922f7c87578e16d4a7223dc67a9bc5602f40048f337ea74fd857d3f4ea1f1903",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/repaired-receipt-before-sanitization.json",
+      "path": "receipt.json",
+      "sanitized_public_sha256": "271b9dc64d00a49ea0faffad7607c6379151682a2d967b541fdfda9434472ae6"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "d0ea76184527423c503cb077e594a8f20d61cd7c04ebd5d44da45c3c3ad87584",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/refusal-mpi1/identity-after.json",
+      "path": "runs/refusal-mpi1/identity-after.json",
+      "sanitized_public_sha256": "d0ea76184527423c503cb077e594a8f20d61cd7c04ebd5d44da45c3c3ad87584"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "d0ea76184527423c503cb077e594a8f20d61cd7c04ebd5d44da45c3c3ad87584",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/refusal-mpi1/identity-before.json",
+      "path": "runs/refusal-mpi1/identity-before.json",
+      "sanitized_public_sha256": "d0ea76184527423c503cb077e594a8f20d61cd7c04ebd5d44da45c3c3ad87584"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "a3b4c548112ab282bea5fd225e5216b4cb3121290de7f9d8dbbe3baf07a8d893",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/refusal-mpi1/launcher.log",
+      "path": "runs/refusal-mpi1/launcher.log",
+      "sanitized_public_sha256": "a3b4c548112ab282bea5fd225e5216b4cb3121290de7f9d8dbbe3baf07a8d893"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "aa79b2a5f1f84de6ec7e6fd2c7cd428628e612997c762d0cd969143fbe166963",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/refusal-mpi1/rank0.xml",
+      "path": "runs/refusal-mpi1/rank0.xml",
+      "sanitized_public_sha256": "998e61cad71f8f070f5da7e61d93167084aba3bc842a0118185cb222fbcaec02"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "cb515561cd96b77ecbf553b68a25fc5694fd6b637c90636df195050e07f153be",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/refusal-mpi1/result.json",
+      "path": "runs/refusal-mpi1/result.json",
+      "sanitized_public_sha256": "db3e0b434abc563ff1b1b52d6840307b4f8d43518bea32af0295338035e054fa"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "d0ea76184527423c503cb077e594a8f20d61cd7c04ebd5d44da45c3c3ad87584",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/refusal-mpi2/identity-after.json",
+      "path": "runs/refusal-mpi2/identity-after.json",
+      "sanitized_public_sha256": "d0ea76184527423c503cb077e594a8f20d61cd7c04ebd5d44da45c3c3ad87584"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "d0ea76184527423c503cb077e594a8f20d61cd7c04ebd5d44da45c3c3ad87584",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/refusal-mpi2/identity-before.json",
+      "path": "runs/refusal-mpi2/identity-before.json",
+      "sanitized_public_sha256": "d0ea76184527423c503cb077e594a8f20d61cd7c04ebd5d44da45c3c3ad87584"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "d47f5d9767755cb59901f3777223a21363df8ec8493cfe4b9e1ba40547b63802",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/refusal-mpi2/launcher.log",
+      "path": "runs/refusal-mpi2/launcher.log",
+      "sanitized_public_sha256": "d47f5d9767755cb59901f3777223a21363df8ec8493cfe4b9e1ba40547b63802"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "4010555875e429ea9f36e828773fdfddc729398ebabd66e5486f040e40216751",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/refusal-mpi2/rank0.xml",
+      "path": "runs/refusal-mpi2/rank0.xml",
+      "sanitized_public_sha256": "cc9f8d67d7edb7da76a3572b932640616e3fd454638cce33c0af0feb4703e37d"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "1527fa67057915d92de14c133063eb0e3e6b81f7a2817cf6cfa8b908cefdeadb",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/refusal-mpi2/rank1.xml",
+      "path": "runs/refusal-mpi2/rank1.xml",
+      "sanitized_public_sha256": "a1687a35a33bc0fd2afd18adb148182364d464ecb1cc21efd30cf2843259ba53"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "871185d86e9f4b7f7bb27a9dd51f89c98f038346335c605d7d1c986a118c2a67",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/refusal-mpi2/result.json",
+      "path": "runs/refusal-mpi2/result.json",
+      "sanitized_public_sha256": "ee4f1b5b2703807844fa3ea89462ec42231e70589cf8255cff67b17e89c89802"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "e084240592c68fcda36bd6f1e9682687dc362aa7f81aeaefba5195fb4ba7a5d0",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/uniform-mpi1-controls/identity-after.json",
+      "path": "runs/uniform-mpi1-controls/identity-after.json",
+      "sanitized_public_sha256": "cccbb2d5580002a00b30386037e143e945ccb7063ab1c65ed4468fc3d6b23899"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "e084240592c68fcda36bd6f1e9682687dc362aa7f81aeaefba5195fb4ba7a5d0",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/uniform-mpi1-controls/identity-before.json",
+      "path": "runs/uniform-mpi1-controls/identity-before.json",
+      "sanitized_public_sha256": "cccbb2d5580002a00b30386037e143e945ccb7063ab1c65ed4468fc3d6b23899"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "ab23f5a3249ae0fcc06d45f8946a2b03b580f513676e5adf09c6b86c394d4753",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/uniform-mpi1-controls/launcher.log",
+      "path": "runs/uniform-mpi1-controls/launcher.log",
+      "sanitized_public_sha256": "ab23f5a3249ae0fcc06d45f8946a2b03b580f513676e5adf09c6b86c394d4753"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "060b839052936ed3af700a3ab2fc6227bc28661ab8de3de62d9a6faaaef42592",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/uniform-mpi1-controls/rank0.xml",
+      "path": "runs/uniform-mpi1-controls/rank0.xml",
+      "sanitized_public_sha256": "98202068757770ab52795dd18eb3ed09dd64fb337eaf8229313d0d366f050e91"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "6ca0240d6fe163cc35f44aedb754c4131939422074013fb673f329afad03f1d2",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/uniform-mpi1-controls/result.json",
+      "path": "runs/uniform-mpi1-controls/result.json",
+      "sanitized_public_sha256": "6ca0240d6fe163cc35f44aedb754c4131939422074013fb673f329afad03f1d2"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "e084240592c68fcda36bd6f1e9682687dc362aa7f81aeaefba5195fb4ba7a5d0",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/uniform-mpi1-positive/identity-after.json",
+      "path": "runs/uniform-mpi1-positive/identity-after.json",
+      "sanitized_public_sha256": "cccbb2d5580002a00b30386037e143e945ccb7063ab1c65ed4468fc3d6b23899"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "e084240592c68fcda36bd6f1e9682687dc362aa7f81aeaefba5195fb4ba7a5d0",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/uniform-mpi1-positive/identity-before.json",
+      "path": "runs/uniform-mpi1-positive/identity-before.json",
+      "sanitized_public_sha256": "cccbb2d5580002a00b30386037e143e945ccb7063ab1c65ed4468fc3d6b23899"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "ab2cec4a094d6a02fa9010c53ad77e3e3b325bfc0ff4a0a5a3ed06a8d4b7f1ca",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/uniform-mpi1-positive/launcher.log",
+      "path": "runs/uniform-mpi1-positive/launcher.log",
+      "sanitized_public_sha256": "26faa79c8652b4eb96d9be0e787991502524071a0f966d3dfb42863c7a501bb2"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "41372f144a38e0f454c25821a7accfc2d8923cf4d427828a2af66b17ed9b1eb1",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/uniform-mpi1-positive/rank0.xml",
+      "path": "runs/uniform-mpi1-positive/rank0.xml",
+      "sanitized_public_sha256": "4142bb95293134e7bf88057d8e23f785418643862d06da737e73e87bf37eddd6"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "39d23d217429a1f3ff55fb133d0b8065cb94cb80f550fbf0bd355a921fcd1bd8",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/uniform-mpi1-positive/result.json",
+      "path": "runs/uniform-mpi1-positive/result.json",
+      "sanitized_public_sha256": "4fadbba661c061ef49f7843b22814b03a9426b26b605914319dbbe07d3828e28"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "e084240592c68fcda36bd6f1e9682687dc362aa7f81aeaefba5195fb4ba7a5d0",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/uniform-mpi2/identity-after.json",
+      "path": "runs/uniform-mpi2/identity-after.json",
+      "sanitized_public_sha256": "cccbb2d5580002a00b30386037e143e945ccb7063ab1c65ed4468fc3d6b23899"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "e084240592c68fcda36bd6f1e9682687dc362aa7f81aeaefba5195fb4ba7a5d0",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/uniform-mpi2/identity-before.json",
+      "path": "runs/uniform-mpi2/identity-before.json",
+      "sanitized_public_sha256": "cccbb2d5580002a00b30386037e143e945ccb7063ab1c65ed4468fc3d6b23899"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "91490d1cc21167595aa711e19fe0ca34f9fc903a9747a543627332ef05a34cc0",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/uniform-mpi2/launcher.log",
+      "path": "runs/uniform-mpi2/launcher.log",
+      "sanitized_public_sha256": "91490d1cc21167595aa711e19fe0ca34f9fc903a9747a543627332ef05a34cc0"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "9f9e9ba487193cf0516f23b4fe44303935695c1c452a8ea5b3c7b73fd367a3e3",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/uniform-mpi2/rank0.xml",
+      "path": "runs/uniform-mpi2/rank0.xml",
+      "sanitized_public_sha256": "00ee9d986e2ae5883211627ea9ed17a1c2542d5e8e7ed531cab1054690d11c9d"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "b42e3bfce41d0a0c7d2fca90228c3bcabc56c3d4395d42d9b552bf3949001735",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/uniform-mpi2/rank1.xml",
+      "path": "runs/uniform-mpi2/rank1.xml",
+      "sanitized_public_sha256": "1eb64575f7e8d14815adac43bde0ddd9813f41e172808dc58ec561a50bae80ac"
+    },
+    {
+      "mode": "portable_path_sanitized_text",
+      "origin_file_sha256": "24a84bbe8af63d9f10744dac9a45746e6cc6ede7caff90b3213b0faf10ab61d5",
+      "original_private_reference": "$EVIDENCE/ci/spatial-public-portability-20261013/original-public-text/runs/uniform-mpi2/result.json",
+      "path": "runs/uniform-mpi2/result.json",
+      "sanitized_public_sha256": "24a84bbe8af63d9f10744dac9a45746e6cc6ede7caff90b3213b0faf10ab61d5"
+    }
+  ],
+  "no_native_import_or_retest": true,
+  "npz_files_unchanged": 56,
+  "npz_members_audited": 2707,
+  "npz_personal_path_matches": 0,
+  "npz_text_members_audited": 686,
+  "qualification_scope_unchanged": true,
+  "schema": "pops.public-evidence-path-sanitization@1",
+  "scientific_numeric_members_unchanged": 2021,
+  "text_path_tokens": [
+    "$AUDIT_ENV",
+    "$REPO",
+    "$EVIDENCE",
+    "$USER"
+  ]
+}

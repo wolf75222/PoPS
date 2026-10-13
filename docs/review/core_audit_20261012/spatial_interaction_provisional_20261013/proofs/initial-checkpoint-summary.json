@@ -1,0 +1,423 @@
+{
+  "accepted_contract": {
+    "clocks": [
+      [
+        "level",
+        "0",
+        "0",
+        "0",
+        "1",
+        "0.000000"
+      ],
+      [
+        "level",
+        "1",
+        "0",
+        "0",
+        "1",
+        "0.000000"
+      ],
+      [
+        "logical",
+        "pops.clock.v1::sha256:65dd0a8e863fe5c410c91b35da8207f7b23c7679e1727a03dd4573a4c241bb9f",
+        "0"
+      ]
+    ],
+    "field_providers": [],
+    "guarantee": "bit_identical_accepted_state",
+    "history_qualifications": [
+      [
+        "I_accepted",
+        "program.block.0",
+        "scalar-history:I_accepted",
+        "pops.program.scalar-output-history-projection@2",
+        "pops.clock.v1::sha256:65dd0a8e863fe5c410c91b35da8207f7b23c7679e1727a03dd4573a4c241bb9f",
+        "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+        "2",
+        "2",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      [
+        "I_accepted",
+        "program.block.0",
+        "scalar-history:I_accepted",
+        "pops.program.scalar-output-history-projection@2",
+        "pops.clock.v1::sha256:65dd0a8e863fe5c410c91b35da8207f7b23c7679e1727a03dd4573a4c241bb9f",
+        "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+        "2",
+        "2",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ],
+      [
+        "I_accepted",
+        "program.block.0",
+        "scalar-history:I_accepted",
+        "pops.program.scalar-output-history-projection@2",
+        "pops.clock.v1::sha256:65dd0a8e863fe5c410c91b35da8207f7b23c7679e1727a03dd4573a4c241bb9f",
+        "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+        "2",
+        "2",
+        "1",
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      [
+        "I_accepted",
+        "program.block.0",
+        "scalar-history:I_accepted",
+        "pops.program.scalar-output-history-projection@2",
+        "pops.clock.v1::sha256:65dd0a8e863fe5c410c91b35da8207f7b23c7679e1727a03dd4573a4c241bb9f",
+        "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+        "2",
+        "2",
+        "1",
+        "1",
+        "0",
+        "0",
+        "0"
+      ],
+      [
+        "I_history",
+        "program.block.0",
+        "scalar-history:I_history",
+        "pops.program.scalar-output-history-projection@2",
+        "pops.clock.v1::sha256:65dd0a8e863fe5c410c91b35da8207f7b23c7679e1727a03dd4573a4c241bb9f",
+        "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+        "2",
+        "2",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      [
+        "I_history",
+        "program.block.0",
+        "scalar-history:I_history",
+        "pops.program.scalar-output-history-projection@2",
+        "pops.clock.v1::sha256:65dd0a8e863fe5c410c91b35da8207f7b23c7679e1727a03dd4573a4c241bb9f",
+        "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+        "2",
+        "2",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ],
+      [
+        "I_history",
+        "program.block.0",
+        "scalar-history:I_history",
+        "pops.program.scalar-output-history-projection@2",
+        "pops.clock.v1::sha256:65dd0a8e863fe5c410c91b35da8207f7b23c7679e1727a03dd4573a4c241bb9f",
+        "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+        "2",
+        "2",
+        "1",
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      [
+        "I_history",
+        "program.block.0",
+        "scalar-history:I_history",
+        "pops.program.scalar-output-history-projection@2",
+        "pops.clock.v1::sha256:65dd0a8e863fe5c410c91b35da8207f7b23c7679e1727a03dd4573a4c241bb9f",
+        "{\"dense_output\":false,\"provider\":\"exact\",\"schema_version\":1}",
+        "2",
+        "2",
+        "1",
+        "1",
+        "0",
+        "0",
+        "0"
+      ],
+      [
+        "density.rho",
+        "program.block.0",
+        "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Abe17b1e5646ba1ac793ff69403439e65760e97259b43cd2bfaa44c03e7f8a9ff::state::rho",
+        "{\"centering\":\"cell\",\"clock\":\"simulation\",\"components\":[\"north\",\"east\",\"third\"],\"domain\":\"real\",\"frame\":\"pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d\",\"kind\":\"state\",\"layout\":\"cell\",\"name\":\"rho\",\"representation\":\"conservative\",\"roles\":{\"east\":\"east\",\"north\":\"north\",\"third\":\"third\"},\"sampling\":\"cell_average\",\"storage\":\"multifab\",\"support\":null,\"units\":[null,null,null],\"value_shape\":[3]}",
+        "pops.clock.v1::sha256:65dd0a8e863fe5c410c91b35da8207f7b23c7679e1727a03dd4573a4c241bb9f",
+        "{\"kind\":\"none\",\"schema_version\":1}",
+        "2",
+        "2",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      [
+        "density.rho",
+        "program.block.0",
+        "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Abe17b1e5646ba1ac793ff69403439e65760e97259b43cd2bfaa44c03e7f8a9ff::state::rho",
+        "{\"centering\":\"cell\",\"clock\":\"simulation\",\"components\":[\"north\",\"east\",\"third\"],\"domain\":\"real\",\"frame\":\"pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d\",\"kind\":\"state\",\"layout\":\"cell\",\"name\":\"rho\",\"representation\":\"conservative\",\"roles\":{\"east\":\"east\",\"north\":\"north\",\"third\":\"third\"},\"sampling\":\"cell_average\",\"storage\":\"multifab\",\"support\":null,\"units\":[null,null,null],\"value_shape\":[3]}",
+        "pops.clock.v1::sha256:65dd0a8e863fe5c410c91b35da8207f7b23c7679e1727a03dd4573a4c241bb9f",
+        "{\"kind\":\"none\",\"schema_version\":1}",
+        "2",
+        "2",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ],
+      [
+        "density.rho",
+        "program.block.0",
+        "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Abe17b1e5646ba1ac793ff69403439e65760e97259b43cd2bfaa44c03e7f8a9ff::state::rho",
+        "{\"centering\":\"cell\",\"clock\":\"simulation\",\"components\":[\"north\",\"east\",\"third\"],\"domain\":\"real\",\"frame\":\"pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d\",\"kind\":\"state\",\"layout\":\"cell\",\"name\":\"rho\",\"representation\":\"conservative\",\"roles\":{\"east\":\"east\",\"north\":\"north\",\"third\":\"third\"},\"sampling\":\"cell_average\",\"storage\":\"multifab\",\"support\":null,\"units\":[null,null,null],\"value_shape\":[3]}",
+        "pops.clock.v1::sha256:65dd0a8e863fe5c410c91b35da8207f7b23c7679e1727a03dd4573a4c241bb9f",
+        "{\"kind\":\"none\",\"schema_version\":1}",
+        "2",
+        "2",
+        "1",
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      [
+        "density.rho",
+        "program.block.0",
+        "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Abe17b1e5646ba1ac793ff69403439e65760e97259b43cd2bfaa44c03e7f8a9ff::state::rho",
+        "{\"centering\":\"cell\",\"clock\":\"simulation\",\"components\":[\"north\",\"east\",\"third\"],\"domain\":\"real\",\"frame\":\"pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d\",\"kind\":\"state\",\"layout\":\"cell\",\"name\":\"rho\",\"representation\":\"conservative\",\"roles\":{\"east\":\"east\",\"north\":\"north\",\"third\":\"third\"},\"sampling\":\"cell_average\",\"storage\":\"multifab\",\"support\":null,\"units\":[null,null,null],\"value_shape\":[3]}",
+        "pops.clock.v1::sha256:65dd0a8e863fe5c410c91b35da8207f7b23c7679e1727a03dd4573a4c241bb9f",
+        "{\"kind\":\"none\",\"schema_version\":1}",
+        "2",
+        "2",
+        "1",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    ],
+    "interface_ledger": {
+      "accepted_entries": 0,
+      "entries": [],
+      "transaction_depth": 0
+    },
+    "ledger": {
+      "accepted_entries": 0,
+      "entries": [],
+      "transaction_depth": 0
+    },
+    "level_relations": [
+      {
+        "child": 1,
+        "parent": 0,
+        "remainder_policy": "integral_only",
+        "temporal_ratio": {
+          "denominator": 1,
+          "numerator": 1
+        }
+      }
+    ],
+    "program_state": "compiled",
+    "schema_version": 8,
+    "synchronization": [],
+    "tag_selection": [
+      [
+        "pops.amr.tag-selection@1",
+        "1"
+      ],
+      [
+        "tag-buffer",
+        "0",
+        "0"
+      ],
+      [
+        "parent-coverage",
+        "0",
+        "2",
+        "2",
+        "1",
+        "2",
+        "2",
+        "1"
+      ]
+    ],
+    "temporal_partition": [
+      [
+        "summary",
+        "global",
+        "pops.temporal-partition.global@1",
+        "0",
+        "0",
+        "1",
+        "0"
+      ]
+    ],
+    "transfer_routes": [
+      [
+        "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Abe17b1e5646ba1ac793ff69403439e65760e97259b43cd2bfaa44c03e7f8a9ff::state::rho",
+        "coarse_fine_fill",
+        "pops.amr-resolved-transfer.v1:sha256:d3bcc39561cda6e053b2b34a38da96155df3bcc665d17d1c053442b5d24b821a",
+        "pops.handle.v1::case:actual_spatial_interaction::amr_transfer_provider::coarse_fine_pops.amr-authored-provider.v1%3Asha256%3Ad8fed9a94119048f26de75ce80c80570fbe77727fcd2f2a7398800406301fd3d",
+        "conservative_coarse_fine",
+        "cell",
+        "cell",
+        "conservative",
+        "dense",
+        "coarse_fine_fill",
+        "2",
+        "2,2",
+        "2",
+        "2,2"
+      ],
+      [
+        "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Abe17b1e5646ba1ac793ff69403439e65760e97259b43cd2bfaa44c03e7f8a9ff::state::rho",
+        "prolongation",
+        "pops.amr-resolved-transfer.v1:sha256:18e4cc6817ae606ab536aef8fb064f4d7313a0e36d0def2c14dbf50dc791f1b8",
+        "pops.handle.v1::case:actual_spatial_interaction::amr_transfer_provider::prolongation_pops.amr-authored-provider.v1%3Asha256%3Ab0094f8c7050cd2e7cf2ee84e71c5d24836cc0ca8ba7a7d3d91187266f4f6bd7",
+        "conservative_linear",
+        "cell",
+        "cell",
+        "conservative",
+        "dense",
+        "prolongation",
+        "2",
+        "1,1",
+        "2",
+        "2,2"
+      ],
+      [
+        "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Abe17b1e5646ba1ac793ff69403439e65760e97259b43cd2bfaa44c03e7f8a9ff::state::rho",
+        "restriction",
+        "pops.amr-resolved-transfer.v1:sha256:5d8e033ac830bf0a99add83d53ba459c88d2c1c12967d22bb0eefe690a6b187e",
+        "pops.handle.v1::case:actual_spatial_interaction::amr_transfer_provider::restriction_pops.amr-authored-provider.v1%3Asha256%3A4c121e4bcd664a6b79e6155cf2311996d21b0a05f29c86f78cd5841def48e452",
+        "volume_average",
+        "cell",
+        "cell",
+        "conservative",
+        "dense",
+        "restriction",
+        "1",
+        "0,0",
+        "2",
+        "2,2"
+      ],
+      [
+        "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Abe17b1e5646ba1ac793ff69403439e65760e97259b43cd2bfaa44c03e7f8a9ff::state::rho",
+        "temporal_interpolation",
+        "pops.amr-resolved-transfer.v1:sha256:2d8133a1eb9e633a9d062d794163c0efb60bf59bffe42d0daa7018d6f6953fe5",
+        "pops.handle.v1::case:actual_spatial_interaction::amr_transfer_provider::temporal_pops.amr-authored-provider.v1%3Asha256%3Adaf7f6559d8a79a3ec9adce6819ea4c599f8e5cae53507a8c0b0cacdfab134bd",
+        "linear_time_interpolation",
+        "cell",
+        "cell",
+        "conservative",
+        "dense",
+        "temporal_interpolation",
+        "2",
+        "0,0",
+        "2",
+        "2,2"
+      ]
+    ]
+  },
+  "checkpoint": "$EVIDENCE/ci/a9297394-spatial-amr-periodic-freeze/a9297394-spatial-amr-reception-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/initial-checkpoint.npz",
+  "clock": [
+    0.0,
+    0
+  ],
+  "histories": {
+    "I_accepted": {
+      "0": {
+        "fill_count": 0,
+        "initialized": false,
+        "slot_dt": [
+          0.0,
+          0.0
+        ]
+      },
+      "1": {
+        "fill_count": 0,
+        "initialized": false,
+        "slot_dt": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "I_history": {
+      "0": {
+        "fill_count": 0,
+        "initialized": false,
+        "slot_dt": [
+          0.0,
+          0.0
+        ]
+      },
+      "1": {
+        "fill_count": 0,
+        "initialized": false,
+        "slot_dt": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "density.rho": {
+      "0": {
+        "fill_count": 0,
+        "initialized": false,
+        "slot_dt": [
+          0.0,
+          0.0
+        ]
+      },
+      "1": {
+        "fill_count": 0,
+        "initialized": false,
+        "slot_dt": [
+          0.0,
+          0.0
+        ]
+      }
+    }
+  },
+  "levels": 2,
+  "spatial": {
+    "dimension": 2,
+    "identity": "pops.checkpoint-spatial-layout.v1:sha256:07af707fac0407317b09b550cccc13c63ea8a41a395961c119133ef349c010d5",
+    "lower": [
+      "0x1.3333333333333p-2",
+      "-0x1.999999999999ap-2"
+    ],
+    "native_layout_identity": "pops.native-spatial-layout.v1:sha256:bd4225ec77d4979e3f11e49d6c6ab4d3cd5f64e50cd3d7251948daadfca14966",
+    "periodicity": [
+      true,
+      true
+    ],
+    "refinement_ratios": [
+      [
+        2,
+        2
+      ]
+    ],
+    "schema_version": 1,
+    "shape": [
+      8,
+      6
+    ],
+    "upper": [
+      "0x1.2666666666666p+1",
+      "0x1.4cccccccccccdp+1"
+    ]
+  }
+}

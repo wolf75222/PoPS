@@ -1,0 +1,3551 @@
+{
+  "block_order": [
+    {
+      "handle_type": "block",
+      "kind": "block",
+      "local_id": "density",
+      "model_owner_path": {
+        "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+        "nodes": [
+          {
+            "kind": "model_definition",
+            "name": "nonlocal_density"
+          }
+        ],
+        "schema_version": 2
+      },
+      "owner_path": {
+        "definition_fingerprint": null,
+        "nodes": [
+          {
+            "kind": "case",
+            "name": "actual_spatial_interaction"
+          }
+        ],
+        "schema_version": 2
+      },
+      "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+      "schema_version": 1
+    }
+  ],
+  "clock": {
+    "name": "macro",
+    "owner": {
+      "definition_fingerprint": null,
+      "nodes": [
+        {
+          "kind": "consumer",
+          "name": "actual_direct_interaction"
+        }
+      ],
+      "schema_version": 2
+    },
+    "schema_version": 1
+  },
+  "commits": [
+    {
+      "block": {
+        "handle_type": "block",
+        "kind": "block",
+        "local_id": "density",
+        "model_owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "owner_path": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+        "schema_version": 1
+      },
+      "state": {
+        "block_ref": {
+          "handle_type": "block",
+          "kind": "block",
+          "local_id": "density",
+          "model_owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "owner_path": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "case",
+                "name": "actual_spatial_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+          "schema_version": 1
+        },
+        "declaration_ref": {
+          "kind": "state",
+          "local_id": "rho",
+          "owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+          "schema_version": 1
+        },
+        "kind": "state",
+        "local_id": "rho",
+        "owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            },
+            {
+              "kind": "block",
+              "name": "density"
+            },
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+        "schema_version": 1
+      },
+      "value": 10
+    }
+  ],
+  "histories": [
+    {
+      "lag": 1,
+      "name": "I_accepted",
+      "ncomp": 1,
+      "state": null
+    },
+    {
+      "lag": 1,
+      "name": "I_history",
+      "ncomp": 1,
+      "state": null
+    },
+    {
+      "lag": 1,
+      "name": "density.rho",
+      "ncomp": null,
+      "state": {
+        "block_ref": {
+          "handle_type": "block",
+          "kind": "block",
+          "local_id": "density",
+          "model_owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "owner_path": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "case",
+                "name": "actual_spatial_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+          "schema_version": 1
+        },
+        "declaration_ref": {
+          "kind": "state",
+          "local_id": "rho",
+          "owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+          "schema_version": 1
+        },
+        "kind": "state",
+        "local_id": "rho",
+        "owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            },
+            {
+              "kind": "block",
+              "name": "density"
+            },
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+        "schema_version": 1
+      }
+    }
+  ],
+  "history_contracts": [
+    {
+      "clock": {
+        "name": "macro",
+        "owner": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "consumer",
+              "name": "actual_direct_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "schema_version": 1
+      },
+      "depth": 1,
+      "interpolation": {
+        "kind": "none",
+        "schema_version": 1
+      },
+      "owner": {
+        "definition_fingerprint": null,
+        "nodes": [
+          {
+            "kind": "consumer",
+            "name": "actual_direct_interaction"
+          }
+        ],
+        "schema_version": 2
+      },
+      "schema_version": 1,
+      "space": {
+        "centering": "cell",
+        "clock": "simulation",
+        "components": [
+          "north"
+        ],
+        "domain": "real",
+        "frame": "pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d",
+        "kind": "state",
+        "layout": "cell",
+        "name": "rho",
+        "representation": "conservative",
+        "roles": {
+          "north": "north"
+        },
+        "sampling": "cell_average",
+        "storage": "multifab",
+        "support": null,
+        "units": [
+          null
+        ],
+        "value_shape": [
+          1
+        ]
+      },
+      "state": {
+        "block_ref": {
+          "handle_type": "block",
+          "kind": "block",
+          "local_id": "density",
+          "model_owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "owner_path": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "case",
+                "name": "actual_spatial_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+          "schema_version": 1
+        },
+        "declaration_ref": {
+          "kind": "state",
+          "local_id": "rho",
+          "owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+          "schema_version": 1
+        },
+        "kind": "state",
+        "local_id": "rho",
+        "owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            },
+            {
+              "kind": "block",
+              "name": "density"
+            },
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+        "schema_version": 1
+      },
+      "validity": {
+        "newest": {
+          "clock": {
+            "name": "macro",
+            "owner": {
+              "definition_fingerprint": null,
+              "nodes": [
+                {
+                  "kind": "consumer",
+                  "name": "actual_direct_interaction"
+                }
+              ],
+              "schema_version": 2
+            },
+            "schema_version": 1
+          },
+          "offset": {
+            "kind": "integer",
+            "value": "0"
+          },
+          "schema_version": 1,
+          "step": 0
+        },
+        "oldest": {
+          "clock": {
+            "name": "macro",
+            "owner": {
+              "definition_fingerprint": null,
+              "nodes": [
+                {
+                  "kind": "consumer",
+                  "name": "actual_direct_interaction"
+                }
+              ],
+              "schema_version": 2
+            },
+            "schema_version": 1
+          },
+          "offset": {
+            "kind": "integer",
+            "value": "0"
+          },
+          "schema_version": 1,
+          "step": -1
+        },
+        "schema_version": 1
+      }
+    }
+  ],
+  "history_persistence": [
+    {
+      "depth": 2,
+      "name": "I_accepted",
+      "policy": {
+        "kind": "history-persistence",
+        "payload": {
+          "policy": "dense"
+        },
+        "protocol": "pops.manifest",
+        "schema_version": 1
+      }
+    },
+    {
+      "depth": 2,
+      "name": "I_history",
+      "policy": {
+        "kind": "history-persistence",
+        "payload": {
+          "policy": "dense"
+        },
+        "protocol": "pops.manifest",
+        "schema_version": 1
+      }
+    },
+    {
+      "depth": 2,
+      "name": "density.rho",
+      "policy": {
+        "kind": "history-persistence",
+        "payload": {
+          "policy": "dense"
+        },
+        "protocol": "pops.manifest",
+        "schema_version": 1
+      }
+    }
+  ],
+  "name": "actual_direct_interaction",
+  "nodes": [
+    {
+      "attrs": {
+        "state": {
+          "handle": {
+            "block_ref": {
+              "handle_type": "block",
+              "kind": "block",
+              "local_id": "density",
+              "model_owner_path": {
+                "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                "nodes": [
+                  {
+                    "kind": "model_definition",
+                    "name": "nonlocal_density"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "owner_path": {
+                "definition_fingerprint": null,
+                "nodes": [
+                  {
+                    "kind": "case",
+                    "name": "actual_spatial_interaction"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+              "schema_version": 1
+            },
+            "declaration_ref": {
+              "kind": "state",
+              "local_id": "rho",
+              "owner_path": {
+                "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                "nodes": [
+                  {
+                    "kind": "model_definition",
+                    "name": "nonlocal_density"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+              "schema_version": 1
+            },
+            "kind": "state",
+            "local_id": "rho",
+            "owner_path": {
+              "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+              "nodes": [
+                {
+                  "kind": "case",
+                  "name": "actual_spatial_interaction"
+                },
+                {
+                  "kind": "block",
+                  "name": "density"
+                },
+                {
+                  "kind": "model_definition",
+                  "name": "nonlocal_density"
+                }
+              ],
+              "schema_version": 2
+            },
+            "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+            "schema_version": 1
+          }
+        }
+      },
+      "block": {
+        "handle_type": "block",
+        "kind": "block",
+        "local_id": "density",
+        "model_owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "owner_path": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+        "schema_version": 1
+      },
+      "id": 0,
+      "inputs": [],
+      "name": "density",
+      "op": "state",
+      "point": {
+        "clock": {
+          "name": "macro",
+          "owner": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "consumer",
+                "name": "actual_direct_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "schema_version": 1
+        },
+        "offset": {
+          "kind": "integer",
+          "value": "0"
+        },
+        "schema_version": 1,
+        "step": 0
+      },
+      "provenance": {
+        "authoring_api": "pops.time.Program.state",
+        "id": "sha256:80395ddb70cfae7da85cd8e436c093fd8c3b1c8301ef4ed31a811998afb148b8",
+        "origins": [
+          {
+            "column": 0,
+            "end_column": null,
+            "end_line": null,
+            "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+            "line": 70,
+            "version": 1
+          }
+        ],
+        "owner": "consumer:actual_direct_interaction",
+        "owner_data": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "consumer",
+              "name": "actual_direct_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "parents": [
+          "sha256:f072f89efa93719e639afb83d04abb4f7b09b311a71c3e3d16bb47d884a42c89"
+        ],
+        "phase": "transform",
+        "primary": {
+          "column": 0,
+          "end_column": null,
+          "end_line": null,
+          "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+          "line": 70,
+          "version": 1
+        },
+        "transformation": "normalize",
+        "version": 1
+      },
+      "space": {
+        "centering": "cell",
+        "clock": "simulation",
+        "components": [
+          "north"
+        ],
+        "domain": "real",
+        "frame": "pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d",
+        "kind": "state",
+        "layout": "cell",
+        "name": "rho",
+        "representation": "conservative",
+        "roles": {
+          "north": "north"
+        },
+        "sampling": "cell_average",
+        "storage": "multifab",
+        "support": null,
+        "units": [
+          null
+        ],
+        "value_shape": [
+          1
+        ]
+      },
+      "state": {
+        "block_ref": {
+          "handle_type": "block",
+          "kind": "block",
+          "local_id": "density",
+          "model_owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "owner_path": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "case",
+                "name": "actual_spatial_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+          "schema_version": 1
+        },
+        "declaration_ref": {
+          "kind": "state",
+          "local_id": "rho",
+          "owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+          "schema_version": 1
+        },
+        "kind": "state",
+        "local_id": "rho",
+        "owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            },
+            {
+              "kind": "block",
+              "name": "density"
+            },
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+        "schema_version": 1
+      },
+      "vtype": "state"
+    },
+    {
+      "attrs": {
+        "history": "density.rho",
+        "state": {
+          "handle": {
+            "block_ref": {
+              "handle_type": "block",
+              "kind": "block",
+              "local_id": "density",
+              "model_owner_path": {
+                "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                "nodes": [
+                  {
+                    "kind": "model_definition",
+                    "name": "nonlocal_density"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "owner_path": {
+                "definition_fingerprint": null,
+                "nodes": [
+                  {
+                    "kind": "case",
+                    "name": "actual_spatial_interaction"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+              "schema_version": 1
+            },
+            "declaration_ref": {
+              "kind": "state",
+              "local_id": "rho",
+              "owner_path": {
+                "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                "nodes": [
+                  {
+                    "kind": "model_definition",
+                    "name": "nonlocal_density"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+              "schema_version": 1
+            },
+            "kind": "state",
+            "local_id": "rho",
+            "owner_path": {
+              "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+              "nodes": [
+                {
+                  "kind": "case",
+                  "name": "actual_spatial_interaction"
+                },
+                {
+                  "kind": "block",
+                  "name": "density"
+                },
+                {
+                  "kind": "model_definition",
+                  "name": "nonlocal_density"
+                }
+              ],
+              "schema_version": 2
+            },
+            "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+            "schema_version": 1
+          }
+        }
+      },
+      "block": {
+        "handle_type": "block",
+        "kind": "block",
+        "local_id": "density",
+        "model_owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "owner_path": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+        "schema_version": 1
+      },
+      "id": 1,
+      "inputs": [
+        0
+      ],
+      "name": "density.rho",
+      "op": "store_history",
+      "point": {
+        "clock": {
+          "name": "macro",
+          "owner": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "consumer",
+                "name": "actual_direct_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "schema_version": 1
+        },
+        "offset": {
+          "kind": "integer",
+          "value": "0"
+        },
+        "schema_version": 1,
+        "step": 0
+      },
+      "provenance": {
+        "authoring_api": "pops.time.Program.store_history",
+        "id": "sha256:7924f682ceea24159a0dfe4e35fbca08bcf712aee98ad09460c3997b7d557fc2",
+        "origins": [
+          {
+            "column": 0,
+            "end_column": null,
+            "end_line": null,
+            "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+            "line": 70,
+            "version": 1
+          }
+        ],
+        "owner": "consumer:actual_direct_interaction",
+        "owner_data": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "consumer",
+              "name": "actual_direct_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "parents": [
+          "sha256:fad833ee9b7743ed1974f0d09b406fc053817e8113183fb6baaa0c3729b9084b"
+        ],
+        "phase": "transform",
+        "primary": {
+          "column": 0,
+          "end_column": null,
+          "end_line": null,
+          "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+          "line": 70,
+          "version": 1
+        },
+        "transformation": "normalize",
+        "version": 1
+      },
+      "space": {
+        "centering": "cell",
+        "clock": "simulation",
+        "components": [
+          "north"
+        ],
+        "domain": "real",
+        "frame": "pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d",
+        "kind": "state",
+        "layout": "cell",
+        "name": "rho",
+        "representation": "conservative",
+        "roles": {
+          "north": "north"
+        },
+        "sampling": "cell_average",
+        "storage": "multifab",
+        "support": null,
+        "units": [
+          null
+        ],
+        "value_shape": [
+          1
+        ]
+      },
+      "state": {
+        "block_ref": {
+          "handle_type": "block",
+          "kind": "block",
+          "local_id": "density",
+          "model_owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "owner_path": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "case",
+                "name": "actual_spatial_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+          "schema_version": 1
+        },
+        "declaration_ref": {
+          "kind": "state",
+          "local_id": "rho",
+          "owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+          "schema_version": 1
+        },
+        "kind": "state",
+        "local_id": "rho",
+        "owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            },
+            {
+              "kind": "block",
+              "name": "density"
+            },
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+        "schema_version": 1
+      },
+      "vtype": "state"
+    },
+    {
+      "attrs": {
+        "operator_handle": {
+          "handle": {
+            "block_ref": {
+              "handle_type": "block",
+              "kind": "block",
+              "local_id": "density",
+              "model_owner_path": {
+                "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                "nodes": [
+                  {
+                    "kind": "model_definition",
+                    "name": "nonlocal_density"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "owner_path": {
+                "definition_fingerprint": null,
+                "nodes": [
+                  {
+                    "kind": "case",
+                    "name": "actual_spatial_interaction"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+              "schema_version": 1
+            },
+            "declaration_ref": {
+              "kind": "local_source",
+              "local_id": "invalid_input",
+              "owner_path": {
+                "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                "nodes": [
+                  {
+                    "kind": "model_definition",
+                    "name": "nonlocal_density"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::local_source::invalid_input::target::invalid_input",
+              "registered_operator_name": "invalid_input",
+              "schema_version": 1
+            },
+            "kind": "local_source",
+            "local_id": "invalid_input",
+            "owner_path": {
+              "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+              "nodes": [
+                {
+                  "kind": "case",
+                  "name": "actual_spatial_interaction"
+                },
+                {
+                  "kind": "block",
+                  "name": "density"
+                },
+                {
+                  "kind": "model_definition",
+                  "name": "nonlocal_density"
+                }
+              ],
+              "schema_version": 2
+            },
+            "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::local_source::invalid_input::target::invalid_input",
+            "registered_operator_name": "invalid_input",
+            "schema_version": 1
+          }
+        },
+        "source": "invalid_input"
+      },
+      "block": {
+        "handle_type": "block",
+        "kind": "block",
+        "local_id": "density",
+        "model_owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "owner_path": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+        "schema_version": 1
+      },
+      "id": 2,
+      "inputs": [
+        0
+      ],
+      "name": "invalid_input",
+      "op": "source",
+      "point": {
+        "clock": {
+          "name": "macro",
+          "owner": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "consumer",
+                "name": "actual_direct_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "schema_version": 1
+        },
+        "offset": {
+          "kind": "integer",
+          "value": "0"
+        },
+        "schema_version": 1,
+        "step": 0
+      },
+      "provenance": {
+        "authoring_api": "pops.time.Program.source",
+        "id": "sha256:9f258254c90c2af5bb18e5aba84482460a27dccf74048408564680f263d2162b",
+        "origins": [
+          {
+            "column": 0,
+            "end_column": null,
+            "end_line": null,
+            "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+            "line": 83,
+            "version": 1
+          }
+        ],
+        "owner": "consumer:actual_direct_interaction",
+        "owner_data": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "consumer",
+              "name": "actual_direct_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "parents": [
+          "sha256:4bb63c8a135625353cbb7240591cff1871fb5b90bea842b9a4faeddb23970eda"
+        ],
+        "phase": "transform",
+        "primary": {
+          "column": 0,
+          "end_column": null,
+          "end_line": null,
+          "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+          "line": 83,
+          "version": 1
+        },
+        "transformation": "normalize",
+        "version": 1
+      },
+      "space": {
+        "base_name": "rho",
+        "base_space": {
+          "centering": "cell",
+          "clock": "simulation",
+          "components": [
+            "north"
+          ],
+          "domain": "real",
+          "frame": "pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d",
+          "kind": "state",
+          "layout": "cell",
+          "name": "rho",
+          "representation": "conservative",
+          "roles": {
+            "north": "north"
+          },
+          "sampling": "cell_average",
+          "storage": "multifab",
+          "support": null,
+          "units": [
+            null
+          ],
+          "value_shape": [
+            1
+          ]
+        },
+        "centering": "cell",
+        "clock": "simulation",
+        "components": [
+          "north"
+        ],
+        "domain": "real",
+        "frame": "pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d",
+        "kind": "rate",
+        "layout": "cell",
+        "name": "Rate(rho)",
+        "representation": "rate",
+        "sampling": "cell_average",
+        "support": null,
+        "units": [
+          null
+        ],
+        "value_shape": [
+          1
+        ]
+      },
+      "state": {
+        "block_ref": {
+          "handle_type": "block",
+          "kind": "block",
+          "local_id": "density",
+          "model_owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "owner_path": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "case",
+                "name": "actual_spatial_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+          "schema_version": 1
+        },
+        "declaration_ref": {
+          "kind": "state",
+          "local_id": "rho",
+          "owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+          "schema_version": 1
+        },
+        "kind": "state",
+        "local_id": "rho",
+        "owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            },
+            {
+              "kind": "block",
+              "name": "density"
+            },
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+        "schema_version": 1
+      },
+      "vtype": "rhs"
+    },
+    {
+      "attrs": {
+        "coeffs": [
+          [
+            [
+              0,
+              {
+                "kind": "integer",
+                "value": "1"
+              }
+            ]
+          ],
+          [
+            [
+              1,
+              {
+                "kind": "integer",
+                "value": "1"
+              }
+            ]
+          ]
+        ],
+        "stencil_access": {
+          "required_ghost_depth": 0,
+          "schema_version": 1
+        }
+      },
+      "block": {
+        "handle_type": "block",
+        "kind": "block",
+        "local_id": "density",
+        "model_owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "owner_path": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+        "schema_version": 1
+      },
+      "id": 3,
+      "inputs": [
+        0,
+        2
+      ],
+      "name": "invalid_issued",
+      "op": "linear_combine",
+      "point": {
+        "clock": {
+          "name": "macro",
+          "owner": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "consumer",
+                "name": "actual_direct_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "schema_version": 1
+        },
+        "offset": {
+          "kind": "integer",
+          "value": "0"
+        },
+        "schema_version": 1,
+        "step": 1
+      },
+      "provenance": {
+        "authoring_api": "pops.time.Program.linear_combine",
+        "id": "sha256:0a8b96ec6a418eb23c9e7aaec1a66fa10fd58e3432887883d0b0e9aae2a43958",
+        "origins": [
+          {
+            "column": 0,
+            "end_column": null,
+            "end_line": null,
+            "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+            "line": 82,
+            "version": 1
+          }
+        ],
+        "owner": "consumer:actual_direct_interaction",
+        "owner_data": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "consumer",
+              "name": "actual_direct_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "parents": [
+          "sha256:1779402a91f903c6ae843492aa32538b079e4d4f02d6287eb0da13fb8784d7ad"
+        ],
+        "phase": "transform",
+        "primary": {
+          "column": 0,
+          "end_column": null,
+          "end_line": null,
+          "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+          "line": 82,
+          "version": 1
+        },
+        "transformation": "normalize",
+        "version": 1
+      },
+      "space": {
+        "centering": "cell",
+        "clock": "simulation",
+        "components": [
+          "north"
+        ],
+        "domain": "real",
+        "frame": "pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d",
+        "kind": "state",
+        "layout": "cell",
+        "name": "rho",
+        "representation": "conservative",
+        "roles": {
+          "north": "north"
+        },
+        "sampling": "cell_average",
+        "storage": "multifab",
+        "support": null,
+        "units": [
+          null
+        ],
+        "value_shape": [
+          1
+        ]
+      },
+      "state": {
+        "block_ref": {
+          "handle_type": "block",
+          "kind": "block",
+          "local_id": "density",
+          "model_owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "owner_path": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "case",
+                "name": "actual_spatial_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+          "schema_version": 1
+        },
+        "declaration_ref": {
+          "kind": "state",
+          "local_id": "rho",
+          "owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+          "schema_version": 1
+        },
+        "kind": "state",
+        "local_id": "rho",
+        "owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            },
+            {
+              "kind": "block",
+              "name": "density"
+            },
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+        "schema_version": 1
+      },
+      "vtype": "state"
+    },
+    {
+      "attrs": {
+        "components": [
+          0
+        ],
+        "contract": "pops.spatial-interaction@1",
+        "kernel": {
+          "contract": "pops.spatial-interaction-kernel@1",
+          "dimension": 2,
+          "tree": [
+            "sub",
+            [
+              "add",
+              [
+                "constant",
+                "0x1.0000000000000p+0"
+              ],
+              [
+                "mul",
+                [
+                  "x",
+                  0
+                ],
+                [
+                  "y",
+                  1
+                ]
+              ]
+            ],
+            [
+              "mul",
+              [
+                "constant",
+                "0x1.0000000000000p+1"
+              ],
+              [
+                "y",
+                0
+              ]
+            ]
+          ],
+          "units": null
+        },
+        "max_workspace_bytes": {
+          "uint64_hex": "0000000000800000"
+        },
+        "measure": {
+          "contract": "pops.cell-volume-eb@1",
+          "coordinate_units": []
+        },
+        "ncomp": 1,
+        "quadrature": "pops.cell-midpoint@1",
+        "realization": "pops.direct-spatial-interaction@1",
+        "source_scope": "issued"
+      },
+      "block": {
+        "handle_type": "block",
+        "kind": "block",
+        "local_id": "density",
+        "model_owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "owner_path": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+        "schema_version": 1
+      },
+      "id": 4,
+      "inputs": [
+        3
+      ],
+      "name": "spatial_interaction4",
+      "op": "spatial_interaction",
+      "point": {
+        "clock": {
+          "name": "macro",
+          "owner": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "consumer",
+                "name": "actual_direct_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "schema_version": 1
+        },
+        "offset": {
+          "kind": "integer",
+          "value": "0"
+        },
+        "schema_version": 1,
+        "step": 1
+      },
+      "provenance": {
+        "authoring_api": "pops.time.Program.spatial_interaction",
+        "id": "sha256:820c28c9cebc7781f905ba607e2394a261793dfed16e90697483641de43679ab",
+        "origins": [
+          {
+            "column": 0,
+            "end_column": null,
+            "end_line": null,
+            "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+            "line": 86,
+            "version": 1
+          }
+        ],
+        "owner": "consumer:actual_direct_interaction",
+        "owner_data": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "consumer",
+              "name": "actual_direct_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "parents": [
+          "sha256:3fcf496cc50f69f164a493d4e1728fddc8c83aa8c349effff4cefbd1c63ddd7e"
+        ],
+        "phase": "transform",
+        "primary": {
+          "column": 0,
+          "end_column": null,
+          "end_line": null,
+          "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+          "line": 86,
+          "version": 1
+        },
+        "transformation": "normalize",
+        "version": 1
+      },
+      "space": {
+        "centering": "cell",
+        "clock": "simulation",
+        "components": [
+          "north"
+        ],
+        "domain": "real",
+        "frame": "pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d",
+        "kind": "field",
+        "layout": "cell",
+        "name": "interaction",
+        "representation": "field",
+        "sampling": "cell_center",
+        "support": null,
+        "units": [
+          null
+        ],
+        "value_shape": [
+          1
+        ]
+      },
+      "state": {
+        "block_ref": {
+          "handle_type": "block",
+          "kind": "block",
+          "local_id": "density",
+          "model_owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "owner_path": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "case",
+                "name": "actual_spatial_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+          "schema_version": 1
+        },
+        "declaration_ref": {
+          "kind": "state",
+          "local_id": "rho",
+          "owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+          "schema_version": 1
+        },
+        "kind": "state",
+        "local_id": "rho",
+        "owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            },
+            {
+              "kind": "block",
+              "name": "density"
+            },
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+        "schema_version": 1
+      },
+      "vtype": "scalar_field"
+    },
+    {
+      "attrs": {
+        "history": "I_accepted",
+        "state": {
+          "handle": {
+            "block_ref": {
+              "handle_type": "block",
+              "kind": "block",
+              "local_id": "density",
+              "model_owner_path": {
+                "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                "nodes": [
+                  {
+                    "kind": "model_definition",
+                    "name": "nonlocal_density"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "owner_path": {
+                "definition_fingerprint": null,
+                "nodes": [
+                  {
+                    "kind": "case",
+                    "name": "actual_spatial_interaction"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+              "schema_version": 1
+            },
+            "declaration_ref": {
+              "kind": "state",
+              "local_id": "rho",
+              "owner_path": {
+                "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                "nodes": [
+                  {
+                    "kind": "model_definition",
+                    "name": "nonlocal_density"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+              "schema_version": 1
+            },
+            "kind": "state",
+            "local_id": "rho",
+            "owner_path": {
+              "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+              "nodes": [
+                {
+                  "kind": "case",
+                  "name": "actual_spatial_interaction"
+                },
+                {
+                  "kind": "block",
+                  "name": "density"
+                },
+                {
+                  "kind": "model_definition",
+                  "name": "nonlocal_density"
+                }
+              ],
+              "schema_version": 2
+            },
+            "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+            "schema_version": 1
+          }
+        }
+      },
+      "block": {
+        "handle_type": "block",
+        "kind": "block",
+        "local_id": "density",
+        "model_owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "owner_path": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+        "schema_version": 1
+      },
+      "id": 5,
+      "inputs": [
+        4
+      ],
+      "name": "I_accepted",
+      "op": "store_history",
+      "point": {
+        "clock": {
+          "name": "macro",
+          "owner": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "consumer",
+                "name": "actual_direct_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "schema_version": 1
+        },
+        "offset": {
+          "kind": "integer",
+          "value": "0"
+        },
+        "schema_version": 1,
+        "step": 1
+      },
+      "provenance": {
+        "authoring_api": "pops.time.Program.store_history",
+        "id": "sha256:125791f952a672074418a4749091240be8281cab4269cf9413f9522830989281",
+        "origins": [
+          {
+            "column": 0,
+            "end_column": null,
+            "end_line": null,
+            "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+            "line": 88,
+            "version": 1
+          }
+        ],
+        "owner": "consumer:actual_direct_interaction",
+        "owner_data": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "consumer",
+              "name": "actual_direct_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "parents": [
+          "sha256:60591706835516387f2658ff310320cc005b6b21b52df7209b3c241a539ef745"
+        ],
+        "phase": "transform",
+        "primary": {
+          "column": 0,
+          "end_column": null,
+          "end_line": null,
+          "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+          "line": 88,
+          "version": 1
+        },
+        "transformation": "normalize",
+        "version": 1
+      },
+      "space": {
+        "centering": "cell",
+        "clock": "simulation",
+        "components": [
+          "north"
+        ],
+        "domain": "real",
+        "frame": "pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d",
+        "kind": "field",
+        "layout": "cell",
+        "name": "interaction",
+        "representation": "field",
+        "sampling": "cell_center",
+        "support": null,
+        "units": [
+          null
+        ],
+        "value_shape": [
+          1
+        ]
+      },
+      "state": {
+        "block_ref": {
+          "handle_type": "block",
+          "kind": "block",
+          "local_id": "density",
+          "model_owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "owner_path": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "case",
+                "name": "actual_spatial_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+          "schema_version": 1
+        },
+        "declaration_ref": {
+          "kind": "state",
+          "local_id": "rho",
+          "owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+          "schema_version": 1
+        },
+        "kind": "state",
+        "local_id": "rho",
+        "owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            },
+            {
+              "kind": "block",
+              "name": "density"
+            },
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+        "schema_version": 1
+      },
+      "vtype": "state"
+    },
+    {
+      "attrs": {
+        "history": "density.rho",
+        "history_contract": {
+          "clock": {
+            "name": "macro",
+            "owner": {
+              "definition_fingerprint": null,
+              "nodes": [
+                {
+                  "kind": "consumer",
+                  "name": "actual_direct_interaction"
+                }
+              ],
+              "schema_version": 2
+            },
+            "schema_version": 1
+          },
+          "depth": 1,
+          "interpolation": {
+            "kind": "none",
+            "schema_version": 1
+          },
+          "owner": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "consumer",
+                "name": "actual_direct_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "schema_version": 1,
+          "space": {
+            "centering": "cell",
+            "clock": "simulation",
+            "components": [
+              "north"
+            ],
+            "domain": "real",
+            "frame": "pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d",
+            "kind": "state",
+            "layout": "cell",
+            "name": "rho",
+            "representation": "conservative",
+            "roles": {
+              "north": "north"
+            },
+            "sampling": "cell_average",
+            "storage": "multifab",
+            "support": null,
+            "units": [
+              null
+            ],
+            "value_shape": [
+              1
+            ]
+          },
+          "state": {
+            "block_ref": {
+              "handle_type": "block",
+              "kind": "block",
+              "local_id": "density",
+              "model_owner_path": {
+                "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                "nodes": [
+                  {
+                    "kind": "model_definition",
+                    "name": "nonlocal_density"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "owner_path": {
+                "definition_fingerprint": null,
+                "nodes": [
+                  {
+                    "kind": "case",
+                    "name": "actual_spatial_interaction"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+              "schema_version": 1
+            },
+            "declaration_ref": {
+              "kind": "state",
+              "local_id": "rho",
+              "owner_path": {
+                "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                "nodes": [
+                  {
+                    "kind": "model_definition",
+                    "name": "nonlocal_density"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+              "schema_version": 1
+            },
+            "kind": "state",
+            "local_id": "rho",
+            "owner_path": {
+              "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+              "nodes": [
+                {
+                  "kind": "case",
+                  "name": "actual_spatial_interaction"
+                },
+                {
+                  "kind": "block",
+                  "name": "density"
+                },
+                {
+                  "kind": "model_definition",
+                  "name": "nonlocal_density"
+                }
+              ],
+              "schema_version": 2
+            },
+            "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+            "schema_version": 1
+          },
+          "validity": {
+            "newest": {
+              "clock": {
+                "name": "macro",
+                "owner": {
+                  "definition_fingerprint": null,
+                  "nodes": [
+                    {
+                      "kind": "consumer",
+                      "name": "actual_direct_interaction"
+                    }
+                  ],
+                  "schema_version": 2
+                },
+                "schema_version": 1
+              },
+              "offset": {
+                "kind": "integer",
+                "value": "0"
+              },
+              "schema_version": 1,
+              "step": 0
+            },
+            "oldest": {
+              "clock": {
+                "name": "macro",
+                "owner": {
+                  "definition_fingerprint": null,
+                  "nodes": [
+                    {
+                      "kind": "consumer",
+                      "name": "actual_direct_interaction"
+                    }
+                  ],
+                  "schema_version": 2
+                },
+                "schema_version": 1
+              },
+              "offset": {
+                "kind": "integer",
+                "value": "0"
+              },
+              "schema_version": 1,
+              "step": -1
+            },
+            "schema_version": 1
+          }
+        },
+        "lag": 1,
+        "state": {
+          "handle": {
+            "block_ref": {
+              "handle_type": "block",
+              "kind": "block",
+              "local_id": "density",
+              "model_owner_path": {
+                "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                "nodes": [
+                  {
+                    "kind": "model_definition",
+                    "name": "nonlocal_density"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "owner_path": {
+                "definition_fingerprint": null,
+                "nodes": [
+                  {
+                    "kind": "case",
+                    "name": "actual_spatial_interaction"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+              "schema_version": 1
+            },
+            "declaration_ref": {
+              "kind": "state",
+              "local_id": "rho",
+              "owner_path": {
+                "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                "nodes": [
+                  {
+                    "kind": "model_definition",
+                    "name": "nonlocal_density"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+              "schema_version": 1
+            },
+            "kind": "state",
+            "local_id": "rho",
+            "owner_path": {
+              "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+              "nodes": [
+                {
+                  "kind": "case",
+                  "name": "actual_spatial_interaction"
+                },
+                {
+                  "kind": "block",
+                  "name": "density"
+                },
+                {
+                  "kind": "model_definition",
+                  "name": "nonlocal_density"
+                }
+              ],
+              "schema_version": 2
+            },
+            "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+            "schema_version": 1
+          }
+        }
+      },
+      "block": {
+        "handle_type": "block",
+        "kind": "block",
+        "local_id": "density",
+        "model_owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "owner_path": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+        "schema_version": 1
+      },
+      "id": 6,
+      "inputs": [],
+      "name": "density.rho",
+      "op": "history",
+      "point": {
+        "clock": {
+          "name": "macro",
+          "owner": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "consumer",
+                "name": "actual_direct_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "schema_version": 1
+        },
+        "offset": {
+          "kind": "integer",
+          "value": "0"
+        },
+        "schema_version": 1,
+        "step": -1
+      },
+      "provenance": {
+        "authoring_api": "pops.time.Program.history",
+        "id": "sha256:379e1939986443a114b22b2b4f3a0301a7644426e8c603b9e0f1a84bb759b90b",
+        "origins": [
+          {
+            "column": 0,
+            "end_column": null,
+            "end_line": null,
+            "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+            "line": 86,
+            "version": 1
+          }
+        ],
+        "owner": "consumer:actual_direct_interaction",
+        "owner_data": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "consumer",
+              "name": "actual_direct_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "parents": [
+          "sha256:a41430113ec7d9a6465a469fef11b7f180a3bdd7a174cd6455730c44bfaddcb2"
+        ],
+        "phase": "transform",
+        "primary": {
+          "column": 0,
+          "end_column": null,
+          "end_line": null,
+          "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+          "line": 86,
+          "version": 1
+        },
+        "transformation": "normalize",
+        "version": 1
+      },
+      "space": {
+        "centering": "cell",
+        "clock": "simulation",
+        "components": [
+          "north"
+        ],
+        "domain": "real",
+        "frame": "pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d",
+        "kind": "state",
+        "layout": "cell",
+        "name": "rho",
+        "representation": "conservative",
+        "roles": {
+          "north": "north"
+        },
+        "sampling": "cell_average",
+        "storage": "multifab",
+        "support": null,
+        "units": [
+          null
+        ],
+        "value_shape": [
+          1
+        ]
+      },
+      "state": {
+        "block_ref": {
+          "handle_type": "block",
+          "kind": "block",
+          "local_id": "density",
+          "model_owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "owner_path": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "case",
+                "name": "actual_spatial_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+          "schema_version": 1
+        },
+        "declaration_ref": {
+          "kind": "state",
+          "local_id": "rho",
+          "owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+          "schema_version": 1
+        },
+        "kind": "state",
+        "local_id": "rho",
+        "owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            },
+            {
+              "kind": "block",
+              "name": "density"
+            },
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+        "schema_version": 1
+      },
+      "vtype": "state"
+    },
+    {
+      "attrs": {
+        "components": [
+          0
+        ],
+        "contract": "pops.spatial-interaction@2",
+        "history_source": {
+          "clock": {
+            "name": "macro",
+            "owner": {
+              "definition_fingerprint": null,
+              "nodes": [
+                {
+                  "kind": "consumer",
+                  "name": "actual_direct_interaction"
+                }
+              ],
+              "schema_version": 2
+            },
+            "schema_version": 1
+          },
+          "cold_start": "copy_current",
+          "contract": "pops.spatial-interaction-history-source@1",
+          "history": "density.rho",
+          "lag": 1,
+          "seed_id": 0,
+          "seed_point": {
+            "clock": {
+              "name": "macro",
+              "owner": {
+                "definition_fingerprint": null,
+                "nodes": [
+                  {
+                    "kind": "consumer",
+                    "name": "actual_direct_interaction"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "schema_version": 1
+            },
+            "offset": {
+              "kind": "integer",
+              "value": "0"
+            },
+            "schema_version": 1,
+            "step": 0
+          },
+          "space": {
+            "centering": "cell",
+            "clock": "simulation",
+            "components": [
+              "north"
+            ],
+            "domain": "real",
+            "frame": "pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d",
+            "kind": "state",
+            "layout": "cell",
+            "name": "rho",
+            "representation": "conservative",
+            "roles": {
+              "north": "north"
+            },
+            "sampling": "cell_average",
+            "storage": "multifab",
+            "support": null,
+            "units": [
+              null
+            ],
+            "value_shape": [
+              1
+            ]
+          },
+          "state": {
+            "handle": {
+              "block_ref": {
+                "handle_type": "block",
+                "kind": "block",
+                "local_id": "density",
+                "model_owner_path": {
+                  "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                  "nodes": [
+                    {
+                      "kind": "model_definition",
+                      "name": "nonlocal_density"
+                    }
+                  ],
+                  "schema_version": 2
+                },
+                "owner_path": {
+                  "definition_fingerprint": null,
+                  "nodes": [
+                    {
+                      "kind": "case",
+                      "name": "actual_spatial_interaction"
+                    }
+                  ],
+                  "schema_version": 2
+                },
+                "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+                "schema_version": 1
+              },
+              "declaration_ref": {
+                "kind": "state",
+                "local_id": "rho",
+                "owner_path": {
+                  "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                  "nodes": [
+                    {
+                      "kind": "model_definition",
+                      "name": "nonlocal_density"
+                    }
+                  ],
+                  "schema_version": 2
+                },
+                "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+                "schema_version": 1
+              },
+              "kind": "state",
+              "local_id": "rho",
+              "owner_path": {
+                "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                "nodes": [
+                  {
+                    "kind": "case",
+                    "name": "actual_spatial_interaction"
+                  },
+                  {
+                    "kind": "block",
+                    "name": "density"
+                  },
+                  {
+                    "kind": "model_definition",
+                    "name": "nonlocal_density"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+              "schema_version": 1
+            }
+          }
+        },
+        "kernel": {
+          "contract": "pops.spatial-interaction-kernel@1",
+          "dimension": 2,
+          "tree": [
+            "sub",
+            [
+              "add",
+              [
+                "constant",
+                "0x1.0000000000000p+0"
+              ],
+              [
+                "mul",
+                [
+                  "x",
+                  0
+                ],
+                [
+                  "y",
+                  1
+                ]
+              ]
+            ],
+            [
+              "mul",
+              [
+                "constant",
+                "0x1.0000000000000p+1"
+              ],
+              [
+                "y",
+                0
+              ]
+            ]
+          ],
+          "units": null
+        },
+        "max_workspace_bytes": {
+          "uint64_hex": "0000000000800000"
+        },
+        "measure": {
+          "contract": "pops.cell-volume-eb@1",
+          "coordinate_units": []
+        },
+        "ncomp": 1,
+        "quadrature": "pops.cell-midpoint@1",
+        "realization": "pops.direct-spatial-interaction@1",
+        "source_scope": "issued"
+      },
+      "block": {
+        "handle_type": "block",
+        "kind": "block",
+        "local_id": "density",
+        "model_owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "owner_path": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+        "schema_version": 1
+      },
+      "id": 7,
+      "inputs": [
+        6
+      ],
+      "name": "spatial_interaction7",
+      "op": "spatial_interaction",
+      "point": {
+        "clock": {
+          "name": "macro",
+          "owner": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "consumer",
+                "name": "actual_direct_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "schema_version": 1
+        },
+        "offset": {
+          "kind": "integer",
+          "value": "0"
+        },
+        "schema_version": 1,
+        "step": -1
+      },
+      "provenance": {
+        "authoring_api": "pops.time.Program.spatial_interaction",
+        "id": "sha256:820c28c9cebc7781f905ba607e2394a261793dfed16e90697483641de43679ab",
+        "origins": [
+          {
+            "column": 0,
+            "end_column": null,
+            "end_line": null,
+            "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+            "line": 86,
+            "version": 1
+          }
+        ],
+        "owner": "consumer:actual_direct_interaction",
+        "owner_data": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "consumer",
+              "name": "actual_direct_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "parents": [
+          "sha256:3fcf496cc50f69f164a493d4e1728fddc8c83aa8c349effff4cefbd1c63ddd7e"
+        ],
+        "phase": "transform",
+        "primary": {
+          "column": 0,
+          "end_column": null,
+          "end_line": null,
+          "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+          "line": 86,
+          "version": 1
+        },
+        "transformation": "normalize",
+        "version": 1
+      },
+      "space": {
+        "centering": "cell",
+        "clock": "simulation",
+        "components": [
+          "north"
+        ],
+        "domain": "real",
+        "frame": "pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d",
+        "kind": "field",
+        "layout": "cell",
+        "name": "interaction",
+        "representation": "field",
+        "sampling": "cell_center",
+        "support": null,
+        "units": [
+          null
+        ],
+        "value_shape": [
+          1
+        ]
+      },
+      "state": {
+        "block_ref": {
+          "handle_type": "block",
+          "kind": "block",
+          "local_id": "density",
+          "model_owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "owner_path": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "case",
+                "name": "actual_spatial_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+          "schema_version": 1
+        },
+        "declaration_ref": {
+          "kind": "state",
+          "local_id": "rho",
+          "owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+          "schema_version": 1
+        },
+        "kind": "state",
+        "local_id": "rho",
+        "owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            },
+            {
+              "kind": "block",
+              "name": "density"
+            },
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+        "schema_version": 1
+      },
+      "vtype": "scalar_field"
+    },
+    {
+      "attrs": {
+        "history": "I_history",
+        "state": {
+          "handle": {
+            "block_ref": {
+              "handle_type": "block",
+              "kind": "block",
+              "local_id": "density",
+              "model_owner_path": {
+                "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                "nodes": [
+                  {
+                    "kind": "model_definition",
+                    "name": "nonlocal_density"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "owner_path": {
+                "definition_fingerprint": null,
+                "nodes": [
+                  {
+                    "kind": "case",
+                    "name": "actual_spatial_interaction"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+              "schema_version": 1
+            },
+            "declaration_ref": {
+              "kind": "state",
+              "local_id": "rho",
+              "owner_path": {
+                "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                "nodes": [
+                  {
+                    "kind": "model_definition",
+                    "name": "nonlocal_density"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+              "schema_version": 1
+            },
+            "kind": "state",
+            "local_id": "rho",
+            "owner_path": {
+              "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+              "nodes": [
+                {
+                  "kind": "case",
+                  "name": "actual_spatial_interaction"
+                },
+                {
+                  "kind": "block",
+                  "name": "density"
+                },
+                {
+                  "kind": "model_definition",
+                  "name": "nonlocal_density"
+                }
+              ],
+              "schema_version": 2
+            },
+            "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+            "schema_version": 1
+          }
+        }
+      },
+      "block": {
+        "handle_type": "block",
+        "kind": "block",
+        "local_id": "density",
+        "model_owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "owner_path": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+        "schema_version": 1
+      },
+      "id": 8,
+      "inputs": [
+        7
+      ],
+      "name": "I_history",
+      "op": "store_history",
+      "point": {
+        "clock": {
+          "name": "macro",
+          "owner": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "consumer",
+                "name": "actual_direct_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "schema_version": 1
+        },
+        "offset": {
+          "kind": "integer",
+          "value": "0"
+        },
+        "schema_version": 1,
+        "step": -1
+      },
+      "provenance": {
+        "authoring_api": "pops.time.Program.store_history",
+        "id": "sha256:125791f952a672074418a4749091240be8281cab4269cf9413f9522830989281",
+        "origins": [
+          {
+            "column": 0,
+            "end_column": null,
+            "end_line": null,
+            "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+            "line": 88,
+            "version": 1
+          }
+        ],
+        "owner": "consumer:actual_direct_interaction",
+        "owner_data": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "consumer",
+              "name": "actual_direct_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "parents": [
+          "sha256:60591706835516387f2658ff310320cc005b6b21b52df7209b3c241a539ef745"
+        ],
+        "phase": "transform",
+        "primary": {
+          "column": 0,
+          "end_column": null,
+          "end_line": null,
+          "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+          "line": 88,
+          "version": 1
+        },
+        "transformation": "normalize",
+        "version": 1
+      },
+      "space": {
+        "centering": "cell",
+        "clock": "simulation",
+        "components": [
+          "north"
+        ],
+        "domain": "real",
+        "frame": "pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d",
+        "kind": "field",
+        "layout": "cell",
+        "name": "interaction",
+        "representation": "field",
+        "sampling": "cell_center",
+        "support": null,
+        "units": [
+          null
+        ],
+        "value_shape": [
+          1
+        ]
+      },
+      "state": {
+        "block_ref": {
+          "handle_type": "block",
+          "kind": "block",
+          "local_id": "density",
+          "model_owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "owner_path": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "case",
+                "name": "actual_spatial_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+          "schema_version": 1
+        },
+        "declaration_ref": {
+          "kind": "state",
+          "local_id": "rho",
+          "owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+          "schema_version": 1
+        },
+        "kind": "state",
+        "local_id": "rho",
+        "owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            },
+            {
+              "kind": "block",
+              "name": "density"
+            },
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+        "schema_version": 1
+      },
+      "vtype": "state"
+    },
+    {
+      "attrs": {
+        "operator_handle": {
+          "handle": {
+            "block_ref": {
+              "handle_type": "block",
+              "kind": "block",
+              "local_id": "density",
+              "model_owner_path": {
+                "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                "nodes": [
+                  {
+                    "kind": "model_definition",
+                    "name": "nonlocal_density"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "owner_path": {
+                "definition_fingerprint": null,
+                "nodes": [
+                  {
+                    "kind": "case",
+                    "name": "actual_spatial_interaction"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+              "schema_version": 1
+            },
+            "declaration_ref": {
+              "kind": "local_source",
+              "local_id": "invalid_input",
+              "owner_path": {
+                "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+                "nodes": [
+                  {
+                    "kind": "model_definition",
+                    "name": "nonlocal_density"
+                  }
+                ],
+                "schema_version": 2
+              },
+              "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::local_source::invalid_input::target::invalid_input",
+              "registered_operator_name": "invalid_input",
+              "schema_version": 1
+            },
+            "kind": "local_source",
+            "local_id": "invalid_input",
+            "owner_path": {
+              "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+              "nodes": [
+                {
+                  "kind": "case",
+                  "name": "actual_spatial_interaction"
+                },
+                {
+                  "kind": "block",
+                  "name": "density"
+                },
+                {
+                  "kind": "model_definition",
+                  "name": "nonlocal_density"
+                }
+              ],
+              "schema_version": 2
+            },
+            "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::local_source::invalid_input::target::invalid_input",
+            "registered_operator_name": "invalid_input",
+            "schema_version": 1
+          }
+        },
+        "source": "invalid_input"
+      },
+      "block": {
+        "handle_type": "block",
+        "kind": "block",
+        "local_id": "density",
+        "model_owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "owner_path": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+        "schema_version": 1
+      },
+      "id": 9,
+      "inputs": [
+        0
+      ],
+      "name": "invalid_input",
+      "op": "source",
+      "point": {
+        "clock": {
+          "name": "macro",
+          "owner": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "consumer",
+                "name": "actual_direct_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "schema_version": 1
+        },
+        "offset": {
+          "kind": "integer",
+          "value": "0"
+        },
+        "schema_version": 1,
+        "step": 0
+      },
+      "provenance": {
+        "authoring_api": "pops.time.Program.source",
+        "id": "sha256:ced0ff125b1ef94dbb64d566adc371a83143790ef483ab23c284257b7ccb7476",
+        "origins": [
+          {
+            "column": 0,
+            "end_column": null,
+            "end_line": null,
+            "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+            "line": 93,
+            "version": 1
+          }
+        ],
+        "owner": "consumer:actual_direct_interaction",
+        "owner_data": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "consumer",
+              "name": "actual_direct_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "parents": [
+          "sha256:a403bde57f90328580c4283935169eeaeebedcf4fac12a810c48f88c5a02b1fa"
+        ],
+        "phase": "transform",
+        "primary": {
+          "column": 0,
+          "end_column": null,
+          "end_line": null,
+          "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+          "line": 93,
+          "version": 1
+        },
+        "transformation": "normalize",
+        "version": 1
+      },
+      "space": {
+        "base_name": "rho",
+        "base_space": {
+          "centering": "cell",
+          "clock": "simulation",
+          "components": [
+            "north"
+          ],
+          "domain": "real",
+          "frame": "pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d",
+          "kind": "state",
+          "layout": "cell",
+          "name": "rho",
+          "representation": "conservative",
+          "roles": {
+            "north": "north"
+          },
+          "sampling": "cell_average",
+          "storage": "multifab",
+          "support": null,
+          "units": [
+            null
+          ],
+          "value_shape": [
+            1
+          ]
+        },
+        "centering": "cell",
+        "clock": "simulation",
+        "components": [
+          "north"
+        ],
+        "domain": "real",
+        "frame": "pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d",
+        "kind": "rate",
+        "layout": "cell",
+        "name": "Rate(rho)",
+        "representation": "rate",
+        "sampling": "cell_average",
+        "support": null,
+        "units": [
+          null
+        ],
+        "value_shape": [
+          1
+        ]
+      },
+      "state": {
+        "block_ref": {
+          "handle_type": "block",
+          "kind": "block",
+          "local_id": "density",
+          "model_owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "owner_path": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "case",
+                "name": "actual_spatial_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+          "schema_version": 1
+        },
+        "declaration_ref": {
+          "kind": "state",
+          "local_id": "rho",
+          "owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+          "schema_version": 1
+        },
+        "kind": "state",
+        "local_id": "rho",
+        "owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            },
+            {
+              "kind": "block",
+              "name": "density"
+            },
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+        "schema_version": 1
+      },
+      "vtype": "rhs"
+    },
+    {
+      "attrs": {
+        "coeffs": [
+          [
+            [
+              0,
+              {
+                "kind": "integer",
+                "value": "1"
+              }
+            ]
+          ],
+          [
+            [
+              1,
+              {
+                "kind": "integer",
+                "value": "1"
+              }
+            ]
+          ]
+        ],
+        "stencil_access": {
+          "required_ghost_depth": 0,
+          "schema_version": 1
+        }
+      },
+      "block": {
+        "handle_type": "block",
+        "kind": "block",
+        "local_id": "density",
+        "model_owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "owner_path": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+        "schema_version": 1
+      },
+      "id": 10,
+      "inputs": [
+        0,
+        9
+      ],
+      "name": "decayed",
+      "op": "linear_combine",
+      "point": {
+        "clock": {
+          "name": "macro",
+          "owner": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "consumer",
+                "name": "actual_direct_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "schema_version": 1
+        },
+        "offset": {
+          "kind": "integer",
+          "value": "0"
+        },
+        "schema_version": 1,
+        "step": 1
+      },
+      "provenance": {
+        "authoring_api": "pops.time.Program.linear_combine",
+        "id": "sha256:15e2218c6483cdf2fa49fff845141d553849aac5dbc5954487a61d64c847d581",
+        "origins": [
+          {
+            "column": 0,
+            "end_column": null,
+            "end_line": null,
+            "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+            "line": 93,
+            "version": 1
+          }
+        ],
+        "owner": "consumer:actual_direct_interaction",
+        "owner_data": {
+          "definition_fingerprint": null,
+          "nodes": [
+            {
+              "kind": "consumer",
+              "name": "actual_direct_interaction"
+            }
+          ],
+          "schema_version": 2
+        },
+        "parents": [
+          "sha256:720eb537e85762359aafc79d9a750a8c779f81ce874b4ad362949ba9a13fa10f"
+        ],
+        "phase": "transform",
+        "primary": {
+          "column": 0,
+          "end_column": null,
+          "end_line": null,
+          "file": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+          "line": 93,
+          "version": 1
+        },
+        "transformation": "normalize",
+        "version": 1
+      },
+      "space": {
+        "centering": "cell",
+        "clock": "simulation",
+        "components": [
+          "north"
+        ],
+        "domain": "real",
+        "frame": "pops.domain-frame.v1:sha256:9962b7bf261d74282eb1c686e1372beef4a3efd6ef940e3e64a04787254d959d",
+        "kind": "state",
+        "layout": "cell",
+        "name": "rho",
+        "representation": "conservative",
+        "roles": {
+          "north": "north"
+        },
+        "sampling": "cell_average",
+        "storage": "multifab",
+        "support": null,
+        "units": [
+          null
+        ],
+        "value_shape": [
+          1
+        ]
+      },
+      "state": {
+        "block_ref": {
+          "handle_type": "block",
+          "kind": "block",
+          "local_id": "density",
+          "model_owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "owner_path": {
+            "definition_fingerprint": null,
+            "nodes": [
+              {
+                "kind": "case",
+                "name": "actual_spatial_interaction"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::case:actual_spatial_interaction::block::density",
+          "schema_version": 1
+        },
+        "declaration_ref": {
+          "kind": "state",
+          "local_id": "rho",
+          "owner_path": {
+            "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+            "nodes": [
+              {
+                "kind": "model_definition",
+                "name": "nonlocal_density"
+              }
+            ],
+            "schema_version": 2
+          },
+          "qualified_id": "pops.handle.v1::model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+          "schema_version": 1
+        },
+        "kind": "state",
+        "local_id": "rho",
+        "owner_path": {
+          "definition_fingerprint": "pops.module:sha256:c71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4",
+          "nodes": [
+            {
+              "kind": "case",
+              "name": "actual_spatial_interaction"
+            },
+            {
+              "kind": "block",
+              "name": "density"
+            },
+            {
+              "kind": "model_definition",
+              "name": "nonlocal_density"
+            }
+          ],
+          "schema_version": 2
+        },
+        "qualified_id": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4::state::rho",
+        "schema_version": 1
+      },
+      "vtype": "state"
+    }
+  ],
+  "step_transaction": {
+    "guards": [],
+    "projections": [],
+    "stores": [
+      "states",
+      "fields",
+      "topology",
+      "flux_ledgers",
+      "caches",
+      "solver_warm_starts",
+      "histories",
+      "clocks",
+      "schedules",
+      "consumers",
+      "diagnostics",
+      "external_effects"
+    ],
+    "strategy": {
+      "dt": {
+        "kind": "binary64",
+        "value": "0x1.47ae147ae147bp-7"
+      },
+      "kind": "fixed_dt"
+    }
+  },
+  "version": 18
+}

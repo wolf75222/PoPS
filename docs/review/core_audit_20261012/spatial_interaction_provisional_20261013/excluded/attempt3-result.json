@@ -1,0 +1,12 @@
+{
+  "cases_per_rank": 1,
+  "failure": {
+    "message": "periodic AMR bounded interaction and mandatory original nonperiodic bind refusal MPI1 process failed with status -11\n",
+    "type": "AssertionError"
+  },
+  "ranks": 1,
+  "scope": "mandatory original nonperiodic AMR bind refusal only; no positive or Uniform rerun",
+  "seconds": 0.25445837499864865,
+  "status": "failed",
+  "unchanged_identity": true
+}

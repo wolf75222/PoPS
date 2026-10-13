@@ -1,0 +1,101 @@
+{
+  "schema": "pops.checkpoint-diagnostic-repair-installed-identity@1",
+  "source_commit": "901fc5d1c0d1aa4752aaae694faaa55ca774189e",
+  "cpp_source_commit": "901fc5d1c0d1aa4752aaae694faaa55ca774189e",
+  "header_signature": "bf10423dfa7f7e8645f66c1692b81362a7c95873a4cab63c1d0ac59c7f5fe479",
+  "abi_version": 13,
+  "native_variants": [
+    {
+      "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.3.34.2);std=202002L;headers=bf10423dfa7f7e8645f66c1692b81362a7c95873a4cab63c1d0ac59c7f5fe479;kokkos=1;stdlib=libc++_220106;mpi=1;mpi_abi=40d6e65d7f79f247f867711ee0854b6220e3b9c1950da10f38add6e0977b9e89;dim=1",
+      "dimension": 1,
+      "has_kokkos": true,
+      "has_mpi": true,
+      "path": "dim1/_pops.cpython-312-darwin.so",
+      "sha256": "9ff1580ddb6337cb6aff1c5a2e6347f291b9bb9d559fab20cd4d0535bcd2ff4e",
+      "version": "1.1.0"
+    },
+    {
+      "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.3.34.2);std=202002L;headers=bf10423dfa7f7e8645f66c1692b81362a7c95873a4cab63c1d0ac59c7f5fe479;kokkos=1;stdlib=libc++_220106;mpi=1;mpi_abi=40d6e65d7f79f247f867711ee0854b6220e3b9c1950da10f38add6e0977b9e89;dim=2",
+      "dimension": 2,
+      "has_kokkos": true,
+      "has_mpi": true,
+      "path": "dim2/_pops.cpython-312-darwin.so",
+      "sha256": "db499a8adbee7fa5395b377d2d71e44a0d4547e62dc5005aee40403662d98af4",
+      "version": "1.1.0"
+    }
+  ],
+  "source_receipt_origins": [
+    {
+      "ref": "external-evidence:ci/901fc5d-installed-dim1-identity.json",
+      "sha256": "3b0259c089ce98e3e25ce40173659d330b439fe0b34a3b0f7110b81d1c8f9893"
+    },
+    {
+      "ref": "external-evidence:ci/901fc5d-installed-dim2-identity.json",
+      "sha256": "5ddf98ac71c157ec74da1b1ba53decada2868b769dd7cab3528b4368fc3ab9d7"
+    }
+  ],
+  "installed_python_source_parity": {
+    "files": 801,
+    "recorded_source_and_installed_bytes_equal": true,
+    "both_dimension_receipts_same_tree": true,
+    "manifest_digest": "8f5dd9a6e985408dcd21d92d65eab48cea5892817f843d5e8a0832f5c056ec57",
+    "manifest_digest_encoding": "SHA256 of UTF-8 json.dumps(python_tree, sort_keys=True, separators=(\",\", \":\"))",
+    "changed_checkpoint_modules": {
+      "runtime/_checkpoint_program_diagnostics.py": "3992a79c641e0d798da06df79bac880134582f1323f612a419ee6e91b1a791e2",
+      "runtime/_amr_checkpoint_v3.py": "07b6f2748e544dc8d7a99eebc52c9f84cfa0cffea68504415e27bc66efaf5709"
+    }
+  },
+  "selected_dimensions": [
+    {
+      "dimension": 1,
+      "native_sha256": "9ff1580ddb6337cb6aff1c5a2e6347f291b9bb9d559fab20cd4d0535bcd2ff4e",
+      "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.3.34.2);std=202002L;headers=bf10423dfa7f7e8645f66c1692b81362a7c95873a4cab63c1d0ac59c7f5fe479;kokkos=1;stdlib=libc++_220106;mpi=1;mpi_abi=40d6e65d7f79f247f867711ee0854b6220e3b9c1950da10f38add6e0977b9e89;dim=1",
+      "has_mpi": true,
+      "pythonpath_absent": true,
+      "runtime_environment": {
+        "dimension": 1,
+        "precision": "double",
+        "real_bytes": 8,
+        "has_kokkos": true,
+        "kokkos_backend": "OpenMP",
+        "kokkos_device": "cpu",
+        "kokkos_concurrency": 2,
+        "mpi_compiled": true,
+        "mpi_active": true,
+        "mpi_rank": 0,
+        "mpi_ranks": 1,
+        "communicator": "MPI_COMM_WORLD"
+      }
+    },
+    {
+      "dimension": 2,
+      "native_sha256": "db499a8adbee7fa5395b377d2d71e44a0d4547e62dc5005aee40403662d98af4",
+      "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.3.34.2);std=202002L;headers=bf10423dfa7f7e8645f66c1692b81362a7c95873a4cab63c1d0ac59c7f5fe479;kokkos=1;stdlib=libc++_220106;mpi=1;mpi_abi=40d6e65d7f79f247f867711ee0854b6220e3b9c1950da10f38add6e0977b9e89;dim=2",
+      "has_mpi": true,
+      "pythonpath_absent": true,
+      "runtime_environment": {
+        "dimension": 2,
+        "precision": "double",
+        "real_bytes": 8,
+        "has_kokkos": true,
+        "kokkos_backend": "OpenMP",
+        "kokkos_device": "cpu",
+        "kokkos_concurrency": 2,
+        "mpi_compiled": true,
+        "mpi_active": true,
+        "mpi_rank": 0,
+        "mpi_ranks": 1,
+        "communicator": "MPI_COMM_WORLD"
+      }
+    }
+  ],
+  "scientific_execution": {
+    "claimed_by_this_identity_receipt": false,
+    "historical_f94_results_transferred": false
+  },
+  "remote_ci": {
+    "verdict_location": "https://github.com/wolf75222/PoPS/pull/686",
+    "requires_exact_final_revision_and_required_aggregate_gate": true,
+    "green_claimed_by_this_identity_receipt": false
+  }
+}

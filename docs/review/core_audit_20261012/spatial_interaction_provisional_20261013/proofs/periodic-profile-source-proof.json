@@ -1,0 +1,23 @@
+{
+  "schema": "pops.spatial-amr-periodic-profile-ir-proof@1",
+  "same_program_cpp_without_identity_normalization": true,
+  "same_observations": true,
+  "same_geometry": true,
+  "same_frame": true,
+  "same_selected_components": true,
+  "same_coarse_initial_bind_array": true,
+  "same_initial_subject_and_source_bindings": true,
+  "initial_layout_plan_id_changed": true,
+  "bounded_kernel": "1+x[0]*y[1]-2*y[0]",
+  "no_torus_kernel_or_periodic_image": true,
+  "profile_restriction": "AMR EB active nonperiodic faces unsupported and mandatory rejected; only periodic transport topology received",
+  "no_fine_initial_state_equivalence_claim_against_unbindable_nonperiodic_profile": true,
+  "nonperiodic_reference": {
+    "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/fresh-nonperiodic.json",
+    "program_cpp_sha256": "a0f4d0573189ba66bff7926db02c2a69b6def9490fcf4c55bd27a8acb1e4eb4f"
+  },
+  "periodic_draft": {
+    "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/fresh-periodic.json",
+    "program_cpp_sha256": "a0f4d0573189ba66bff7926db02c2a69b6def9490fcf4c55bd27a8acb1e4eb4f"
+  }
+}

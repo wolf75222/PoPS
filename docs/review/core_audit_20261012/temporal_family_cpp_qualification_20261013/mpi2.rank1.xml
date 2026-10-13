@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="7" failures="0" disabled="0" errors="0" time="0.066" timestamp="2026-10-13T04:18:46.773" name="AllTests">
+  <properties>
+    <property name="pops_mpi_rank" value="1"/>
+    <property name="pops_mpi_expected_size" value="2"/>
+    <property name="pops_mpi_rank_source" value="PMI"/>
+  </properties>
+  <testsuite name="AmrSpatialMaterialization" tests="7" failures="0" disabled="0" skipped="0" errors="0" time="0.051" timestamp="2026-10-13T04:18:46.787">
+    <testcase name="PendingProofSurvivesPublicationAndRejectsRankLocalDamage" file="$REPO/tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp" line="358" status="run" result="completed" time="0.011" timestamp="2026-10-13T04:18:46.787" classname="AmrSpatialMaterialization" />
+    <testcase name="DeclaredFamilyPreservesMigratedQuadratureAndMetricClosure" file="$REPO/tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp" line="454" status="run" result="completed" time="0.002" timestamp="2026-10-13T04:18:46.799" classname="AmrSpatialMaterialization" />
+    <testcase name="DeclaredFamilyRejectsMissingAndForeignFamilies" file="$REPO/tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp" line="459" status="run" result="completed" time="0.01" timestamp="2026-10-13T04:18:46.801" classname="AmrSpatialMaterialization" />
+    <testcase name="DeclaredFamilyPreservesEveryOperatorOccurrenceDescriptor" file="$REPO/tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp" line="469" status="run" result="completed" time="0.008" timestamp="2026-10-13T04:18:46.812" classname="AmrSpatialMaterialization" />
+    <testcase name="DeclaredFamilyBindsStageWeightToMeasureAndRetainsPackSize" file="$REPO/tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp" line="478" status="run" result="completed" time="0.004" timestamp="2026-10-13T04:18:46.821" classname="AmrSpatialMaterialization" />
+    <testcase name="DeclaredFamilyRequiresCompletePhysicalTemporalCoverage" file="$REPO/tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp" line="486" status="run" result="completed" time="0.009" timestamp="2026-10-13T04:18:46.825" classname="AmrSpatialMaterialization" />
+    <testcase name="LegacyStillRequiresTheOriginalExactOperatorPack" file="$REPO/tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp" line="495" status="run" result="completed" time="0.003" timestamp="2026-10-13T04:18:46.835" classname="AmrSpatialMaterialization" />
+  </testsuite>
+</testsuites>

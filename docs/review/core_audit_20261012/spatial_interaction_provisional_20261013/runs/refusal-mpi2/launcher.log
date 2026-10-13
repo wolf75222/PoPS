@@ -1,0 +1,28 @@
+BOOT before import pops
+BOOT before import pops
+BOOT after import pops
+BOOT after import pops
+BOOT after select_native_dimension2
+BOOT after mpi_world 0 2
+BOOT before pytest import
+BOOT after select_native_dimension2
+BOOT after mpi_world 1 2
+BOOT before pytest import
+BOOT before pytest.main
+BOOT before pytest.main
+..                                                                        [100%]                                                                        [100%]
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_nonperiodic_amr_refuses_at_bind
+  tests/python/integration/runtime/test_public_spatial_interaction.py:274: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.compiler
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+
+1 passed, 1 warning in 48.87s
+=============================== warnings summary ===============================
+tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_nonperiodic_amr_refuses_at_bind
+  tests/python/integration/runtime/test_public_spatial_interaction.py:274: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.compiler
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1 passed, 1 warning in 48.87s

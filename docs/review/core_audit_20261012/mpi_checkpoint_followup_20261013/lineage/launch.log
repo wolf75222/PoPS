@@ -1,0 +1,23 @@
+== RegridOnRestart two-rank collective rollback + lineage ==
+[rank 0] regrid-on-restart-mpi: compile and publish start
+[rank 0] regrid-on-restart-mpi: compile and publish done
+[rank 1] regrid-on-restart-mpi: authenticated cache load start
+[rank 1] regrid-on-restart-mpi: authenticated cache load done
+  [OK ] source reaches the exact accepted checkpoint boundary
+  [OK ] source checkpoint carries a real multistep history
+  [OK ] one rank-local validation fault fails every rank coherently
+  [OK ] failed collective restart restores each rank's complete accepted image
+  [OK ] rank-divergent post-transform contract identity fails every rank coherently
+  [OK ] identity divergence is injected only after the native transform
+  [OK ] post-recompute identity divergence rolls back rank-local carriers, registries, dirty providers, owners, histories and Program audit
+{"rank": 0, "selected_source_run": "pops.run.v1:sha256:aed3dd124656e872f55d8349af861bbc475408021341199706c33e3313300557", "original_source_run": "pops.run.v1:sha256:48f8398cec38e1e8fc18d9c66a2ca1fd01fc3edf407c0da0d11de8b066a12880", "expected_transformed_source_run": "pops.run.v1:sha256:aed3dd124656e872f55d8349af861bbc475408021341199706c33e3313300557", "owner_history_lineage": "pops.run.v1:sha256:258a09c3979221efe59bcbff1d2b2d2795bb4c0391306da9f6d8a10fff5b973c", "clauses": {"legacy_source_equal": false, "exact_transformed_source": true, "exact_run_lineage": true, "distinct_lineage": true}}
+  [OK ] successful retry publishes the authenticated restart identity
+  [OK ] successful retry performs one real structural hierarchy transform
+{"rank": 1, "selected_source_run": "pops.run.v1:sha256:aed3dd124656e872f55d8349af861bbc475408021341199706c33e3313300557", "original_source_run": "pops.run.v1:sha256:48f8398cec38e1e8fc18d9c66a2ca1fd01fc3edf407c0da0d11de8b066a12880", "expected_transformed_source_run": "pops.run.v1:sha256:aed3dd124656e872f55d8349af861bbc475408021341199706c33e3313300557", "owner_history_lineage": "pops.run.v1:sha256:258a09c3979221efe59bcbff1d2b2d2795bb4c0391306da9f6d8a10fff5b973c", "clauses": {"legacy_source_equal": false, "exact_transformed_source": true, "exact_run_lineage": true, "distinct_lineage": true}}
+  [OK ] restart authenticates the transformed source run and a distinct continuation lineage
+  [OK ] receipt authenticates accepted contracts and each phase-local history consensus
+  [OK ] receipt authenticates the field manifest and lexical tie order of two native recomputes
+  [OK ] the collective hierarchy transform conserves every block component
+  [OK ] restart identity, continuation identity and receipt agree on every rank
+  [OK ] the next run manifest authenticates the transformed continuation lineage
+  [OK ] the transformed multistep continuation advances without colliding with its source

@@ -1,0 +1,117 @@
+{
+  "branch": "codex/core-audit-20261012",
+  "checkout": "$REPO",
+  "constraints": {
+    "model_name_dispatch": false,
+    "named_flux_guards": "preserved",
+    "native_api_headers": "unchanged",
+    "physical_laws": "unchanged",
+    "solve_guards": "preserved",
+    "tolerances": "rtol=5e-12 atol=5e-12 unchanged"
+  },
+  "head": "a9297394d5fbf6c191195bc69563822da3169bbe",
+  "installation_attestation": {
+    "path": "$EVIDENCE/ci/a9297394-installed-dim2-identity.json",
+    "sha256": "bf99c43164c4e1fc20b1157d5928067408a5f4058d3c3f5e501e8523d4661dde"
+  },
+  "native_identity_before_install": {
+    "abi_version": 13,
+    "header_signature": "e1b678510d7b4dc24a3286ad6fd8433f1c31412bc18582e8a2c9d0de2b40289c",
+    "native": "$AUDIT_ENV/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "native_cpp_commit": "6b50905b5e51770cbcb545d890d82945d616fd25",
+    "native_sha256": "f67ecd7e90e11842db84950da92edf93610f0076ca8dbb2228b66581d3c36403",
+    "python_source_commit": "dae48c3b15505696a11f84782487ac321fbb6a71"
+  },
+  "native_qualification": "pending same 5 cases MPI1 then MPI2 on immutable installed a9297394/f67e/e1b/ABI13",
+  "parent_source_freeze": {
+    "path": "$EVIDENCE/ci/3261d081-spatial-mask-source-freeze/receipt.json",
+    "sha256": "dec28b79a92658eb529db59a42f558646998601207e8d20a3764ca05842a4e6d"
+  },
+  "patch": {
+    "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/fixture-change.patch",
+    "sha256": "843940ec50e9dd21fa745b5cbe5e18f8e5a2f80560f9960226860bc73d4e54eb"
+  },
+  "prior_failed_native_attempt": {
+    "excluded_from_passed_reception": true,
+    "path": "$EVIDENCE/ci/3261d081-spatial-mask-qualified-mpi1/result.json",
+    "seconds": 38.02464483299991,
+    "status": "failed"
+  },
+  "pyright": {
+    "focused": {
+      "errors": 0,
+      "warnings": 0
+    },
+    "version": "1.1.414",
+    "whole_source": {
+      "errors": 0,
+      "warnings": 3
+    }
+  },
+  "schema": "pops.spatial-source-only-fixture-freeze@1",
+  "scope": "fixture/helper only: exact named source evaluation of unchanged zero-flux PDE on finite captured states",
+  "source_files": [
+    {
+      "frozen": "$EVIDENCE/ci/3261d081-spatial-mask-source-freeze/source/python/pops/codegen/program_emit_ops.py",
+      "path": "python/pops/codegen/program_emit_ops.py",
+      "sha256": "82573dda420ed1db0924dbf4a85d60e8cf1b0b8ea15a1c0d83ddcbde875d35dc"
+    },
+    {
+      "frozen": "$EVIDENCE/ci/3261d081-spatial-mask-source-freeze/source/python/pops/codegen/program_emit_model_kernels.py",
+      "path": "python/pops/codegen/program_emit_model_kernels.py",
+      "sha256": "ea6766d5ef8f38b7f064aeaff17da13edb52a83853666c40e33605d6324b1e22"
+    },
+    {
+      "frozen": "$EVIDENCE/ci/3261d081-spatial-mask-source-freeze/source/python/pops/codegen/_program_kernel_reuse.py",
+      "path": "python/pops/codegen/_program_kernel_reuse.py",
+      "sha256": "23df51bc0ce77bba450e2b3e4d347de3a87ec4a6e072658a698bdcbbb317f9f0"
+    },
+    {
+      "frozen": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/source/tests/python/integration/runtime/test_public_spatial_interaction.py",
+      "path": "tests/python/integration/runtime/test_public_spatial_interaction.py",
+      "sha256": "f6d4edfad01b598192e972c7239c7fc602cf70270d19ad3539bdf59718d2f315"
+    },
+    {
+      "frozen": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/source/tests/python/support/spatial_interaction_receipts.py",
+      "path": "tests/python/support/spatial_interaction_receipts.py",
+      "sha256": "bd12ddd777b631a3f70929e35695686dcf51d1e866529677420449926cfb6b67"
+    },
+    {
+      "frozen": "$EVIDENCE/ci/3261d081-spatial-mask-source-freeze/source/tests/python/unit/codegen/test_program_source_kernel_reuse.py",
+      "path": "tests/python/unit/codegen/test_program_source_kernel_reuse.py",
+      "sha256": "744ba21bc3be48c3253af283cc9848a575eba3342a0300996e86c323f568da4f"
+    },
+    {
+      "frozen": "$EVIDENCE/ci/3261d081-spatial-mask-source-freeze/source/tests/python/unit/time/test_local_transform.py",
+      "path": "tests/python/unit/time/test_local_transform.py",
+      "sha256": "51637a2d658b01230d281ec85c66d362e412dc47de3be7f59668501dd8d5a6db"
+    },
+    {
+      "frozen": "$EVIDENCE/ci/3261d081-spatial-mask-source-freeze/source/tests/python/unit/codegen/test_program_value_authority.py",
+      "path": "tests/python/unit/codegen/test_program_value_authority.py",
+      "sha256": "d814e21085cbd453fa1921ba15c3af016c03910aea782d74d36dd1a08872e38c"
+    },
+    {
+      "frozen": "$EVIDENCE/ci/3261d081-spatial-mask-source-freeze/source/tests/python/integration/runtime/test_multiblock_implicit_phase.py",
+      "path": "tests/python/integration/runtime/test_multiblock_implicit_phase.py",
+      "sha256": "d96f95d355e5da7096bfacfaaede6e9ec678cacc7119d21e1224a71539955309"
+    },
+    {
+      "frozen": "$EVIDENCE/ci/3261d081-spatial-mask-source-freeze/source/tests/python/unit/codegen/test_program_codegen_multimodel.py",
+      "path": "tests/python/unit/codegen/test_program_codegen_multimodel.py",
+      "sha256": "1072ba1c47f9ae71f61f416405feaa65f59f56d94882858d1bef2e3927554bd0"
+    }
+  ],
+  "source_tests": {
+    "log": "$EVIDENCE/ci/3261d081-spatial-mask-source-freeze/source-tests.log",
+    "native_deselected": 6,
+    "passed": 62,
+    "seconds": 24.3
+  },
+  "structural_source_proof": {
+    "cases": 5,
+    "passed": true,
+    "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/source-proof.json",
+    "sha256": "4c3250eafa67a0bca734f11569b69976e18f4bc364ba18501719c00da3321815"
+  }
+}

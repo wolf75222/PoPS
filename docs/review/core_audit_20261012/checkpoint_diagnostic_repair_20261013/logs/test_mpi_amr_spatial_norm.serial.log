@@ -1,0 +1,11 @@
+Note: Google Test filter = AmrSpatialMaterialization.PendingProofSurvivesPublicationAndRejectsRankLocalDamage
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from AmrSpatialMaterialization
+[ RUN      ] AmrSpatialMaterialization.PendingProofSurvivesPublicationAndRejectsRankLocalDamage
+[       OK ] AmrSpatialMaterialization.PendingProofSurvivesPublicationAndRejectsRankLocalDamage (11 ms)
+[----------] 1 test from AmrSpatialMaterialization (11 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (27 ms total)
+[  PASSED  ] 1 test.

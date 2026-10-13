@@ -1,0 +1,572 @@
+{
+  "schema": "pops.core-audit.ci-dim1-scientific-receptions@1",
+  "schema_version": 1,
+  "status": "complete_mpi1_mpi2",
+  "source_commit": "a9297394d5fbf6c191195bc69563822da3169bbe",
+  "qualification_scope": "Real installed Dim1 MPI1 and MPI2 of the three exact M05/M26/M23 targets; Serial CI is separate",
+  "source_receipt_origin": {
+    "ref": "external-evidence:ci/a9297394-dim1-scientific-receptions.json",
+    "sha256": "c345021c39df03aec42789e0568b97359d1b4c8426e0de2d0cf999747ee25657"
+  },
+  "installed_identity": {
+    "source_commit": "a9297394d5fbf6c191195bc69563822da3169bbe",
+    "native_dimension": 1,
+    "native_sha256": "33c0ea8e1ced3c2d8a71306cdd6957f0cb068ea4907c81e478815d9149329a28",
+    "header_signature": "e1b678510d7b4dc24a3286ad6fd8433f1c31412bc18582e8a2c9d0de2b40289c",
+    "abi_version": 13,
+    "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.3.34.2);std=202002L;headers=e1b678510d7b4dc24a3286ad6fd8433f1c31412bc18582e8a2c9d0de2b40289c;kokkos=1;stdlib=libc++_220106;mpi=1;mpi_abi=40d6e65d7f79f247f867711ee0854b6220e3b9c1950da10f38add6e0977b9e89;dim=1",
+    "root_identity_origin": {
+      "ref": "external-evidence:ci/a9297394-installed-dim1-identity.json"
+    }
+  },
+  "accounting": {
+    "case_worlds_passed": 6,
+    "rank_case_outcomes_passed": 9,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "case_world_definition": "One exact scientific fixture executed in one MPI world; 3 fixtures x 2 worlds = 6.",
+    "rank_outcome_definition": "XML test outcomes per participating rank; MPI1 contributes 3 and MPI2 contributes 6.",
+    "cell_values_grids_diagnostic_records_and_saved_files_are_not_additional_cases": true,
+    "saved_artifacts_with_recorded_verified_sha256": 28
+  },
+  "principal_oracles": [
+    {
+      "id": "M05",
+      "fixture": "tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py::test_periodic_shear_three_grids_dissipation_and_accepted_ledger",
+      "summary": "True cell means and saved scalar shear states on three grids; accepted face-ledger flux/cell increments, mass, semidiscrete dissipation and forward-Euler energy correction are checked against the original independent oracle.",
+      "scope": "genuine Dim1 periodic scalar shear reduction, not full Navier-Stokes"
+    },
+    {
+      "id": "M26",
+      "fixture": "tests/python/integration/runtime/test_api040_m26_finite_interaction_runtime.py::test_finite_interaction_two_densities_rebind_permutation_and_adjoint",
+      "summary": "Measured finite N12 map on two densities with rebind and permutation; independent potential, measured pairing, adjoint and quadratic energy-increment identities are checked.",
+      "scope": "N12 measured finite DOFs only, not an aggregation-diffusion PDE"
+    },
+    {
+      "id": "M23",
+      "fixture": "tests/python/integration/runtime/test_m23_hall_fourier_runtime.py::test_hall_fourier_signed_phase_norm_permutations_and_zero_limit",
+      "summary": "Dim1 transverse two-component Hall/Fourier witness checks signed discrete phase, norm, permutations and zero-Hall limit against the original stage oracle.",
+      "scope": "periodic Dim1 transverse linear two-component classification witness"
+    }
+  ],
+  "worlds": [
+    {
+      "profile": "MPI1",
+      "mpi_ranks": 1,
+      "elapsed_seconds": 141.44801054199343,
+      "completed_case_worlds": 3,
+      "completed_rank_case_outcomes": 3,
+      "status_origin": {
+        "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/status.json"
+      },
+      "launcher_log": {
+        "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/launcher.log"
+      },
+      "xml": [
+        {
+          "rank": 0,
+          "origin": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/rank0.xml",
+            "sha256": "22abb28229a25e0af936f2e5885999b7777218314ea5e57a6677fb38b21cdb8c"
+          },
+          "passed": 3,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0,
+          "cases": [
+            {
+              "fixture": "tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py::test_periodic_shear_three_grids_dissipation_and_accepted_ledger",
+              "seconds": 29.059
+            },
+            {
+              "fixture": "tests/python/integration/runtime/test_api040_m26_finite_interaction_runtime.py::test_finite_interaction_two_densities_rebind_permutation_and_adjoint",
+              "seconds": 53.859
+            },
+            {
+              "fixture": "tests/python/integration/runtime/test_m23_hall_fourier_runtime.py::test_hall_fourier_signed_phase_norm_permutations_and_zero_limit",
+              "seconds": 57.125
+            }
+          ]
+        }
+      ],
+      "identity_pairs": [
+        {
+          "owner": "parent",
+          "before": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/identity-before-parent.json"
+          },
+          "after": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/identity-after-parent.json"
+          },
+          "equal": true,
+          "installed_source_files_verified": 5
+        },
+        {
+          "owner": "rank0",
+          "before": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/identity-before-rank0.json"
+          },
+          "after": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/identity-after-rank0.json"
+          },
+          "equal": true,
+          "installed_source_files_verified": 5
+        }
+      ],
+      "scientific_receipts": [
+        {
+          "oracle_id": "M26",
+          "fixture": "tests/python/integration/runtime/test_api040_m26_finite_interaction_runtime.py::test_finite_interaction_two_densities_rebind_permutation_and_adjoint",
+          "status": "passed",
+          "origin": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/rank0-pytest-tmp/test_finite_interaction_two_de0/receipt.json",
+            "sha256": "115e1db26fba3c7db5daa45c3a8112d91276c62d2eb16d004d55abdfb95305d6"
+          },
+          "scope": "N12 measured finite DOFs only, not an aggregation-diffusion PDE",
+          "diagnostic_record_count": 3,
+          "record_count_is_not_case_count": true,
+          "criteria": {
+            "density_error": 2e-14,
+            "potential_error": 3e-13,
+            "measured_pairing_error": 3e-13,
+            "adjoint_defect": 3e-13,
+            "energy_increment_identity": 3e-13,
+            "time_error": 2e-14
+          },
+          "maximum_absolute_metrics": {
+            "density_error": 0,
+            "potential_error": 1.4224732503009818e-16,
+            "measured_pairing_error": 2.220446049250313e-16,
+            "adjoint_defect": 1.3660947373317356e-17,
+            "energy_increment_identity": 6.071532165918825e-18,
+            "time_error": 0
+          },
+          "saved_artifacts": [
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/rank0-pytest-tmp/test_finite_interaction_two_de0/state_canonical_base.npz",
+              "sha256": "150e8ea3c0ef70a9c894f058af5470b5f788b99bcc9774b20150432f41e5ece4"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/rank0-pytest-tmp/test_finite_interaction_two_de0/state_canonical_variation.npz",
+              "sha256": "8e82b2e0efad32453e1155a9c76674629cefd37e10846aa4753429393bab2d36"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/rank0-pytest-tmp/test_finite_interaction_two_de0/state_permuted_base.npz",
+              "sha256": "681f1a22afd9f8d3897f4b8ddc8e917627ef86f2d0823d8e52b6d6d4b71641bd"
+            }
+          ]
+        },
+        {
+          "oracle_id": "M05",
+          "fixture": "tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py::test_periodic_shear_three_grids_dissipation_and_accepted_ledger",
+          "status": "passed",
+          "origin": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/rank0-pytest-tmp/test_periodic_shear_three_grid0/receipt.json",
+            "sha256": "e8d8918ee06f01f8a301d1296d93e9dff32a700d0dd83a8804bd9ef1b5b43794"
+          },
+          "scope": "genuine Dim1 periodic scalar shear reduction, not full Navier-Stokes",
+          "diagnostic_record_count": 3,
+          "record_count_is_not_case_count": true,
+          "criteria": {
+            "initial_max_error": 2e-14,
+            "saved_state_max_error": 5e-12,
+            "continuous_state_max_error": 0.0002,
+            "mass_error": 5e-13,
+            "ledger_flux_max_error": 2e-12,
+            "ledger_cell_change_error": 5e-13,
+            "semidiscrete_work_error": 5e-13,
+            "forward_euler_energy_error": 5e-13,
+            "time_error": 3e-14,
+            "explicit_frequency_fraction_max": 0.9
+          },
+          "maximum_absolute_metrics": {
+            "initial_max_error": 0,
+            "saved_state_max_error": 1.2212453270876722e-15,
+            "continuous_state_max_error": 0.00014274083071397214,
+            "mass_error": 2.0952206983282373e-17,
+            "ledger_flux_max_error": 0,
+            "ledger_cell_change_error": 1.6805133673525319e-18,
+            "semidiscrete_work_error": 5.551115123125783e-17,
+            "forward_euler_energy_error": 4.7704895589362195e-17,
+            "time_error": 0
+          },
+          "saved_artifacts": [
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/rank0-pytest-tmp/test_periodic_shear_three_grid0/state_32.npz",
+              "sha256": "fff52c991dfae15ae5a82e131a45775f2c943d42ec2a04ff35214aefb75484aa"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/rank0-pytest-tmp/test_periodic_shear_three_grid0/ledger_32.json",
+              "sha256": "7fdc14ec28dbfb022a8f8742c9964d958ea61b53d252fefd5c416f63fe74a274"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/rank0-pytest-tmp/test_periodic_shear_three_grid0/state_64.npz",
+              "sha256": "e884ed7630bc4cd0e55201a6e4a566d95c53f026a52df058de7147e66b15b5a6"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/rank0-pytest-tmp/test_periodic_shear_three_grid0/ledger_64.json",
+              "sha256": "afd45dfa9cf2a4b52f3c45416f5e637cb9cc707766a2c9e49d82b11542129a80"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/rank0-pytest-tmp/test_periodic_shear_three_grid0/state_128.npz",
+              "sha256": "b8a454f4dadb335b68288bddef24c9b487ae95d135316e4ad4aa9324b3cfef4f"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/rank0-pytest-tmp/test_periodic_shear_three_grid0/ledger_128.json",
+              "sha256": "cf985e7f4c88219a39ba5258720333e5694170929bac1164b8460db68083692e"
+            }
+          ]
+        },
+        {
+          "oracle_id": "M23",
+          "fixture": "tests/python/integration/runtime/test_m23_hall_fourier_runtime.py::test_hall_fourier_signed_phase_norm_permutations_and_zero_limit",
+          "status": "passed",
+          "origin": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/rank0-pytest-tmp/test_hall_fourier_signed_phase0/receipt.json",
+            "sha256": "29dfeeb28fb58cbb1d0246c021fb9cb4533be484f097897c55d0077e7c4235f7"
+          },
+          "scope": "periodic Dim1 transverse linear two-component classification witness",
+          "diagnostic_record_count": 5,
+          "record_count_is_not_case_count": true,
+          "criteria": {
+            "initial_max_error": 3e-14,
+            "saved_state_max_error": 3e-10,
+            "phase_discrete_error": 3e-10,
+            "norm_discrete_error": 3e-10,
+            "time_error": 3e-14
+          },
+          "maximum_absolute_metrics": {
+            "initial_max_error": 0,
+            "saved_state_max_error": 4.107825191113079e-15,
+            "phase_discrete_error": 2.3068026910881914e-16,
+            "norm_discrete_error": 3.9968028886505635e-15,
+            "time_error": 0
+          },
+          "saved_artifacts": [
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/rank0-pytest-tmp/test_hall_fourier_signed_phase0/state_32_01_0.3.npz",
+              "sha256": "e53416371a5ee24e8a923cb41cc70f7cb567640344e75258a5d29cab05d41c2f"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/rank0-pytest-tmp/test_hall_fourier_signed_phase0/state_64_01_0.3.npz",
+              "sha256": "a5a9ff7f59fe3cc6f4ad35a24ae6eb11b1a481fa41fe6ccbcc1797ad0aad1efd"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/rank0-pytest-tmp/test_hall_fourier_signed_phase0/state_32_10_0.3.npz",
+              "sha256": "b4a21bd89567995472bc8c2bee9f8d3e74588de0e256eb054f35ce7ccf6a6826"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/rank0-pytest-tmp/test_hall_fourier_signed_phase0/state_64_10_0.3.npz",
+              "sha256": "659911fce78ccb4bb477c97fab1760359e067707aa44f43661b8353d659e3c99"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi1/rank0-pytest-tmp/test_hall_fourier_signed_phase0/state_32_01_0.0.npz",
+              "sha256": "df57f3136a41dc079a293ccb5b56a1505c163d03cb0d85db6b2e0595ea3806c4"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "profile": "MPI2",
+      "mpi_ranks": 2,
+      "elapsed_seconds": 36.75393395801075,
+      "completed_case_worlds": 3,
+      "completed_rank_case_outcomes": 6,
+      "status_origin": {
+        "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/status.json"
+      },
+      "launcher_log": {
+        "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/launcher.log"
+      },
+      "xml": [
+        {
+          "rank": 0,
+          "origin": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank0.xml",
+            "sha256": "3db19118a090d4f739c941644c0db2ce28c4c4c171af4a8af51339eeace148bd"
+          },
+          "passed": 3,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0,
+          "cases": [
+            {
+              "fixture": "tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py::test_periodic_shear_three_grids_dissipation_and_accepted_ledger",
+              "seconds": 8.466
+            },
+            {
+              "fixture": "tests/python/integration/runtime/test_api040_m26_finite_interaction_runtime.py::test_finite_interaction_two_densities_rebind_permutation_and_adjoint",
+              "seconds": 9.745
+            },
+            {
+              "fixture": "tests/python/integration/runtime/test_m23_hall_fourier_runtime.py::test_hall_fourier_signed_phase_norm_permutations_and_zero_limit",
+              "seconds": 16.947
+            }
+          ]
+        },
+        {
+          "rank": 1,
+          "origin": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank1.xml",
+            "sha256": "81d353228dad380de995c13b65a1bbb3b957566c1b7677a2d5409a25fcbdd505"
+          },
+          "passed": 3,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0,
+          "cases": [
+            {
+              "fixture": "tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py::test_periodic_shear_three_grids_dissipation_and_accepted_ledger",
+              "seconds": 8.467
+            },
+            {
+              "fixture": "tests/python/integration/runtime/test_api040_m26_finite_interaction_runtime.py::test_finite_interaction_two_densities_rebind_permutation_and_adjoint",
+              "seconds": 9.744
+            },
+            {
+              "fixture": "tests/python/integration/runtime/test_m23_hall_fourier_runtime.py::test_hall_fourier_signed_phase_norm_permutations_and_zero_limit",
+              "seconds": 16.947
+            }
+          ]
+        }
+      ],
+      "identity_pairs": [
+        {
+          "owner": "parent",
+          "before": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/identity-before-parent.json"
+          },
+          "after": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/identity-after-parent.json"
+          },
+          "equal": true,
+          "installed_source_files_verified": 5
+        },
+        {
+          "owner": "rank0",
+          "before": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/identity-before-rank0.json"
+          },
+          "after": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/identity-after-rank0.json"
+          },
+          "equal": true,
+          "installed_source_files_verified": 5
+        },
+        {
+          "owner": "rank1",
+          "before": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/identity-before-rank1.json"
+          },
+          "after": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/identity-after-rank1.json"
+          },
+          "equal": true,
+          "installed_source_files_verified": 5
+        }
+      ],
+      "scientific_receipts": [
+        {
+          "oracle_id": "M26",
+          "fixture": "tests/python/integration/runtime/test_api040_m26_finite_interaction_runtime.py::test_finite_interaction_two_densities_rebind_permutation_and_adjoint",
+          "status": "passed",
+          "origin": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank0-pytest-tmp/test_finite_interaction_two_de0/receipt.json",
+            "sha256": "a101b1d9027368050291ea797d964570be297b010f212f339f0070c0890d5ab7"
+          },
+          "scope": "N12 measured finite DOFs only, not an aggregation-diffusion PDE",
+          "diagnostic_record_count": 3,
+          "record_count_is_not_case_count": true,
+          "criteria": {
+            "density_error": 2e-14,
+            "potential_error": 3e-13,
+            "measured_pairing_error": 3e-13,
+            "adjoint_defect": 3e-13,
+            "energy_increment_identity": 3e-13,
+            "time_error": 2e-14
+          },
+          "maximum_absolute_metrics": {
+            "density_error": 0,
+            "potential_error": 1.4224732503009818e-16,
+            "measured_pairing_error": 2.220446049250313e-16,
+            "adjoint_defect": 1.3660947373317356e-17,
+            "energy_increment_identity": 6.071532165918825e-18,
+            "time_error": 0
+          },
+          "saved_artifacts": [
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank0-pytest-tmp/test_finite_interaction_two_de0/state_canonical_base.npz",
+              "sha256": "150e8ea3c0ef70a9c894f058af5470b5f788b99bcc9774b20150432f41e5ece4"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank0-pytest-tmp/test_finite_interaction_two_de0/state_canonical_variation.npz",
+              "sha256": "8e82b2e0efad32453e1155a9c76674629cefd37e10846aa4753429393bab2d36"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank0-pytest-tmp/test_finite_interaction_two_de0/state_permuted_base.npz",
+              "sha256": "681f1a22afd9f8d3897f4b8ddc8e917627ef86f2d0823d8e52b6d6d4b71641bd"
+            }
+          ]
+        },
+        {
+          "oracle_id": "M05",
+          "fixture": "tests/python/integration/runtime/test_api040_m05_periodic_shear_runtime.py::test_periodic_shear_three_grids_dissipation_and_accepted_ledger",
+          "status": "passed",
+          "origin": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank0-pytest-tmp/test_periodic_shear_three_grid0/receipt.json",
+            "sha256": "53bd5493f5592961278849e3e63a722df7810251592770fd0fbb48a3522f1839"
+          },
+          "scope": "genuine Dim1 periodic scalar shear reduction, not full Navier-Stokes",
+          "diagnostic_record_count": 3,
+          "record_count_is_not_case_count": true,
+          "criteria": {
+            "initial_max_error": 2e-14,
+            "saved_state_max_error": 5e-12,
+            "continuous_state_max_error": 0.0002,
+            "mass_error": 5e-13,
+            "ledger_flux_max_error": 2e-12,
+            "ledger_cell_change_error": 5e-13,
+            "semidiscrete_work_error": 5e-13,
+            "forward_euler_energy_error": 5e-13,
+            "time_error": 3e-14,
+            "explicit_frequency_fraction_max": 0.9
+          },
+          "maximum_absolute_metrics": {
+            "initial_max_error": 0,
+            "saved_state_max_error": 1.2212453270876722e-15,
+            "continuous_state_max_error": 0.00014274083071397214,
+            "mass_error": 2.0952206983282373e-17,
+            "ledger_flux_max_error": 0,
+            "ledger_cell_change_error": 1.6805133673525319e-18,
+            "semidiscrete_work_error": 5.551115123125783e-17,
+            "forward_euler_energy_error": 4.7704895589362195e-17,
+            "time_error": 0
+          },
+          "saved_artifacts": [
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank0-pytest-tmp/test_periodic_shear_three_grid0/state_32.npz",
+              "sha256": "fff52c991dfae15ae5a82e131a45775f2c943d42ec2a04ff35214aefb75484aa"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank0-pytest-tmp/test_periodic_shear_three_grid0/ledger_32.json",
+              "sha256": "7fdc14ec28dbfb022a8f8742c9964d958ea61b53d252fefd5c416f63fe74a274"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank0-pytest-tmp/test_periodic_shear_three_grid0/state_64.npz",
+              "sha256": "e884ed7630bc4cd0e55201a6e4a566d95c53f026a52df058de7147e66b15b5a6"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank0-pytest-tmp/test_periodic_shear_three_grid0/ledger_64.json",
+              "sha256": "afd45dfa9cf2a4b52f3c45416f5e637cb9cc707766a2c9e49d82b11542129a80"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank0-pytest-tmp/test_periodic_shear_three_grid0/state_128.npz",
+              "sha256": "b8a454f4dadb335b68288bddef24c9b487ae95d135316e4ad4aa9324b3cfef4f"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank0-pytest-tmp/test_periodic_shear_three_grid0/ledger_128.json",
+              "sha256": "cf985e7f4c88219a39ba5258720333e5694170929bac1164b8460db68083692e"
+            }
+          ]
+        },
+        {
+          "oracle_id": "M23",
+          "fixture": "tests/python/integration/runtime/test_m23_hall_fourier_runtime.py::test_hall_fourier_signed_phase_norm_permutations_and_zero_limit",
+          "status": "passed",
+          "origin": {
+            "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank0-pytest-tmp/test_hall_fourier_signed_phase0/receipt.json",
+            "sha256": "77505bbdcc4e73e19927e2c4face1481bb510920a102d1becd937e7ac26154ad"
+          },
+          "scope": "periodic Dim1 transverse linear two-component classification witness",
+          "diagnostic_record_count": 5,
+          "record_count_is_not_case_count": true,
+          "criteria": {
+            "initial_max_error": 3e-14,
+            "saved_state_max_error": 3e-10,
+            "phase_discrete_error": 3e-10,
+            "norm_discrete_error": 3e-10,
+            "time_error": 3e-14
+          },
+          "maximum_absolute_metrics": {
+            "initial_max_error": 0,
+            "saved_state_max_error": 4.107825191113079e-15,
+            "phase_discrete_error": 2.3068026910881914e-16,
+            "norm_discrete_error": 3.9968028886505635e-15,
+            "time_error": 0
+          },
+          "saved_artifacts": [
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank0-pytest-tmp/test_hall_fourier_signed_phase0/state_32_01_0.3.npz",
+              "sha256": "e53416371a5ee24e8a923cb41cc70f7cb567640344e75258a5d29cab05d41c2f"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank0-pytest-tmp/test_hall_fourier_signed_phase0/state_64_01_0.3.npz",
+              "sha256": "a5a9ff7f59fe3cc6f4ad35a24ae6eb11b1a481fa41fe6ccbcc1797ad0aad1efd"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank0-pytest-tmp/test_hall_fourier_signed_phase0/state_32_10_0.3.npz",
+              "sha256": "b4a21bd89567995472bc8c2bee9f8d3e74588de0e256eb054f35ce7ccf6a6826"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank0-pytest-tmp/test_hall_fourier_signed_phase0/state_64_10_0.3.npz",
+              "sha256": "659911fce78ccb4bb477c97fab1760359e067707aa44f43661b8353d659e3c99"
+            },
+            {
+              "ref": "external-evidence:ci/a9297394-dim1-scientific-mpi2/rank0-pytest-tmp/test_hall_fourier_signed_phase0/state_32_01_0.0.npz",
+              "sha256": "df57f3136a41dc079a293ccb5b56a1505c163d03cb0d85db6b2e0595ea3806c4"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "runner": {
+    "origin": {
+      "ref": "external-evidence:ci/dim1_scientific_mpi_runner.py",
+      "sha256": "d10f32e72f7880e4d4a69d5f3e1cd5eb014615adde10b7e5d3b09e72eacaf428"
+    },
+    "harness_adjustment": "Preserved root OMP_NUM_THREADS=2 and OMP_PROC_BIND=false instead of overriding thread environment",
+    "repository_edits": 0,
+    "nonfatal_warning": "M26 set_threads after native initialization has no effect; root OpenMP environment was preserved"
+  },
+  "provenance_scope": {
+    "all_xml_and_before_after_identities_reported_verified_by_origin_receipt": true,
+    "saved_artifacts_verification": "28 original saved artifacts were SHA256-verified by the completed origin reception; this publication copies those digests and performs no qualification or repeated artifact validation.",
+    "validation_or_native_imports_executed_for_this_publication": false,
+    "reference_policy": "external-evidence:<path> resolves below the retained evidence root; repository fixture IDs remain repository-relative."
+  },
+  "distinct_serial_ci": {
+    "status": "pending",
+    "reason": "A genuine Serial-native CI reception is separate; MPI1 is an MPI profile, not a Serial qualification.",
+    "mpi1_is_serial": false
+  },
+  "other_receptions": {
+    "ns_native": {
+      "scope": "separate native reception",
+      "public_receipt": "docs/review/core_audit_20261012/ci-dim1-ns-conduction-receptions.json"
+    },
+    "spatial_native": "qualification still in progress; not claimed here"
+  },
+  "gate": {
+    "required_remote_ci_status": "pending",
+    "green_claimed": false,
+    "scope": "Historical local receipt; pending records the state when prepared. Current remote verdict is assessed on the exact final PR revision."
+  },
+  "historical_public_json_and_report_modified": false,
+  "current_reception_index": {
+    "scope": "Later receipt links reconcile historical pending fields below; each linked receipt retains its own source/native identity. These links do not transfer execution results to a later binary.",
+    "dim1_m05_m26_m23": "ci-dim1-scientific-receptions.json",
+    "dim1_ns_conduction": "ci-dim1-ns-conduction-receptions.json",
+    "historical_spatial_partial": "spatial_interaction_provisional_20261013/receipt.json",
+    "installed_a929": "ci-repairs-installed-identity.json",
+    "snapshot_source_cpp": "history_snapshot_qualification_20261013/receipt.json",
+    "installed_f94": "history-snapshot-installed-identity.json",
+    "remote_ci": {
+      "verdict_location": "https://github.com/wolf75222/PoPS/pull/686",
+      "requires_exact_final_revision_and_required_aggregate_gate": true
+    },
+    "final_amr_periodic_f94": "spatial_amr_final_20261013/receipt.json"
+  }
+}
