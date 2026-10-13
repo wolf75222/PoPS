@@ -340,6 +340,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
     assert variant_targets == {
         "test_amr_history_ring": (2,),
         "test_amr_history_remap_collective": (2,),
+        "test_amr_interaction_history_snapshot": (2,),
         "test_prepared_field_rhs_inputs": (2,),
         "test_amr_multiblock_coupled_source": (2,),
         "test_amr_multiblock_implicit_transaction": (2,),
@@ -391,7 +392,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 125
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 126
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
@@ -400,6 +401,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
     assert ctest_plan["test_mpi_system_analytic_level_set_np2"] == 2
     assert ctest_plan["test_world_communicator_np2"] == 2
     assert ctest_plan["test_amr_history_remap_collective_np2"] == 2
+    assert ctest_plan["test_amr_interaction_history_snapshot_np2"] == 2
     assert ctest_plan["test_tensor_diagonal_mg_preconditioner_np2"] == 2
 
 
@@ -1098,7 +1100,7 @@ def test_python_mpi_orchestrator_contract_is_fail_closed():
             },
         ],
     }
-    with pytest.raises(SystemExit, match="expected exactly one path field"):
+    with pytest.raises(SystemExit, match="expected path and optional exact partitions"):
         sel.manifest_python_mpi_orchestrators(
             {"python": {"suite": [suite]}}
         )
@@ -1318,7 +1320,11 @@ def test_python_mpi_workflow_executes_every_plan_row_with_stdin_reading_child(
                                            tmp_path / "receipts" / group["group"]))
     assert next((code for code in received if code), 0) == status
     launched = [json.loads(line) for line in pathlib.Path(environment["LAUNCH_LOG"]).read_text().splitlines()]
-    assert [row["path"] for row in launched] == [row["path"] for row in all_launches]
+    expected_selectors = [
+        row["path"] + ("::" + row["parent_node"] if row.get("parent_node") else "")
+        for row in all_launches
+    ]
+    assert [row["path"] for row in launched] == expected_selectors
     for row in launched:
         assert row["argv"][:2] == ["--signal=TERM", "--kill-after=30s"]
         assert row["argv"][2] in {"900s", "1200s", "1500s"}

@@ -25,6 +25,46 @@ def _load_runner():
     return module
 
 
+def test_m4_uses_the_complete_canonical_mpi_orchestrator_inventory():
+    runner = _load_runner()
+    data = runner.tomllib.loads(runner.TEST_MANIFEST.read_text(encoding="utf-8"))
+    rows = runner.selection.manifest_python_mpi_orchestrators(data)
+    assert len(rows) == 28
+    assert sum("partitions" in row for row in rows) == 4
+    assert runner._python_mpi_orchestrators() == {row["path"] for row in rows}
+
+
+@pytest.mark.parametrize("mutation", ["extra_field", "missing_id", "duplicate_id", "unknown_id",
+                                     "foreign_parent", "no_partitions", "legacy_partitions", "duplicate_path"])
+def test_m4_canonical_orchestrator_errors_stay_fail_closed(monkeypatch, mutation):
+    runner = _load_runner()
+    canonical = runner.selection.manifest_python_mpi_orchestrators
+    def validate_mutation(data):
+        suite = next(row for row in data["python"]["suite"] if row.get("mpi_orchestrators"))
+        rows = suite["mpi_orchestrators"]
+        row = next(row for row in rows if "partitions" in row)
+        if mutation == "extra_field": row["nproc"] = 2
+        elif mutation == "missing_id": row["partitions"].pop()
+        elif mutation == "duplicate_id": row["partitions"].append(dict(row["partitions"][0]))
+        elif mutation == "unknown_id":
+            part = row["partitions"][0]
+            part["id"] = "unowned"
+            part["parent_node"] = part["parent_node"].split("[", 1)[0] + "[unowned]"
+        elif mutation == "foreign_parent": row["partitions"][0]["parent_node"] = "test_unowned[saved_restart]"
+        elif mutation == "no_partitions": row.pop("partitions")
+        elif mutation == "legacy_partitions":
+            next(row for row in rows if "partitions" not in row)["partitions"] = row["partitions"]
+        elif mutation == "duplicate_path": rows.append(dict(row))
+        return canonical(data)
+    monkeypatch.setattr(runner.selection, "manifest_python_mpi_orchestrators", validate_mutation)
+    with pytest.raises(ValueError) as caught:
+        runner._python_mpi_orchestrators()
+    assert isinstance(caught.value.__cause__, SystemExit)
+    assert str(caught.value) == str(caught.value.__cause__)
+    _, errors = runner.audit_manifest(MANIFEST)
+    assert any("cannot read Python MPI ownership: " + str(caught.value) == error for error in errors)
+
+
 def _mutated_manifest(tmp_path: Path, old: str, new: str) -> Path:
     source = MANIFEST.read_text(encoding="utf-8")
     assert old in source
