@@ -43,16 +43,16 @@ if reports:
             'FAIL_PATH': failed_path, 'FAIL_STATUS': str(failed_status)}
 
 
-def test_exact_thirty_groups_cover_all_thirty_eight_contracts_and_forty_eight_nodes_with_existing_caps():
+def test_exact_thirty_seven_groups_cover_all_thirty_eight_contracts_and_sixty_two_nodes_with_existing_caps():
     plan = runner.make_plan()
     assert (len(plan['groups']), plan['contract_count'], plan['orchestrator_count'],
-            plan['entrypoint_count']) == (30, 38, 28, 10)
-    assert plan['parent_launch_count'] == 48
+            plan['entrypoint_count']) == (37, 38, 28, 10)
+    assert plan['parent_launch_count'] == 62
     launches = [launch for group in plan['groups'] for launch in group['launches']]
-    assert len({(launch['path'], launch.get('parent_node', '')) for launch in launches}) == 48
+    assert len({(launch['path'], launch.get('parent_node', '')) for launch in launches}) == 62
     assert len({launch['path'] for launch in launches}) == 38
     pairs = [row for row in plan['groups'] if row['group'].startswith('worlds-')]
-    assert len(pairs) == 18
+    assert len(pairs) == 25
     for pair in pairs:
         assert len(pair['launches']) == 2
         assert [row['path'][-7:] for row in pair['launches']] == ['mpi1.py', 'mpi2.py']
@@ -78,12 +78,18 @@ def test_allocation_refuses_an_incomplete_mandatory_world_pair():
 
 
 @pytest.mark.parametrize('mutation', ('remove_field', 'dual_omission', 'unknown', 'duplicate',
-                                     'wrong_function', 'unowned_wrapper', 'unknown_field'))
-def test_partition_contract_cannot_omit_or_invent_native_coverage(mutation):
+                                     'wrong_function', 'wrong_world', 'unowned_wrapper', 'unknown_field'))
+@pytest.mark.parametrize('family', ('amr', 'original', 'newton'))
+def test_partition_contract_cannot_omit_or_invent_native_coverage(mutation, family):
     manifest = copy.deepcopy(runner.selection.load_manifest())
     suite = next(row for row in manifest['python']['suite'] if row['name'] == 'pops_python_integration_mpi')
-    owners = [row for row in suite['mpi_orchestrators'] if 'test_public_amr_profile_mpi' in row['path']]
+    prefix = {'amr': 'test_public_amr_profile_mpi',
+              'original': 'test_public_amr_original_field_mpi',
+              'newton': 'test_public_typed_newton_mpi'}[family]
+    owners = [row for row in suite['mpi_orchestrators'] if prefix in row['path']]
     row = owners[0]
+    parent_function = row['partitions'][0]['parent_node'].split('[', 1)[0]
+    first_id = row['partitions'][0]['id']
     if mutation == 'remove_field':
         row.pop('partitions')
     elif mutation == 'dual_omission':
@@ -91,13 +97,15 @@ def test_partition_contract_cannot_omit_or_invent_native_coverage(mutation):
             owner['partitions'].pop()
     elif mutation == 'unknown':
         row['partitions'][0]['id'] = 'unknown'
-        row['partitions'][0]['parent_node'] = 'test_public_amr_fixtures_on_authenticated_mpi1_world[unknown]'
+        row['partitions'][0]['parent_node'] = parent_function + '[unknown]'
     elif mutation == 'duplicate':
         row['partitions'].append(copy.deepcopy(row['partitions'][0]))
     elif mutation == 'wrong_function':
-        row['partitions'][0]['parent_node'] = 'test_foreign[tag_selection]'
+        row['partitions'][0]['parent_node'] = 'test_foreign[' + first_id + ']'
+    elif mutation == 'wrong_world':
+        row['partitions'][0]['parent_node'] = parent_function.replace('mpi1', 'mpi2') + '[' + first_id + ']'
     elif mutation == 'unowned_wrapper':
-        other = next(owner for owner in suite['mpi_orchestrators'] if 'test_public_typed_newton_mpi1' in owner['path'])
+        other = next(owner for owner in suite['mpi_orchestrators'] if 'test_public_captured_diffusion_mpi1' in owner['path'])
         other['partitions'] = copy.deepcopy(row['partitions'])
     else:
         row['partitions'][0]['watchdog'] = 9999
@@ -108,7 +116,7 @@ def test_partition_contract_cannot_omit_or_invent_native_coverage(mutation):
 def test_partition_parent_xml_requires_exact_owned_module_and_selected_node(tmp_path):
     launches = [launch for group in runner.make_plan()['groups'] for launch in group['launches']
                 if 'parent_node' in launch]
-    assert len(launches) == 14
+    assert len(launches) == 30
     for launch in launches:
         root = ET.Element('testsuite')
         case = ET.SubElement(root, 'testcase', name=launch['parent_node'],
@@ -155,7 +163,7 @@ def test_plan_cli_exports_the_same_complete_dynamic_matrix(tmp_path):
     values = dict(line.split('=', 1) for line in outputs.read_text().splitlines())
     matrix = json.loads(values['matrix'])
     assert matrix['include'] == [{'group': row['group']} for row in plan['groups']]
-    assert values['group_count'] == '30'
+    assert values['group_count'] == '37'
 
 
 def wheel_artifact(tmp_path):

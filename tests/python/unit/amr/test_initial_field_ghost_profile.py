@@ -255,28 +255,64 @@ def test_field_profile_drivers_keep_every_declared_native_group_and_world(tmp_pa
 
 
 def test_checkpoint_profile_drivers_keep_all_seventeen_cases_in_each_world(tmp_path, monkeypatch):
+    from collections import Counter
     import importlib
     from tests.python.support import public_checkpoint_profile_mpi as profile
+    from tests.python.support import public_typed_newton_mpi as newton
 
     expected_counts = {"accepted_halo": 2, "scalar_bound_capture": 4,
                        "imex_checkpoint": 2, "amr12_carrier": 1, "typed_newton": 8}
     assert set(profile.GROUPS) == set(expected_counts)
     calls = []
-    monkeypatch.setattr(profile, "run_fixture_world", lambda **arguments: calls.append(arguments))
+
+    def capture(**arguments):
+        calls.append(arguments)
+        if arguments["tests"][0].startswith(
+                "tests/python/integration/runtime/test_public_newton_typed_original.py::"):
+            arguments["directory"].mkdir()
+            name = arguments["tests"][0].split("::", 1)[1]
+            for rank in range(arguments["ranks"]):
+                receipt = ET.Element("testsuite")
+                ET.SubElement(receipt, "testcase", name=name,
+                              classname="tests.python.integration.runtime.test_public_newton_typed_original")
+                ET.ElementTree(receipt).write(arguments["directory"] / ("rank%d.xml" % rank))
+
+    monkeypatch.setattr(profile, "run_fixture_world", capture)
+    monkeypatch.setattr(newton, "run_fixture_world", capture)
     for group, count in expected_counts.items():
         for ranks in (1, 2):
             module = importlib.import_module(
                 "tests.python.integration.mpi.test_public_%s_mpi%d" % (group, ranks))
-            getattr(module, "test_public_%s_on_authenticated_mpi%d_world" % (group, ranks))(tmp_path)
-            call = calls[-1]
-            assert call["ranks"] == ranks
-            assert call["directory"] == tmp_path / (group + "-mpi%d" % ranks)
-            assert call["tests"] is profile.GROUPS[group][0]
-            assert call["expected_cases"] is profile.GROUPS[group][1]
-            assert sum(call["expected_cases"].values()) == count
-            assert {selector.split("::", 1)[1] for selector in call["tests"]} == set(call["expected_cases"])
-            assert call["expected_rank_env"] == "POPS_TEST_PUBLIC_NATIVE_EXPECT_RANKS"
-            assert call["timeout_seconds"] == 840
+            function = getattr(module, "test_public_%s_on_authenticated_mpi%d_world" % (group, ranks))
+            partitions = tuple(newton.TYPED_NEWTON_PARTITIONS) if group == "typed_newton" else (None,)
+            union, native_nodes = Counter(), []
+            for partition in partitions:
+                parent = tmp_path
+                if partition is None:
+                    function(parent)
+                else:
+                    parent = tmp_path / (group + "-" + partition + "-mpi%d" % ranks)
+                    parent.mkdir()
+                    function(parent, partition)
+                call = calls[-1]
+                assert call["ranks"] == ranks
+                assert call["directory"] == parent / (group + "-mpi%d" % ranks)
+                if partition is None:
+                    assert call["tests"] is profile.GROUPS[group][0]
+                    assert call["expected_cases"] is profile.GROUPS[group][1]
+                    assert sum(call["expected_cases"].values()) == count
+                else:
+                    assert call["tests"] == (newton.TYPED_NEWTON_PARTITIONS[partition],)
+                    assert call["expected_cases"] == {"test_public_typed_original_policy": 1}
+                assert {selector.split("::", 1)[1].split("[", 1)[0]
+                        for selector in call["tests"]} == set(call["expected_cases"])
+                assert call["expected_rank_env"] == "POPS_TEST_PUBLIC_NATIVE_EXPECT_RANKS"
+                assert call["timeout_seconds"] == 840
+                union.update(call["expected_cases"])
+                native_nodes.extend(call["tests"])
+            assert union == profile.GROUPS[group][1]
+            assert sum(union.values()) == count
+            assert len(native_nodes) == len(set(native_nodes))
     assert sum(sum(call["expected_cases"].values()) for call in calls) == 34
     assert sum(call["ranks"] * sum(call["expected_cases"].values()) for call in calls) == 51
     assert len({call["directory"] for call in calls}) == len(calls)

@@ -1001,6 +1001,10 @@ def test_manifest_projects_serial_python_mpi_orchestrators():
         elif "test_public_amr_original_field_mpi" in path:
             ids = ("saved_restart", "parent_rollback_retry")
             function = "test_public_amr_original"
+        elif "test_public_typed_newton_mpi" in path:
+            ids = ("relative_uniform", "relative_amr", "floor_uniform", "floor_amr",
+                   "absolute_uniform", "absolute_amr", "overflow_uniform", "overflow_amr")
+            function = "test_public_typed_newton"
         else:
             continue
         world = int(path[-4])

@@ -1437,8 +1437,26 @@ mpi_orchestrators = [
   { path = "tests/python/integration/mpi/test_public_scalar_bound_capture_mpi2.py" },
   { path = "tests/python/integration/mpi/test_public_spatial_interaction_mpi1.py" },
   { path = "tests/python/integration/mpi/test_public_spatial_interaction_mpi2.py" },
-  { path = "tests/python/integration/mpi/test_public_typed_newton_mpi1.py" },
-  { path = "tests/python/integration/mpi/test_public_typed_newton_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_typed_newton_mpi1.py", partitions = [
+    { id = "relative_uniform", parent_node = "test_public_typed_newton_on_authenticated_mpi1_world[relative_uniform]" },
+    { id = "relative_amr", parent_node = "test_public_typed_newton_on_authenticated_mpi1_world[relative_amr]" },
+    { id = "floor_uniform", parent_node = "test_public_typed_newton_on_authenticated_mpi1_world[floor_uniform]" },
+    { id = "floor_amr", parent_node = "test_public_typed_newton_on_authenticated_mpi1_world[floor_amr]" },
+    { id = "absolute_uniform", parent_node = "test_public_typed_newton_on_authenticated_mpi1_world[absolute_uniform]" },
+    { id = "absolute_amr", parent_node = "test_public_typed_newton_on_authenticated_mpi1_world[absolute_amr]" },
+    { id = "overflow_uniform", parent_node = "test_public_typed_newton_on_authenticated_mpi1_world[overflow_uniform]" },
+    { id = "overflow_amr", parent_node = "test_public_typed_newton_on_authenticated_mpi1_world[overflow_amr]" },
+  ] },
+  { path = "tests/python/integration/mpi/test_public_typed_newton_mpi2.py", partitions = [
+    { id = "relative_uniform", parent_node = "test_public_typed_newton_on_authenticated_mpi2_world[relative_uniform]" },
+    { id = "relative_amr", parent_node = "test_public_typed_newton_on_authenticated_mpi2_world[relative_amr]" },
+    { id = "floor_uniform", parent_node = "test_public_typed_newton_on_authenticated_mpi2_world[floor_uniform]" },
+    { id = "floor_amr", parent_node = "test_public_typed_newton_on_authenticated_mpi2_world[floor_amr]" },
+    { id = "absolute_uniform", parent_node = "test_public_typed_newton_on_authenticated_mpi2_world[absolute_uniform]" },
+    { id = "absolute_amr", parent_node = "test_public_typed_newton_on_authenticated_mpi2_world[absolute_amr]" },
+    { id = "overflow_uniform", parent_node = "test_public_typed_newton_on_authenticated_mpi2_world[overflow_uniform]" },
+    { id = "overflow_amr", parent_node = "test_public_typed_newton_on_authenticated_mpi2_world[overflow_amr]" },
+  ] },
 ]
 
 [[python.suite]]

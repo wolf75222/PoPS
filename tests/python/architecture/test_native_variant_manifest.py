@@ -642,7 +642,7 @@ def test_ctest_python_mpi_projection_matches_the_manifest_and_dim2_contract():
                       for row in rows for partition in row.get("partitions", [])]
     partition_block = source.split("set(_pops_py_mpi_partition_nodes", 1)[1].split(")", 1)[0]
     projected_nodes = re.findall(r'"([^"|]+)\|([^"|]+)\|([^"|]+)"', partition_block)
-    assert len(expected_nodes) == len(set(expected_nodes)) == 14
+    assert len(expected_nodes) == len(set(expected_nodes)) == 30
     assert projected_nodes == expected_nodes
     assert 'if(NOT _pops_py_mpi_orchestrator IN_LIST _pops_py_mpi_partitioned_orchestrators)' in source
     assert source.count('pops_add_mpi_pytest_orchestrator("${_pops_py_mpi_orchestrator}" "" "")') == 1

@@ -295,7 +295,23 @@ if(POPS_NATIVE_DIM STREQUAL "2")
       "tests/python/integration/mpi/test_public_amr_profile_mpi2.py|stationary_regrids|test_public_amr_fixtures_on_authenticated_mpi2_world[stationary_regrids]"
       "tests/python/integration/mpi/test_public_amr_profile_mpi2.py|evolving_halo|test_public_amr_fixtures_on_authenticated_mpi2_world[evolving_halo]"
       "tests/python/integration/mpi/test_public_amr_profile_mpi2.py|evolved_spatial|test_public_amr_fixtures_on_authenticated_mpi2_world[evolved_spatial]"
-      "tests/python/integration/mpi/test_public_amr_profile_mpi2.py|evolved_spatial_v4|test_public_amr_fixtures_on_authenticated_mpi2_world[evolved_spatial_v4]")
+      "tests/python/integration/mpi/test_public_amr_profile_mpi2.py|evolved_spatial_v4|test_public_amr_fixtures_on_authenticated_mpi2_world[evolved_spatial_v4]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi1.py|relative_uniform|test_public_typed_newton_on_authenticated_mpi1_world[relative_uniform]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi1.py|relative_amr|test_public_typed_newton_on_authenticated_mpi1_world[relative_amr]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi1.py|floor_uniform|test_public_typed_newton_on_authenticated_mpi1_world[floor_uniform]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi1.py|floor_amr|test_public_typed_newton_on_authenticated_mpi1_world[floor_amr]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi1.py|absolute_uniform|test_public_typed_newton_on_authenticated_mpi1_world[absolute_uniform]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi1.py|absolute_amr|test_public_typed_newton_on_authenticated_mpi1_world[absolute_amr]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi1.py|overflow_uniform|test_public_typed_newton_on_authenticated_mpi1_world[overflow_uniform]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi1.py|overflow_amr|test_public_typed_newton_on_authenticated_mpi1_world[overflow_amr]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi2.py|relative_uniform|test_public_typed_newton_on_authenticated_mpi2_world[relative_uniform]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi2.py|relative_amr|test_public_typed_newton_on_authenticated_mpi2_world[relative_amr]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi2.py|floor_uniform|test_public_typed_newton_on_authenticated_mpi2_world[floor_uniform]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi2.py|floor_amr|test_public_typed_newton_on_authenticated_mpi2_world[floor_amr]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi2.py|absolute_uniform|test_public_typed_newton_on_authenticated_mpi2_world[absolute_uniform]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi2.py|absolute_amr|test_public_typed_newton_on_authenticated_mpi2_world[absolute_amr]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi2.py|overflow_uniform|test_public_typed_newton_on_authenticated_mpi2_world[overflow_uniform]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi2.py|overflow_amr|test_public_typed_newton_on_authenticated_mpi2_world[overflow_amr]")
   set(_pops_py_mpi_partitioned_orchestrators)
   foreach(_pops_py_mpi_partition IN LISTS _pops_py_mpi_partition_nodes)
     string(REPLACE "|" ";" _pops_py_mpi_partition_fields "${_pops_py_mpi_partition}")

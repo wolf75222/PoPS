@@ -554,6 +554,14 @@ MPI_ORCHESTRATOR_PARTITION_CONTRACTS.update({
     for world in (1, 2)
 })
 
+MPI_ORCHESTRATOR_PARTITION_CONTRACTS.update({
+    "tests/python/integration/mpi/test_public_typed_newton_mpi%d.py" % world:
+        ("test_public_typed_newton_on_authenticated_mpi%d_world" % world,
+         ("relative_uniform", "relative_amr", "floor_uniform", "floor_amr",
+          "absolute_uniform", "absolute_amr", "overflow_uniform", "overflow_amr"))
+    for world in (1, 2)
+})
+
 
 def manifest_python_mpi_orchestrators(manifest: dict) -> list[dict]:
     """Return serial pytest drivers that create and tear down their own MPI worlds.
