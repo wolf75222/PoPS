@@ -1,0 +1,13 @@
+"""All 18 public AMR cases on every rank, partitioned into bounded MPI2 worlds."""
+import pytest
+
+from tests.python.support.public_amr_profile_mpi import PARTITIONS, run_public_amr_profile_world
+
+
+pytestmark = pytest.mark.mpi
+
+
+@pytest.mark.parametrize("partition", tuple(PARTITIONS))
+def test_public_amr_fixtures_on_authenticated_mpi2_world(tmp_path, partition):
+    run_public_amr_profile_world(ranks=2, directory=tmp_path / (partition + "-mpi2"),
+                                 partition=partition)

@@ -1,3 +1,19 @@
+public:
+/// Invocation-owned input authority for a generated synchronous RHS evaluation.
+class RhsInputTrace {
+public:
+  RhsInputTrace(const RhsInputTrace&) = default;
+  RhsInputTrace(RhsInputTrace&&) = default;
+
+private:
+  friend class AmrProgramContext;
+  RhsInputTrace() = default;
+  const AmrProgramContext* owner_ = nullptr;
+  const field_type* input_ = nullptr;
+  std::shared_ptr<const RhsInputTraceRecord> current_;
+  std::shared_ptr<const RhsInputTraceRecord> parent_;
+};
+
 // Immutable same-SSA parent inputs for synchronous source/transport composition.
 private:
 struct RhsInputTraceRecord {

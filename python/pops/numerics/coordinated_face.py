@@ -72,7 +72,7 @@ class CoordinatedFace:
                 if any(not isinstance(row[index], Const) or row[index].value != 0
                        for row in rows[1:]):
                     raise ValueError("conservative component %s requires literal zero side sources" % component)
-            balances.append(FaceBalance(*rows, speed))
+            balances.append(FaceBalance(rows[0], rows[1], rows[2], speed))
         object.__setattr__(self, "balances", tuple(balances))
         object.__setattr__(self, "left_symbols", left)
         object.__setattr__(self, "right_symbols", right)

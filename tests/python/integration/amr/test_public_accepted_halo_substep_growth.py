@@ -80,7 +80,6 @@ def build_growth():
 import hashlib
 import json
 from pathlib import Path
-import sys
 import numpy as np
 import pytest
 from tests.python.support.accepted_halo_substep_oracle import CONTRACT,check,discriminate,factor
@@ -89,21 +88,21 @@ from tests.python.support.collective_checks import collective_call,collective_ch
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.public_native_profile import native_profile
+from tests.python.support.evolved_stage_v_capture import world_rank
 from tests.python.support.evolving_accepted_halo_oracle import halo_rows
 
 @pytest.mark.compiler
 @pytest.mark.native_loader
 def test_public_accepted_halo_five_halves_substep_growth(isolated_native_cache,tmp_path,record_property):
     del isolated_native_cache
-    from pops._native_selector import select_native_dimension
-    native=select_native_dimension(2); world=native.mpi_world()
-    with collective_check(world):
-        assert native.__abi_version__==8
-        assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
-        assert Path(native.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+    native,world=native_profile(scope="public accepted halo substep growth")
+    record_property("native_abi_version",native.__abi_version__)
+    record_property("native_profile","MPI" if world is not None else "Serial")
     case,layout=collective_call(world,build_growth)
     resolved=collective_call(world,lambda:pops.resolve(pops.validate(case),layout=layout))
-    artifact=compile_resolved_plan_once(world,resolved,route=CONTRACT,compile_artifact=pops.compile)
+    artifact=(pops.compile(resolved) if world is None else compile_resolved_plan_once(
+        world,resolved,route=CONTRACT,compile_artifact=pops.compile))
     context=collective_call(world,lambda:artifact_execution_context(artifact))
     def bind(): return pops.bind(artifact,resources={'execution_context':context})
     runtime=collective_call(world,bind)
@@ -122,7 +121,7 @@ def test_public_accepted_halo_five_halves_substep_growth(isolated_native_cache,t
     collective_call(world,lambda:pops.run(restarted,t_end=2*DT,max_steps=1,console=False))
     images['replay']=observe(world,restarted);publish(world,directory,'replay',images['replay'])
     with collective_check(world):
-        if world.rank==0:
+        if world_rank(world)==0:
             with np.load(path,allow_pickle=False) as checkpoint:
                 payload={key:checkpoint[key].copy() for key in checkpoint.files}
             accepted=json.loads(str(payload['amr_accepted_contract']))
@@ -148,6 +147,6 @@ def test_public_accepted_halo_five_halves_substep_growth(isolated_native_cache,t
             for level,((current,mask),(initial,oldmask)) in enumerate(zip(image[1],images['initial'][1],strict=True)):
                 np.testing.assert_array_equal(mask,oldmask)
                 proof['errors'][phase+str(level)]=check(initial,current,mask,steps,level)
-        if world.rank==0:(directory/'temporal-proof.json').write_text(json.dumps(proof,indent=2)+'\n')
+        if world_rank(world)==0:(directory/'temporal-proof.json').write_text(json.dumps(proof,indent=2)+'\n')
     record_property('artifact_identity',artifact.artifact_identity.token)
     record_property('native_sha256',hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest())

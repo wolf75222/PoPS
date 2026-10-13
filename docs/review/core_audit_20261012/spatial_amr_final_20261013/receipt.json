@@ -1,0 +1,265 @@
+{
+  "errors": 0,
+  "failures": 0,
+  "limits": [
+    "Only the AMR periodic positive was executed on f94 native.",
+    "Previously received Uniform and nonperiodic bind refusal executions retain their historical native tuple.",
+    "No model-specific dispatch or tolerance, physical kernel, geometry, source law, history, or replay oracle was changed.",
+    "The new NoInterpolation composite history runtime admits exact integral macro windows; ratio2 refusal is covered by separate CPP receptions.",
+    "Local native qualification does not authenticate GitHub CI or its required aggregate gate."
+  ],
+  "native_identity": {
+    "abi_version": 13,
+    "dimension": 2,
+    "has_mpi": true,
+    "header_signature": "da8e04dab4c1e22cf3c31dc75e253eecf26f3350a09b900667cc8a1c05eacb4d",
+    "native": "$AUDIT_ENV/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "native_sha256": "e9b1c76cb0927f0df939bad9d1e785cd565cd582cd06bd3b24dba9cca0f765fc"
+  },
+  "rank_outcomes": 3,
+  "runner_sources": [
+    {
+      "path": "$EVIDENCE/ci/f94b82ea-spatial-amr-final/runner.py",
+      "sha256": "884cf791d406670e879e139fa6e2e73039fcb337c0dab0adabeab7812d88b02a"
+    },
+    {
+      "path": "$EVIDENCE/ci/f94b82ea-spatial-amr-final/rank_driver.py",
+      "sha256": "782ada3dea029cd5c08a5a7b93b61ee9b7f44c8a73abbb1a13f4bea686888243"
+    },
+    {
+      "path": "$EVIDENCE/ci/f94b82ea-spatial-amr-final/inspect_saved.py",
+      "sha256": "fadb384d23391c58187e19dd6cc290188d13bb9a3e6f9e25df93713b0c854d4d"
+    }
+  ],
+  "saved_oracles": {
+    "path": "$EVIDENCE/ci/f94b82ea-spatial-amr-final/saved-oracles.json",
+    "sha256": "802b694989d99946611978764443e4c9fd9fb8c5bf020596d7b94491dae35e06"
+  },
+  "schema": "pops.spatial-amr-final-aggregate-reception@1",
+  "skipped": 0,
+  "source_commit": "f94b82ea9d2c4ee571e994dd29ce3e699a82809e",
+  "source_freeze": {
+    "path": "$EVIDENCE/ci/f94b82ea-spatial-amr-final/source-freeze.json",
+    "sha256": "a81fc76c1bed1ea0329bcde4cef774d7b2fed505bd1b2232eb30375d132b2a5b"
+  },
+  "status": "passed",
+  "world_variants": 2,
+  "worlds": [
+    {
+      "attestation": {
+        "path": "$EVIDENCE/ci/f94b82ea-installed-dim2-identity.json",
+        "sha256": "31b57f0cdc21280bf3f732087c5d6efb465419979b2c1f9fc92a79d5c59f9fce"
+      },
+      "command": [
+        "$AUDIT_ENV/bin/mpiexec",
+        "-n",
+        "1",
+        "$AUDIT_ENV/bin/python",
+        "-u",
+        "$EVIDENCE/ci/f94b82ea-spatial-amr-final/rank_driver.py",
+        "$EVIDENCE/ci/f94b82ea-spatial-amr-final/mpi1",
+        "$EVIDENCE/ci/f94b82ea-installed-dim2-identity.json",
+        "$EVIDENCE/ci/f94b82ea-spatial-amr-final/source-freeze.json",
+        "1",
+        "tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_saved_history_and_exact_replay[partial-amr-cutcell]"
+      ],
+      "environment": {
+        "OMP_NUM_THREADS": "2",
+        "OMP_PROC_BIND": "false",
+        "POPS_CI_TEST_EXECUTION": "installed",
+        "POPS_INCLUDE": "$AUDIT_ENV/lib/python3.12/site-packages/pops/include",
+        "POPS_NATIVE_DIM": "2",
+        "POPS_REQUIRE_MPI_TESTS": "1",
+        "POPS_REQUIRE_NATIVE_TESTS": "1",
+        "POPS_TEST_PUBLIC_NATIVE_EXPECT_RANKS": "1",
+        "PYTEST_DEBUG_TEMPROOT": "$EVIDENCE/ci/f94b82ea-spatial-amr-final/mpi1/tmp"
+      },
+      "files": {
+        "identity-after.json": "53b04e83265d11f72146693aa18e8e7e82ff61009a1dca2aeb86fa6056ab6fca",
+        "identity-before.json": "53b04e83265d11f72146693aa18e8e7e82ff61009a1dca2aeb86fa6056ab6fca",
+        "launcher.log": "166d4544969413e3713b8d990812a8bba29b8a5986c055c6275896351fa439b1",
+        "rank0-identity-after.json": "8aae424963a5bee6ae5a873f8a4d2b581316388a99079f780fb7959f406bfd80",
+        "rank0-identity-before.json": "8aae424963a5bee6ae5a873f8a4d2b581316388a99079f780fb7959f406bfd80",
+        "rank0.xml": "90cefd171a29660f03448a870529fb6734c72bb7297d5400214ffec1c636eb66",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/.598a37b8460106ec7231b473a7b9fae01b141fe70cf94f1ce58409d54d82ab71.pops-stage-th5xs5h3.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/598a37b8460106ec7231b473a7b9fae01b141fe70cf94f1ce58409d54d82ab71.so": "d539d3638e1d1e2a8b0c66b7af8961c84ac3848d9561cc57a812e2dc3342f9ad",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/598a37b8460106ec7231b473a7b9fae01b141fe70cf94f1ce58409d54d82ab71.so.pops-artifact.json": "98500b28e6215da989c8f6cf10c54840ad3fae15190e0c64b7da7b1f5a91fea7",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/598a37b8460106ec7231b473a7b9fae01b141fe70cf94f1ce58409d54d82ab71.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/598a37b8460106ec7231b473a7b9fae01b141fe70cf94f1ce58409d54d82ab71.so.pops-model-compile.json": "7d474214772fc51f4cdca6b2634499c63546c423cfe163a0033e34319928228e",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/598a37b8460106ec7231b473a7b9fae01b141fe70cf94f1ce58409d54d82ab71.so.pops-model.cpp": "e3eb28429fabab700a47cd0e99dc5c656519ea5c8d2d1b91218d7ff2ef266a8f",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/e164ad76d59b35fbcfe6abd55b910df369ec2c5611988b65de40c021f1f826a6.so": "e218a9bf615b8b7f0cf9db020d0b036fbb10811a80d11fc2c8fc7af54d03ee87",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/e164ad76d59b35fbcfe6abd55b910df369ec2c5611988b65de40c021f1f826a6.so.pops-artifact.json": "96a2a6b2fda510314a140af7ea44e103788134ba485b90c21f3407adbd64f1f2",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/e164ad76d59b35fbcfe6abd55b910df369ec2c5611988b65de40c021f1f826a6.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/accepted-checkpoint.npz": "446960b2c042aeff02c4e9aedfd03a95e3093b16855f29fc247f188b9a0d2093",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/accepted.npz": "6f47d5ba54b0845ff6722ef905d6324db9836bd5b3691ef9e3fe252aacec7157",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/continuous-checkpoint.npz": "e9e0e73b1022412f6088b8f46f1a9ce84c23b62e9df121be81dc8e2060dc4880",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/continuous.npz": "5c78d353b8763c2296018f21a82381c10c4c24902776c496be73fb060cbce255",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/initial-checkpoint.npz": "ebb7d4cc32b369376cee3c17263c11ad397d22d54ce96b4ae5be29b993601213",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/initial.npz": "5f10e9eea4c98bf272e32a1b23f2a844f92ef2abf90e509e96769f661ffbdc09",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/program-1.cpp": "88ab14579484ddd6bda4031688814a3639c596ff55c7e89f29a5c4c6126dd95e",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/program-1.ir.json": "ac22bd4a617dc8575bed4ff8732b49ec93e683aea6c8fb0b97ac9d836c2daf7c",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/receipt.json": "9e332c6710859fa45e76cf47fa83d83b0120eddd8348eae23141b31e89f7f207",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/reloaded-checkpoint.npz": "446960b2c042aeff02c4e9aedfd03a95e3093b16855f29fc247f188b9a0d2093",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/reloaded.npz": "6f47d5ba54b0845ff6722ef905d6324db9836bd5b3691ef9e3fe252aacec7157",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/replay-checkpoint.npz": "e78070ab1cadfd54a66e07de19f06b1957e20bae79b364dd1bc933bfa9540ccd",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/replay.npz": "5c78d353b8763c2296018f21a82381c10c4c24902776c496be73fb060cbce255"
+      },
+      "launcher": "$AUDIT_ENV/bin/mpiexec",
+      "parent_native_imported": false,
+      "rank_outcomes": [
+        {
+          "errors": 0,
+          "failures": 0,
+          "name": "test_public_spatial_interaction_saved_history_and_exact_replay[partial-amr-cutcell]",
+          "properties": {
+            "adaptive": "True",
+            "dimension": "2",
+            "evidence_path": "$EVIDENCE/ci/f94b82ea-spatial-amr-final/mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction",
+            "fixture_schema": "pops.spatial-interaction-native-fixture@1",
+            "rank": "0",
+            "size": "1",
+            "width": "3"
+          },
+          "rank": 0,
+          "skipped": 0,
+          "time": 48.028,
+          "xml": "$EVIDENCE/ci/f94b82ea-spatial-amr-final/mpi1/rank0.xml",
+          "xml_sha256": "90cefd171a29660f03448a870529fb6734c72bb7297d5400214ffec1c636eb66"
+        }
+      ],
+      "ranks": 1,
+      "returncode": 0,
+      "schema": "pops.spatial-amr-final-native-reception@1",
+      "scope": "Only AMR periodic positive; two synchronous macro steps, History@2 and exact restart/replay; original nonperiodic guard remains a separately received refusal.",
+      "seconds": 49.50495287499507,
+      "source_commit": "f94b82ea9d2c4ee571e994dd29ce3e699a82809e",
+      "source_freeze": {
+        "path": "$EVIDENCE/ci/f94b82ea-spatial-amr-final/source-freeze.json",
+        "sha256": "a81fc76c1bed1ea0329bcde4cef774d7b2fed505bd1b2232eb30375d132b2a5b"
+      },
+      "status": "passed",
+      "target": "tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_saved_history_and_exact_replay[partial-amr-cutcell]",
+      "timeout": false,
+      "unchanged_identity": true
+    },
+    {
+      "attestation": {
+        "path": "$EVIDENCE/ci/f94b82ea-installed-dim2-identity.json",
+        "sha256": "31b57f0cdc21280bf3f732087c5d6efb465419979b2c1f9fc92a79d5c59f9fce"
+      },
+      "command": [
+        "$AUDIT_ENV/bin/mpiexec",
+        "-n",
+        "2",
+        "$AUDIT_ENV/bin/python",
+        "-u",
+        "$EVIDENCE/ci/f94b82ea-spatial-amr-final/rank_driver.py",
+        "$EVIDENCE/ci/f94b82ea-spatial-amr-final/mpi2",
+        "$EVIDENCE/ci/f94b82ea-installed-dim2-identity.json",
+        "$EVIDENCE/ci/f94b82ea-spatial-amr-final/source-freeze.json",
+        "2",
+        "tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_saved_history_and_exact_replay[partial-amr-cutcell]"
+      ],
+      "environment": {
+        "OMP_NUM_THREADS": "2",
+        "OMP_PROC_BIND": "false",
+        "POPS_CI_TEST_EXECUTION": "installed",
+        "POPS_INCLUDE": "$AUDIT_ENV/lib/python3.12/site-packages/pops/include",
+        "POPS_NATIVE_DIM": "2",
+        "POPS_REQUIRE_MPI_TESTS": "1",
+        "POPS_REQUIRE_NATIVE_TESTS": "1",
+        "POPS_TEST_PUBLIC_NATIVE_EXPECT_RANKS": "2",
+        "PYTEST_DEBUG_TEMPROOT": "$EVIDENCE/ci/f94b82ea-spatial-amr-final/mpi2/tmp"
+      },
+      "files": {
+        "identity-after.json": "53b04e83265d11f72146693aa18e8e7e82ff61009a1dca2aeb86fa6056ab6fca",
+        "identity-before.json": "53b04e83265d11f72146693aa18e8e7e82ff61009a1dca2aeb86fa6056ab6fca",
+        "launcher.log": "dbf09dbb71f5133aee73c05d856aa2214a7daaf0e54d36c54c306137756a439d",
+        "rank0-identity-after.json": "1b73313a02d5fa7fb8d55ec12f813a01b201d83bed27ac9d16af7b053d0cafc5",
+        "rank0-identity-before.json": "1b73313a02d5fa7fb8d55ec12f813a01b201d83bed27ac9d16af7b053d0cafc5",
+        "rank0.xml": "f72f0a4cbcc536b9bac25f68bb7453e1084146dc181794cd824d8a48abc63324",
+        "rank1-identity-after.json": "f59be44a305c818e5a6f3075ae1687f0f8cd7eb84ef1e31ec3b9eb3045ffa56f",
+        "rank1-identity-before.json": "f59be44a305c818e5a6f3075ae1687f0f8cd7eb84ef1e31ec3b9eb3045ffa56f",
+        "rank1.xml": "0a5eda0d0cf750afccef3a107c6423a2b840fd13cb91cbe141982e6e1fafe796",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/.598a37b8460106ec7231b473a7b9fae01b141fe70cf94f1ce58409d54d82ab71.pops-stage-b7e602vj.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/598a37b8460106ec7231b473a7b9fae01b141fe70cf94f1ce58409d54d82ab71.so": "d539d3638e1d1e2a8b0c66b7af8961c84ac3848d9561cc57a812e2dc3342f9ad",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/598a37b8460106ec7231b473a7b9fae01b141fe70cf94f1ce58409d54d82ab71.so.pops-artifact.json": "d5979d7a4333c42c8df5d235301b99f9bf571bc7d607a8f8498fd43cc52d2ce0",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/598a37b8460106ec7231b473a7b9fae01b141fe70cf94f1ce58409d54d82ab71.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/598a37b8460106ec7231b473a7b9fae01b141fe70cf94f1ce58409d54d82ab71.so.pops-model-compile.json": "b0797ec089659164ef2cf82b4c40c29786ab51439bbccf419a0ecfd896a16aab",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/598a37b8460106ec7231b473a7b9fae01b141fe70cf94f1ce58409d54d82ab71.so.pops-model.cpp": "e3eb28429fabab700a47cd0e99dc5c656519ea5c8d2d1b91218d7ff2ef266a8f",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/e164ad76d59b35fbcfe6abd55b910df369ec2c5611988b65de40c021f1f826a6.so": "e218a9bf615b8b7f0cf9db020d0b036fbb10811a80d11fc2c8fc7af54d03ee87",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/e164ad76d59b35fbcfe6abd55b910df369ec2c5611988b65de40c021f1f826a6.so.pops-artifact.json": "96a2a6b2fda510314a140af7ea44e103788134ba485b90c21f3407adbd64f1f2",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/e164ad76d59b35fbcfe6abd55b910df369ec2c5611988b65de40c021f1f826a6.so.pops-cache.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/accepted-checkpoint.npz": "9cfe0c80c6f6718fcac482b99d372e515f0554f209d6b65253dd0fb59c44c13a",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/accepted.npz": "8bc1a54c09bfb6792cd37725f9338c380d2fdc4da1e64fc7dbdac36a1151986a",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/continuous-checkpoint.npz": "66759353c88c9c9d5b61a03175991c8f852049f58ca0410497786844f5a16804",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/continuous.npz": "e6ab25f649b97bdc10fd8e036e01402efd7696ba3ada59f063597d6042d4673b",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/initial-checkpoint.npz": "c01d2199345aff55e14788a140daa337f142d2012c90ea7a842eaa5a07d29ef9",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/initial.npz": "b6153a863b1fac865d61a2dc1e472b5096bf6f4af5e6da8c7694f0d578c85731",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/program-1.cpp": "88ab14579484ddd6bda4031688814a3639c596ff55c7e89f29a5c4c6126dd95e",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/program-1.ir.json": "ac22bd4a617dc8575bed4ff8732b49ec93e683aea6c8fb0b97ac9d836c2daf7c",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/receipt.json": "79b1df05da9d6b491ec79fcbb4f1373d351ea67ea18ec764606871a2a7f58d51",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/reloaded-checkpoint.npz": "9cfe0c80c6f6718fcac482b99d372e515f0554f209d6b65253dd0fb59c44c13a",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/reloaded.npz": "8bc1a54c09bfb6792cd37725f9338c380d2fdc4da1e64fc7dbdac36a1151986a",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/replay-checkpoint.npz": "ad9d63bd208da5187bab58cf5d35cf17855d50e7737257cc33d7a02463fb1a0d",
+        "tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/replay.npz": "e6ab25f649b97bdc10fd8e036e01402efd7696ba3ada59f063597d6042d4673b"
+      },
+      "launcher": "$AUDIT_ENV/bin/mpiexec",
+      "parent_native_imported": false,
+      "rank_outcomes": [
+        {
+          "errors": 0,
+          "failures": 0,
+          "name": "test_public_spatial_interaction_saved_history_and_exact_replay[partial-amr-cutcell]",
+          "properties": {
+            "adaptive": "True",
+            "dimension": "2",
+            "evidence_path": "$EVIDENCE/ci/f94b82ea-spatial-amr-final/mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction",
+            "fixture_schema": "pops.spatial-interaction-native-fixture@1",
+            "rank": "0",
+            "size": "2",
+            "width": "3"
+          },
+          "rank": 0,
+          "skipped": 0,
+          "time": 50.239,
+          "xml": "$EVIDENCE/ci/f94b82ea-spatial-amr-final/mpi2/rank0.xml",
+          "xml_sha256": "f72f0a4cbcc536b9bac25f68bb7453e1084146dc181794cd824d8a48abc63324"
+        },
+        {
+          "errors": 0,
+          "failures": 0,
+          "name": "test_public_spatial_interaction_saved_history_and_exact_replay[partial-amr-cutcell]",
+          "properties": {
+            "adaptive": "True",
+            "dimension": "2",
+            "evidence_path": "$EVIDENCE/ci/f94b82ea-spatial-amr-final/mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction",
+            "fixture_schema": "pops.spatial-interaction-native-fixture@1",
+            "rank": "1",
+            "size": "2",
+            "width": "3"
+          },
+          "rank": 1,
+          "skipped": 0,
+          "time": 50.239,
+          "xml": "$EVIDENCE/ci/f94b82ea-spatial-amr-final/mpi2/rank1.xml",
+          "xml_sha256": "0a5eda0d0cf750afccef3a107c6423a2b840fd13cb91cbe141982e6e1fafe796"
+        }
+      ],
+      "ranks": 2,
+      "returncode": 0,
+      "schema": "pops.spatial-amr-final-native-reception@1",
+      "scope": "Only AMR periodic positive; two synchronous macro steps, History@2 and exact restart/replay; original nonperiodic guard remains a separately received refusal.",
+      "seconds": 51.67230637501052,
+      "source_commit": "f94b82ea9d2c4ee571e994dd29ce3e699a82809e",
+      "source_freeze": {
+        "path": "$EVIDENCE/ci/f94b82ea-spatial-amr-final/source-freeze.json",
+        "sha256": "a81fc76c1bed1ea0329bcde4cef774d7b2fed505bd1b2232eb30375d132b2a5b"
+      },
+      "status": "passed",
+      "target": "tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_saved_history_and_exact_replay[partial-amr-cutcell]",
+      "timeout": false,
+      "unchanged_identity": true
+    }
+  ]
+}

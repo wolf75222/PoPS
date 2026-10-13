@@ -84,7 +84,11 @@ def _entry(value, authority):
                         raise NotImplementedError("moving physical flux needs an interval-qualified provider for %s"%node.name)
                     replacements[id(node)]=Var("pops_principal_%d"%impl.cons_names.index(node.name),"cons")
                 pending.extend(_children(node))
-            state_handle=module.state_handle((state.declaration_ref or state).space)
+            from pops.model.handles import StateHandle
+            declaration=state.declaration_ref or state
+            if not isinstance(declaration,StateHandle):
+                raise ValueError("moving physical transport lost its exact StateSpace declaration")
+            state_handle=module.state_handle(declaration.space)
             quantities={(state_handle,i):Var("pops_principal_%d"%i,"cons")
                         for i in range(group.component_count)}
             return substitute_quantities(expanded,quantities,expression_bindings=replacements)
@@ -205,6 +209,8 @@ def _source(value, authority):
         body=tuple(expand_primitive_recipes(impl._source_terms[item.attrs["source"]],impl.prim_defs))
         roots=tuple(weight*expr for expr in body) if roots is None else tuple(
             old+weight*expr for old,expr in zip(roots,body,strict=True))
+    if roots is None:
+        raise ValueError("moving physical source requires at least one exact source term")
     pending=list(roots); seen=set()
     while pending:
         node=pending.pop()

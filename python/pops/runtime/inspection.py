@@ -302,6 +302,8 @@ def _diagnostics(sim: Any, options: Any) -> Any:
     diagnostics: Any = dict(_call(sim, "program_diagnostics", {}) or {})
     diagnostics["solver_events"] = list(_call(sim, "solver_diagnostics", []) or [])
     diagnostics["fallbacks"] = fallback_diagnostics_report(options)
+    from pops.runtime._initial_program_execution import initial_program_reports_snapshot
+    diagnostics["initial_program_solves"] = initial_program_reports_snapshot(sim)
     return diagnostics
 
 

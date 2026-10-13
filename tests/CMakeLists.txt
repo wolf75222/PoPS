@@ -504,6 +504,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_poisson_smoother_cache
   test_cartesian_poisson_nd
   test_geometric_mg_nd
+  test_tensor_diagonal_mg_preconditioner
   test_elliptic_named_device_kernels
   test_geometric_mg
   test_poisson_convergence
@@ -764,6 +765,12 @@ pops_add_gtest_suite(NAME test_amr_system_contract SOURCES "${_src}" EXTRA_LIBS 
 pops_test_source(_src test_amr_scalar_output_history)
 pops_add_gtest_suite(NAME test_amr_scalar_output_history SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr RUNTIME_DISCOVERY)
 
+pops_test_source(_src test_amr_history_remap_collective)
+pops_add_gtest_suite(NAME test_amr_history_remap_collective SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr LABELS unit runtime amr medium)
+
+pops_test_source(_src test_amr_interaction_history_snapshot)
+pops_add_gtest_suite(NAME test_amr_interaction_history_snapshot SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr LABELS unit runtime amr medium)
+
 pops_test_source(_src test_amr_system_twoblock)
 pops_add_gtest_suite(NAME test_amr_system_twoblock SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
@@ -997,6 +1004,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_krylov_workspace_reentrancy 2)
   set(POPS_MPI_RANKS_test_pure_field_algebra_extreme_dot 2)
   set(POPS_MPI_RANKS_test_geometric_mg 2)
+  set(POPS_MPI_RANKS_test_tensor_diagonal_mg_preconditioner 2)
   set(POPS_MPI_RANKS_test_tensor_coarse_gmres 2)
   set(POPS_MPI_RANKS_test_tensor_fac_partial_hierarchy 2)
   set(POPS_MPI_RANKS_test_tensor_fac_conservative_interface 2)
@@ -1011,6 +1019,8 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_amr_hierarchy_barrier_continuation 2)
   set(POPS_MPI_RANKS_test_amr_path_rhs_barrier 2)
   set(POPS_MPI_RANKS_test_amr_scalar_output_history 2)
+  set(POPS_MPI_RANKS_test_amr_history_remap_collective 2)
+  set(POPS_MPI_RANKS_test_amr_interaction_history_snapshot 2)
   set(POPS_MPI_RANKS_test_amr_hierarchy_field_scratch 2)
   set(POPS_MPI_RANKS_test_amr_synchronized_continuation 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_substeps 2)
@@ -1187,6 +1197,7 @@ if(POPS_HAS_MPI)
     test_krylov_workspace_reentrancy
     test_pure_field_algebra_extreme_dot
     test_geometric_mg
+    test_tensor_diagonal_mg_preconditioner
     # These existing tensor/polar witnesses include distributed and empty-owner contracts.
     test_tensor_coarse_gmres
     test_tensor_fac_partial_hierarchy
@@ -1210,6 +1221,8 @@ if(POPS_HAS_MPI)
     # Canonical fine subfaces and signed NCP terms publish before any level update.
     test_amr_path_rhs_barrier
     test_amr_scalar_output_history
+    test_amr_history_remap_collective
+    test_amr_interaction_history_snapshot
     # Rank-local field shape and solve-identity refusals must remain collective.
     test_amr_hierarchy_field_scratch
     test_amr_synchronized_continuation
@@ -1269,7 +1282,11 @@ if(POPS_HAS_MPI)
     "test_krylov_workspace_reentrancy.shared_problem_allocation_and_input_failures_converge_before_constructor_and_retry:"
     "test_krylov_workspace_reentrancy.shared_workspace_allocation_and_input_failures_converge_before_constructor_and_retry:"
     "test_krylov_workspace_reentrancy.workspace_rebind_reserves_mutation_during_blocking_operator_prepare:"
-    "test_krylov_workspace_reentrancy.problem_prepare_reserves_mutation_during_blocking_resource_freeze"
+    "test_krylov_workspace_reentrancy.problem_prepare_reserves_mutation_during_blocking_resource_freeze:"
+    "test_krylov_workspace_reentrancy.richardson_confirms_the_last_allowed_correction_before_staged_publication:"
+    "test_krylov_workspace_reentrancy.richardson_late_convergence_and_iteration_limit_preserve_acceptance_controls:"
+    "test_krylov_workspace_reentrancy.richardson_last_correction_retains_invalid_controls_and_nonfinite_guards:"
+    "test_krylov_workspace_reentrancy.numerical_actions_do_not_downgrade_explicit_provider_failure_or_false_convergence"
   )
   foreach(_test IN LISTS POPS_CPP_MPI_VARIANT_TESTS)
     foreach(_np IN LISTS POPS_MPI_RANKS_${_test})

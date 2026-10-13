@@ -11,7 +11,7 @@ import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from pops._geometry_contracts import (
     CARTESIAN_CELL_MEASURES_BY_DIMENSION,
@@ -77,6 +77,9 @@ from ._observer_runtime import (
     PostCommitObserverQueue,
     PostCommitObserverWorker,
 )
+
+if TYPE_CHECKING:
+    from pops.output._restart_provider import _RestartSnapshot
 
 
 _BUILTIN_CATALYST_PROCESS_LOCK = threading.Lock()
@@ -733,6 +736,16 @@ class _PreparedScientificOutput(PreparedPublication):
         return None
 
 
+class _CheckpointReplay(Protocol):
+    """The retained sealed-replay authority used by checkpoint publication."""
+
+    transport_lost: bool
+
+    def stage(self, previous: _RestartSnapshot) -> _RestartSnapshot: ...
+
+    def close(self) -> None: ...
+
+
 class _PreparedCheckpoint(PreparedPublication):
     def __init__(
         self, effect: AcceptedSideEffect, engine: Any, operation: Any, target: Any
@@ -747,7 +760,7 @@ class _PreparedCheckpoint(PreparedPublication):
                                                   prepared_capture=candidate))
         operation.validate_snapshot(self._snapshot)
         self._published = self._discarded = False
-        self._replay = None
+        self._replay: _CheckpointReplay | None = None
         retain = getattr(self._snapshot, "retain_sealed_replay", None)
         retry_contract = operation.consumer_data().get("publication_retry_contract")
         self._publisher_id = ("pops.restart-checkpoint.v6" if retry_contract ==
@@ -759,7 +772,7 @@ class _PreparedCheckpoint(PreparedPublication):
             try:
                 if not callable(retain):
                     raise TypeError("checkpoint provider lacks its declared sealed replay authority")
-                self._replay = retain()
+                self._replay = cast(_CheckpointReplay, retain())
             except BaseException:
                 self._snapshot.discard()
                 raise
@@ -4522,10 +4535,11 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                 self._pending_baselines[effect.identity.token] = baseline_updates
                 if projection is None:
                     recorder = getattr(self._owner._executor, "record_program_diagnostic", None)
-                    if values and not callable(recorder):
-                        raise RuntimeError("checkpoint candidate diagnostics require a Native recorder")
-                    for value in values:
-                        recorder(_diagnostic_record_name(value), value.value)
+                    if values:
+                        if not callable(recorder):
+                            raise RuntimeError("checkpoint candidate diagnostics require a Native recorder")
+                        for value in values:
+                            recorder(_diagnostic_record_name(value), value.value)
                     if diagnostic_projections is not None:
                         diagnostic_projections[effect.identity.token] = _DiagnosticProjection(
                             values, tuple(sorted(baseline_updates.items())), unavailable

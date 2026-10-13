@@ -13,9 +13,11 @@ import sys
 import numpy as np
 import pops
 import pytest
+from tests.python.support.checkpoint_staging import require_no_checkpoint_staging as _require_no_checkpoint_staging
 from tests.python.support.collective_checks import collective_attempt, collective_call, collective_check
 from tests.python.support.evolved_stage_v_capture import pin, retain_v_provenance, save_json
 from tests.python.support.integral_state_receipts import collective_directory
+from tests.python.support.public_native_profile import native_profile, rank_and_size
 from tests.python.integration.runtime.test_final_imex_original_reception import _save_snapshot
 
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
@@ -83,11 +85,11 @@ def _same_checkpoints(before, after):
 def test_original_imex_final_checkpoint_failure_restores_science_and_outputs(
         tmp_path, monkeypatch, record_property, isolated_native_cache, native_cxx, kokkos_root):
     del isolated_native_cache, native_cxx, kokkos_root
-    from pops._native_selector import select_native_dimension
     from pops.output._restart_provider import _RestartSnapshot
-    native = select_native_dimension(2)
-    world = native.mpi_world()
-    rank = int(world.rank)
+    native, world = native_profile(scope="public IMEX checkpoint publication rollback")
+    rank, _size = rank_and_size(world)
+    record_property("native_abi_version", native.__abi_version__)
+    record_property("native_profile", "MPI" if world is not None else "Serial")
     directory = collective_directory(world, tmp_path / "imex-checkpoint-publication")
     spec = importlib.util.spec_from_file_location("real_final_imex_publication_case", EXAMPLE)
     example = importlib.util.module_from_spec(spec)
@@ -178,7 +180,11 @@ def test_original_imex_final_checkpoint_failure_restores_science_and_outputs(
             if rank == 0:
                 _same_checkpoints(before_arrays, after_arrays)
                 assert _files(output_root) == baseline_files
-                assert not list(output_root.rglob("*.pops-*")), "no checkpoint staging artifacts may survive"
+                tombstones = _require_no_checkpoint_staging(output_root)
+                save_json(directory / "cleanup-proof.json", dict(
+                    schema="pops.checkpoint.empty-cleanup-tombstones@1",
+                    output_files=baseline_files, tombstones=tombstones,
+                    surviving_staging_entries=False))
             report = simulation._executor._last_step_transaction_report
             assert report.status == "failed" and report.phase == "effect" and report.action == "fail_run"
             assert report.attempts == 1 and report.staged_effects == report.rolled_back_effects

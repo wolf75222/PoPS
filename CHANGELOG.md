@@ -18,6 +18,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Preserve positive periodic energy for discontinuous symmetric tensor coefficients through
+  weighted cross gradients and congruence to harmonic normal faces; retain constant-tensor,
+  scalar and explicit physical metric laws and account for cross terms in the exact diagonal.
+- Keep AMR tagging buffers idempotent across stationary regrids without discarding retained
+  refinement, recognize Richardson convergence on its final permitted correction, and converge
+  checkpoint/restart path preparation errors and target mismatches before MPI capture or I/O.
 - Publish required transport auxiliaries at the accepted state before native CFL speed
   estimates, fixing first-step reads of uninitialized coordinate fields. Preserve provider
   permissions, invalid-speed guards and exact checkpoint publication points.

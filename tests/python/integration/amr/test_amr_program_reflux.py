@@ -27,6 +27,7 @@ from pathlib import Path
 import numpy as np
 import pops
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.integration.amr.test_amr_history_regrid import _advecting_tag_front
 import pops.lib.time as libtime
 import pytest
 from pops.lib.initial import BindArray
@@ -122,7 +123,7 @@ def _blob(amp=0.5, w=0.12):
 def _run(program_fn, tag, native_cxx, refine_thr=1.2, u0=None, nsteps=NSTEPS):
     """Bind ``program_fn`` on a genuine two-level public AMR runtime and advance it."""
     if u0 is None:
-        u0 = _blob(amp=0.5)
+        u0 = _advecting_tag_front()
     model = _euler_model("rfx_blk_%s" % tag)
     plan_name = "rfx_prog_%s" % tag
     plan = program_fn(model, plan_name, native_cxx)

@@ -58,14 +58,8 @@ void materialize_active_flux_expression_(
       const double duration = active_flux_interval_duration_(basis.window);
       if (!std::isfinite(duration) || !(duration > 0.0))
         throw std::invalid_argument("AMR Program flux basis has an invalid physical duration");
-      stage_identities.push_back(
-          "pops.program-flux-expression.v1/provider/" +
-          std::to_string(static_cast<unsigned int>(basis.provider)) + "/rhs/" +
-          std::to_string(basis.rhs_identity) + "/point-stage/" + std::to_string(basis.point.stage) +
-          "/basis/" + std::to_string(identity) + "/dt-power/1/weight/" +
-          std::to_string(weight.numerator) + "/" + std::to_string(weight.denominator) + "/stage/" +
-          std::to_string(basis.point.stage_fraction.numerator) + "/" +
-          std::to_string(basis.point.stage_fraction.denominator));
+      (void)declared_flux_temporal_family_(basis);
+      stage_identities.push_back(flux_expression_stage_identity_(basis, weight));
     }
     if (multiblock_flux_ledger_type* incoming = active_incoming_flux_[runtime_block];
         incoming != nullptr) {
@@ -94,13 +88,32 @@ void materialize_active_flux_expression_(
               std::count_if(entries.begin(), entries.end(), same_coarse_face));
           const bool exact_operator_pack =
               coarse_count == stage_identities.size() &&
-              std::all_of(
-                  stage_identities.begin(), stage_identities.end(), [&](const std::string& stage) {
-                    return std::any_of(entries.begin(), entries.end(), [&](const auto& entry) {
-                      return same_coarse_face(entry) && entry.key.stage == stage;
-                    });
-                  });
+              std::all_of(expression.begin(), expression.end(), [&](const auto& item) {
+                const auto& basis = *item.second.basis;
+                const auto family = declared_flux_temporal_family_(basis);
+                const std::string legacy_stage = family.empty()
+                    ? flux_expression_stage_identity_(basis, item.second.coefficient.begin()->second)
+                    : std::string{};
+                return std::any_of(entries.begin(), entries.end(), [&](const auto& entry) {
+                  if (!same_coarse_face(entry))
+                    return false;
+                  if (family.empty())
+                    return entry.key.stage == legacy_stage;
+                  // Preserve both full stage strings and both emitted coefficients.
+                  // The same declared operator may have another exact quadrature
+                  // after history migration; its stored stage must bind its own measure.
+                  return entry.key.temporal_family == family &&
+                         entry.key.stage ==
+                             flux_expression_stage_identity_(basis, entry.measure.stage_weight);
+                });
+              });
           if (!exact_operator_pack) {
+            std::string expected;
+            for (const auto& stage : stage_identities) {
+              if (!expected.empty())
+                expected += ", ";
+              expected += stage;
+            }
             std::string observed;
             for (const auto& entry : entries)
               if (same_coarse_face(entry)) {
@@ -112,7 +125,7 @@ void materialize_active_flux_expression_(
                 "AMR Program coarse/fine flux operator identities differ before face-flux "
                 "publication: expected " +
                 std::to_string(stage_identities.size()) + " stage(s), observed " +
-                std::to_string(coarse_count) + " [" + observed + "]");
+                std::to_string(coarse_count) + " [expected: " + expected + "; observed: " + observed + "]");
           }
         }
       }

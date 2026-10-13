@@ -681,6 +681,45 @@ def canonical_checkpoint_path(value: Any, *, extension: str = ".npz") -> Path:
     return Path(os.path.abspath(os.path.normpath(os.fspath(path))))
 
 
+def collective_checkpoint_path(
+    topology: CheckpointTopology,
+    value: Any,
+    *,
+    extension: str = ".npz",
+    phase_prefix: str = "checkpoint",
+) -> Path:
+    """Agree on a canonical target before capture or any root filesystem access.
+
+    Path coercion can fail on just one rank. Such a rank must join the preparation decision
+    before a peer can enter a native capture or a root-only read/publication collective.
+    """
+    target = None
+    path_error = None
+    try:
+        target = canonical_checkpoint_path(value, extension=extension)
+    except BaseException as error:
+        path_error = error
+    rows = consensus(
+        topology,
+        "%s target preparation" % phase_prefix,
+        error=path_error,
+        value=None if target is None else str(target),
+    )
+    if target is None:
+        raise RuntimeError("%s target preparation returned no path" % phase_prefix)
+    root_target = rows[0]["value"]
+    target_error = (
+        None
+        if str(target) == root_target
+        else ValueError(
+            "%s target differs across ranks: local %s, rank-0 %s"
+            % (phase_prefix, target, root_target)
+        )
+    )
+    consensus(topology, "%s target agreement" % phase_prefix, error=target_error)
+    return target
+
+
 def _error_record(error: BaseException) -> dict[str, str]:
     """Return one transport-safe error record without erasing its semantic family.
 

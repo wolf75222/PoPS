@@ -1,0 +1,9 @@
+{
+  "cases_per_rank": 2,
+  "failure": null,
+  "ranks": 1,
+  "scope": "MPI1 two unreceived singular-source controls; MPI2 these two plus two unreceived Uniform positives; no AMR or received MPI1-positive rerun",
+  "seconds": 73.9541545839893,
+  "status": "passed",
+  "unchanged_identity": true
+}

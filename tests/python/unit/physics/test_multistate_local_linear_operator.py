@@ -1,6 +1,5 @@
 """Typed facade matrix scope follows explicit State, including a smaller first State."""
-from pathlib import Path
-import sys
+import inspect
 import pytest
 import pops
 from pops.domain import Rectangle
@@ -11,6 +10,7 @@ from pops.model import LocalLinearOperator
 from pops.moments import CartesianMonomialBasis
 from pops.time import FixedDt
 from pops.codegen.module_lowering import lower_and_validate
+from tests.python.support.python_source_authority import assert_current_python_sources, native_module_bindings
 
 
 def model_and_states():
@@ -42,8 +42,9 @@ def test_facade_selected_second_state_resolves_and_emits_whole_program():
     from pops.codegen.program_graph_lowering import _emit_resolved_program_graph
     from pops.codegen.program_models import ProgramModelGraph
     from pops.time._program.detach import detach_compiled_program
-    assert Path(pops.__file__).resolve().is_relative_to(Path(__file__).resolve().parents[4]/'python')
-    assert 'pops._pops' not in sys.modules
+    native_before = native_module_bindings()
+    assert_current_python_sources(pops, inspect.getmodule(pops.Model),
+                                  inspect.getmodule(_emit_resolved_program_graph))
     model,first,selected,frame=model_and_states()
     matrix=[[0.]*6 for _ in range(6)];matrix[1][3],matrix[3][1]=2.,-2.
     operator=model.operator('selected_skew',returns=model.local_linear_operator('selected_skew',on=selected,matrix=matrix))
@@ -64,6 +65,7 @@ def test_facade_selected_second_state_resolves_and_emits_whole_program():
     assert 'affine_velocity_push_forward<2>' in cpp
     assert tuple(authority.model_for_block('selected').cons_names)==selected.components
     assert tuple(authority.model_for_block('earlier').cons_names)==first.components
+    assert native_module_bindings() == native_before
 
 
 @pytest.mark.parametrize('wrong',('missing','foreign','wrong_size','undeclared_field'))

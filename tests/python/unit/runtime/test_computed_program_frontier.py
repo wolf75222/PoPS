@@ -161,6 +161,24 @@ def test_program_frontier_refuses_overshoot_without_accepting_temporal_state():
     # The direct host seam owns no numerical rollback; RuntimeInstance/native tests qualify that.
 
 
+@pytest.mark.parametrize("payload", (None, object(), [], ("pops.frontier.duration",)))
+def test_program_frontier_refuses_a_non_mapping_native_receipt_without_temporal_acceptance(payload):
+    engine, native, temporal, prepared = _host()
+    engine.program_diagnostics = lambda: payload
+    with pytest.raises(TypeError, match="frontier result must be a Mapping"):
+        prepared.run_step(native, t_end=.8)
+    assert temporal.time_hex == 0.0.hex() and temporal.macro_step == 0
+    assert "program_frontier" not in temporal.controller_state
+
+
+def test_program_frontier_accepts_the_exact_duration_from_a_readonly_mapping():
+    from types import MappingProxyType
+    engine, native, temporal, prepared = _host()
+    engine.program_diagnostics = lambda: MappingProxyType({"pops.frontier.duration": .8})
+    prepared.run_step(native, t_end=.8)
+    assert temporal.time_hex == .8.hex() and temporal.macro_step == 1
+
+
 @pytest.mark.parametrize("field", range(5))
 def test_computed_dt_preflight_compares_policy_entry_step_and_frontier(monkeypatch, field):
     from pops import _native_collectives

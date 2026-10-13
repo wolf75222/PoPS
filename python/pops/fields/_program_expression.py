@@ -72,14 +72,14 @@ def encode_field_expression(expression: Any, states: Any, *, unknowns: tuple = (
             if len(matches) != 1:
                 raise ValueError("field expression read has no exact qualified State binding")
             index, handle, components = matches[0]
-            if type(value) is ValueExpr:
-                if len(components) != 1:
-                    raise ValueError("a field load must select a component of a multi-component State")
-                component = 0
-            else:
+            if type(value) is QuantityRef:
                 if tuple(value.space.components) != components:
                     raise ValueError("field expression component space differs from its State binding")
                 component = components.index(value.component)
+            else:
+                if len(components) != 1:
+                    raise ValueError("a field load must select a component of a multi-component State")
+                component = 0
             return ("input", index, component, handle.canonical_identity())
         if type(value) in binary:
             return (binary[type(value)], encode(value.a), encode(value.b))

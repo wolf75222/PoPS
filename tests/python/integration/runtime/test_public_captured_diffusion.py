@@ -10,7 +10,6 @@ import json
 import os
 from pathlib import Path
 import struct
-import sys
 
 import numpy as np
 import pops
@@ -23,6 +22,7 @@ from tests.python.support.captured_diffusion_mms import (
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.public_native_profile import native_profile, rank_and_size
 
 
 def bounded_bytes(path):
@@ -132,19 +132,18 @@ def _run_public_diffusion_mms(
         isolated_native_cache, tmp_path, record_property, width, order, *,
         candidate_diffusion=False):
     del isolated_native_cache
-    from pops._native_selector import select_native_dimension
-    native = select_native_dimension(2)
-    world = native.mpi_world()
-    with collective_check(world):
-        assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+    native, world = native_profile(scope="public captured diffusion")
+    rank, size = rank_and_size(world)
+    record_property("native_abi_version", native.__abi_version__)
+    record_property("native_profile", "MPI" if world is not None else "Serial")
     cells = 16
     case, layout, _, token = collective_call(world, lambda: build(
         cells, width, order, candidate_diffusion=candidate_diffusion))
     initial, target, _ = collective_call(world, lambda: initial_data(
         cells, width, candidate_diffusion=candidate_diffusion))
     resolved = collective_call(world, lambda: pops.resolve(pops.validate(case), layout=layout))
-    artifact = compile_resolved_plan_once(world, resolved, route="captured-D-original-Uniform",
-                                          compile_artifact=pops.compile)
+    artifact = (pops.compile(resolved) if world is None else compile_resolved_plan_once(
+        world, resolved, route="captured-D-original-Uniform", compile_artifact=pops.compile))
     context = collective_call(world, lambda: artifact_execution_context(artifact))
     runtime = collective_call(world, lambda: pops.bind(artifact,
         initial_state={key: value.copy() for key, value in initial.items()}, resources={"execution_context": context}))
@@ -181,7 +180,7 @@ def _run_public_diffusion_mms(
     with collective_check(world):
         same_images(replay, continuous)
         assert accepted[1][-1] == (DT, 1) and continuous[1][-1] == (2*DT, 2)
-        if world.rank == 0:
+        if rank == 0:
             phases = {}
             np.savez(directory/"initial.npz", **initial, target=target)
             for phase, image, time in (("accepted", accepted, DT), ("continuous", continuous, 2*DT),
@@ -221,7 +220,7 @@ def _run_public_diffusion_mms(
             assert checkpoint_paths.isdisjoint(observation_paths)
             receipt = {"kind": "actual-native-captured-D-original-MMS",
                 "fixture_schema": "pops.captured-diffusion-native-fixture@3", "artifact": artifact.artifact_identity.token,
-                "dimension": 2, "rank": world.rank, "size": world.size, "cells": cells, "width": width,
+                "dimension": 2, "rank": rank, "size": size, "cells": cells, "width": width,
                 "order": order, "face_policy": "pops.field.face-mean.arithmetic@1", "newton": CONTROLS,
                 "fd_step": FD_STEP, "solution_tolerance": SOLUTION_TOL, "residual_tolerance": RESIDUAL_TOL,
                 "native": {"path": str(native.__file__), "sha256": hashlib.sha256(bounded_bytes(native.__file__)).hexdigest()},
@@ -242,7 +241,7 @@ def _run_public_diffusion_mms(
                 )
             (directory/"receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True)+"\n")
         for name, value in (("artifact_identity", artifact.artifact_identity.token), ("dimension", 2),
-                            ("rank", world.rank), ("size", world.size), ("evidence_path", str(directory)),
+                            ("rank", rank), ("size", size), ("evidence_path", str(directory)),
                             ("captured_diffusion_receipt", str(directory/"receipt.json"))):
             record_property(name, value)
 

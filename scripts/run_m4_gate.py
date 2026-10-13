@@ -17,6 +17,9 @@ import tempfile
 import tomllib
 import xml.etree.ElementTree as ET
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ci_select_tests as selection
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "tests/gates/m4_runtime_io.toml"
@@ -184,21 +187,12 @@ def _python_mpi_entrypoints() -> dict[str, int]:
 
 
 def _python_mpi_orchestrators() -> set[str]:
-    orchestrators: set[str] = set()
-    for suite in _python_suites():
-        for row in suite.get("mpi_orchestrators", ()):
-            if not isinstance(row, dict) or set(row) != {"path"}:
-                raise ValueError(
-                    "invalid Python MPI orchestrator %r; expected exactly one path field"
-                    % row
-                )
-            path = row["path"]
-            if not isinstance(path, str) or not path:
-                raise ValueError("invalid Python MPI orchestrator path %r" % path)
-            if path in orchestrators:
-                raise ValueError("duplicate Python MPI orchestrator %s" % path)
-            orchestrators.add(path)
-    return orchestrators
+    data = tomllib.loads(TEST_MANIFEST.read_text(encoding="utf-8"))
+    try:
+        rows = selection.manifest_python_mpi_orchestrators(data)
+    except SystemExit as exc:
+        raise ValueError(str(exc)) from exc
+    return {row["path"] for row in rows}
 
 
 def _python_suite_owns(relative: str) -> bool:

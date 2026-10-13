@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from fractions import Fraction
 import math
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pops.identity.scalar import scalar_data
 from pops.time._authoring import atomic_authoring
@@ -45,7 +45,13 @@ class MovingFieldProjection:
                 "source_measure_weights": [scalar_data(value) for value in self.source_measure_weights]}
 
 
-class _ProgramGeometry:
+if TYPE_CHECKING:
+    from pops.time._program.contract import _ProgramBase
+else:
+    _ProgramBase = object
+
+
+class _ProgramGeometry(_ProgramBase):
     @atomic_authoring
     def geometry_state(self, state: Any, *, evolution: Any, name: str | None = None):
         """Bind an accepted physical state to its explicit evolved geometry."""

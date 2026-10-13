@@ -378,7 +378,7 @@ def resolve(
 
     program_field_plans = capture_program_field_plans(
         problem, detached_frozen, target=target, layout_plan=layout_plan, program=resolved_time)
-    from pops.time.field_sampling import validate_resolved_scalar_storage
+    from pops.codegen.program_field_observations import validate_resolved_scalar_storage
     validate_resolved_scalar_storage(resolved_time, layout_plan, target=target)
     from pops.codegen._physical_mapping_resolution import validate_physical_mapping_program
     validate_physical_mapping_program(layout_plan, resolved_time, program_field_plans,
@@ -622,11 +622,11 @@ def bind(artifact: Any, inputs: Any) -> Any:
                 if row.source.options.to_data().get("native_route") != "bound_level_zero"
             }
         else:
-            from pops.mesh._amr import AnalyticReprojection
+            from pops.mesh._amr import AnalyticReprojection, NativeProgramSeed
             analytic = {
                 row.subject.qualified_id
                 for row in plan.bootstrap_plan.selections
-                if type(row.method) is AnalyticReprojection
+                if type(row.method) in (AnalyticReprojection, NativeProgramSeed)
             }
         expected_initial = {
             key: value for key, value in expected_initial.items() if key not in analytic

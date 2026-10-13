@@ -181,9 +181,11 @@ def test_gradient_output_sign_reaches_model_hash_and_both_native_loaders() -> No
         if target == "system":
             negative_loader = negative_emit.__pops_native_loader_source__(target=target)
             positive_loader = positive_emit.__pops_native_loader_source__(target=target)
-            assert 'package.elliptic_attachments.push_back({"electrostatic",' in negative_loader
-            assert '}, -1, std::move(named_elliptic_rhs_0)});' in negative_loader
-            assert '}, 1, std::move(named_elliptic_rhs_0)});' in positive_loader
+            for loader, sign in ((negative_loader, -1), (positive_loader, 1)):
+                assert 'attachment.field = "electrostatic";' in loader
+                assert 'attachment.gradient_sign = %d;' % sign in loader
+                assert 'std::move(named_elliptic_rhs_0)' in loader
+                assert 'package.elliptic_attachments.push_back(std::move(attachment));' in loader
             continue
 
         def roles(sign: int) -> tuple[dict[str, object], ...]:

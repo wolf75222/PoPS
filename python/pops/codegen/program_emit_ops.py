@@ -973,6 +973,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             )
         var[v.id] = var[scalar_in.id]
     elif v.op == "diffusive_rhs":
+        if bidx is None:
+            raise ValueError("diffusive delegate requires an explicit resolved block owner")
         from pops.codegen.program_emit_diffusion import _emit_diffusive_rhs
         from pops.codegen.program_partition_stability import has_independent_diffusion_transport
         defer_bound = (has_independent_diffusion_transport(node_model)
@@ -1001,11 +1003,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         named_fluxes = _named_fluxes(v)
         requested = v.attrs.get("sources")
         named = [s for s in (requested or []) if s != "default"]
-        if target == "system" and (named_fluxes is not None or named):
-            operation = "named_flux" if named_fluxes is not None else "named_source"
+        if target == "system" and named_fluxes is not None:
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
-                % (bidx, json.dumps(operation)))
+                % (bidx, json.dumps("named_flux")))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = "
                      "ctx.rhs_scratch(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[state_in.id]))
@@ -1198,10 +1199,6 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "source":
         state_in = v.inputs[0]  # source inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id
-        if target == "system":
-            lines.append(
-                "ctx.require_cartesian_generated_operator(%d, %s);"
-                % (bidx, json.dumps("named_source")))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[state_in.id]))
         output_setup_end = len(lines)
@@ -1307,10 +1304,14 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         if target != "system":
             raise NotImplementedError("field cell-mean State projection requires the qualified Uniform System route")
         var[v.id] = var[source.id]
+    elif v.op == "field_warm_start":
+        from pops.codegen.program_emit_field_warm_start import emit_field_warm_start
+        emit_field_warm_start(v, var, lines, target=target, model_graph=model,
+                              field_plans=field_plans, block_index=bidx)
     elif v.op == "field_sample":
         from pops.codegen.program_emit_field_sample import emit_field_sample
         emit_field_sample(v, var, lines, prelude, node_model, provider_plans, bidx, target,
-                          model_graph=model)
+                          model_graph=model, field_plans=field_plans)
     elif v.op == "scalar_field":
         # Qualified AMR scalars bind current-attempt storage; uniform and unqualified scalars
         # retain their layout-bound install lifetime. Matrix-free apply sub-blocks manage their
@@ -1324,10 +1325,15 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         var[v.id] = "(*%s)" % sp
         ncomp = int(v.attrs.get("ncomp", 1))
         if v.attrs.get("scalar_storage") is not None:
-            if target != "system":
-                raise NotImplementedError("typed scalar scratch requires Uniform")
-            prelude.append("auto %s = ctx.alloc_shared_scalar_field_for_block(%d, %d, 1);"
-                           % (sp, bidx, ncomp))
+            if target == "amr_system":
+                rebound = v.id in var.get(("hierarchy_retained_bindings",), ())
+                lines.append("auto* %s = &ctx.retained_scalar(%d, %d, %d, %s);" %
+                             (sp, v.id, bidx, ncomp, "false" if rebound else "true"))
+            elif target == "system":
+                prelude.append("auto %s = ctx.alloc_shared_scalar_field_for_block(%d, %d, 1);"
+                               % (sp, bidx, ncomp))
+            else:
+                raise NotImplementedError("typed scalar scratch target is unsupported")
             var[("field_pointer", v.id)] = sp
             return
         owner = None
@@ -1417,6 +1423,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 % (bidx, json.dumps("condensed_rhs")))
         emit_condensed_op(
             v, var, node_model, lines, prelude,
+            field_plans=field_plans,
             provider_plans=provider_plans,
             consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
             program_block=_required_block_index(
@@ -1692,11 +1699,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         else:
             var[v.id] = "u%d" % v.id  # an intermediate stage state (scratch, zero-initialized)
             # A scalar_field combine (ADC-427: the phi^{n+1} extrapolation) has no block, so it has no
-            # base block-state to shape the scratch: template it on the FIRST scalar input instead (a
-            # 1-component field, same (ba, dm)). A State combine shapes it on the block base as before.
+            # base block-state to shape the scratch: inherit the exact first field input, including
+            # every component of a coupled field tuple. A State combine uses the block base as before.
             template = var[terms[0][0].id] if v.vtype == "scalar_field" else var[base.id]
-            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
-                         % (var[v.id], int(v.id), template))
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.%s(%d, 0, %s%s);"
+                         % (var[v.id], "scalar_scratch" if v.vtype == "scalar_field" else "scratch_state",
+                            int(v.id), template, ", (%s).ncomp(), 1" % template
+                            if v.vtype == "scalar_field" else ""))
             output_setup_end = len(lines)
             for inp, coeff in terms:
                 lines.append("ctx.axpy(%s, %s, %s, dt, %s);"

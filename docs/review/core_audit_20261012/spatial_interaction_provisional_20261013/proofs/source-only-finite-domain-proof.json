@@ -1,0 +1,457 @@
+{
+  "authored_flux_expression": "preserved Mul(Const0,consVar), not rewritten",
+  "cases": [
+    {
+      "case": "w1-uniform-decay",
+      "declared_rate_retained": true,
+      "declared_rate_sources": [
+        "decay"
+      ],
+      "embedded_boundary_provider": "zero_flux",
+      "flux": {
+        "x": [
+          {
+            "factor": 0,
+            "factor_type": "Const",
+            "state_kind": "cons",
+            "state_name": "north",
+            "state_type": "Var",
+            "type": "Mul"
+          }
+        ],
+        "y": [
+          {
+            "factor": 0,
+            "factor_type": "Const",
+            "state_kind": "cons",
+            "state_name": "north",
+            "state_type": "Var",
+            "type": "Mul"
+          }
+        ]
+      },
+      "generated_cpp": {
+        "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/w1-uniform-decay.cpp",
+        "sha256": "90e110627f5e660fd7eef003804f4c56b19a5933ea4303ec2b2fd85cd8c02974"
+      },
+      "no_transport_runtime_evaluation": true,
+      "selected_components": [
+        0
+      ],
+      "sources": [
+        {
+          "body": [
+            "(ScalarLiteral({'kind': 'binary64', 'value': '-0x1.999999999999ap-3'}) * quantity(rho, north))"
+          ],
+          "owner_authenticated": true,
+          "point": "TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='actual_direct_interaction'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)",
+          "qid": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3A3573d59808a7d2d25a99903995e5bbd1bf630c0f325a408b8969eda1c830f74d#authoring=1::local_source::decay::target::decay",
+          "registry_name": "decay"
+        }
+      ],
+      "waves": {
+        "x": [
+          {
+            "type": "Const",
+            "value": 0
+          }
+        ],
+        "y": [
+          {
+            "type": "Const",
+            "value": 0
+          }
+        ]
+      }
+    },
+    {
+      "case": "w3-uniform-decay",
+      "declared_rate_retained": true,
+      "declared_rate_sources": [
+        "decay"
+      ],
+      "embedded_boundary_provider": "zero_flux",
+      "flux": {
+        "x": [
+          {
+            "factor": 0,
+            "factor_type": "Const",
+            "state_kind": "cons",
+            "state_name": "north",
+            "state_type": "Var",
+            "type": "Mul"
+          },
+          {
+            "factor": 0,
+            "factor_type": "Const",
+            "state_kind": "cons",
+            "state_name": "east",
+            "state_type": "Var",
+            "type": "Mul"
+          },
+          {
+            "factor": 0,
+            "factor_type": "Const",
+            "state_kind": "cons",
+            "state_name": "third",
+            "state_type": "Var",
+            "type": "Mul"
+          }
+        ],
+        "y": [
+          {
+            "factor": 0,
+            "factor_type": "Const",
+            "state_kind": "cons",
+            "state_name": "north",
+            "state_type": "Var",
+            "type": "Mul"
+          },
+          {
+            "factor": 0,
+            "factor_type": "Const",
+            "state_kind": "cons",
+            "state_name": "east",
+            "state_type": "Var",
+            "type": "Mul"
+          },
+          {
+            "factor": 0,
+            "factor_type": "Const",
+            "state_kind": "cons",
+            "state_name": "third",
+            "state_type": "Var",
+            "type": "Mul"
+          }
+        ]
+      },
+      "generated_cpp": {
+        "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/w3-uniform-decay.cpp",
+        "sha256": "c95049e8287611b39d07d5f20303a38c480b612bb5faa877c059299d9769fbfb"
+      },
+      "no_transport_runtime_evaluation": true,
+      "selected_components": [
+        2,
+        0
+      ],
+      "sources": [
+        {
+          "body": [
+            "(ScalarLiteral({'kind': 'binary64', 'value': '-0x1.999999999999ap-3'}) * quantity(rho, north))",
+            "(ScalarLiteral({'kind': 'binary64', 'value': '-0x1.999999999999ap-3'}) * quantity(rho, east))",
+            "(ScalarLiteral({'kind': 'binary64', 'value': '-0x1.999999999999ap-3'}) * quantity(rho, third))"
+          ],
+          "owner_authenticated": true,
+          "point": "TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='actual_direct_interaction'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)",
+          "qid": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Abe17b1e5646ba1ac793ff69403439e65760e97259b43cd2bfaa44c03e7f8a9ff#authoring=4::local_source::decay::target::decay",
+          "registry_name": "decay"
+        }
+      ],
+      "waves": {
+        "x": [
+          {
+            "type": "Const",
+            "value": 0
+          },
+          {
+            "type": "Const",
+            "value": 0
+          },
+          {
+            "type": "Const",
+            "value": 0
+          }
+        ],
+        "y": [
+          {
+            "type": "Const",
+            "value": 0
+          },
+          {
+            "type": "Const",
+            "value": 0
+          },
+          {
+            "type": "Const",
+            "value": 0
+          }
+        ]
+      }
+    },
+    {
+      "case": "w3-amr-decay",
+      "declared_rate_retained": true,
+      "declared_rate_sources": [
+        "decay"
+      ],
+      "embedded_boundary_provider": "zero_flux",
+      "flux": {
+        "x": [
+          {
+            "factor": 0,
+            "factor_type": "Const",
+            "state_kind": "cons",
+            "state_name": "north",
+            "state_type": "Var",
+            "type": "Mul"
+          },
+          {
+            "factor": 0,
+            "factor_type": "Const",
+            "state_kind": "cons",
+            "state_name": "east",
+            "state_type": "Var",
+            "type": "Mul"
+          },
+          {
+            "factor": 0,
+            "factor_type": "Const",
+            "state_kind": "cons",
+            "state_name": "third",
+            "state_type": "Var",
+            "type": "Mul"
+          }
+        ],
+        "y": [
+          {
+            "factor": 0,
+            "factor_type": "Const",
+            "state_kind": "cons",
+            "state_name": "north",
+            "state_type": "Var",
+            "type": "Mul"
+          },
+          {
+            "factor": 0,
+            "factor_type": "Const",
+            "state_kind": "cons",
+            "state_name": "east",
+            "state_type": "Var",
+            "type": "Mul"
+          },
+          {
+            "factor": 0,
+            "factor_type": "Const",
+            "state_kind": "cons",
+            "state_name": "third",
+            "state_type": "Var",
+            "type": "Mul"
+          }
+        ]
+      },
+      "generated_cpp": {
+        "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/w3-amr-decay.cpp",
+        "sha256": "d90cb659cf91db39a9abee42b8a5b2eceec5c1cc3f09812d9c9d5cff19f66b28"
+      },
+      "no_transport_runtime_evaluation": true,
+      "selected_components": [
+        2,
+        0
+      ],
+      "sources": [
+        {
+          "body": [
+            "(ScalarLiteral({'kind': 'binary64', 'value': '-0x1.999999999999ap-3'}) * quantity(rho, north))",
+            "(ScalarLiteral({'kind': 'binary64', 'value': '-0x1.999999999999ap-3'}) * quantity(rho, east))",
+            "(ScalarLiteral({'kind': 'binary64', 'value': '-0x1.999999999999ap-3'}) * quantity(rho, third))"
+          ],
+          "owner_authenticated": true,
+          "point": "TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='actual_direct_interaction'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)",
+          "qid": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Abe17b1e5646ba1ac793ff69403439e65760e97259b43cd2bfaa44c03e7f8a9ff#authoring=7::local_source::decay::target::decay",
+          "registry_name": "decay"
+        }
+      ],
+      "waves": {
+        "x": [
+          {
+            "type": "Const",
+            "value": 0
+          },
+          {
+            "type": "Const",
+            "value": 0
+          },
+          {
+            "type": "Const",
+            "value": 0
+          }
+        ],
+        "y": [
+          {
+            "type": "Const",
+            "value": 0
+          },
+          {
+            "type": "Const",
+            "value": 0
+          },
+          {
+            "type": "Const",
+            "value": 0
+          }
+        ]
+      }
+    },
+    {
+      "case": "w1-uniform-nonfinite",
+      "declared_rate_retained": true,
+      "declared_rate_sources": [
+        "invalid_input"
+      ],
+      "embedded_boundary_provider": "zero_flux",
+      "flux": {
+        "x": [
+          {
+            "factor": 0,
+            "factor_type": "Const",
+            "state_kind": "cons",
+            "state_name": "north",
+            "state_type": "Var",
+            "type": "Mul"
+          }
+        ],
+        "y": [
+          {
+            "factor": 0,
+            "factor_type": "Const",
+            "state_kind": "cons",
+            "state_name": "north",
+            "state_type": "Var",
+            "type": "Mul"
+          }
+        ]
+      },
+      "generated_cpp": {
+        "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/w1-uniform-nonfinite.cpp",
+        "sha256": "4d480ac05547068f71a3e7352135981496c873cb9fb7f4b4ff7051454d65c26b"
+      },
+      "no_transport_runtime_evaluation": true,
+      "selected_components": [
+        0
+      ],
+      "sources": [
+        {
+          "body": [
+            "(quantity(rho, north) / (ScalarLiteral({'kind': 'integer', 'value': '3'}) - quantity(rho, north)))"
+          ],
+          "owner_authenticated": true,
+          "point": "TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='actual_direct_interaction'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)",
+          "qid": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4#authoring=10::local_source::invalid_input::target::invalid_input",
+          "registry_name": "invalid_input"
+        },
+        {
+          "body": [
+            "(quantity(rho, north) / (ScalarLiteral({'kind': 'integer', 'value': '3'}) - quantity(rho, north)))"
+          ],
+          "owner_authenticated": true,
+          "point": "TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='actual_direct_interaction'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)",
+          "qid": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4#authoring=10::local_source::invalid_input::target::invalid_input",
+          "registry_name": "invalid_input"
+        }
+      ],
+      "waves": {
+        "x": [
+          {
+            "type": "Const",
+            "value": 0
+          }
+        ],
+        "y": [
+          {
+            "type": "Const",
+            "value": 0
+          }
+        ]
+      }
+    },
+    {
+      "case": "w1-uniform-nonfinite-inactive",
+      "declared_rate_retained": true,
+      "declared_rate_sources": [
+        "invalid_input"
+      ],
+      "embedded_boundary_provider": "zero_flux",
+      "flux": {
+        "x": [
+          {
+            "factor": 0,
+            "factor_type": "Const",
+            "state_kind": "cons",
+            "state_name": "north",
+            "state_type": "Var",
+            "type": "Mul"
+          }
+        ],
+        "y": [
+          {
+            "factor": 0,
+            "factor_type": "Const",
+            "state_kind": "cons",
+            "state_name": "north",
+            "state_type": "Var",
+            "type": "Mul"
+          }
+        ]
+      },
+      "generated_cpp": {
+        "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/w1-uniform-nonfinite-inactive.cpp",
+        "sha256": "fc42354e726f6c5e688e97f7382c668bd5fb61fa01c0c5baccd1d82cf1bd64eb"
+      },
+      "no_transport_runtime_evaluation": true,
+      "selected_components": [
+        0
+      ],
+      "sources": [
+        {
+          "body": [
+            "(quantity(rho, north) / (ScalarLiteral({'kind': 'integer', 'value': '3'}) - quantity(rho, north)))"
+          ],
+          "owner_authenticated": true,
+          "point": "TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='actual_direct_interaction'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)",
+          "qid": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4#authoring=13::local_source::invalid_input::target::invalid_input",
+          "registry_name": "invalid_input"
+        },
+        {
+          "body": [
+            "(quantity(rho, north) / (ScalarLiteral({'kind': 'integer', 'value': '3'}) - quantity(rho, north)))"
+          ],
+          "owner_authenticated": true,
+          "point": "TimePoint(clock=Clock(name='macro', owner=OwnerPath(nodes=(OwnerSegment(kind=<OwnerKind.CONSUMER: 'consumer'>, name='actual_direct_interaction'),), _authority=None, _definition_fingerprint=None)), offset=ScalarLiteral({'kind': 'integer', 'value': '0'}), step=0)",
+          "qid": "pops.handle.v1::case:actual_spatial_interaction/block:density/model_definition:nonlocal_density@pops.module%3Asha256%3Ac71e20ceb7cd65d8b0f120d650e34bf8d077510cebdca3c681df9ee3d78a04d4#authoring=13::local_source::invalid_input::target::invalid_input",
+          "registry_name": "invalid_input"
+        }
+      ],
+      "waves": {
+        "x": [
+          {
+            "type": "Const",
+            "value": 0
+          }
+        ],
+        "y": [
+          {
+            "type": "Const",
+            "value": 0
+          }
+        ]
+      }
+    }
+  ],
+  "domain": "all captured accepted rho values are finite; active nonfinite issued source is rejected before publication",
+  "kind": "structural source emission proof only; not native execution",
+  "mathematical_identity": "F=0*rho=0 for finite rho; waves=Const0; -divF=0; explicit named source is the same declared PDE rate on this domain",
+  "physical_no_flux_boundaries_unchanged": true,
+  "schema": "pops.spatial-source-only-finite-domain-proof@1",
+  "source_files": [
+    {
+      "path": "$REPO/tests/python/integration/runtime/test_public_spatial_interaction.py",
+      "sha256": "f6d4edfad01b598192e972c7239c7fc602cf70270d19ad3539bdf59718d2f315"
+    },
+    {
+      "path": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+      "sha256": "bd12ddd777b631a3f70929e35695686dcf51d1e866529677420449926cfb6b67"
+    }
+  ],
+  "source_laws_unchanged": true,
+  "tolerances_unchanged": true
+}

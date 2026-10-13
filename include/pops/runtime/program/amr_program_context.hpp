@@ -31,6 +31,8 @@
 #include <pops/runtime/program/prepared_resource_cache.hpp>
 #include <pops/runtime/program/prepared_integral_capture.hpp>
 #include <pops/runtime/program/program_value_authority.hpp>
+#include <pops/runtime/program/prepared_program_field_stages.hpp>
+#include <pops/runtime/program/prepared_hierarchy_barrier.hpp>
 #include <pops/runtime/program/spatial_direct_interaction.hpp>
 #include <pops/runtime/program/prepared_tensor_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
@@ -73,6 +75,8 @@ namespace pops::runtime::program {
 namespace detail {
 template <int Dim>
 struct AmrProgramHistoryRemapCollectiveTestAccess;
+template <int Dim>
+struct AmrInteractionHistorySnapshotTestAccess;
 }
 
 template <int Dim>
@@ -239,20 +243,7 @@ private:
   struct RhsInputTraceRecord;
 
 public:
-  /// Invocation-owned input authority for a generated synchronous RHS evaluation.
-  class RhsInputTrace {
-  public:
-    RhsInputTrace(const RhsInputTrace&) = default;
-    RhsInputTrace(RhsInputTrace&&) = default;
-
-  private:
-    friend class AmrProgramContext;
-    RhsInputTrace() = default;
-    const AmrProgramContext* owner_ = nullptr;
-    const field_type* input_ = nullptr;
-    std::shared_ptr<const RhsInputTraceRecord> current_;
-    std::shared_ptr<const RhsInputTraceRecord> parent_;
-  };
+  class RhsInputTrace;
 
   struct RhsGroupRequest {
     RhsGroupRequest(int block_value, field_type* state_value, field_type* rhs_value,
@@ -304,6 +295,27 @@ public:
   struct PreparedHierarchyTensorState {
     std::unique_ptr<hierarchy_tensor_solver_type> solver;
     std::vector<HierarchyTensorLevelBoundary> boundaries;
+  };
+
+  struct InteractionHistoryDeclaration {
+    int owner = -1;
+    std::string name;
+    int lag = 0;
+    std::string state, space, clock, interpolation;
+    std::uint64_t max_bytes = 0;
+    std::string identity;
+    bool operator==(const InteractionHistoryDeclaration&) const = default;
+  };
+  using InteractionHistorySourceKey = std::pair<int, std::string>;
+  struct InteractionHistorySnapshot {
+    // Complete required rings: no fabricated/empty numeric slots.
+    HistoryManager<Dim> history;
+    std::vector<field_type> cold_seed;
+    PreparedResourceAttempt attempt;
+    std::uint64_t epoch = 0, generation = 0, macro_step = 0;
+    double time = 0, dt = 0;
+    std::size_t retained_bytes = 0;
+    std::string authority;
   };
 
   struct ClosedOriginalFieldSource {
@@ -485,6 +497,7 @@ public:
 #include <pops/runtime/program/amr_program_context_spatial_imex.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_public.inc>
 #include <pops/runtime/program/amr_program_context_spatial_operations.inc>
+#include <pops/runtime/program/amr_program_context_spatial_history_snapshot.inc>
 #include <pops/runtime/program/amr_program_context_spatial_interaction.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_public.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_solver.inc>
@@ -518,6 +531,8 @@ public:
 
   template <int TestDim>
   friend struct detail::AmrProgramHistoryRemapCollectiveTestAccess;
+  template <int TestDim>
+  friend struct detail::AmrInteractionHistorySnapshotTestAccess;
 
   facade_type* facade_ = nullptr;
   // A raw restart hierarchy rebuild may replace the facade-owned runtime object.  Rebind only at
@@ -559,6 +574,9 @@ public:
   std::shared_ptr<const hierarchy_tensor_registry_type> hierarchy_tensor_solver_registry_;
   mutable std::optional<HierarchyTensorSelection> hierarchy_tensor_selection_;
   mutable std::map<std::int64_t, HierarchyFieldResource> hierarchy_field_resources_;
+  mutable bool interaction_history_declarations_sealed_ = false;
+  mutable std::map<std::int64_t, InteractionHistoryDeclaration> interaction_history_declarations_;
+  mutable std::map<InteractionHistorySourceKey, std::shared_ptr<const InteractionHistorySnapshot>> interaction_history_snapshots_;
   mutable std::map<std::int64_t, std::shared_ptr<const ClosedOriginalFieldSource>> closed_original_sources_;
   mutable std::map<std::int64_t, std::shared_ptr<const ClosedInteractionTower>> closed_interactions_;
   mutable std::map<std::string, std::vector<ProgramFieldLevel>> staged_field_publications_;

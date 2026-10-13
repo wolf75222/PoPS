@@ -15,10 +15,23 @@ def _emit_program(program, model, *, target):
     return emit_cpp_program(program, model=lowered, target=target)
 
 
-def _transport_program(factory=libtime.ForwardEuler):
+def _compact_euler(routes):
+    """Author the exact bounded three-node-per-block local-time language."""
+    program = pops.Program("bounded_cell_local_euler")
+    states = [program.state(route.state) for route in routes]
+    current = [state.n for state in states]
+    rates = [route.rate(value) for route, value in zip(routes, current, strict=True)]
+    for state, value, rate in zip(states, current, rates, strict=True):
+        program.commit(state.next, program.value("accepted", value + program.dt*rate,
+                                                at=state.next.point))
+    return program
+
+
+def _transport_program(factory=None):
     model = Model("cell_local_transport")
     (u,) = model.conservative_vars("u")
     model.flux(x=[u], y=[0 * u])
+    model.eigenvalues(x=[1 + 0*u], y=[0*u])
     rate = model.rate("transport", flux=True, sources=())
     state = next(
         declaration
@@ -26,7 +39,9 @@ def _transport_program(factory=libtime.ForwardEuler):
         if declaration.kind == "state"
     )
     block = pops.Case("cell_local_case").block("tracer", model)
-    return factory(block[state], rate=rate), model
+    program = (factory(block[state], rate=rate) if factory is not None else
+               _compact_euler((libtime.RungeKuttaRoute(block[state], rate),)))
+    return program, model
 
 
 def test_cell_local_time_contract_is_frozen_rebuilt_and_hashed() -> None:
@@ -88,6 +103,7 @@ def test_amr_codegen_emits_one_typed_cell_local_route_per_block() -> None:
     model = Model("cell_local_multiroute")
     (u,) = model.conservative_vars("u")
     model.flux(x=[u], y=[0 * u])
+    model.eigenvalues(x=[1 + 0*u], y=[0*u])
     rate = model.rate("transport", flux=True, sources=())
     state = next(
         declaration
@@ -101,10 +117,7 @@ def test_amr_codegen_emits_one_typed_cell_local_route_per_block() -> None:
         libtime.RungeKuttaRoute(first[state], rate),
         libtime.RungeKuttaRoute(second[state], rate),
     )
-    program = libtime.RungeKutta(
-        routes=routes,
-        tableau=libtime.FORWARD_EULER_TABLEAU,
-    )
+    program = _compact_euler(routes)
     program.cell_local_time(tick_denominator=64, rung=1)
 
     source = _emit_program(program, model, target="amr_system")
@@ -125,6 +138,13 @@ def test_cell_local_codegen_refuses_non_euler_and_nondefault_cadence() -> None:
     strided.cell_local_time(tick_denominator=100)
     with pytest.raises(ValueError, match="default Program cadence"):
         _emit_program(strided, model, target="amr_system")
+
+
+def test_cell_local_bounded_provider_refuses_extra_rate_materialization() -> None:
+    aliased, model = _transport_program(libtime.ForwardEuler)
+    aliased.cell_local_time(tick_denominator=100)
+    with pytest.raises(ValueError, match="one transport-only ForwardEuler route"):
+        _emit_program(aliased, model, target="amr_system")
 
 
 def test_cell_local_codegen_refuses_uniform_target() -> None:

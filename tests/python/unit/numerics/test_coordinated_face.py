@@ -17,6 +17,7 @@ from pops.codegen.module_lowering import lower_and_validate
 from pops.codegen.module_codegen import _emit_bricks
 from pops.codegen.module_emit_coordinated_face import emit_coordinated_face_members
 from tests.python.support.symbolic_path_case import declarations
+from tests.python.support.native_syntax_toolchain import configured_kokkos_toolchain
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -198,9 +199,7 @@ def test_runtime_capture_is_qualified_and_lowered_without_baking_its_value(forei
 @pytest.mark.parametrize("coordinated", [False, True])
 def test_actual_generated_composite_selects_and_executes_its_exact_policy(tmp_path, coordinated):
     """Compile the real composite/adapter, including the legacy version-zero trait."""
-    prefix = Path(sys.prefix)
-    if not (prefix / "include/Kokkos_MathematicalFunctions.hpp").is_file():
-        pytest.skip("host generated-brick check requires the configured Kokkos SDK")
+    compiler, prefix, kokkos_flags, link_flags = configured_kokkos_toolchain()
     if coordinated:
         case, layout, _ = _load("api040_m07_saint_venant").build_case()
         dimension = 1
@@ -232,10 +231,10 @@ def test_actual_generated_composite_selects_and_executes_its_exact_policy(tmp_pa
     source += "return 0;}\n"
     cpp, exe = tmp_path / "composite.cpp", tmp_path / "composite"
     cpp.write_text(source)
-    command = [shutil.which("c++"), "-std=c++20", "-O2", "-fno-fast-math", "-ffp-contract=off",
-        "-DPOPS_NATIVE_DIM="+str(dimension), "-I"+str(ROOT/"include"), "-I"+str(prefix/"include"),
+    command = [compiler, "-std=c++20", "-O2", "-fno-fast-math", "-ffp-contract=off",
+        "-DPOPS_NATIVE_DIM="+str(dimension), "-I"+str(ROOT/"include"), *kokkos_flags,
         str(cpp), "-o", str(exe), "-L"+str(prefix/"lib"), "-lkokkoscore",
-        "-Wl,-rpath,"+str(prefix/"lib")]
+        "-Wl,-rpath,"+str(prefix/"lib"), *link_flags]
     if sys.platform == "darwin":
         command.append("-lomp")
     compiled = subprocess.run(command, text=True, capture_output=True)

@@ -17,8 +17,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from pops._ir.quantity import PhysicalDimension
     from pops.time.handles import StateEndpointHandle
     from pops.time.values import ProgramValue
+    from pops.time._program.global_sources import _GlobalSourceBinding
 
 
 from pops.time._authoring import register_program_type, require_program
@@ -64,6 +66,10 @@ class _ProgramBase:
     _history_contracts: dict
     _time_endpoint_handles: dict
     _dt_bound: Any
+    _geometry_states: dict[object, ProgramValue]
+    _integral_states: dict[str, float]
+    _integral_units: dict[str, PhysicalDimension]
+    _integral_transfers: list[tuple[str, int, int, int, int, float]]
     _operator_registries: dict
     _capture_source: bool
     _provenance_context: Any
@@ -102,6 +108,10 @@ class _ProgramBase:
     # --- node construction / core builder (_ProgramCore) ---
     def _new(self, vtype: Any, op: Any, inputs: Any, attrs: Any, name: Any, block: Any,
              **metadata: Any) -> Any: ...
+    def _pointwise_expression(
+        self, name: Any, expression: Any, *, at: Any = None, finite_support: Any = None,
+        field_product_space: Any = None, field_product_authority: Any = None
+    ) -> ProgramValue: ...
     def _canonical_value(self, value: Any) -> Any: ...
     def _replace_value(self, value: Any, **changes: Any) -> Any: ...
     def _guard_mutable(self, operation: Any) -> None: ...
@@ -147,7 +157,10 @@ class _ProgramBase:
     ) -> Any: ...
     def source(self, operator: Any, state: Any = None, fields: Any = None) -> Any: ...
     def evaluate_source(self, operator: Any, state: Any, fields: Any = None, *, global_inputs: Any) -> Any: ...
-    def _source(self, name: Any, state: Any = None, fields: Any = None) -> Any: ...
+    def _source(self, name: Any, state: Any = None, fields: Any = None,
+                operator_handle: Any = None, *,
+                global_bindings: tuple[_GlobalSourceBinding, ...] = (),
+                global_captures: tuple[ProgramValue, ...] = ()) -> Any: ...
     def solve_implicit_source(self, state: Any, *, name: Any = None) -> Any: ...
     def implicit_source(self, state: Any, *, implicit_vars: Any = (),
                         implicit_roles: Any = (), name: Any = None) -> Any: ...

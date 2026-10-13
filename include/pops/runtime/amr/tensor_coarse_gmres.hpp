@@ -7,6 +7,7 @@
 #include <pops/mesh/boundary/halo_exchange.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
+#include <pops/numerics/elliptic/mg/tensor_diagonal_preconditioner.hpp>
 #include <pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp>
 #include <pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp>
 
@@ -28,7 +29,7 @@
 
 namespace pops::runtime::program::tensor_fac {
 
-enum class CoarsePreconditionerKind : std::uint8_t { diagonal, polar_poisson };
+enum class CoarsePreconditionerKind : std::uint8_t { diagonal, polar_poisson, tensor_diagonal_mg };
 
 /// The Krylov basis and coefficient/diagonal layouts are constructed eagerly. Operator sessions
 /// first prepare from real staged coefficients, before the first recurrence, and subsequently
@@ -52,6 +53,7 @@ class TensorCoarseGmres {
     std::string contract;
     CoarsePreconditionerKind preconditioner;
     std::array<field_type, static_cast<std::size_t>(Dim * Dim)> coefficients;
+    std::optional<field_type> packed_coefficients{};
     field_type inverse_diagonal;
     OperatorEvaluationSnapshot snapshot{};
     PreparedVectorDistribution<Dim> distribution;
@@ -73,6 +75,10 @@ class TensorCoarseGmres {
           .scalar(options.arithmetic_diagonal);
       if (preconditioner != CoarsePreconditionerKind::diagonal)
         parameters.text("tensor-coarse-preconditioner-v1").scalar(preconditioner);
+      if (preconditioner == CoarsePreconditionerKind::tensor_diagonal_mg)
+        parameters.text("tensor-diagonal-mg-fixed-vcycle@1")
+            .scalar(2).scalar(2).scalar(2).scalar(50)
+            .text("red-black-gauss-seidel/harmonic-faces/constant-injection/nonsingular");
       for (int axis = 0; axis < Dim; ++axis) {
         parameters.scalar(geometry.domain().lo[axis]).scalar(geometry.domain().hi[axis])
             .scalar(geometry.lower()[axis]).scalar(geometry.upper()[axis])
@@ -88,6 +94,9 @@ class TensorCoarseGmres {
       for (auto& coefficient : coefficients)
         coefficient = field_type(prototype.layout(), prototype.distribution(),
                                  prototype.local_rank(), 1, prototype.ghosts());
+      if (preconditioner == CoarsePreconditionerKind::tensor_diagonal_mg)
+        packed_coefficients.emplace(prototype.layout(), prototype.distribution(),
+                                    prototype.local_rank(), Dim * Dim, prototype.ghosts());
       snapshot.authority = ::pops::detail::fingerprint_seed();
       ::pops::detail::fingerprint_mix(snapshot.authority, contract);
       ::pops::detail::fingerprint_mix(snapshot.authority, "tensor-coarse-gmres-operator-v1");
@@ -291,6 +300,40 @@ class TensorCoarseGmres {
     PolarPreconditionSession make_session(const ExecutionLane& lane) const { return {data, lane}; }
   };
 
+  struct TensorMgPreconditionSession {
+    std::shared_ptr<const Data> data;
+    PreparedLinearPreconditionerSessionCallbacks<Dim> callbacks;
+    TensorMgPreconditionSession(std::shared_ptr<const Data> source, const ExecutionLane& lane)
+        : data(std::move(source)), callbacks(elliptic::mg::make_tensor_diagonal_mg_sessions<Dim>(
+              std::shared_ptr<const field_type>(data, &data->coefficients[0]),
+              std::shared_ptr<const field_type>(data, &*data->packed_coefficients),
+              data->geometry, data->boundary->conditions(), data->distribution,
+              2, 2, 2, 50)(lane)) {}
+    void prepare() {
+      if (!data->snapshot.valid())
+        throw std::logic_error("tensor coarse GMRES diagonal MG is unprepared");
+      callbacks.prepare();
+    }
+    PreparedApplyResult apply(field_type& out, const field_type& in) noexcept {
+      try {
+        callbacks.apply(out, in);
+        return PreparedApplyResult::success();
+      } catch (...) {
+        return PreparedApplyResult::unknown_failure();
+      }
+    }
+    std::size_t allocation_count() const noexcept { return 1 + callbacks.allocation_count(); }
+  };
+
+  struct TensorMgPreconditionSource {
+    std::shared_ptr<const Data> data;
+    static constexpr PreparedProviderIdentity provider_identity() noexcept {
+      return {"pops.tensor-fac.coarse-fixed-tensor-diagonal-mg", 1};
+    }
+    void serialize_exact_parameters(ExactContractBuilder& contract) const { contract.text(data->contract); }
+    TensorMgPreconditionSession make_session(const ExecutionLane& lane) const { return {data, lane}; }
+  };
+
  public:
   TensorCoarseGmres(const field_type& prototype, const Geometry<Dim>& geometry,
                    const HaloSchedule<Dim>& halo,
@@ -304,7 +347,8 @@ class TensorCoarseGmres {
       if (restart < 1 || restart >= KrylovWorkspace<Dim>::max_batched_basis_extent())
         throw std::invalid_argument("tensor coarse GMRES restart exceeds its prepared basis limit");
       if ((preconditioner != CoarsePreconditionerKind::diagonal &&
-           preconditioner != CoarsePreconditionerKind::polar_poisson) ||
+           preconditioner != CoarsePreconditionerKind::polar_poisson &&
+           preconditioner != CoarsePreconditionerKind::tensor_diagonal_mg) ||
           (preconditioner == CoarsePreconditionerKind::polar_poisson && Dim != 2))
         throw std::invalid_argument("unsupported tensor coarse GMRES preconditioner");
       data_ = std::make_shared<Data>(prototype, geometry, halo, homogeneous_boundary, options,
@@ -344,6 +388,8 @@ class TensorCoarseGmres {
           auto provider = [&] {
             if (data_->preconditioner == CoarsePreconditionerKind::polar_poisson)
               return PreparedLinearPreconditionerProvider<Dim>(PolarPreconditionSource{data_});
+            if (data_->preconditioner == CoarsePreconditionerKind::tensor_diagonal_mg)
+              return PreparedLinearPreconditionerProvider<Dim>(TensorMgPreconditionSource{data_});
             return PreparedLinearPreconditionerProvider<Dim>(PreconditionSource{data_});
           }();
           return typename PreparedAffineLinearProblem<Dim>::ConstructionInputs{
@@ -386,6 +432,19 @@ class TensorCoarseGmres {
           Kokkos::deep_copy(destination.fab(local).storage(), source[slot]->fab(local).storage());
       }
       Kokkos::fence();
+      if (data_->packed_coefficients) {
+        for (std::size_t local = 0; local < data_->packed_coefficients->local_size(); ++local) {
+          auto out = data_->packed_coefficients->fab(local).view();
+          std::array<FieldView<const Real, Dim>, Dim * Dim> inputs{};
+          for (std::size_t slot = 0; slot < inputs.size(); ++slot)
+            inputs[slot] = std::as_const(data_->coefficients[slot]).fab(local).view();
+          for_each_cell(data_->packed_coefficients->fab(local).grown_box(),
+              [=] POPS_HD(const Index<Dim>& index) {
+                for (int slot = 0; slot < Dim * Dim; ++slot) out(index, slot) = inputs[slot](index, 0);
+              });
+        }
+        Kokkos::fence();
+      }
       for (std::size_t local = 0; local < data_->inverse_diagonal.local_size(); ++local)
         if (for_each_cell_reduce_max(
                 data_->inverse_diagonal.box(local),

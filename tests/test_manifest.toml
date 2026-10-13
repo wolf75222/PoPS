@@ -33,6 +33,18 @@ labels = ["integration", "amr", "medium"]
 mpi_variants = [2]
 
 [[cpp.suite]]
+name = "test_amr_history_remap_collective"
+sources = ["tests/cpp/unit/runtime/test_amr_history_remap_collective.cpp"]
+labels = ["unit", "runtime", "amr", "medium"]
+mpi_variants = [2]
+
+[[cpp.suite]]
+name = "test_amr_interaction_history_snapshot"
+sources = ["tests/cpp/unit/runtime/test_amr_interaction_history_snapshot.cpp"]
+labels = ["unit", "runtime", "amr", "medium"]
+mpi_variants = [2]
+
+[[cpp.suite]]
 name = "test_amr_multiblock_compiled"
 sources = ["tests/cpp/integration/amr/test_amr_multiblock_compiled.cpp"]
 labels = ["integration", "amr", "medium"]
@@ -616,6 +628,12 @@ labels = ["unit", "elliptic", "fast", "nd"]
 name = "test_geometric_mg_nd"
 sources = ["tests/cpp/unit/elliptic/test_geometric_mg_nd.cpp"]
 labels = ["unit", "elliptic", "amr", "fast", "nd"]
+
+[[cpp.suite]]
+name = "test_tensor_diagonal_mg_preconditioner"
+sources = ["tests/cpp/unit/elliptic/test_tensor_diagonal_mg_preconditioner.cpp"]
+labels = ["unit", "elliptic", "fast", "nd"]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_composite_fac_eb"
@@ -1376,17 +1394,87 @@ mpi_entrypoints = [
 ]
 mpi_orchestrators = [
   { path = "tests/python/integration/mpi/test_amr_rank_change_restart.py" },
+  { path = "tests/python/integration/mpi/test_initial_field_ghost_mpi.py" },
+  { path = "tests/python/integration/mpi/test_public_accepted_halo_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_accepted_halo_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_amr12_carrier_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_amr12_carrier_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_amr_original_field_mpi1.py", partitions = [
+    { id = "saved_restart", parent_node = "test_public_amr_original_on_authenticated_mpi1_world[saved_restart]" },
+    { id = "parent_rollback_retry", parent_node = "test_public_amr_original_on_authenticated_mpi1_world[parent_rollback_retry]" },
+  ] },
+  { path = "tests/python/integration/mpi/test_public_amr_original_field_mpi2.py", partitions = [
+    { id = "saved_restart", parent_node = "test_public_amr_original_on_authenticated_mpi2_world[saved_restart]" },
+    { id = "parent_rollback_retry", parent_node = "test_public_amr_original_on_authenticated_mpi2_world[parent_rollback_retry]" },
+  ] },
+  { path = "tests/python/integration/mpi/test_public_amr_profile_mpi1.py", partitions = [
+    { id = "tag_selection", parent_node = "test_public_amr_fixtures_on_authenticated_mpi1_world[tag_selection]" },
+    { id = "stationary_regrids", parent_node = "test_public_amr_fixtures_on_authenticated_mpi1_world[stationary_regrids]" },
+    { id = "evolving_halo", parent_node = "test_public_amr_fixtures_on_authenticated_mpi1_world[evolving_halo]" },
+    { id = "evolved_spatial", parent_node = "test_public_amr_fixtures_on_authenticated_mpi1_world[evolved_spatial]" },
+    { id = "evolved_spatial_v4", parent_node = "test_public_amr_fixtures_on_authenticated_mpi1_world[evolved_spatial_v4]" },
+  ] },
+  { path = "tests/python/integration/mpi/test_public_amr_profile_mpi2.py", partitions = [
+    { id = "tag_selection", parent_node = "test_public_amr_fixtures_on_authenticated_mpi2_world[tag_selection]" },
+    { id = "stationary_regrids", parent_node = "test_public_amr_fixtures_on_authenticated_mpi2_world[stationary_regrids]" },
+    { id = "evolving_halo", parent_node = "test_public_amr_fixtures_on_authenticated_mpi2_world[evolving_halo]" },
+    { id = "evolved_spatial", parent_node = "test_public_amr_fixtures_on_authenticated_mpi2_world[evolved_spatial]" },
+    { id = "evolved_spatial_v4", parent_node = "test_public_amr_fixtures_on_authenticated_mpi2_world[evolved_spatial_v4]" },
+  ] },
+  { path = "tests/python/integration/mpi/test_public_captured_diffusion_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_captured_diffusion_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_completed_original_interaction_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_completed_original_interaction_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_evolved_original_stage_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_evolved_original_stage_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_imex_checkpoint_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_imex_checkpoint_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_scalar_bound_capture_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_scalar_bound_capture_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_spatial_interaction_mpi1.py" },
+  { path = "tests/python/integration/mpi/test_public_spatial_interaction_mpi2.py" },
+  { path = "tests/python/integration/mpi/test_public_typed_newton_mpi1.py", partitions = [
+    { id = "relative_uniform", parent_node = "test_public_typed_newton_on_authenticated_mpi1_world[relative_uniform]" },
+    { id = "relative_amr", parent_node = "test_public_typed_newton_on_authenticated_mpi1_world[relative_amr]" },
+    { id = "floor_uniform", parent_node = "test_public_typed_newton_on_authenticated_mpi1_world[floor_uniform]" },
+    { id = "floor_amr", parent_node = "test_public_typed_newton_on_authenticated_mpi1_world[floor_amr]" },
+    { id = "absolute_uniform", parent_node = "test_public_typed_newton_on_authenticated_mpi1_world[absolute_uniform]" },
+    { id = "absolute_amr", parent_node = "test_public_typed_newton_on_authenticated_mpi1_world[absolute_amr]" },
+    { id = "overflow_uniform", parent_node = "test_public_typed_newton_on_authenticated_mpi1_world[overflow_uniform]" },
+    { id = "overflow_amr", parent_node = "test_public_typed_newton_on_authenticated_mpi1_world[overflow_amr]" },
+  ] },
+  { path = "tests/python/integration/mpi/test_public_typed_newton_mpi2.py", partitions = [
+    { id = "relative_uniform", parent_node = "test_public_typed_newton_on_authenticated_mpi2_world[relative_uniform]" },
+    { id = "relative_amr", parent_node = "test_public_typed_newton_on_authenticated_mpi2_world[relative_amr]" },
+    { id = "floor_uniform", parent_node = "test_public_typed_newton_on_authenticated_mpi2_world[floor_uniform]" },
+    { id = "floor_amr", parent_node = "test_public_typed_newton_on_authenticated_mpi2_world[floor_amr]" },
+    { id = "absolute_uniform", parent_node = "test_public_typed_newton_on_authenticated_mpi2_world[absolute_uniform]" },
+    { id = "absolute_amr", parent_node = "test_public_typed_newton_on_authenticated_mpi2_world[absolute_amr]" },
+    { id = "overflow_uniform", parent_node = "test_public_typed_newton_on_authenticated_mpi2_world[overflow_uniform]" },
+    { id = "overflow_amr", parent_node = "test_public_typed_newton_on_authenticated_mpi2_world[overflow_amr]" },
+  ] },
 ]
 
 [[python.suite]]
 name = "pops_python_integration_native_loader"
 path = "tests/python/integration/native_loader"
 labels = ["integration", "python", "native_loader", "compiler", "medium"]
+hardware_entrypoints = [
+  { path = "tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py", hardware = "gpu", native_dimension = 2, expected_cases = { test_installed_gpu_external_field_dispatch_rollback_retry = 4 } },
+]
 
 [[python.suite]]
 name = "pops_python_integration_runtime"
 path = "tests/python/integration/runtime"
-labels = ["integration", "python", "runtime", "medium"]
+labels = ["integration", "python", "runtime", "mpi", "medium"]
+mpi_entrypoints = [
+  { path = "tests/python/integration/runtime/test_m15_mpi_collective_rejection.py", nproc = 2, native_dimension = 1 },
+  { path = "tests/python/integration/runtime/test_mapped_field_binding_collective_runtime.py", nproc = 2 },
+]
 
 [[python.suite]]
 name = "pops_python_unit_analytic"

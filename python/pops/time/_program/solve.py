@@ -168,7 +168,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         if initial_guess is not None and not _is_field_value(initial_guess):
             raise ValueError("solve_linear: initial_guess must be a scalar_field or State value")
         scalar_attrs = {key: operator.attrs[key] for key in
-                        ("scalar_storage", "scalar_owner", "scalar_sampling_contract")
+                        ("scalar_storage", "scalar_owner", "scalar_sampling_contract", "scalar_storage_component")
                         if key in operator.attrs}
         if scalar_attrs:
             from pops.time.field_sampling import scalar_co_location

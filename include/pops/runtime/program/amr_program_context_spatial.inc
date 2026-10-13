@@ -202,6 +202,8 @@ void begin_step(double dt) const {
   current_interval_end_phase_ = {1, 1};
   stage_time_ = ::pops::amr::Rational(0, 1);
   logical_substep_ = 0;
+  revoke_interaction_history_snapshots_();
+  prepare_interaction_history_snapshots_(dt);
 }
 
 void configure_primary_clock(const std::string& clock) const {

@@ -392,6 +392,7 @@ def test_preconditioners_catalog():
         "Prepared",
         "Provider",
         "ScratchResource",
+        "TensorDiagonalMG",
         "UsePolicy",
         "register",
     }
@@ -402,7 +403,7 @@ def test_preconditioners_catalog():
         assert not hasattr(pre, removed)
     for extension in (
         "Prepared", "register", "Provider", "IntOption", "NativeEmission",
-        "ScratchResource", "UsePolicy", "NativeComponent", "HeaderOnlyComponent"
+        "ScratchResource", "UsePolicy", "NativeComponent", "HeaderOnlyComponent", "TensorDiagonalMG"
     ):
         assert callable(getattr(pre, extension))
 

@@ -5,5 +5,6 @@ route-constrained :class:`FFT` descriptors from :mod:`pops.solvers.elliptic._des
 for the parameter surface (typed smoother / coarse / tolerance) and the capability declaration.
 """
 from ._descriptor import CartesianCG, FFT, GeometricMG
+from ._cycle import RedBlackVcycle, RoundoffAwareResidual
 
-__all__ = ["CartesianCG", "GeometricMG", "FFT"]
+__all__ = ["CartesianCG", "GeometricMG", "FFT", "RedBlackVcycle", "RoundoffAwareResidual"]

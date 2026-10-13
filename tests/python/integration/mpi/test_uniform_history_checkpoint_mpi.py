@@ -13,6 +13,7 @@ publication/mutation, and continues identically to an uninterrupted public ``Run
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import os
 from pathlib import Path
@@ -196,6 +197,38 @@ def _assert_failure(
     raise AssertionError("collective public operation unexpectedly succeeded")
 
 
+def _assert_collective_path_failure(
+    world: Any,
+    operation: Any,
+    error_type: type[BaseException],
+    fragments: tuple[str, ...],
+) -> None:
+    message = _assert_failure(operation, error_type, fragments)
+    # Use the installed native communicator: every rank must leave the failed path preparation
+    # with the same exception family and message before another public collective can start.
+    records = world.allgather_bytes((error_type.__name__ + ":" + message).encode("utf-8"))
+    assert len(records) == int(world.size)
+    assert all(record == records[0] for record in records), records
+
+
+@contextmanager
+def _root_directory_open_refusal(world: Any, directory: Path) -> Any:
+    original_open = os.open
+
+    def denied_directory_open(value: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        if str(value) == str(directory) and flags & getattr(os, "O_DIRECTORY", 0):
+            raise PermissionError("injected rank-zero checkpoint directory open refusal")
+        return original_open(value, flags, *args, **kwargs)
+
+    if int(world.rank) == 0:
+        os.open = denied_directory_open
+    try:
+        yield
+    finally:
+        if int(world.rank) == 0:
+            os.open = original_open
+
+
 def _checkpoint_target(artifact: Any) -> Path:
     identity = artifact.artifact_identity.hexdigest
     digest = hashlib.sha256((identity + "|uniform-history-mpi").encode("utf-8")).hexdigest()[:20]
@@ -234,19 +267,59 @@ def test_uniform_history_checkpoint_restart_mpi() -> None:
     interrupted = _bind(artifact, context, initial)
     _advance(interrupted, half)
     assert _rings_equal(rings_at_half, _rings(interrupted))
+    state_at_half = np.asarray(interrupted.state_global("tracer"), dtype=np.float64).copy()
+
+    # The original deadlock happened before snapshot capture when only rank zero rejected NUL.
+    # Exercise either rank as the invalid caller, then complete a native agreement to prove that
+    # every peer returned instead of remaining inside a checkpoint staging collective.
+    for invalid_rank in (0, 1):
+        malformed = str(target) + ("\x00" if rank == invalid_rank else "")
+        _assert_collective_path_failure(
+            world,
+            lambda: interrupted.checkpoint(malformed),
+            TypeError,
+            ("rank %d" % invalid_rank, "checkpoint path must be non-empty filesystem text"),
+        )
+        assert not target.exists()
 
     divergent_checkpoint = (
         target.parent / ("rank-%d-uniform-history" % rank) / "must-not-publish.npz"
     )
-    _assert_failure(
+    _assert_collective_path_failure(
+        world,
         lambda: interrupted.checkpoint(divergent_checkpoint),
         ValueError,
-        ("rank 1", "staging directory differs across ranks"),
+        ("rank 1", "checkpoint target differs across ranks"),
     )
     assert not divergent_checkpoint.exists()
 
-    checkpoint = Path(interrupted.checkpoint(target))
+    # Full filenames, including names in the same directory, must agree before snapshot I/O.
+    # Root's injected I/O error would win if path agreement were still deferred to publication.
+    divergent_name = target if rank == 0 else target.with_name("rank-one-must-not-publish.npz")
+    with _root_directory_open_refusal(world, target.parent):
+        _assert_collective_path_failure(
+            world,
+            lambda: interrupted.checkpoint(divergent_name),
+            ValueError,
+            ("rank 1", "checkpoint target differs across ranks"),
+        )
+        _assert_failure(
+            lambda: interrupted.checkpoint(target),
+            PermissionError,
+            ("injected rank-zero checkpoint directory open refusal",),
+        )
+    assert not target.exists() and not divergent_name.exists()
+    assert np.array_equal(
+        state_at_half, np.asarray(interrupted.state_global("tracer"), dtype=np.float64)
+    )
+    assert _rings_equal(rings_at_half, _rings(interrupted))
+    assert interrupted.macro_step() == half and interrupted.time() == half * DT
+
+    # Canonical aliases are accepted: the suffix replacement on rank one names the same target.
+    equivalent_target = target if rank == 0 else target.with_suffix(".ignored")
+    checkpoint = Path(interrupted.checkpoint(equivalent_target))
     assert checkpoint == target and checkpoint.is_file()
+    sealed_bytes = checkpoint.read_bytes()
 
     restored = _bind(artifact, context, initial)
     restored.restart(checkpoint)
@@ -264,10 +337,19 @@ def test_uniform_history_checkpoint_restart_mpi() -> None:
     history_shape_before_failure = tuple(
         (name, preflight_target.history_depth(name)) for name in preflight_target.history_names()
     )
+    for invalid_rank in (0, 1):
+        malformed = str(checkpoint) + ("\x00" if rank == invalid_rank else "")
+        _assert_collective_path_failure(
+            world,
+            lambda: preflight_target.restart(malformed),
+            TypeError,
+            ("rank %d" % invalid_rank, "checkpoint path must be non-empty filesystem text"),
+        )
     wrong_restart = (
         checkpoint if rank == 0 else checkpoint.with_name("rank-one-wrong-uniform-history.npz")
     )
-    _assert_failure(
+    _assert_collective_path_failure(
+        world,
         lambda: preflight_target.restart(wrong_restart),
         ValueError,
         ("rank 1", "restart target differs across ranks"),
@@ -281,6 +363,7 @@ def test_uniform_history_checkpoint_restart_mpi() -> None:
     assert history_shape_before_failure == tuple(
         (name, preflight_target.history_depth(name)) for name in preflight_target.history_names()
     )
+    assert checkpoint.read_bytes() == sealed_bytes
 
     _advance(restored, NSTEPS - half)
     result = np.asarray(restored.state_global("tracer"), dtype=np.float64).copy()

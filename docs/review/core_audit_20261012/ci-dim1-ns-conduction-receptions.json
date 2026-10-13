@@ -1,0 +1,312 @@
+{
+  "schema": "pops.core-audit.ci-dim1-ns-conduction-receptions@1",
+  "schema_version": 1,
+  "status": "complete_mpi1_mpi2_local",
+  "source_receipt_origin": {
+    "ref": "external-evidence:ci/ns-conduction-dim1-qualified.json",
+    "sha256": "4cdc9f10f7f5adfde1889f6ba67bcd9cadfe6b56b6b352eecdc042429693182a"
+  },
+  "qualification_scope": "Two exact public compressible NS/conduction stage/restart/replay fixtures, N8 and N16, received in genuine installed Dim1 MPI1 and MPI2.",
+  "installed_identity": {
+    "source_commit": "a9297394d5fbf6c191195bc69563822da3169bbe",
+    "native_dimension": 1,
+    "native_sha256": "33c0ea8e1ced3c2d8a71306cdd6957f0cb068ea4907c81e478815d9149329a28",
+    "header_signature": "e1b678510d7b4dc24a3286ad6fd8433f1c31412bc18582e8a2c9d0de2b40289c",
+    "abi_version": 13
+  },
+  "accounting": {
+    "case_worlds_passed": 4,
+    "rank_case_outcomes_passed": 6,
+    "xml_files": 3,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "case_world_definition": "N8 and N16 x MPI1 and MPI2 = 4 world/grid variants.",
+    "rank_outcome_definition": "MPI1 rank0: 2; MPI2 ranks0 and1: 2 each = 6.",
+    "saved_phases_and_cell_values_are_not_additional_cases": true
+  },
+  "profile_durations_seconds": {
+    "MPI1": 73.67213166700094,
+    "MPI2": 80.88114570800099
+  },
+  "rank_results": [
+    {
+      "profile": "MPI1",
+      "rank": 0,
+      "mpi_ranks": 1,
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "pytest_status": 0,
+      "elapsed_seconds": 73.67213166700094,
+      "xml": {
+        "ref": "external-evidence:ci/ns-conduction-dim1-mpi1/rank-0/pytest.xml",
+        "sha256": "b6b5000354ae6ff8572b71513e63f9931be8d89f4ea82f0fa7a8dd0ecaad9e3e",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "identity": {
+        "before": {
+          "ref": "external-evidence:ci/ns-conduction-dim1-mpi1/rank-0/identity-before.json",
+          "sha256": "e1e6104bde19300097b865a9848b892f18921aaa2fdbb461d7e5f5f777bf7ac7"
+        },
+        "after": {
+          "ref": "external-evidence:ci/ns-conduction-dim1-mpi1/rank-0/identity-after.json",
+          "sha256": "e1e6104bde19300097b865a9848b892f18921aaa2fdbb461d7e5f5f777bf7ac7"
+        },
+        "before_summary": {
+          "head": "a9297394d5fbf6c191195bc69563822da3169bbe",
+          "native_sha256": "33c0ea8e1ced3c2d8a71306cdd6957f0cb068ea4907c81e478815d9149329a28",
+          "abi_version": 13,
+          "header_signature": "e1b678510d7b4dc24a3286ad6fd8433f1c31412bc18582e8a2c9d0de2b40289c",
+          "dimension": 1,
+          "mpi": true,
+          "rank": 0,
+          "size": 1,
+          "python_tree_files": 801
+        },
+        "after_summary": {
+          "head": "a9297394d5fbf6c191195bc69563822da3169bbe",
+          "native_sha256": "33c0ea8e1ced3c2d8a71306cdd6957f0cb068ea4907c81e478815d9149329a28",
+          "abi_version": 13,
+          "header_signature": "e1b678510d7b4dc24a3286ad6fd8433f1c31412bc18582e8a2c9d0de2b40289c",
+          "dimension": 1,
+          "mpi": true,
+          "rank": 0,
+          "size": 1,
+          "python_tree_files": 801
+        },
+        "before_after_equal": true,
+        "python_tree_equal": true
+      }
+    },
+    {
+      "profile": "MPI2",
+      "rank": 0,
+      "mpi_ranks": 2,
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "pytest_status": 0,
+      "elapsed_seconds": 80.88036012499651,
+      "xml": {
+        "ref": "external-evidence:ci/ns-conduction-dim1-mpi2/rank-0/pytest.xml",
+        "sha256": "6f3f77ed273e2693f0c211e893f802a9402bfdad654b0daac29998f38be356ca",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "identity": {
+        "before": {
+          "ref": "external-evidence:ci/ns-conduction-dim1-mpi2/rank-0/identity-before.json",
+          "sha256": "03a3a10fe2e9397bf857e91a467021b1d922419963b0fdb3e997c751501f577b"
+        },
+        "after": {
+          "ref": "external-evidence:ci/ns-conduction-dim1-mpi2/rank-0/identity-after.json",
+          "sha256": "03a3a10fe2e9397bf857e91a467021b1d922419963b0fdb3e997c751501f577b"
+        },
+        "before_summary": {
+          "head": "a9297394d5fbf6c191195bc69563822da3169bbe",
+          "native_sha256": "33c0ea8e1ced3c2d8a71306cdd6957f0cb068ea4907c81e478815d9149329a28",
+          "abi_version": 13,
+          "header_signature": "e1b678510d7b4dc24a3286ad6fd8433f1c31412bc18582e8a2c9d0de2b40289c",
+          "dimension": 1,
+          "mpi": true,
+          "rank": 0,
+          "size": 2,
+          "python_tree_files": 801
+        },
+        "after_summary": {
+          "head": "a9297394d5fbf6c191195bc69563822da3169bbe",
+          "native_sha256": "33c0ea8e1ced3c2d8a71306cdd6957f0cb068ea4907c81e478815d9149329a28",
+          "abi_version": 13,
+          "header_signature": "e1b678510d7b4dc24a3286ad6fd8433f1c31412bc18582e8a2c9d0de2b40289c",
+          "dimension": 1,
+          "mpi": true,
+          "rank": 0,
+          "size": 2,
+          "python_tree_files": 801
+        },
+        "before_after_equal": true,
+        "python_tree_equal": true
+      }
+    },
+    {
+      "profile": "MPI2",
+      "rank": 1,
+      "mpi_ranks": 2,
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "pytest_status": 0,
+      "elapsed_seconds": 80.88114570800099,
+      "xml": {
+        "ref": "external-evidence:ci/ns-conduction-dim1-mpi2/rank-1/pytest.xml",
+        "sha256": "cf45966d32bb404e862581928c35fa604a2b0c3f8f00190aacc4bdf57cb5677b",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "identity": {
+        "before": {
+          "ref": "external-evidence:ci/ns-conduction-dim1-mpi2/rank-1/identity-before.json",
+          "sha256": "a44a28191f462cbc3df760e7f5a576f0bc41baba86b12d805cc1bd2b71c5597e"
+        },
+        "after": {
+          "ref": "external-evidence:ci/ns-conduction-dim1-mpi2/rank-1/identity-after.json",
+          "sha256": "a44a28191f462cbc3df760e7f5a576f0bc41baba86b12d805cc1bd2b71c5597e"
+        },
+        "before_summary": {
+          "head": "a9297394d5fbf6c191195bc69563822da3169bbe",
+          "native_sha256": "33c0ea8e1ced3c2d8a71306cdd6957f0cb068ea4907c81e478815d9149329a28",
+          "abi_version": 13,
+          "header_signature": "e1b678510d7b4dc24a3286ad6fd8433f1c31412bc18582e8a2c9d0de2b40289c",
+          "dimension": 1,
+          "mpi": true,
+          "rank": 1,
+          "size": 2,
+          "python_tree_files": 801
+        },
+        "after_summary": {
+          "head": "a9297394d5fbf6c191195bc69563822da3169bbe",
+          "native_sha256": "33c0ea8e1ced3c2d8a71306cdd6957f0cb068ea4907c81e478815d9149329a28",
+          "abi_version": 13,
+          "header_signature": "e1b678510d7b4dc24a3286ad6fd8433f1c31412bc18582e8a2c9d0de2b40289c",
+          "dimension": 1,
+          "mpi": true,
+          "rank": 1,
+          "size": 2,
+          "python_tree_files": 801
+        },
+        "before_after_equal": true,
+        "python_tree_equal": true
+      }
+    }
+  ],
+  "scientific_receptions": [
+    {
+      "id": "MPI1-N16",
+      "fixture": "tests/python/integration/runtime/test_public_ns_conduction.py::test_public_compressible_ns_conduction_original_stage_exact_replay[16]",
+      "profile": "MPI1",
+      "grid_n": 16,
+      "origin": {
+        "ref": "external-evidence:ci/ns-conduction-dim1-mpi1/rank-0/pytest-tmp/test_public_compressible_ns_co1/compressible-NS-conduction/receipt.json",
+        "sha256": "f060488f686621aa7e2c6910e61d74be9b846b4afd252119a37909b19274bd40"
+      },
+      "artifact_identity": "pops.artifact.v1:sha256:01dc926f6525d643765ed715db4a64e1d90584199c1a83a5daf12ef3b087df97",
+      "saved_phases": [
+        "accepted",
+        "continuous",
+        "reloaded",
+        "replay"
+      ],
+      "exact_restart_and_replay": true
+    },
+    {
+      "id": "MPI1-N8",
+      "fixture": "tests/python/integration/runtime/test_public_ns_conduction.py::test_public_compressible_ns_conduction_original_stage_exact_replay[8]",
+      "profile": "MPI1",
+      "grid_n": 8,
+      "origin": {
+        "ref": "external-evidence:ci/ns-conduction-dim1-mpi1/rank-0/pytest-tmp/test_public_compressible_ns_co0/compressible-NS-conduction/receipt.json",
+        "sha256": "eb435aad656f9e2f866ea8dd3c9a0b994310832ae8b07eb1f25a5af1b9f5b3c2"
+      },
+      "artifact_identity": "pops.artifact.v1:sha256:d27e4b72595ab2956ae63562cc4602382281dc5962955747c9e0da220fe05e8d",
+      "saved_phases": [
+        "accepted",
+        "continuous",
+        "reloaded",
+        "replay"
+      ],
+      "exact_restart_and_replay": true
+    },
+    {
+      "id": "MPI2-N16",
+      "fixture": "tests/python/integration/runtime/test_public_ns_conduction.py::test_public_compressible_ns_conduction_original_stage_exact_replay[16]",
+      "profile": "MPI2",
+      "grid_n": 16,
+      "origin": {
+        "ref": "external-evidence:ci/ns-conduction-dim1-mpi2/rank-0/pytest-tmp/test_public_compressible_ns_co1/compressible-NS-conduction/receipt.json",
+        "sha256": "d6ddd36db39666b2964243dd891e7932b8833c2ba904145ec99a698430964c1e"
+      },
+      "artifact_identity": "pops.artifact.v1:sha256:01dc926f6525d643765ed715db4a64e1d90584199c1a83a5daf12ef3b087df97",
+      "saved_phases": [
+        "accepted",
+        "continuous",
+        "reloaded",
+        "replay"
+      ],
+      "exact_restart_and_replay": true
+    },
+    {
+      "id": "MPI2-N8",
+      "fixture": "tests/python/integration/runtime/test_public_ns_conduction.py::test_public_compressible_ns_conduction_original_stage_exact_replay[8]",
+      "profile": "MPI2",
+      "grid_n": 8,
+      "origin": {
+        "ref": "external-evidence:ci/ns-conduction-dim1-mpi2/rank-0/pytest-tmp/test_public_compressible_ns_co0/compressible-NS-conduction/receipt.json",
+        "sha256": "b6ca42f6edde1b2a7abd838ba40483b68a6570ca95730ec9cec182a34ab5d228"
+      },
+      "artifact_identity": "pops.artifact.v1:sha256:d27e4b72595ab2956ae63562cc4602382281dc5962955747c9e0da220fe05e8d",
+      "saved_phases": [
+        "accepted",
+        "continuous",
+        "reloaded",
+        "replay"
+      ],
+      "exact_restart_and_replay": true
+    }
+  ],
+  "scientific_contract": {
+    "original_oracles": "Complete original stage, state/field/history and exact restart/replay checks from the named fixture are received.",
+    "saved_phases": [
+      "accepted",
+      "continuous",
+      "reloaded",
+      "replay"
+    ],
+    "all_four_world_variants_exact_restart_and_replay": true,
+    "scope_limit": "This records only the named N8/N16 fixtures in the two MPI worlds; no broader NS convergence or Serial-native claim."
+  },
+  "verification_scope": {
+    "source_receipt_local_only": true,
+    "native_identity_before_after_equal": true,
+    "metadata_review": "Three XML summaries and immutable before/after identity tables read; all three 801-file Python trees and identity snapshots equal.",
+    "native_tests_repeated_for_publication": false,
+    "physics_or_artifact_validation_repeated_for_publication": false,
+    "native_imports_executed_for_publication": false,
+    "reference_policy": "external-evidence:<path> resolves below the retained evidence root; fixture paths are repository-relative."
+  },
+  "distinct_serial_ci": {
+    "status": "pending",
+    "mpi1_is_serial": false
+  },
+  "spatial_native_reception": {
+    "status": "pending",
+    "claimed_by_this_file": false
+  },
+  "gate": {
+    "required_remote_ci_status": "pending",
+    "green_claimed": false,
+    "scope": "Historical local receipt; pending records the state when prepared. Current remote verdict is assessed on the exact final PR revision."
+  },
+  "historical_public_json_and_report_modified": false,
+  "current_reception_index": {
+    "scope": "Later receipt links reconcile historical pending fields below; each linked receipt retains its own source/native identity. These links do not transfer execution results to a later binary.",
+    "dim1_m05_m26_m23": "ci-dim1-scientific-receptions.json",
+    "dim1_ns_conduction": "ci-dim1-ns-conduction-receptions.json",
+    "historical_spatial_partial": "spatial_interaction_provisional_20261013/receipt.json",
+    "installed_a929": "ci-repairs-installed-identity.json",
+    "snapshot_source_cpp": "history_snapshot_qualification_20261013/receipt.json",
+    "installed_f94": "history-snapshot-installed-identity.json",
+    "remote_ci": {
+      "verdict_location": "https://github.com/wolf75222/PoPS/pull/686",
+      "requires_exact_final_revision_and_required_aggregate_gate": true
+    },
+    "final_amr_periodic_f94": "spatial_amr_final_20261013/receipt.json"
+  }
+}

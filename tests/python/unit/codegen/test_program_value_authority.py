@@ -1,5 +1,6 @@
 """Source-only issued-value lowering: real authored graph, no native module imported."""
 from dataclasses import FrozenInstanceError
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -276,10 +277,22 @@ def test_diffusive_publication_follows_real_stage_write_and_successful_guard_tai
     stability = source.index('"combined_transport_diffusion_stability"', apply)
     last_source = source.index("ctx.axpy(diffusive_rhs_%d,0.25,diffusive_source_" % diffusion.id,
                                stability)
+    source_call = re.search(
+        r'(pops_shared_source_[0-9a-f]{64})\(ctx, "[^"]+", 0, u%d, diffusive_source_%d_1\);' %
+        (state.id, diffusion.id), source[stability:last_source])
+    assert source_call is not None
+    helper_start = source.index("inline void %s(" % source_call[1])
+    helper = source[helper_start:source.index("\n}", helper_start)]
+    source_mask = helper.index("ctx.pointwise_active_mask(block_index, kernel_input);")
+    fab_loop = helper.index("for (int li = 0;")
+    inactive_return = helper.index("return;")
+    source_read = helper.index("const pops::Real rho = kernel_inputA(index, 0);")
     complete = source.index("ctx.complete_program_value_write(std::move(value_write_%d))" %
                             diffusion.id, last_source)
     consumer = source.index("ctx.solve_fields_from_program_values_at(", complete)
     assert allocation < point < begin < preparation < apply < stability < last_source < complete < consumer
+    assert source_mask < fab_loop < inactive_return < source_read
+    assert "outA(index, 0) = pops::Real(0);" in helper[source_mask:inactive_return]
     assert "ctx.program_value(%d, 0, u%d)" % (state.id, state.id) in source[begin:preparation]
     assert 'catch (const pops::runtime::program::DiffusiveEvaluationError& error)' in source[apply:complete]
     assert "diffusive_face_evaluation" in source[apply:complete]

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="3" time="126.661" timestamp="2026-10-13T01:02:28.773593+02:00" hostname="macbookpro.home"><testcase classname="tests.python.integration.runtime.test_public_spatial_interaction" name="test_public_spatial_interaction_saved_history_and_exact_replay[scalar-cutcell]" time="39.299"><properties><property name="evidence_path" value="$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction" /><property name="dimension" value="2" /><property name="rank" value="0" /><property name="size" value="1" /><property name="adaptive" value="False" /><property name="width" value="1" /><property name="fixture_schema" value="pops.spatial-interaction-native-fixture@1" /></properties></testcase><testcase classname="tests.python.integration.runtime.test_public_spatial_interaction" name="test_public_spatial_interaction_saved_history_and_exact_replay[signed-vector-permuted]" time="40.420"><properties><property name="evidence_path" value="$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio1/spatial-interaction" /><property name="dimension" value="2" /><property name="rank" value="0" /><property name="size" value="1" /><property name="adaptive" value="False" /><property name="width" value="3" /><property name="fixture_schema" value="pops.spatial-interaction-native-fixture@1" /></properties></testcase><testcase classname="tests.python.integration.runtime.test_public_spatial_interaction" name="test_public_spatial_interaction_saved_history_and_exact_replay[partial-amr-cutcell]" time="46.529"><failure message="AssertionError: (('ValueError', 'active AMR embedded transport has no EB-qualified physical-boundary provider', False),)">tmp_path = PosixPath('$EVIDENCE/ci/a9297394-spatial-source-only-freeze/3261d081-spatial-mask-qualified-mpi1/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio2')
+record_property = &lt;function record_property.&lt;locals&gt;.append_property at 0x113fc2f20&gt;
+width = 3, adaptive = True
+
+    @pytest.mark.compiler
+    @pytest.mark.kokkos
+    @pytest.mark.native_loader
+    @pytest.mark.parametrize("width,adaptive", ((1, False), (3, False), (3, True)),
+                             ids=("scalar-cutcell", "signed-vector-permuted", "partial-amr-cutcell"))
+    def test_public_spatial_interaction_saved_history_and_exact_replay(
+            isolated_native_cache, tmp_path, record_property, width, adaptive):
+        del isolated_native_cache
+        world, native = world_and_native()
+        artifact, selected = prepare(world, width, adaptive, None)
+&gt;       runtime = bind(world, artifact, width)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/python/integration/runtime/test_public_spatial_interaction.py:118: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/python/integration/runtime/test_public_spatial_interaction.py:29: in bind
+    return collective_call(world, lambda: pops.bind(artifact, initial_values=values,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+world = &lt;pops._pops._NativeWorldCommunicator object at 0x1025c9970&gt;
+operation = &lt;function bind.&lt;locals&gt;.&lt;lambda&gt; at 0x11343ba60&gt;
+
+    def collective_call(world, operation):
+        value, failures = collective_attempt(world, operation)
+&gt;       assert not any(failures), failures
+               ^^^^^^^^^^^^^^^^^
+E       AssertionError: (('ValueError', 'active AMR embedded transport has no EB-qualified physical-boundary provider', False),)
+
+tests/python/support/collective_checks.py:31: AssertionError</failure></testcase></testsuite></testsuites>

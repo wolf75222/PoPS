@@ -473,10 +473,25 @@ TEST(test_program_reflux_ledger, HistoryPublicationIdentityUsesPhysicalWindowsAn
   const auto current = program::serialize_amr_program_accepted_state(state);
   const auto restored = program::deserialize_amr_program_accepted_state<2>(current);
   EXPECT_EQ(restored.history_slots, state.history_slots);
-  // Freeze an actual AND6 history layout by removing only the new per-slot 32-byte records.
+  // Freeze the actual AND6 layout: it predates committed attempts, declared history halos,
+  // and the per-slot publication identities. Merely relabeling the current wire is invalid.
   auto legacy = current;
   const std::size_t attempt_offset = 5 * sizeof(std::uint64_t) + state.spatial_contract.size();
   legacy.erase(legacy.begin() + attempt_offset, legacy.begin() + attempt_offset + 8);
+  ASSERT_TRUE(state.logical_clock_ticks.empty());
+  ASSERT_EQ(state.histories.size(), 1u);
+  const auto& history = state.histories.front();
+  // Three container counts, five words per clock, and eight legacy descriptor words.
+  // The five descriptor strings contribute their characters in addition to those words.
+  const std::size_t halo_offset = attempt_offset +
+      (3 + 5 * state.level_clocks.size() + 8) * sizeof(std::uint64_t) +
+      history.name.size() + history.state_identity.size() + history.space_identity.size() +
+      history.clock_identity.size() + history.interpolation_identity.size();
+  ASSERT_GE(legacy.size(), halo_offset + 8);
+  ASSERT_EQ(history.ghost_depth, -1);
+  ASSERT_TRUE(std::all_of(legacy.begin() + halo_offset, legacy.begin() + halo_offset + 8,
+                          [](std::uint8_t byte) { return byte == 0xff; }));
+  legacy.erase(legacy.begin() + halo_offset, legacy.begin() + halo_offset + 8);
   const auto framed =
       program::encode_history_sample_identity("prior", 0, std::span(&publication, 1));
   const std::vector<std::uint8_t> record(framed.end() - 32, framed.end());
@@ -491,6 +506,7 @@ TEST(test_program_reflux_ledger, HistoryPublicationIdentityUsesPhysicalWindowsAn
   ASSERT_EQ(removed, 4);
   legacy[7] = '6';
   const auto old = program::deserialize_amr_program_accepted_state<2>(legacy);
+  EXPECT_EQ(old.histories, state.histories);
   for (const auto& slot : old.history_slots)
     EXPECT_EQ(slot.sample, Sample{});
   EXPECT_FALSE(old.accepted_attempt);

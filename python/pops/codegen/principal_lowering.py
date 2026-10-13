@@ -52,10 +52,14 @@ def _authenticate_numerical_captures(module, group):
             seen.add(id(node))
             if isinstance(node, RuntimeParamRef):
                 handle = node.handle
+                if handle is None:
+                    raise ValueError("principal numerical capture requires its declaring Handle")
                 if handle.is_instance:
-                    if handle.block_ref._resolved() != state.block_ref._resolved():
+                    declaration, block = handle._instance_refs()
+                    _, state_block = state._instance_refs()
+                    if block._resolved() != state_block._resolved():
                         raise ValueError("principal numerical capture belongs to another block instance")
-                    handle = handle.declaration_ref
+                    handle = declaration
                 try:
                     module._param_registry.handle(handle)
                 except (KeyError, ValueError) as exc:

@@ -1622,6 +1622,10 @@ void System<Dim>::register_elliptic_field(
                 throw std::logic_error(
                     "FFT field solver requires periodic exact field boundaries on every face");
           }
+        } else if (configured->second.family_route == "red_black_geometric_mg") {
+          if (candidate_plan.has_reaction || candidate_plan.boundary_kernel || candidate_plan.newton)
+            throw std::logic_error("red-black field MG rejects reaction, dynamic boundary, and Newton contracts");
+          (void)runtime::system::decode_red_black_geometric_mg_options<Dim>(configured->second.options);
         } else if (configured->second.family_route == "cartesian_cg") {
           if (candidate_plan.has_reaction)
             throw std::logic_error(
@@ -1667,6 +1671,10 @@ void System<Dim>::register_elliptic_field(
       }
       backend = runtime::system::PoissonFftFieldSolverBackend<Dim>::prepare_collectively(
           std::move(*request), configured->second.exact_identity, lane);
+    } else if (configured->second.family_route == "red_black_geometric_mg") {
+      backend = runtime::system::RedBlackGeometricMgFieldSolverBackend<Dim>::prepare_collectively(
+          p_->geom, p_->ba, p_->dm, p_->local_rank, prepared_topology, prepared_options,
+          configured->second.options, lane, configured->second.exact_identity);
     } else if (configured->second.family_route == "cartesian_cg") {
       backend = runtime::system::CartesianCgFieldSolverBackend<Dim>::prepare_collectively(
           p_->geom, p_->ba, p_->dm, p_->local_rank, prepared_topology, prepared_options, lane,

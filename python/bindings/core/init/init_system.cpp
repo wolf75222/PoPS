@@ -905,6 +905,8 @@ void bind_system_physics(py::class_<System>& cls) {
       .def("set_clock", &System::set_clock, py::arg("t"), py::arg("macro_step"))
       .def("set_potential", &System::set_potential, py::arg("phi"))
       .def("field_provider_slots", &System::field_provider_slots)
+      .def("field_solve_report", &System::field_solve_report, py::arg("provider_slot"),
+           "Read the last accepted field report; guesses and rejected candidates cannot replace it.")
       .def("field_provider_materialized", &System::field_provider_materialized,
            py::arg("provider_slot"),
            "Collective-free readiness of one exact registered field provider.")
@@ -1199,6 +1201,9 @@ void bind_system_physics(py::class_<System>& cls) {
 void bind_system_stepping(py::class_<System>& cls) {
   cls.def("solve_fields",
           [](System& system) { return consume_solve_outcome(system.solve_fields()); })
+      .def("_solve_initial_field", [](System& system, const std::string& provider_slot) {
+        return consume_solve_outcome(system.solve_initial_field(provider_slot));
+      }, py::arg("provider_slot"))
       .def("step", &System::step, py::arg("dt"))
       .def("_advance_program_region", &System::advance_program_region, py::arg("dt"))
       .def("advance", &System::advance, py::arg("dt"), py::arg("nsteps"))
@@ -1277,9 +1282,9 @@ void bind_system_stepping(py::class_<System>& cls) {
             } catch (...) {
               preparation_error = std::current_exception();
             }
-            // DTO parsing may allocate or reject a rank-local Python value. Vote on the
-            // native process world before prepare enters its first collective; an outer
-            // Python collective cannot compensate for peers already inside that call.
+    // DTO parsing may allocate or reject a rank-local Python value. Vote on the
+    // native process world before prepare enters its first collective; an outer
+    // Python collective cannot compensate for peers already inside that call.
 #ifdef POPS_HAS_MPI
             const auto& world = pops::WorldCommunicator::world();
             if (pops::all_reduce_max(preparation_error ? 1L : 0L, world.communicator()) != 0) {
@@ -1383,7 +1388,10 @@ void bind_system_stepping(py::class_<System>& cls) {
                     py::cast<int>(row["component"])));
                 continue;
               }
-              if (source != "provider" || row.size() != 2 || !row.contains("key"))
+              const bool derivative = source == "provider_derivative";
+              if ((source != "provider" && !derivative) || row.size() != (derivative ? 4 : 2) ||
+                  !row.contains("key") ||
+                  (derivative && (!row.contains("axis") || !row.contains("edge_order"))))
                 throw std::invalid_argument(
                     "mapped analytic provider input requires exactly source/key");
               const py::dict key = py::cast<py::dict>(row["key"]);
@@ -1391,11 +1399,15 @@ void bind_system_stepping(py::class_<System>& cls) {
                   !key.contains("space_name") || !key.contains("component"))
                 throw std::invalid_argument(
                     "mapped analytic provider input requires an exact ComponentKey");
-              inputs.push_back(pops::runtime::system::AnalyticMappedInput::provider(
-                  {py::cast<std::string>(key["owner_qid"]),
-                   py::cast<std::string>(key["space_kind"]),
-                   py::cast<std::string>(key["space_name"]),
-                   py::cast<std::string>(key["component"])}));
+              pops::runtime::system::AuxiliaryComponentKey provider_key{
+                  py::cast<std::string>(key["owner_qid"]), py::cast<std::string>(key["space_kind"]),
+                  py::cast<std::string>(key["space_name"]),
+                  py::cast<std::string>(key["component"])};
+              inputs.push_back(derivative ? pops::runtime::system::AnalyticMappedInput::derivative(
+                                                std::move(provider_key), py::cast<int>(row["axis"]),
+                                                py::cast<int>(row["edge_order"]))
+                                          : pops::runtime::system::AnalyticMappedInput::provider(
+                                                std::move(provider_key)));
             }
             return system.set_analytic_mapped_state(name, opcodes, literals, inputs, consumer_qid);
           },

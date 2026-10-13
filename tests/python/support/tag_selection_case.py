@@ -1,7 +1,7 @@
 """Public stationary transport and periodic rectangular tag selection."""
 import math
 import pops
-from pops.amr import AcceptedHaloPreparation, AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging, AMRTransfer, Buffer, Tag, Hysteresis, EqualityPolicy, ConflictPolicy
+from pops.amr import AcceptedHaloPreparation, AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging, AMRTransfer, Buffer, Coarsen, Tag, Hysteresis, EqualityPolicy, ConflictPolicy
 from pops.analytic import cos, x
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
@@ -28,7 +28,7 @@ THRESHOLD = .7
 DT = 1/64
 
 
-def build(shape, tag_buffer, transfer_kind):
+def build(shape, tag_buffer, transfer_kind, *, regrid_every=1000, coarsen=False, max_levels=2):
     case = pops.Case("authored tag reach and numerical parent coverage")
     block = case.block("marker", MODEL)
     numerics = DiscretizationPlan()
@@ -49,11 +49,15 @@ def build(shape, tag_buffer, transfer_kind):
     transfer = AMRTransfer()
     transfer.state(block[STATE], policy)
     threshold = case.param(RuntimeParam("tag-threshold", default=THRESHOLD))
+    marker_value = ValueExpr(block[STATE])["marker"]
+    rules = [Tag(marker_value > case.value(threshold)), Buffer(cells=tag_buffer)]
+    if coarsen:
+        rules.append(Coarsen(marker_value < case.value(threshold)))
     layout = AMR(grid=CartesianGrid(frame=FRAME, cells=shape, periodic=PeriodicAxes(FRAME.axes)),
-        hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-        tagging=AMRTagging(rules=(Tag(ValueExpr(block[STATE])["marker"] > case.value(threshold)), Buffer(cells=tag_buffer)),
+        hierarchy=AMRHierarchy(max_levels=max_levels, ratios=(2,)*(max_levels-1)),
+        tagging=AMRTagging(rules=tuple(rules),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
-        regrid=AMRRegrid(schedule=every(1000, clock=program.clock)), transfer=transfer,
+        regrid=AMRRegrid(schedule=every(regrid_every, clock=program.clock)), transfer=transfer,
         execution=AMRExecution.synchronous(accepted_halo=AcceptedHaloPreparation()),
         clustering=BergerRigoutsos(minimum_efficiency=1., minimum_box_size=1, maximum_box_size=4))
     return case, layout

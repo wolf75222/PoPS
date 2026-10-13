@@ -13,7 +13,7 @@ from pops.codegen._compile_drivers import _compile_resolved_problem, compile_pro
 from pops.codegen._interface_validation import validate_shared_interface_program
 from pops.codegen.program_emit_control import _emit_contiguous_rhs_group
 from pops.codegen.program_codegen import emit_cpp_program
-from pops.numerics.terms import Flux
+from pops.numerics.terms import DefaultSource, Flux
 from pops.time import EventHandle, Program, TimePoint, every
 from typed_program_support import typed_state
 
@@ -329,39 +329,29 @@ def test_shared_interface_rejects_default_flux_rhs_nested_in_loop() -> None:
 
 def test_group_codegen_keeps_atomic_and_per_rate_identities_distinct() -> None:
     program = Program("group_identity")
-    left_block = object()
-    right_block = object()
-    left_state = SimpleNamespace(id=3)
-    right_state = SimpleNamespace(id=4)
     point = TimePoint(program.clock, Fraction(1, 2))
-    left_rate = SimpleNamespace(
-        id=11,
-        name="left_rate",
-        point=point,
-        block=left_block,
-        inputs=(left_state,),
-        attrs={"sources": None},
-    )
-    right_rate = SimpleNamespace(
-        id=12,
-        name="right_rate",
-        point=point,
-        block=right_block,
-        inputs=(right_state,),
-        attrs={"sources": ()},
-    )
-    variables = {3: "u3", 4: "u4"}
+    left = typed_state(program, "left", state_name="U")
+    right = typed_state(program, "right", state_name="U")
+    left_state = program.value("left_input", left.n, at=point)
+    right_state = program.value("right_input", right.n, at=point)
+    left_rate = program.rhs("left_rate", state=left_state, terms=[Flux(), DefaultSource()])
+    right_rate = program.rhs("right_rate", state=right_state, terms=[Flux()])
+    variables = {left_state.id: "left_input", right_state.id: "right_input"}
     lines: list[str] = []
 
     _emit_contiguous_rhs_group(
         [left_rate, right_rate],
-        {left_block: 0, right_block: 1},
+        {left.block: 0, right.block: 1},
         variables,
         lines,
         group_identity=29,
     )
 
-    assert lines[-1] == ("ctx.rhs_group(29, {{0, &u3, &r11, 11, 0}, {1, &u4, &r12, 12, 1}});")
+    expected = ("ctx.rhs_group(29, {{0, &left_input, &r%d, %d, 0}, "
+                "{1, &right_input, &r%d, %d, 1}});" %
+                (left_rate.id, left_rate.id, right_rate.id, right_rate.id))
+    assert [line for line in lines if line.startswith("ctx.rhs_group(")] == [expected]
+    assert 29 not in (left_rate.id, right_rate.id)
 
 
 def test_validation_and_codegen_share_noncontiguous_stage_coherence_plan() -> None:

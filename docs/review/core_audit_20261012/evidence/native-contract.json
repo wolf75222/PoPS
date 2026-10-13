@@ -1,0 +1,8 @@
+{
+  "dimension": 2,
+  "has_kokkos": true,
+  "has_mpi": true,
+  "has_parallel_hdf5": true,
+  "native_extension": "<qualification-env>/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+  "sha256": "dbf1f7de0d4309ae5607028432604493f2a4c4f7140a8d0f94446a1438909d08"
+}

@@ -34,7 +34,8 @@ def test_cross_two_plus_three_body_is_a_real_vector_not_componentwise():
     assert policy.options["component_counts"] == (2, 3)
 
 
-def joint_case(*, reverse=False, foreign=False, mixed=False, cross_offset=1):
+def joint_case(*, reverse=False, foreign=False, mixed=False, cross_offset=1,
+               explicit_joint_waves=True):
     from pops.layouts import Uniform
     from pops.math import ddt, div
     from pops.mesh import CartesianGrid, PeriodicAxes
@@ -59,7 +60,8 @@ def joint_case(*, reverse=False, foreign=False, mixed=False, cross_offset=1):
                 axis: tuple((1 if axis == frame.x else -0.5) * total + q for q in state)
                 for axis in frame.axes
             },
-            waves={axis: (6.0,) * 2 for axis in frame.axes} if i == 0 else None,
+            waves=({axis: (6.0,) * 2 for axis in frame.axes}
+                   if i == 0 and not explicit_joint_waves else None),
         )
         for i, state in enumerate(owned)
     )
@@ -67,6 +69,10 @@ def joint_case(*, reverse=False, foreign=False, mixed=False, cross_offset=1):
         model.rate("rate%d" % i, equation=ddt(state) == -div(flux))
         for i, (state, flux) in enumerate(zip(owned, fluxes, strict=True))
     )
+    if explicit_joint_waves:
+        from pops._ir.expr import Const
+        # One five-component transport group owns the same bound on every packed component.
+        model.module.eigenvalues(**{axis.name: (Const(6.0),) * 5 for axis in frame.axes})
     policies = (
         reconstruction.User(
             lambda s: (
@@ -145,6 +151,13 @@ def test_joint_foreign_model_capture_is_refused():
 
     with pytest.raises(ValueError, match="another model|owner|belongs"):
         ProgramModelGraph.from_resolved_blocks(joint_case(foreign=True).blocks)
+
+
+def test_joint_missing_common_wave_authority_is_refused():
+    from pops.codegen.program_models import ProgramModelGraph
+
+    with pytest.raises(ValueError, match="ambiguous wave laws; declare an explicit joint wave authority"):
+        ProgramModelGraph.from_resolved_blocks(joint_case(explicit_joint_waves=False).blocks)
 
 
 def test_joint_undeclared_state_and_bad_shape_are_refused():

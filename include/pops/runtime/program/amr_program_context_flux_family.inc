@@ -76,3 +76,30 @@ static bool same_flux_producer_(const FluxBasis& active, const FluxBasis& retain
          active.rhs_identity == retained.rhs_identity && active.provider == retained.provider &&
          (retained.temporal_family.empty() || active.temporal_family == retained.temporal_family);
 }
+
+
+// An installed producer registry is authoritative; a missing or foreign family
+// cannot turn a modern producer into a legacy exact-pack comparison.
+std::string_view declared_flux_temporal_family_(const FluxBasis& basis) const {
+  if (declared_flux_temporal_families_.empty())
+    return {};
+  const auto declared = declared_flux_temporal_families_.find(
+      std::tuple{basis.runtime_block, basis.rhs_identity, basis.provider});
+  if (declared == declared_flux_temporal_families_.end() || declared->second.empty() ||
+      basis.temporal_family != declared->second)
+    throw std::invalid_argument("AMR Program flux basis lacks its declared producer family");
+  return declared->second;
+}
+
+// Render every operator occurrence field and the exact coefficient together.
+// Reflux may authenticate another level's own coefficient without rewriting it.
+static std::string flux_expression_stage_identity_(const FluxBasis& basis,
+                                                   ::pops::amr::Rational weight) {
+  return "pops.program-flux-expression.v1/provider/" +
+         std::to_string(static_cast<unsigned int>(basis.provider)) + "/rhs/" +
+         std::to_string(basis.rhs_identity) + "/point-stage/" + std::to_string(basis.point.stage) +
+         "/basis/" + std::to_string(basis.identity) + "/dt-power/1/weight/" +
+         std::to_string(weight.numerator) + "/" + std::to_string(weight.denominator) + "/stage/" +
+         std::to_string(basis.point.stage_fraction.numerator) + "/" +
+         std::to_string(basis.point.stage_fraction.denominator);
+}

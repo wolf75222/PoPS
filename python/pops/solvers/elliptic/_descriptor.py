@@ -218,7 +218,11 @@ class GeometricMG(Descriptor):
     loud (Spec 5 sec.7). The descriptor is inert: it records the configuration and answers the
     protocol; the C++ multigrid kernel runs the V-cycles.
 
-    ``pops.compile`` / ``pops.bind`` lower this descriptor only to the AMR MG/FAC provider. The
+    With ``cycle=RedBlackVcycle()`` a uniform System prepares the explicit red-black V-cycle,
+    independently of an optional field-only ``CellCentreBall`` conductor. The latter never masks
+    transport or another field operator. Composite conductor AMR is refused pending qualification.
+
+    Without an explicit cycle, ``pops.compile`` / ``pops.bind`` retain the AMR MG/FAC provider. The
     defaults are the native ``kMG*`` constants. Only the Gauss-Seidel smoother and bottom solve are
     wired natively; :meth:`validate` refuses the (never-wired) ``Chebyshev`` smoother structurally
     rather than silently ignoring it. A uniform ``System`` uses :class:`CartesianCG` instead.
@@ -239,6 +243,8 @@ class GeometricMG(Descriptor):
         post_sweeps: int = _MG_DEFAULT_POST_SMOOTH,
         bottom_sweeps: int = _MG_DEFAULT_BOTTOM_SWEEPS,
         fac: Any = None,
+        field_domain: Any = None,
+        cycle: Any = None,
     ) -> None:
         # Default smoother is the natively-wired RedBlackGaussSeidel (ADC-613): the native V-cycle
         # uses a Gauss-Seidel smoother, so this keeps GeometricMG() working. Chebyshev stays a
@@ -276,6 +282,17 @@ class GeometricMG(Descriptor):
                 "descriptor or None, not %r; use CompositeFAC()." % (fac,)
             )
         self.fac = fac
+        if field_domain is not None:
+            from pops.fields.domain import CellCentreBall
+            if type(field_domain) is not CellCentreBall:
+                raise TypeError("GeometricMG.field_domain must be an exact CellCentreBall")
+        self.field_domain = field_domain
+        from ._cycle import RedBlackVcycle
+        if cycle is not None and type(cycle) is not RedBlackVcycle:
+            raise TypeError("GeometricMG.cycle must be an exact RedBlackVcycle")
+        if field_domain is not None and cycle is None:
+            raise ValueError("a field-domain conductor requires an explicitly prepared RedBlackVcycle")
+        self.cycle = cycle
 
     @property
     def name(self) -> str:
@@ -296,9 +313,14 @@ class GeometricMG(Descriptor):
 
     def _prepared_field_solver(self) -> tuple[Any, dict[str, Any]]:
         """Bind through the same authenticated provider protocol as external solvers."""
-        from ._prepared_field_providers import (
-            geometric_mg_field_solver_provider,
-        )
+        from ._prepared_field_providers import geometric_mg_field_solver_provider, red_black_geometric_mg_field_solver_provider
+
+        if self.cycle is not None:
+            return red_black_geometric_mg_field_solver_provider(), {
+                "mg": self.mg_options(), "cycle": self.cycle.to_data(),
+                "field_domain": None if self.field_domain is None else self.field_domain.to_data(),
+                "fac": None if self.fac is None else self.fac.options(),
+            }
 
         return geometric_mg_field_solver_provider(), {
             "mg": self.mg_options(),
@@ -343,11 +365,15 @@ class GeometricMG(Descriptor):
         # options view -- and everything hashed from it -- is unchanged.
         if self.fac is not None:
             view["fac"] = self.fac.name
+        if self.field_domain is not None:
+            view["field_domain"] = self.field_domain.to_data()
+        if self.cycle is not None:
+            view["cycle"] = self.cycle.to_data()
         return view
 
     def to_data(self) -> dict[str, Any]:
         """Exact structural identity consumed through the generic descriptor protocol."""
-        return {
+        data = {
             "scheme": self.scheme,
             "smoother": {
                 "type": type(self.smoother).__name__,
@@ -375,6 +401,11 @@ class GeometricMG(Descriptor):
                 }
             ),
         }
+        if self.field_domain is not None:
+            data["field_domain"] = self.field_domain.to_data()
+        if self.cycle is not None:
+            data["cycle"] = self.cycle.to_data()
+        return data
 
     def mg_options(self) -> dict:
         """The RESOLVED native V-cycle scalars set_poisson forwards to C++ (ADC-613).

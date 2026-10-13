@@ -248,6 +248,13 @@ def test_replacing_a_committed_record_keeps_commit_inspection_canonical():
     current = program.value(
         "current_next", 1 * temporal.n, at=temporal.next.point)
     program.commit(temporal.next, current)
-    renamed = program.value("renamed", current)
+    alias = program.value("alias", current)
+    assert alias.id != current.id and alias.inputs == (current,)
+    assert commits_by_block(program)["fluid"] is current
+    # Record replacement retains SSA authority; a fresh value alias does not
+    # silently redirect the already published endpoint.
+    renamed = program._replace_value(current, name="renamed")
     assert commits_by_block(program)["fluid"] is renamed
+    assert renamed.id == current.id and renamed.point == temporal.next.point
+    assert renamed.provenance == current.provenance
     assert "renamed" in program.dump_operator_ir()

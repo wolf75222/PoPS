@@ -108,6 +108,17 @@ is an authored solve in the Program; selecting an IMEX descriptor does not autom
 make every diffusion operator implicit. Diffusive interface exchanges carry the same
 accepted-stage accounting requirements as advective exchanges.
 
+The shared Cartesian tensor field operator keeps harmonic normal-face coefficients and
+averages coefficient-weighted cross gradients. Each orientation of the one-sided gradient
+uses the congruent tensor `D A D`, with `D_ii=sqrt(H_i/A_ii)` for its selected normal face.
+For symmetric positive tensors on a periodic uniform grid this gives a nonnegative energy,
+including discontinuous coefficients. Constant tensors and scalar harmonic faces retain their
+existing stencils. The optional arithmetic-diagonal route weights each cell's central gradient
+before averaging; explicit physical metric-face extrapolation and zero-conormal laws remain
+separate boundary contracts. The smoother's diagonal includes every cross-term center
+contribution, including the declared homogeneous boundary ghost influences. This local energy
+identity does not by itself qualify AMR interpolation/reflux or nonsymmetric boundary operators.
+
 ## Time integration through Program
 
 The production temporal authority is the typed Program graph. Factories under

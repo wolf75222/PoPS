@@ -284,6 +284,7 @@ def test_runtime_instance_has_only_the_explicit_read_and_restart_surface() -> No
         "field_potential_level_global",
         "field_provider_levels",
         "field_provider_slots",
+        "field_solve_report",
         "set_field_composite_mean_neutralizing",
         "flush_live_visualizations",
         "flush_post_commit_consumers",
@@ -294,6 +295,7 @@ def test_runtime_instance_has_only_the_explicit_read_and_restart_surface() -> No
         "history_names",
         "history_ncomp",
         "history_slot_dt",
+        "initial_program_reports",
         "inspect",
         "integral",
         "integral_state",
@@ -336,6 +338,47 @@ def test_runtime_instance_has_only_the_explicit_read_and_restart_surface() -> No
             "step_cfl",
         }
     )
+
+
+def test_runtime_report_readers_preserve_signatures_and_executor_authority() -> None:
+    from types import SimpleNamespace
+
+    from pops.runtime._runtime_instance import RuntimeInstance
+
+    assert tuple(signature(RuntimeInstance.field_solve_report).parameters) == ("self", "slot")
+    assert tuple(signature(RuntimeInstance.initial_program_reports).parameters) == ("self",)
+    accepted_report = object()
+    calls = []
+
+    class FieldOwner:
+        def field_provider_slots(self):
+            return ("potential",)
+
+        def field_solve_report(self, slot):
+            calls.append(slot)
+            return accepted_report
+
+        def solve_fields(self):
+            raise AssertionError("reading an accepted report must not execute a solver")
+
+    runtime = object.__new__(RuntimeInstance)
+    owner = FieldOwner()
+    runtime._executor = owner
+    assert runtime.field_solve_report("potential") is accepted_report
+    assert calls == ["potential"]
+    with pytest.raises(ValueError, match="one installed provider-slot owner"):
+        runtime.field_solve_report("absent")
+    runtime._executor = SimpleNamespace(_engines={"first": owner, "second": FieldOwner()})
+    with pytest.raises(ValueError, match="one installed provider-slot owner"):
+        runtime.field_solve_report("potential")
+    assert calls == ["potential"]
+
+    reports = {"carrier": ({"ordinal": 1, "residual_evaluation": {"rhs_norm": 2.0}},)}
+    runtime._executor = SimpleNamespace(_initial_program_reports=reports)
+    snapshot = runtime.initial_program_reports()
+    assert snapshot == reports
+    snapshot["carrier"][0]["residual_evaluation"]["rhs_norm"] = 99.0
+    assert reports["carrier"][0]["residual_evaluation"]["rhs_norm"] == 2.0
 
 
 def test_output_surface_has_direct_consumers_not_policy_bundles() -> None:

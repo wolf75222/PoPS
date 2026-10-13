@@ -1,0 +1,22 @@
+Note: Google Test filter = GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts
+Note: Google Test filter = GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GeneratedAmrSystemBlock
+[ RUN      ] GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts
+[       OK ] GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts (43 ms)
+[       OK ] GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts (44 ms)
+[----------] 1 test from GeneratedAmrSystemBlock (44 ms total)
+
+[----------] Global test environment tear-down
+[----------] 1 test from GeneratedAmrSystemBlock (43 ms total)
+
+[----------] Global test environment tear-down
+[==========] [==========] 1 test from 1 test suite ran. (44 ms total)
+[  PASSED  ] 1 test.
+1 test from 1 test suite ran. (43 ms total)
+[  PASSED  ] 1 test.

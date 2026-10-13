@@ -129,6 +129,7 @@ def validate_amr_authorities(plan: Any) -> None:
         )
     from pops.mesh._amr import (
         AnalyticReprojection,
+        NativeProgramSeed,
         BootstrapPlan,
         ResolvedHierarchy,
     )
@@ -296,6 +297,7 @@ def validate_amr_authorities(plan: Any) -> None:
     for binding in plan.initial_condition_plan.bindings:
         options = binding.source.options.to_data()
         analytic = type(selections[binding.subject.qualified_id]) is AnalyticReprojection
+        initial_program = type(selections[binding.subject.qualified_id]) is NativeProgramSeed
         if analytic and (
             binding.subject.kind == "particle"
             or not isinstance(options.get("native_route"), str)
@@ -304,7 +306,11 @@ def validate_amr_authorities(plan: Any) -> None:
             raise NotImplementedError(
                 "native analytic AMR bootstrap requires a registered data-only source provider"
             )
-        if not analytic and options.get("native_route") != "bound_level_zero":
+        if initial_program:
+            from pops.runtime._initial_source_lowering import validate_initial_source
+            if validate_initial_source(options, where="resolved AMR initial program") != "bootstrap_program":
+                raise ValueError("AMR initial program changed its authenticated native route")
+        if not analytic and not initial_program and options.get("native_route") != "bound_level_zero":
             raise NotImplementedError(
                 "native AMR initial source requires native_route='bound_level_zero'"
             )

@@ -43,13 +43,8 @@ program_accepted_value_type capture_program_accepted_field_value(
   refresh_resources_();
   if (level < 0 || static_cast<std::size_t>(level) >= runtime_->hierarchy().num_levels())
     throw std::invalid_argument("accepted Field source names an absent AMR level");
-  const auto planned = std::find_if(program_values_.state_->plan.fields.begin(),
-      program_values_.state_->plan.fields.end(), [&](const auto& edge) {
-        return edge.field_node == field_node && edge.program_block == program_block;
-      });
-  if (planned == program_values_.state_->plan.fields.end() ||
-      (level == active_level_ && !planned->accepted_only))
-    throw std::invalid_argument("active AMR Field stage cannot be substituted by an accepted image");
+  program_values_.require_accepted_edge_(field_node,program_block,
+      "active AMR Field stage cannot be substituted by an accepted image");
   const int owner = sys_block(program_block);
   const auto& field = facade_->prepared_amr_block_state(owner,level);
   auto point = boundary_evaluation_point(0);
@@ -70,69 +65,121 @@ std::function<void()> require_program_accepted_field_value(
     int program_block, int level, const field_type& input) const {
   require_program_value_identity_();
   refresh_resources_();
-  const auto planned = std::find_if(program_values_.state_->plan.fields.begin(),
-      program_values_.state_->plan.fields.end(), [&](const auto& edge) {
-        return edge.field_node == field_node && edge.program_block == program_block;
-      });
-  if (planned == program_values_.state_->plan.fields.end() ||
-      (level == active_level_ && !planned->accepted_only))
-    throw std::invalid_argument("active AMR Field stage requires its declared SSA source");
+  program_values_.require_accepted_edge_(field_node,program_block,
+      "active AMR Field stage requires its declared SSA source");
   if (&input != &facade_->prepared_amr_block_state(sys_block(program_block),level))
     throw std::invalid_argument("accepted Field source is not its exact owned hierarchy image");
   return program_values_.require_accepted_field_(value,field_node,program_block,level,input,resource_attempt());
 }
 
+private:
+using field_stages_type = PreparedProgramFieldStages<Dim>;
+using named_field_request_type = typename field_stages_type::request_type;
+mutable field_stages_type prepared_field_stages_;
+
+typename field_stages_type::Stamp field_stage_stamp_(
+    const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+  return {point,runtime_->topology_epoch(),runtime_->materialization_generation(),
+      mapping_continuation_ ? mapping_continuation_->internal_sequence : 0,active_subcycling_attempt_};
+}
+
+typename field_stages_type::Sources prepare_named_field_values_(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, std::int64_t field_node,
+    std::string_view field, std::initializer_list<ProgramFieldValueOverride> overrides) const {
+  require_boundary_point_(point,"AMR SSA Field stage");
+  require_program_value_identity_();
+  if (point.level != active_level_ || field_node < 0 || field.empty() ||
+      point != boundary_evaluation_point(point.stage))
+    throw std::invalid_argument("AMR SSA Field stage lost its exact consumer point");
+  return field_stages_type::prepare_sources(field_stage_stamp_(point),field_node,
+      std::string(field),program_values_.state_->plan,overrides,
+      [&](const auto& item) -> typename named_field_request_type::Source {
+        const int owner = sys_block(item.program_block);
+        require_same_field_contract_(*item.state,facade_->prepared_amr_block_state(owner,active_level_),
+                                     "AMR SSA Field source");
+        auto value = program_value(item.source_ssa,item.program_block,*item.state);
+        auto validate = require_program_field_value(value,field_node,item.program_block,*item.state);
+        return {std::move(value),std::move(validate)};
+      }, [&](int block) -> typename named_field_request_type::Source {
+        auto value = capture_program_accepted_field_value(field_node,block,active_level_);
+        const auto& accepted = facade_->prepared_amr_block_state(sys_block(block),active_level_);
+        auto validate = require_program_accepted_field_value(value,field_node,block,active_level_,accepted);
+        return {std::move(value),std::move(validate)};
+      });
+}
+
+public:
+/// Each executing level retains its completed native values before the common hierarchy barrier.
+void stage_program_field_values_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, std::int64_t field_node,
+    std::string_view field, std::initializer_list<ProgramFieldValueOverride> overrides) const {
+  const auto& lane = prepared_execution_lane();
+  std::exception_ptr error;
+  try {
+    if (!mapping_continuation_ || !mapping_continuation_->executing)
+      throw std::logic_error("AMR Field stage requires its executing hierarchy continuation");
+    prepared_field_stages_.stage_sources(field_node,prepare_named_field_values_(point,field_node,field,overrides));
+  } catch (...) { error = std::current_exception(); }
+  collectively_rethrow_exception(error,lane,"AMR Field source staging failed collectively");
+}
+
 [[nodiscard]] SolveOutcome solve_fields_from_program_values_at(
     const runtime::multiblock::BoundaryEvaluationPoint& point, std::int64_t field_node,
     std::string_view field, std::initializer_list<ProgramFieldValueOverride> overrides) const {
-  using Request = runtime::system::FieldSolveRequest<Dim>;
   refresh_resources_();
-  const auto& lane = prepared_execution_lane();
-  std::optional<Request> request;
-  std::exception_ptr error;
-  try {
+  return prepared_field_stages_.solve_sources(field_node,prepared_execution_lane(),[&] {
     require_boundary_point_(point,"AMR SSA Field solve");
     require_program_value_identity_();
-    if (point.level != active_level_ || field_node < 0 || field.empty())
-      throw std::invalid_argument("AMR SSA Field solve has an invalid active point or identity");
     if (point != boundary_evaluation_point(point.stage))
       throw std::invalid_argument("AMR SSA Field solve lost its context-owned consumer point");
-    std::vector<typename Request::Source> sources;
-    std::vector<typename Request::LegacySource> legacy;
-    std::set<int> seen;
-    for (const auto& item : overrides) {
-      if (!item.state || !seen.insert(item.program_block).second)
-        throw std::invalid_argument("AMR SSA Field solve has a null or duplicate stage");
-      const int owner = sys_block(item.program_block);
-      require_same_field_contract_(*item.state,facade_->prepared_amr_block_state(owner,active_level_),
-                                   "AMR SSA Field source");
-      if (item.source_ssa >= 0) {
-        auto value = program_value(item.source_ssa,item.program_block,*item.state);
-        auto validate = require_program_field_value(value,field_node,item.program_block,*item.state);
-        sources.push_back({std::move(value),std::move(validate)});
-      } else {
-        if (program_values_.state_->edges.contains({field_node,item.program_block}))
-          throw std::invalid_argument("AMR V2 Field source cannot use the legacy source route");
-        legacy.push_back({owner,active_level_,std::make_shared<field_type>(*item.state)});
-      }
-    }
-    for (const auto& edge : program_values_.state_->plan.fields) {
-      if (edge.field_node != field_node) continue;
-      if (!seen.contains(edge.program_block) && !edge.accepted_only)
-        throw std::invalid_argument("active AMR Field solve lacks its declared SSA stage override");
-      for (std::size_t level = 0; level < runtime_->hierarchy().num_levels(); ++level) {
-        if (static_cast<int>(level) == active_level_ && seen.contains(edge.program_block)) continue;
-        auto value = capture_program_accepted_field_value(field_node,edge.program_block,
-                                                         static_cast<int>(level));
-        const auto& accepted = facade_->prepared_amr_block_state(sys_block(edge.program_block),
-                                                                static_cast<int>(level));
-        auto validate = require_program_accepted_field_value(value,field_node,edge.program_block,
-                                                             static_cast<int>(level),accepted);
-        sources.push_back({std::move(value),std::move(validate)});
-      }
-    }
-    request = Request(std::string(field),point,std::move(sources),std::move(legacy));
+    const bool root_callback = mapping_continuation_ && !mapping_continuation_->executing &&
+        mapping_continuation_->ports.front().kind == MappingPortKind::named_field_solve;
+    return prepared_field_stages_.prepare_request(field_stage_stamp_(point),field_node,
+        std::string(field),nlev(),root_callback,
+        [&] { return prepare_named_field_values_(point,field_node,field,overrides); },
+        [](const auto& name,const auto& at,auto sources) {
+          return named_field_request_type(name,at,std::move(sources)); });
+  },[&](const auto& request) { return facade_->solve_fields_from_request_at_in_place_(request); });
+}
+
+void stage_field_warm_start(const std::string& provider_slot, int program_block,
+                            const field_type& potential, int evaluation_id,
+                            const std::string& publication_identity) const {
+  const auto& lane = prepared_execution_lane();
+  std::exception_ptr error;
+  try {
+    refresh_resources_();
+    const auto point = boundary_evaluation_point(evaluation_id);
+    require_boundary_point_(point,"AMR field warm-start stage");
+    if (!mapping_continuation_ || !mapping_continuation_->executing ||
+        provider_slot.empty() || publication_identity.empty() || potential.ncomp() != 1)
+      throw std::invalid_argument("AMR field warm start requires its exact scalar hierarchy stage");
+    const int owner = sys_block(program_block);
+    const auto found = std::find_if(scratches_.begin(),scratches_.end(),[&](const auto& item) {
+      return &item.second == &potential;
+    });
+    if (found == scratches_.end() || std::get<0>(found->first) != ScratchKind::Scalar ||
+        std::get<1>(found->first) != active_level_ || std::get<2>(found->first) != owner)
+      throw std::invalid_argument("AMR warm start is not the exact owner/level scalar endpoint family");
+    prepared_field_stages_.stage_warm_start(field_stage_stamp_(point),provider_slot,publication_identity,
+        owner,std::get<3>(found->first),std::get<4>(found->first),potential,resource_attempt());
   } catch (...) { error = std::current_exception(); }
-  collectively_rethrow_exception(error,lane,"AMR SSA Field request failed collectively");
-  return facade_->solve_fields_from_request_at_in_place_(*request);
+  collectively_rethrow_exception(error,lane,"AMR warm-start source staging failed collectively");
+}
+
+void publish_staged_field_warm_start(int evaluation_id) const {
+  prepared_field_stages_.publish_warm_start(evaluation_id,prepared_execution_lane(),[&] {
+    const bool root_callback = mapping_continuation_ && !mapping_continuation_->executing &&
+        mapping_continuation_->ports.front().kind == MappingPortKind::field_warm_start;
+    return prepared_field_stages_.prepare_warm_start(
+        field_stage_stamp_(boundary_evaluation_point(evaluation_id)),evaluation_id,nlev(),root_callback,
+        resource_attempt(),[&](int level,const auto& staged) {
+          const auto scalar = scratches_.find(ScratchKey{ScratchKind::Scalar,level,
+              staged.owner,staged.source_value,staged.source_subslot});
+          return scalar != scratches_.end() && &scalar->second == staged.source;
+        });
+  },[&](const auto& publication) {
+    const auto& root = *publication.root;
+    facade_->publish_program_field_warm_start(root.stamp.point,root.slot,root.owner,publication.images,root.identity);
+  });
 }

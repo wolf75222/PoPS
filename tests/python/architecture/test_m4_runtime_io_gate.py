@@ -25,6 +25,46 @@ def _load_runner():
     return module
 
 
+def test_m4_uses_the_complete_canonical_mpi_orchestrator_inventory():
+    runner = _load_runner()
+    data = runner.tomllib.loads(runner.TEST_MANIFEST.read_text(encoding="utf-8"))
+    rows = runner.selection.manifest_python_mpi_orchestrators(data)
+    assert len(rows) == 28
+    assert sum("partitions" in row for row in rows) == 6
+    assert runner._python_mpi_orchestrators() == {row["path"] for row in rows}
+
+
+@pytest.mark.parametrize("mutation", ["extra_field", "missing_id", "duplicate_id", "unknown_id",
+                                     "foreign_parent", "no_partitions", "legacy_partitions", "duplicate_path"])
+def test_m4_canonical_orchestrator_errors_stay_fail_closed(monkeypatch, mutation):
+    runner = _load_runner()
+    canonical = runner.selection.manifest_python_mpi_orchestrators
+    def validate_mutation(data):
+        suite = next(row for row in data["python"]["suite"] if row.get("mpi_orchestrators"))
+        rows = suite["mpi_orchestrators"]
+        row = next(row for row in rows if "partitions" in row)
+        if mutation == "extra_field": row["nproc"] = 2
+        elif mutation == "missing_id": row["partitions"].pop()
+        elif mutation == "duplicate_id": row["partitions"].append(dict(row["partitions"][0]))
+        elif mutation == "unknown_id":
+            part = row["partitions"][0]
+            part["id"] = "unowned"
+            part["parent_node"] = part["parent_node"].split("[", 1)[0] + "[unowned]"
+        elif mutation == "foreign_parent": row["partitions"][0]["parent_node"] = "test_unowned[saved_restart]"
+        elif mutation == "no_partitions": row.pop("partitions")
+        elif mutation == "legacy_partitions":
+            next(row for row in rows if "partitions" not in row)["partitions"] = row["partitions"]
+        elif mutation == "duplicate_path": rows.append(dict(row))
+        return canonical(data)
+    monkeypatch.setattr(runner.selection, "manifest_python_mpi_orchestrators", validate_mutation)
+    with pytest.raises(ValueError) as caught:
+        runner._python_mpi_orchestrators()
+    assert isinstance(caught.value.__cause__, SystemExit)
+    assert str(caught.value) == str(caught.value.__cause__)
+    _, errors = runner.audit_manifest(MANIFEST)
+    assert any("cannot read Python MPI ownership: " + str(caught.value) == error for error in errors)
+
+
 def _mutated_manifest(tmp_path: Path, old: str, new: str) -> Path:
     source = MANIFEST.read_text(encoding="utf-8")
     assert old in source
@@ -105,7 +145,7 @@ def test_m4_required_ci_lane_executes_the_complete_installed_gate():
 
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     mpi_job = workflow.split("\n  mpi:\n", 1)[1]
-    mpi_job = mpi_job.split("\n  gate-openmp-prewarm:\n", 1)[0]
+    mpi_job = mpi_job.split("\n  mpi-python:\n", 1)[0]
     assert "if: needs.set-mode.outputs.mpi_required == 'true'" in mpi_job
     assert "python3-vtk9" in mpi_job
     assert "/usr/bin/python3 scripts/run_m4_gate.py --list-ctest-targets" in mpi_job
@@ -120,7 +160,15 @@ def test_m4_required_ci_lane_executes_the_complete_installed_gate():
     assert 'OMPI_MCA_io: "^ompio"' in mpi_job.split("\n    steps:\n", 1)[0]
     assert "vtkXMLPUnstructuredGridReader" in complete
     assert "vtkXMLUnstructuredGridReader" in complete
-    assert "/usr/bin/python3 scripts/run_m4_gate.py \\" in complete
+    installed_python = 'env -u PYTHONPATH "$RUNNER_TEMP/pops-mpi-producer-installed/bin/python"'
+    assert installed_python + " - <<'PY'" in complete
+    assert installed_python + " scripts/run_m4_gate.py \\" in complete
+    assert "POPS_CI_TEST_EXECUTION: installed" in complete
+    assert 'POPS_NATIVE_DIM: "2"' in complete
+    producer = mpi_job.split("- name: Assemble and authenticate the unique MPI Dim2 wheel", 1)[1]
+    producer = producer.split("- name: Publish authenticated MPI Python wheel", 1)[0]
+    assert "scripts/ci_python_mpi.py authenticate" in producer
+    assert '--install-root "$RUNNER_TEMP/pops-mpi-producer-installed"' in producer
     assert "--build-dir build-mpi" in complete
     assert "--mpi-exec mpiexec" in complete
     assert "--audit-only" not in complete

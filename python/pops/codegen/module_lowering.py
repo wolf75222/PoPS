@@ -512,6 +512,8 @@ def _module_to_model(module: Any, state_space: Any = None,
         selected_waves = module._eigenvalues
     if (selected_waves is not None and not principal_rates
             and (len(states) == 1 or applicable_grid_names)):
+        if not isinstance(selected_waves, Mapping):
+            raise TypeError("selected physical wave values must be an axis mapping")
         m.eigenvalues(**{
             axis: _body_for_state(values)
             for axis, values in selected_waves.items()

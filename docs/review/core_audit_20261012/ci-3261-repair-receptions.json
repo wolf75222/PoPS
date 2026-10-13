@@ -1,0 +1,459 @@
+{
+  "schema": "pops.core-audit.ci-3261-repair-receptions@1",
+  "schema_version": 1,
+  "generated_at_utc": "2026-10-12T22:49:26.747944+00:00",
+  "ci_failed_revision": "3261d0817aca29bca4549fa722dcf01cabee3267",
+  "source_snapshot_revision": "a9297394d5fbf6c191195bc69563822da3169bbe",
+  "snapshot_kind": "working-tree repair receipts; not a final installed/remote gate",
+  "reference_policy": {
+    "repository_files": "repository-relative paths",
+    "external_artifacts": "external-evidence:<path> resolves below the retained evidence root; origin SHA256 identifies original bytes"
+  },
+  "qualified_installed_origin": {
+    "python_revision": "dae48c3b15505696a11f84782487ac321fbb6a71",
+    "python_tree_sha256": "b9b520e7fe0d57e293a0e89b80711bb19688d07241b3877bf6b8f93a329a5965",
+    "native_cpp_revision": "6b50905b5e51770cbcb545d890d82945d616fd25",
+    "native_sha256": "f67ecd7e90e11842db84950da92edf93610f0076ca8dbb2228b66581d3c36403",
+    "header_signature": "e1b678510d7b4dc24a3286ad6fd8433f1c31412bc18582e8a2c9d0de2b40289c",
+    "abi_version": 13,
+    "dimension": 2,
+    "mpi_ranks": 1,
+    "scope": "Origin of the completed Native receipts; final repaired production install remains a separate reception."
+  },
+  "native_receptions": [
+    {
+      "id": "final_imex_common_time",
+      "status": "complete",
+      "profile": "Dim2 MPI1",
+      "passed": 2,
+      "seconds": 177.68,
+      "fixtures": [
+        "tests/python/integration/runtime/test_final_imex_original_reception.py::test_original_manual_state_field_restart",
+        "tests/python/integration/runtime/test_final_imex_original_reception.py::test_original_preset_parity_and_rejected_rollback"
+      ],
+      "origins": [
+        {
+          "ref": "external-evidence:ci/final-imex-dim2-mpi1-validation.json",
+          "sha256": "499ef49ee22a37b0cfb7e8b5add17b2483084e47405621f77ef70b49b9378349"
+        }
+      ],
+      "contract": "Original manual/preset IMEX, state/field restart and rejected rollback oracles received; scope is the recorded common-time case.",
+      "fixture_source_sha256_recorded": null,
+      "source_binding_note": "The origin receipt records compiled Model/Program provenance, not a fixture-file digest. Current source is not substituted for that missing digest."
+    },
+    {
+      "id": "accepted_halo_and_checkpoint_rollback",
+      "status": "complete",
+      "profile": "Dim2 MPI1",
+      "passed": 2,
+      "seconds": 109.2,
+      "fixtures": [
+        "tests/python/integration/amr/test_public_accepted_halo_stage_failure.py::test_public_accepted_halo_rank_local_failure_restores_before_publication",
+        "tests/python/integration/runtime/test_imex_checkpoint_publication_rollback.py::test_original_imex_final_checkpoint_failure_restores_science_and_outputs"
+      ],
+      "qualified_sources": [
+        {
+          "path": "tests/python/integration/amr/test_public_accepted_halo_stage_failure.py",
+          "sha256": "05689ef31e51730bd6ad343f11a76257de47c05686dd90831b992a2a313dd578"
+        },
+        {
+          "path": "tests/python/integration/runtime/test_imex_checkpoint_publication_rollback.py",
+          "sha256": "a8726e30f198f6d6187ccfc236f7b25a17aa01abce503a82f0d95e95e209c9b6"
+        }
+      ],
+      "origins": [
+        {
+          "ref": "external-evidence:ci/shard33-oracles-final-receipt.json",
+          "sha256": "014da64f10e192ca7ff186c105bc997b07ee2965dc899054054de079be1cf4cf"
+        },
+        {
+          "ref": "external-evidence:ci/shard33-oracles-mpi1.xml",
+          "sha256": "8fabbdb28d16d80761d491b4a07608547d94bd65ec1aa9acb73abb8ee2c1adb2"
+        }
+      ],
+      "contract": "Current POPSANDA prefix only; complete accepted payload remains byte-exact. Original science/output/rollback assertions retain strict authenticated empty cleanup containers.",
+      "empty_cleanup_containers": 1
+    },
+    {
+      "id": "checkpoint_sealed_retry",
+      "status": "complete",
+      "profile": "Dim2 MPI1",
+      "passed": 1,
+      "seconds": 83.92,
+      "fixtures": [
+        "tests/python/integration/runtime/test_imex_checkpoint_sealed_retry.py::test_original_imex_checkpoint_retry_replays_one_completed_seal"
+      ],
+      "qualified_sources": [
+        {
+          "path": "tests/python/support/checkpoint_staging.py",
+          "sha256": "e9dfe82c0ec6a07648d3d5acc24ec8c2cba0e4274efc4184c589585e2f57b3ff"
+        },
+        {
+          "path": "tests/python/integration/runtime/test_imex_checkpoint_publication_rollback.py",
+          "sha256": "b9057cd6a26f966c711f5140eff599953c51111f04f651b02775ca1d53a81c40"
+        },
+        {
+          "path": "tests/python/integration/runtime/test_imex_checkpoint_sealed_retry.py",
+          "sha256": "2007d5a8c2694a33bbc6d12296ac026212bf0455c0a707717facb5851780654c"
+        }
+      ],
+      "origins": [
+        {
+          "ref": "external-evidence:ci/shard34-sealed-retry-final-receipt.json",
+          "sha256": "4de17b74b50838fa9fc33e023a51cb284fcd92812aa87a829d062d90afc607a4"
+        },
+        {
+          "ref": "external-evidence:ci/shard34-sealed-retry-mpi1.xml",
+          "sha256": "ab038b0f1547c5400e0f14a747a71ee49408a5a0bd86e5a5cc1ce5fda285c237"
+        }
+      ],
+      "contract": "One capture/factory, two byte-exact publications with the same seal and inode; original restart and continuation oracles passed.",
+      "empty_cleanup_containers": 3,
+      "shared_cleanup_helper_body_and_bytecode_equal": true
+    },
+    {
+      "id": "amr_transport_n64",
+      "status": "complete",
+      "profile": "Dim2 MPI1",
+      "passed": 1,
+      "seconds": 147.34304799999518,
+      "fixtures": [
+        "tests/python/integration/runtime/test_amr_transport_diffusion_qualification.py::test_periodic_full_refinement_restart_and_face_inventory[64]"
+      ],
+      "fixture_source_snapshot": {
+        "path": "tests/python/integration/runtime/test_amr_transport_diffusion_qualification.py",
+        "sha256": "2f8bf11f0ca1cc03f2c1252a4a2036f5e3b44543473c61b18ca3a032161d931a"
+      },
+      "origins": [
+        {
+          "ref": "external-evidence:ci/3261d081-transport-frame-mpi1-receipt.json",
+          "sha256": "fa873fbb158692cf89ac7972ba2fb306900c92e0e06611275eb8eb28c3e78e4d"
+        },
+        {
+          "ref": "external-evidence:ci/3261d081-transport-frame-mpi1/rank0.xml",
+          "sha256": "6f1c7578fcb56f2e5dd3e49172f4d93635f26e2c3929e71805ec1e4d7e503ec3"
+        },
+        {
+          "ref": "external-evidence:ci/3261d081-transport-frame-mpi1/adc942-periodic-n64.json",
+          "sha256": "c538d4a3a24cf5086c115c7c49fd0e1e4e5a3cf69351d9952caf160346d3851b"
+        }
+      ],
+      "contract": "Exchange/reflux oracles use the effective support/frame captured before the last step; the post-regrid hierarchy is not substituted for that frame.",
+      "metrics": {
+        "raw_active_pre_reflux_incidence_amount": 2.1572930989956113e-07,
+        "reflux_mass_delta": -2.157293098995612e-07,
+        "exchange_mass_defect": -5.293955920339377e-23,
+        "last_step_mass_change": 0.0,
+        "continuous_mass_drift": 0.0,
+        "restarted_mass_drift": 0.0,
+        "l2_error": 0.00014556096106842285,
+        "l2_bound": 0.000390625,
+        "restart_bit_exact": true,
+        "evaluation_frame": {
+          "generation": 21,
+          "space": "pops.amr-program.face-evidence-space.v1:sha256:7f0d431720a82f79d1aac74a5f00dafe8ea2c87c14f50a34f5f0e4b7b279cace",
+          "topology_epoch": 21
+        }
+      },
+      "cpp_source_review": {
+        "kind": "source inspection",
+        "file": {
+          "path": "include/pops/runtime/program/amr_program_context_history_checkpoint_runtime.inc",
+          "sha256": "6851aa7c1f33336e8a706ec450c37c202bf80fa717616ca9b9ffc3c63f43ae36"
+        },
+        "line": 161,
+        "finding": "Serialization reuses accepted_face_evidence_provenance_ with accepted face flux and synchronization events; this supports preserving the captured evaluation frame."
+      }
+    },
+    {
+      "id": "newton_original_policies",
+      "status": "complete",
+      "profile": "Dim2 MPI1",
+      "passed": 8,
+      "seconds": 505.22362237500784,
+      "policies": [
+        "relative",
+        "floor",
+        "absolute",
+        "overflow"
+      ],
+      "backends": [
+        "uniform",
+        "amr"
+      ],
+      "fixtures": [
+        "tests/python/integration/runtime/test_public_newton_typed_original.py::test_public_typed_original_policy[relative-uniform]",
+        "tests/python/integration/runtime/test_public_newton_typed_original.py::test_public_typed_original_policy[relative-amr]",
+        "tests/python/integration/runtime/test_public_newton_typed_original.py::test_public_typed_original_policy[floor-uniform]",
+        "tests/python/integration/runtime/test_public_newton_typed_original.py::test_public_typed_original_policy[floor-amr]",
+        "tests/python/integration/runtime/test_public_newton_typed_original.py::test_public_typed_original_policy[absolute-uniform]",
+        "tests/python/integration/runtime/test_public_newton_typed_original.py::test_public_typed_original_policy[absolute-amr]",
+        "tests/python/integration/runtime/test_public_newton_typed_original.py::test_public_typed_original_policy[overflow-uniform]",
+        "tests/python/integration/runtime/test_public_newton_typed_original.py::test_public_typed_original_policy[overflow-amr]"
+      ],
+      "qualified_sources": [
+        {
+          "path": "tests/python/integration/runtime/test_public_newton_typed_original.py",
+          "sha256": "b6a0e92d67cfbfd0814fdb54a9d8fb905c4ea0a7e310f3b071153394383a2f7a"
+        }
+      ],
+      "origins": [
+        {
+          "ref": "external-evidence:ci/3261d081-newton-import-mpi1-receipt.json",
+          "sha256": "3bda552d6e90257287fbb95fe689df33246c85e1f70f8ff2fc1cb859705f3515"
+        },
+        {
+          "ref": "external-evidence:ci/3261d081-newton-import-mpi1/rank0.xml",
+          "sha256": "4b1281b103588d9f6f1bd950c8c91b9391c55bc42dad211ad31c1ac73a684c8f"
+        }
+      ],
+      "contract": "Fixture import sys repaired; PDE, policies and complete original oracles unchanged. No new MPI2 reception claimed."
+    }
+  ],
+  "source_controls": [
+    {
+      "id": "architecture_and_leaf",
+      "status": "complete_source",
+      "passed": 72,
+      "counts": {
+        "architecture": 30,
+        "leaf": 42
+      },
+      "origins": [
+        {
+          "ref": "external-evidence:ci/architecture-four-failure-repair-freeze.json",
+          "sha256": "39e120abf625933c80c034f6afb3b6919b0d71a7ad6f9396361f4a0dc68cff86"
+        },
+        {
+          "ref": "external-evidence:ci/architecture-four-failure-repair.xml",
+          "sha256": "b0fe49031dfed26455b864279e6fe4c11d94554b07e829c2877abb484d2ba12e"
+        },
+        {
+          "ref": "external-evidence:ci/architecture-leaf-value-semantics.xml",
+          "sha256": "ed2e42138800465eb0e097aa236e566b63a51777b1f6ffef5679ebefca161f7b"
+        },
+        {
+          "ref": "external-evidence:ci/architecture-leaf-value-executable-parity.json",
+          "sha256": "c108b738e84b95b55656f700490564c7cebe685590c6d5a5b38ab3ef334effc0"
+        }
+      ],
+      "source_files": [
+        {
+          "path": "python/pops/time/value_support.py",
+          "sha256": "7ec86a6b4d3d7943062dde900e777c102c363c9cb27435a332478dc18462d421"
+        },
+        {
+          "path": "tests/python/architecture/test_m4_runtime_io_gate.py",
+          "sha256": "d66b757f8cf60b813e3dcbd06994f2c13ea51be28b1d70e71e3419584e98cd6d"
+        },
+        {
+          "path": "tests/python/architecture/test_native_variant_manifest.py",
+          "sha256": "e7252749f627c5a286d621132c9668151ebf5c3f42058e7b2adf4fddf1f97339"
+        }
+      ],
+      "contract": "Source architecture boundaries and leaf executable semantics; static-only narrowing preserves runtime AST/opcodes."
+    },
+    {
+      "id": "named_source_mask",
+      "status": "complete_source_native_pending",
+      "passed": 62,
+      "deselected_native": 6,
+      "origins": [
+        {
+          "ref": "external-evidence:ci/3261d081-spatial-mask-source-freeze/receipt.json",
+          "sha256": "dec28b79a92658eb529db59a42f558646998601207e8d20a3764ca05842a4e6d"
+        },
+        {
+          "ref": "external-evidence:ci/3261d081-spatial-mask-source-freeze/source-tests.log",
+          "sha256": "75295d5172287e7af084fa7ba6ca747337aa45eafe3b9319f5f47f49592ba5ac"
+        }
+      ],
+      "source_files": [
+        {
+          "path": "python/pops/codegen/program_emit_ops.py",
+          "sha256": "82573dda420ed1db0924dbf4a85d60e8cf1b0b8ea15a1c0d83ddcbde875d35dc"
+        },
+        {
+          "path": "python/pops/codegen/program_emit_model_kernels.py",
+          "sha256": "ea6766d5ef8f38b7f064aeaff17da13edb52a83853666c40e33605d6324b1e22"
+        },
+        {
+          "path": "python/pops/codegen/_program_kernel_reuse.py",
+          "sha256": "23df51bc0ce77bba450e2b3e4d347de3a87ec4a6e072658a698bdcbbb317f9f0"
+        },
+        {
+          "path": "tests/python/integration/runtime/test_public_spatial_interaction.py",
+          "sha256": "64e31a5e80b159625d3994b82687816f8c5029532aea7e8d35a4fb92ea72a9c8"
+        },
+        {
+          "path": "tests/python/support/spatial_interaction_receipts.py",
+          "sha256": "dd67d548f3c107a1741dd779b106712f97f4d285b08f531c924e4fe21b6ef476"
+        },
+        {
+          "path": "tests/python/unit/codegen/test_program_source_kernel_reuse.py",
+          "sha256": "744ba21bc3be48c3253af283cc9848a575eba3342a0300996e86c323f568da4f"
+        },
+        {
+          "path": "tests/python/unit/time/test_local_transform.py",
+          "sha256": "51637a2d658b01230d281ec85c66d362e412dc47de3be7f59668501dd8d5a6db"
+        },
+        {
+          "path": "tests/python/unit/codegen/test_program_value_authority.py",
+          "sha256": "d814e21085cbd453fa1921ba15c3af016c03910aea782d74d36dd1a08872e38c"
+        },
+        {
+          "path": "tests/python/integration/runtime/test_multiblock_implicit_phase.py",
+          "sha256": "d96f95d355e5da7096bfacfaaede6e9ec678cacc7119d21e1224a71539955309"
+        },
+        {
+          "path": "tests/python/unit/codegen/test_program_codegen_multimodel.py",
+          "sha256": "1072ba1c47f9ae71f61f416405feaa65f59f56d94882858d1bef2e3927554bd0"
+        }
+      ],
+      "contract": "Named-source mask/cache/kernel ownership changes retain authored PDE/solver policies; MPI1/MPI2 qualification remains pending."
+    },
+    {
+      "id": "example_native_profile_controls",
+      "status": "complete_source_native_pending",
+      "passed": 32,
+      "counts": {
+        "m05_m26": 19,
+        "m23": 13
+      },
+      "origins": [
+        {
+          "ref": "external-evidence:ci/m05-m26-native-profile-source-proof.json",
+          "sha256": "d73e5b38054688c15c22786f5a7c2222d61ff35bde015ae037c07d9c29c9def2"
+        },
+        {
+          "ref": "external-evidence:ci/m05-m26-native-profile-source.xml",
+          "sha256": "cb2d009a3b3da19fbad0f182fda3a3026ad3252e7327824fdd0abd7dc6582861"
+        },
+        {
+          "ref": "external-evidence:ci/m23-native-profile-source.xml",
+          "sha256": "cf8d10dbcde8b1c78c867ff5d7afed3ff037d8541599d12fbfcaeafb54d1e452"
+        },
+        {
+          "ref": "external-evidence:ci/m05-m26-native-profile-science-before.json",
+          "sha256": "0b5c1374ce16daf536dbf0dcaafbdeaa8fcb62eca6f1da3cce431308c3d4a239"
+        }
+      ],
+      "source_files": [
+        {
+          "path": "examples/migration/scientific/_native_example_profile.py",
+          "sha256": "8cdc96783eb4aa14f922595fc374a4b9bcb24a0cf1d7786adf3510574a17cd64"
+        },
+        {
+          "path": "examples/migration/scientific/api040_m26_finite_interaction.py",
+          "sha256": "ee25f5d66cfc0152558df4cdb71bfa5887d2807bc7f1e9c01de1766e0d0c469c"
+        }
+      ],
+      "authoring_oracle_criteria_ast_sha256": {
+        "examples/migration/scientific/api040_m05_periodic_shear.py": "11e1223eb2b7445e6a7228aec34b25e6c39f5f7bc72d75278a78e52075294108",
+        "examples/migration/scientific/api040_m23_hall_fourier.py": "71253ac35e5120d103c69af16e7db9f61822e24e3ec816ea8818e049d9aaea8f",
+        "examples/migration/scientific/api040_m26_finite_interaction.py": "6d4cf5bc6646f97eb21614a85fd3fa5767959fb1475411f02938217e2f60cc76"
+      },
+      "contract": "M05/M23/M26 share authenticated Native execution-profile routing; scientific authoring/oracle criteria AST unchanged. Native Dim1 example reception remains pending."
+    },
+    {
+      "id": "typed_product_history",
+      "status": "complete_source",
+      "passed": 26,
+      "origins": [
+        {
+          "ref": "external-evidence:ci/typed-product-history-source.xml",
+          "sha256": "1394d848d763980a15f57adb305ec959b8999e57d87119936885b2373085e556"
+        },
+        {
+          "ref": "external-evidence:ci/typed-product-history-source.log",
+          "sha256": "4313b814cc1471848a3576a11ac8fcc275bf813ea3ca1f0e45fd96043ca4d67f"
+        },
+        {
+          "ref": "external-evidence:ci/typed-product-history-catalog-freeze.json",
+          "sha256": "2dc77b26a70f27e752e142af2ef86cd2a2d7b933b896f297c1cc059fbac8f64c"
+        }
+      ],
+      "source_files": [
+        {
+          "path": "python/pops/codegen/program_history_identity.py",
+          "sha256": "b95c04cbd995a90c4edc85111d8006c4738ed86ed8d5c0d66d343a0a6d7890c5"
+        },
+        {
+          "path": "tests/python/unit/codegen/test_typed_product_seed_history.py",
+          "sha256": "e81f6134d172dce2b55b6779bd7cd1af23efb308f92615f19975495f203a9847"
+        }
+      ],
+      "contract": "Typed history/seed allocation anchors and checkpoint-halo/source emission controls; no Native execution in this source receipt.",
+      "final_typing_status": "complete_via_recorded_global_pyright"
+    }
+  ],
+  "global_type_checker": {
+    "status": "complete",
+    "version": "1.1.414",
+    "summary": {
+      "filesAnalyzed": 802,
+      "errorCount": 0,
+      "warningCount": 3,
+      "informationCount": 0,
+      "timeInSec": 25.274
+    },
+    "warnings": "3 inherited warnings reported by coordinator",
+    "origin": {
+      "ref": "external-evidence:ci/3261d081-repair-integration-pyright-final.json",
+      "sha256": "64f33315522332386d2dc32cf9b31086c3e98e11806dee92d7211e0a6be4cb59"
+    }
+  },
+  "unreceived_or_pending": [
+    {
+      "id": "dim1_ns",
+      "status": "pending"
+    },
+    {
+      "id": "dim1_examples_m05_m23_m26",
+      "status": "pending"
+    },
+    {
+      "id": "named_source_mask_mpi1",
+      "status": "pending"
+    },
+    {
+      "id": "named_source_mask_mpi2",
+      "status": "pending"
+    },
+    {
+      "id": "final_repaired_production_install_and_identity",
+      "status": "pending"
+    },
+    {
+      "id": "required_remote_ci_on_final_revision",
+      "status": "pending"
+    }
+  ],
+  "excluded_harness_failure": {
+    "kind": "global source pytest collection",
+    "status": "excluded_not_a_positive_test_reception",
+    "reason": "Collection stopped before tests because test_typed_phase_records imports pops._pops without a selected source-checkout Native leaf; reported by coordinator."
+  },
+  "gate": {
+    "status": "pending",
+    "green_claimed": false,
+    "mpi2_new_qualification_claimed": false,
+    "global_pytest_positive_claimed": false,
+    "report_md_modified_by_this_artifact_task": false,
+    "scope": "Historical local receipt; pending records the state when prepared. Current remote verdict is assessed on the exact final PR revision."
+  },
+  "current_reception_index": {
+    "scope": "Later receipt links reconcile historical pending fields below; each linked receipt retains its own source/native identity. These links do not transfer execution results to a later binary.",
+    "dim1_m05_m26_m23": "ci-dim1-scientific-receptions.json",
+    "dim1_ns_conduction": "ci-dim1-ns-conduction-receptions.json",
+    "historical_spatial_partial": "spatial_interaction_provisional_20261013/receipt.json",
+    "installed_a929": "ci-repairs-installed-identity.json",
+    "snapshot_source_cpp": "history_snapshot_qualification_20261013/receipt.json",
+    "installed_f94": "history-snapshot-installed-identity.json",
+    "remote_ci": {
+      "verdict_location": "https://github.com/wolf75222/PoPS/pull/686",
+      "requires_exact_final_revision_and_required_aggregate_gate": true
+    },
+    "final_amr_periodic_f94": "spatial_amr_final_20261013/receipt.json"
+  }
+}

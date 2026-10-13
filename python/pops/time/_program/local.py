@@ -582,10 +582,25 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
     @atomic_authoring
     def field_sample(self, source: Any, *, template: Any, storage: Any, space: Any,
                      component: Any = None, name: Any = None) -> Any:
-        """Copy one exact native auxiliary/State component into declared scalar field storage."""
+        """Copy a qualified auxiliary/State component or exact solved-field output.
+
+        For a consumed FieldsContext, select ``component=(field_handle, component_name)``.
+        """
         from pops.time.field_sampling import field_sample
         return field_sample(self, source, template=template, storage=storage, space=space,
                             component=component, name=name)
+
+    @atomic_authoring
+    def publish_field_warm_start(self, field: Any, value: Any, *, fields: Any,
+                                 template: Any, state: Any, name: Any = None) -> None:
+        """Seed a qualified field iterate from a consumed scalar solve.
+
+        ``template`` authenticates the original field solve. ``state`` supplies the
+        target time point; this operation creates no readable field context for it.
+        """
+        from pops.time.field_warm_start import publish_field_warm_start
+        publish_field_warm_start(self, field, value, fields=fields, template=template,
+                                 state=state, name=name)
 
     @atomic_authoring
     def set_apply(self, operator: Any, body_fn: Any) -> Any:
@@ -615,7 +630,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         try:
             pointwise = StencilAccess.pointwise()
             scalar_attrs = {key: operator.attrs[key] for key in
-                            ("scalar_storage", "scalar_owner", "scalar_sampling_contract")
+                            ("scalar_storage", "scalar_owner", "scalar_sampling_contract", "scalar_storage_component")
                             if key in operator.attrs}
             out_sf = self._new(
                 "scalar_field", "apply_out", (),
@@ -645,12 +660,27 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
                     continue
                 if (value.attrs.get("scalar_storage") != scalar_attrs["scalar_storage"]
                         or value.attrs.get("scalar_sampling_contract")
-                        != scalar_attrs["scalar_sampling_contract"]):
+                        != scalar_attrs["scalar_sampling_contract"]
+                        or value.attrs.get("scalar_storage_component")
+                        != scalar_attrs.get("scalar_storage_component")):
                     raise ValueError(
                         "typed scalar apply requires every scalar intermediate/result to "
                         "retain its exact storage/space/owner authority")
                 scalar_co_location(in_sf, value, "typed scalar apply")
         attrs = dict(operator.attrs)
+        boundary_owners = {node.attrs.get("field_boundary_owner") for node in block
+                           if node.attrs.get("field_boundary_owner") is not None}
+        if boundary_owners:
+            if len(boundary_owners) != 1:
+                raise ValueError("one scalar operator requires one exact field boundary authority")
+            owner = next(iter(boundary_owners))
+            for node in block:
+                access = node.attrs.get("stencil_access")
+                if type(access) is StencilAccess and access.required_ghost_depth > 0 and \
+                        node.attrs.get("field_boundary_owner") != owner:
+                    raise ValueError("scalar operator mixes unauthenticated boundary authorities")
+            attrs.update(field_boundary_owner=owner,
+                         field_boundary_contract="pops.installed-field-boundary@1")
         inferred_stencil_access = StencilAccess.compose(
             (node.attrs.get("stencil_access") for node in block),
             where="set_apply(%s)" % operator.name,
@@ -697,7 +727,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         from pops.time.field_sampling import scalar_co_location
         scalar_co_location(out, in_, "laplacian")
         attrs = {key: in_.attrs[key] for key in
-                 ("scalar_storage", "scalar_owner", "scalar_sampling_contract")
+                 ("scalar_storage", "scalar_owner", "scalar_sampling_contract", "scalar_storage_component")
                  if key in in_.attrs}
         if not attrs:
             return self._new("scalar_field", "laplacian", (out, in_),
@@ -845,7 +875,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
                          out.name, iterate.block, state_ref=iterate.state_ref)
 
     # --- tensor-coefficient matrix-free apply of the generic condensed-implicit route (ADC-637) --------
-    def apply_laplacian_coeff(self, out: Any, in_: Any, coeffs: Any) -> Any:
+    def apply_laplacian_coeff(self, out: Any, in_: Any, coeffs: Any, *, boundary: Any = None) -> Any:
         """Record ``out = div(A grad in_)`` with the tensor ``A`` of a @ref condensed_coeffs bundle (the
         coefficiented matrix-free matvec of the condensed-implicit elliptic operator,
         ``pops::apply_laplacian``'s coefficient path). @p out and @p in_ are scalar_field values; @p
@@ -866,7 +896,18 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         # concrete state and determines the physical block on which this apply is valid.  Preserve
         # that provenance on the result instead of letting ``_new`` infer only ``state_ref`` while
         # leaving ``block=None`` (an impossible half-qualified ProgramValue).
+        from pops.time.field_sampling import scalar_co_location
+        from pops.time.field_boundaries import field_boundary_contract
+        scalar_co_location(out, in_, "tensor Laplacian")
+        scalar_attrs = {key: in_.attrs[key] for key in
+                        ("scalar_storage", "scalar_owner", "scalar_sampling_contract", "scalar_storage_component")
+                        if key in in_.attrs}
+        boundary_attrs = field_boundary_contract(self, boundary, coeffs)
         return self._new(
             "scalar_field", "apply_laplacian_coeff", (out, in_, coeffs),
-            {"stencil_access": StencilAccess.nearest_neighbour()}, out.name,
-            coeffs.block, state_ref=coeffs.state_ref)
+            {"stencil_access": StencilAccess.nearest_neighbour(), **scalar_attrs,
+             **boundary_attrs}, out.name,
+            coeffs.block, state_ref=None if scalar_attrs else coeffs.state_ref,
+            space=in_.space if scalar_attrs else None,
+            point=in_.point if scalar_attrs else None,
+            inherit_state_ref=not bool(scalar_attrs))

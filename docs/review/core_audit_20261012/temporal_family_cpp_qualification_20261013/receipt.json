@@ -1,0 +1,140 @@
+{
+  "status": "scoped_cpp_temporal_family_materialization_passed_singleton_and_actual_mpi2",
+  "head_at_execution": "b4a5a86af7dffe64b2a7537f9d3346f80be70a19",
+  "checkout": "$REPO",
+  "dimension": 2,
+  "omp_threads_per_rank": 1,
+  "new_gtest_cases": 6,
+  "existing_controls": 1,
+  "executed_case_rank_results": 21,
+  "new_fixture_subscenarios": {
+    "distinct": 18,
+    "positive": 2,
+    "negative": 16
+  },
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "identities_before_after_equal": true,
+  "identity": {
+    "source_files": {
+      "include/pops/runtime/program/amr_program_context_flux_family.inc": "dd7c64bbfe3b002319f48fa2d415d69a43b4429e2c9dd93222198943f34fbcb7",
+      "include/pops/runtime/program/amr_program_context_flux_expression_runtime.inc": "2740992d7ee4aa838240a7a544a5962d0fe047414f64f5f5a9d572ddabb793af",
+      "include/pops/runtime/program/amr_program_context_spatial_implicit.inc": "4810d7b141963db2ff3396726fc2fdbad02d04a6544e98c8da7c200fd1a5c01d",
+      "include/pops/amr/reflux/metric_reflux.hpp": "cf1411222d51a82a62acaa9bec7635c1a2fac03eb0b643d627559b370ad5525f",
+      "include/pops/parallel/collective_exception.hpp": "d1fb358cbce7edecb1d2f171c5e2ebad48565cb2aa8cfd78cbbed7f7692576f9",
+      "tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp": "89c72609a2f11c352258aa714645a0a08dfdf7d05b447736eb25825b06e66461",
+      "tests/cpp/support/amr_temporal_family_materialization_fixture.hpp": "de28d6c90b86496eba93c81cfbd0857e3fda704cfaa687c9d93b2cecf7ac1989",
+      "tests/cpp/support/gtest_main.cpp": "e49fa309013f918d46208ed36a45c7653b6b247939f7611e2f4481fe4e14eb97",
+      "tests/cpp/support/gtest_rank_output.hpp": "937405877ee988219f6bbb11220803a47fed95a38785a207529fb0938bde506a"
+    },
+    "headers_tree": {
+      "files": 404,
+      "sha256": "1388f6e6d56745766391f790f6049f4db5e50594b04aeeabdebe20eaab2734a8"
+    },
+    "cpp_source_tree": {
+      "files": 23,
+      "sha256": "7c68a1ebe5b5f7397e5789375721d2336b91a5ecc5e20a204b3ed8b31b7d38ce"
+    },
+    "executable": {
+      "path": "$REPO/build-mpi/bin/test_mpi_amr_spatial_norm",
+      "sha256": "4ed3ecd0d00ca3b715fb8c27860183bc53739206492e53b6b81269fdf3699e56"
+    },
+    "mpiexec": {
+      "path": "$AUDIT_ENV/bin/mpiexec",
+      "sha256": "10e953c1debc5f3feb464f7e6af535fcbc86f155e6205f891e4bca65cd97521f"
+    },
+    "cmake_cache_sha256": "e6d5b516ff1d5361418eb98edcfa6005558a70ae56158054a23f9f6f72b4f896"
+  },
+  "qualified_source_diff": {
+    "path": "qualified-source.diff",
+    "sha256": "1d5dba782dfbe10e978667cd0b5b9a21e6ac6695444f38cc184f585a5bc6c68b"
+  },
+  "mpi_version": "HYDRA build details:\n    Version:                                 4.1.2\n    Release Date:                            Wed Jun  7 15:22:45 CDT 2023\n    CC:                              arm64-apple-darwin20.0.0-clang -I$AUDIT_ENV/include -D_FORTIFY_SOURCE=2 -isystem $AUDIT_ENV/include -mmacosx-version-min=11.0 -I$AUDIT_ENV/include -ftree-vectorize -fPIC -fstack-protector-strong -O2 -pipe -isystem $AUDIT_ENV/include -fdebug-prefix-map=$BUILD_HOME/miniforge3/conda-bld/mpich-mpi_1707373739416/work=/usr/local/src/conda/mpich-4.1.2 -fdebug-prefix-map=$AUDIT_ENV=/usr/local/src/conda-prefix -L$AUDIT_ENV/lib -Wl,-rpath,$AUDIT_ENV/lib \n    Configure options:                       '--disable-option-checking' '--prefix=$AUDIT_ENV' '--with-hwloc=embedded' '--disable-dependency-tracking' '--enable-cxx' '--enable-fortran' '--enable-f08' '--enable-wrapper-dl-type=none' '--disable-opencl' '--with-device=ch4' 'build_alias=x86_64-apple-darwin13.4.0' 'host_alias=arm64-apple-darwin20.0.0' 'MPICHLIB_CFLAGS=-ftree-vectorize -fPIC -fstack-protector-strong -O2 -pipe -isystem $AUDIT_ENV/include -fdebug-prefix-map=$BUILD_HOME/miniforge3/conda-bld/mpich-mpi_1707373739416/work=/usr/local/src/conda/mpich-4.1.2 -fdebug-prefix-map=$AUDIT_ENV=/usr/local/src/conda-prefix' 'MPICHLIB_CPPFLAGS=-D_FORTIFY_SOURCE=2 -isystem $AUDIT_ENV/include -mmacosx-version-min=11.0' 'MPICHLIB_CXXFLAGS=-ftree-vectorize -fPIC -fstack-protector-strong -O2 -pipe -stdlib=libc++ -fvisibility-inlines-hidden -fmessage-length=0 -isystem $AUDIT_ENV/include -fdebug-prefix-map=$BUILD_HOME/miniforge3/conda-bld/mpich-mpi_1707373739416/work=/usr/local/src/conda/mpich-4.1.2 -fdebug-prefix-map=$AUDIT_ENV=/usr/local/src/conda-prefix' 'MPICHLIB_FFLAGS=-march=armv8.3-a -ftree-vectorize -fPIC -fno-stack-protector -O2 -pipe -isystem $AUDIT_ENV/include -fdebug-prefix-map=$BUILD_HOME/miniforge3/conda-bld/mpich-mpi_1707373739416/work=/usr/local/src/conda/mpich-4.1.2 -fdebug-prefix-map=$AUDIT_ENV=/usr/local/src/conda-prefix' 'MPICHLIB_FCFLAGS=-march=armv8.3-a -ftree-vectorize -fPIC -fno-stack-protector -O2 -pipe -isystem $AUDIT_ENV/include -fdebug-prefix-map=$BUILD_HOME/miniforge3/conda-bld/mpich-mpi_1707373739416/work=/usr/local/src/conda/mpich-4.1.2 -fdebug-prefix-map=$AUDIT_ENV=/usr/local/src/conda-prefix' 'CC=arm64-apple-darwin20.0.0-clang' 'CFLAGS=-I$AUDIT_ENV/include -ftree-vectorize -fPIC -fstack-protector-strong -O2 -pipe -isystem $AUDIT_ENV/include -fdebug-prefix-map=$BUILD_HOME/miniforge3/conda-bld/mpich-mpi_1707373739416/work=/usr/local/src/conda/mpich-4.1.2 -fdebug-prefix-map=$AUDIT_ENV=/usr/local/src/conda-prefix -fno-common -O2' 'LDFLAGS=-L$AUDIT_ENV/lib -Wl,-rpath,$AUDIT_ENV/lib' 'CPPFLAGS=-I$AUDIT_ENV/include -D_FORTIFY_SOURCE=2 -isystem $AUDIT_ENV/include -mmacosx-version-min=11.0 -DNETMOD_INLINE=__netmod_inline_ofi__ -I$BUILD_HOME/miniforge3/conda-bld/mpich-mpi_1707373739416/work/src/mpl/include -I$BUILD_HOME/miniforge3/conda-bld/mpich-mpi_1707373739416/work/modules/json-c -I$BUILD_HOME/miniforge3/conda-bld/mpich-mpi_1707373739416/work/modules/hwloc/include -D_REENTRANT -I$BUILD_HOME/miniforge3/conda-bld/mpich-mpi_1707373739416/work/src/mpi/romio/include -I$BUILD_HOME/miniforge3/conda-bld/mpich-mpi_1707373739416/work/src/pmi/include -I$BUILD_HOME/miniforge3/conda-bld/mpich-mpi_1707373739416/work/modules/yaksa/src/frontend/include -I$BUILD_HOME/miniforge3/conda-bld/mpich-mpi_1707373739416/work/modules/libfabric/include' 'CXX=arm64-apple-darwin20.0.0-clang++' 'CXXFLAGS=-I$AUDIT_ENV/include -ftree-vectorize -fPIC -fstack-protector-strong -O2 -pipe -stdlib=libc++ -fvisibility-inlines-hidden -fmessage-length=0 -isystem $AUDIT_ENV/include -fdebug-prefix-map=$BUILD_HOME/miniforge3/conda-bld/mpich-mpi_1707373739416/work=/usr/local/src/conda/mpich-4.1.2 -fdebug-prefix-map=$AUDIT_ENV=/usr/local/src/conda-prefix -O2' 'FC=arm64-apple-darwin20.0.0-gfortran' 'FCFLAGS=-I$AUDIT_ENV/include -fallow-argument-mismatch -march=armv8.3-a -ftree-vectorize -fPIC -fno-stack-protector -O2 -pipe -isystem $AUDIT_ENV/include -fdebug-prefix-map=$BUILD_HOME/miniforge3/conda-bld/mpich-mpi_1707373739416/work=/usr/local/src/conda/mpich-4.1.2 -fdebug-prefix-map=$AUDIT_ENV=/usr/local/src/conda-prefix -O2' 'FFLAGS=-I$AUDIT_ENV/include -fallow-argument-mismatch -march=armv8.3-a -ftree-vectorize -fPIC -fno-stack-protector -O2 -pipe -isystem $AUDIT_ENV/include -fdebug-prefix-map=$BUILD_HOME/miniforge3/conda-bld/mpich-mpi_1707373739416/work=/usr/local/src/conda/mpich-4.1.2 -fdebug-prefix-map=$AUDIT_ENV=/usr/local/src/conda-prefix -O2' '--cache-file=/dev/null' '--srcdir=.' 'LIBS='\n    Process Manager:                         pmi\n    Launchers available:                     ssh rsh fork slurm ll lsf sge manual persist\n    Topology libraries available:            hwloc\n    Resource management kernels available:   user slurm ll lsf sge pbs cobalt\n    Demux engines available:                 poll select\n",
+  "receptions": [
+    {
+      "world_size": 1,
+      "returncode": 0,
+      "seconds": 1.093156667018775,
+      "command": [
+        "$REPO/build-mpi/bin/test_mpi_amr_spatial_norm",
+        "--gtest_filter=AmrSpatialMaterialization.DeclaredFamilyBindsStageWeightToMeasureAndRetainsPackSize:AmrSpatialMaterialization.DeclaredFamilyPreservesEveryOperatorOccurrenceDescriptor:AmrSpatialMaterialization.DeclaredFamilyPreservesMigratedQuadratureAndMetricClosure:AmrSpatialMaterialization.DeclaredFamilyRejectsMissingAndForeignFamilies:AmrSpatialMaterialization.DeclaredFamilyRequiresCompletePhysicalTemporalCoverage:AmrSpatialMaterialization.LegacyStillRequiresTheOriginalExactOperatorPack:AmrSpatialMaterialization.PendingProofSurvivesPublicationAndRejectsRankLocalDamage",
+        "--gtest_output=xml:$EVIDENCE/ci/temporal-family-cpp-qualification/serial.xml"
+      ],
+      "log": "serial.log",
+      "xml": [
+        {
+          "path": "serial.xml",
+          "sha256": "4cb803bd6ab4d4b56281281dda52d1966638e30adfe7e690e7579dabd5f39962",
+          "rank": 0,
+          "cases": 7,
+          "properties": {},
+          "seconds": 0.074
+        }
+      ]
+    },
+    {
+      "world_size": 2,
+      "returncode": 0,
+      "seconds": 0.24907608301145956,
+      "command": [
+        "$AUDIT_ENV/bin/mpiexec",
+        "-n",
+        "2",
+        "$REPO/build-mpi/bin/test_mpi_amr_spatial_norm",
+        "--gtest_filter=AmrSpatialMaterialization.DeclaredFamilyBindsStageWeightToMeasureAndRetainsPackSize:AmrSpatialMaterialization.DeclaredFamilyPreservesEveryOperatorOccurrenceDescriptor:AmrSpatialMaterialization.DeclaredFamilyPreservesMigratedQuadratureAndMetricClosure:AmrSpatialMaterialization.DeclaredFamilyRejectsMissingAndForeignFamilies:AmrSpatialMaterialization.DeclaredFamilyRequiresCompletePhysicalTemporalCoverage:AmrSpatialMaterialization.LegacyStillRequiresTheOriginalExactOperatorPack:AmrSpatialMaterialization.PendingProofSurvivesPublicationAndRejectsRankLocalDamage",
+        "--gtest_output=xml:$EVIDENCE/ci/temporal-family-cpp-qualification/mpi2.xml"
+      ],
+      "log": "mpi2.log",
+      "xml": [
+        {
+          "path": "mpi2.rank0.xml",
+          "sha256": "d1849096efd31b0288521b8a65c6e621b1d41c3aaff439d419a3a15bd161c247",
+          "rank": 0,
+          "cases": 7,
+          "properties": {
+            "pops_mpi_rank": "0",
+            "pops_mpi_expected_size": "2",
+            "pops_mpi_rank_source": "PMI"
+          },
+          "seconds": 0.066
+        },
+        {
+          "path": "mpi2.rank1.xml",
+          "sha256": "582cca4e12bbcd22dd77c19d34ec242d9b528813878e19098d4f2ccad2711d67",
+          "rank": 1,
+          "cases": 7,
+          "properties": {
+            "pops_mpi_rank": "1",
+            "pops_mpi_expected_size": "2",
+            "pops_mpi_rank_source": "PMI"
+          },
+          "seconds": 0.066
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "Source C++ qualification; Python native build/installation and scientific shared-interface restart reception remain separate.",
+    "The singleton uses the MPI-enabled executable without mpiexec; MPI2 uses actual MPICH and rank-qualified XML.",
+    "New metadata fixtures use private test access; numeric payload is a constant-density quadrature oracle.",
+    "The 18 subscenarios are source-defined iterations within six GTest cases, not 18 independent GTest XML cases.",
+    "No unexecuted C++ case or remote CI verdict is claimed."
+  ],
+  "qualified_source_revision": "9995defcd0972b2c72e1ba3f2413387bd6fba06f",
+  "source_identity_verification": {
+    "recorded_production_test_harness_files": 9,
+    "all_recorded_files_match_commit": true,
+    "method": "SHA256 of git show qualified_source_revision:path matches each recorded source-file digest",
+    "execution_context": "The original head_at_execution plus the received working-tree patch preceded the integrating commit; identities are preserved, not reassigned from chronology."
+  },
+  "source_receipt_origin": {
+    "ref": "external-evidence:ci/temporal-family-cpp-qualification/receipt.json",
+    "sha256": "62f5726fcfc24f2ef43bb87b0ef7998a163f59872f57120fdb748a2c7fc64517"
+  },
+  "independent_review": {
+    "scope": "Production and test review reported by the integration coordinator",
+    "findings": 0,
+    "execution_is_separate": true
+  }
+}

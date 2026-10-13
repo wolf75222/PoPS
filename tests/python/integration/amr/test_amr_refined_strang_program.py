@@ -10,11 +10,12 @@ exact exponential.  Their ordering therefore has a closed-form matrix oracle.
 Running two accepted macro steps additionally proves that stage scratch from the
 first step cannot leak into the next accepted state.
 
-The marker is narrow enough that the resolved three-cell transition reach produces
-three nonempty temporal histories at N=16: initially fine, refined after the first
-interval, and refined only after the second interval.  The final regrid covers the
-domain by construction, so "uncovered" below means uncovered during both physical
-intervals rather than absent from the final post-step topology.
+The diagnostic marker grows by a declared constant source.  Its increasing values
+produce broader tag sets after each accepted interval; the transition reach is
+applied once to each actual tag set.  This produces three nonempty temporal
+histories at N=16: initially fine, refined after the first interval, and refined
+only after the second.  The final regrid covers the domain, so "uncovered" below
+means uncovered during both physical intervals.
 """
 
 from __future__ import annotations
@@ -64,6 +65,9 @@ DT = 2.0e-2
 NSTEPS = 2
 FIRST_RATE = 1.0
 SECOND_RATE = -2.0
+# The final diagnostic increment exceeds the tag threshold by 0.02, so the
+# final coverage does not depend on Gaussian tails surviving float rounding.
+MARKER_GROWTH = 5.5
 
 pytestmark = [
     pytest.mark.compiler,
@@ -86,7 +90,10 @@ def _inert_scalar_model(name, frame):
         waves={x_axis: (0.0,), y_axis: (0.0,)},
     )
     rate = model.rate("inert_marker_rate", equation=ddt(state) == -div(flux))
-    return model, state, flux, rate
+    model.source("diagnostic_marker_growth", on=state,
+                 value=(MARKER_GROWTH + 0.0 * marker,))
+    growth = model.module.operator_handle("diagnostic_marker_growth")
+    return model, state, flux, rate, growth
 
 
 def _split_model(frame):
@@ -163,7 +170,7 @@ def _resolved(native_cxx):
         Cartesian2D()
     )
     split_model, split_state, split_flux, split_rate, first, second = _split_model(frame)
-    marker_model, marker_declaration, marker_flux, marker_rate = _inert_scalar_model(
+    marker_model, marker_declaration, marker_flux, marker_rate, marker_growth = _inert_scalar_model(
         "amr-refined-strang-marker", frame
     )
 
@@ -185,8 +192,8 @@ def _resolved(native_cxx):
     )
     marker_temporal = program.state(marker_state)
     marker_next = program.value(
-        "held_marker",
-        marker_temporal.n,
+        "growing_marker",
+        marker_temporal.n + program.dt * program.source(marker_growth, marker_temporal.n),
         at=marker_temporal.next.point,
     )
     program.commit(marker_temporal.next, marker_next)
@@ -209,9 +216,8 @@ def _resolved(native_cxx):
                 center={x_axis: 0.5, y_axis: 0.5},
                 background=0.0,
                 amplitude=1.0,
-                # The cell-average threshold tags the central 2x2 coarse core.  The resolved
-                # StateTransfer contract then contributes buffer=2 and lookahead=1, so each
-                # materialization expands retained coverage by three parent cells per side.
+                # Buffer(cells=0) keeps the initial central 2x2 tag core unchanged.
+                # The declared marker growth changes the subsequent tag sets themselves.
                 inverse_width=200.0,
             ),
             projection=ConservativeCellAverage(),
@@ -352,6 +358,9 @@ def test_generated_strang_runs_only_through_program_on_refined_amr(
     coarse_covered = _coarse_coverage(fine_valid)
     first_regrid_covered = middle_covered & ~initially_covered
     last_regrid_covered = coarse_covered & ~middle_covered
+    print("AMR Strang coarse coverage:", tuple(int(np.count_nonzero(mask)) for mask in
+          (initially_covered, middle_covered, coarse_covered)),
+          "fine boxes:", (initial_boxes, middle_boxes, final_boxes))
     assert np.all(initial_fine_valid <= middle_fine_valid)
     assert np.all(middle_fine_valid <= fine_valid)
     assert np.any(initially_covered)
@@ -362,17 +371,17 @@ def test_generated_strang_runs_only_through_program_on_refined_amr(
     uncovered_during_evolution = ~middle_covered
     np.testing.assert_array_equal(last_regrid_covered, uncovered_during_evolution)
 
-    # The exact boxes and counts follow from the central 2x2 tag core and the authenticated
-    # transition reach of three parent cells.  They also prove that both accepted regrids changed
-    # topology and that the three temporal-history categories all have real support.
-    assert initial_boxes == ((1, (8, 8), (23, 23)),)
-    assert middle_boxes == ((1, (2, 2), (29, 29)),)
+    # With an explicit zero buffer, the marker's successive tag extents are 2x2,
+    # 4x4 and the full coarse domain.  Both accepted regrids change topology and
+    # all three temporal-history categories have real support.
+    assert initial_boxes == ((1, (14, 14), (17, 17)),)
+    assert middle_boxes == ((1, (12, 12), (19, 19)),)
     assert final_boxes == ((1, (0, 0), (31, 31)),)
-    assert np.count_nonzero(initially_covered) == 64
-    assert np.count_nonzero(first_regrid_covered) == 132
-    assert np.count_nonzero(last_regrid_covered) == 60
-    assert np.count_nonzero(initial_fine_valid) == 256
-    assert np.count_nonzero(middle_fine_valid) == 784
+    assert np.count_nonzero(initially_covered) == 4
+    assert np.count_nonzero(first_regrid_covered) == 12
+    assert np.count_nonzero(last_regrid_covered) == 240
+    assert np.count_nonzero(initial_fine_valid) == 16
+    assert np.count_nonzero(middle_fine_valid) == 64
     assert np.count_nonzero(fine_valid) == 1024
 
     # Let W be one width-DT Strang step and F be the two width-DT/2 substeps owned by

@@ -96,7 +96,14 @@ def test_local_transform_program_emits_one_collective_fail_closed_kernel() -> No
     assert 'require_cartesian_generated_operator(0, "local_transform")' not in source
     assert "ctx.pointwise_active_mask(0," in source
     assert "transform_has_active_mask_" in source
-    assert "outA(index, 0) = u0A(index, 0);" in source
+    input_view = re.search(
+        r"(\w+A) = std::as_const\((\w+)\)\.fab\(li\)\.view\(\);", step_body)
+    assert input_view is not None
+    view_name, field_name = input_view.groups()
+    assert view_name == field_name + "A"
+    inactive_branch = step_body.split("if (transform_has_active_mask_", 1)[1].split("return;", 1)[0]
+    assert "outA(index, 0) = %s(index, 0);" % view_name in inactive_branch
+    assert "statusA(index, 0) = pops::Real(0);" in inactive_branch
     assert "ctx.pointwise_status_max(0," in source
     assert "StepAttemptRejected" in source
     assert "Kokkos::isfinite" in source
@@ -170,10 +177,9 @@ def test_generated_operator_preflight_keeps_only_unqualified_cartesian_kernels()
         (
             "rhs",
             "source",
-            ('operation = "named_flux"', 'else "named_source"'),
+            'json.dumps("named_flux")',
             "ctx.rhs_scratch",
         ),
-        ("source", "apply", 'json.dumps("named_source")', "ctx.rhs_scratch"),
         ("apply", "solve_local_linear", 'json.dumps("linear_source_apply")', "ctx.rhs_scratch"),
         (
             "solve_local_linear",
@@ -189,6 +195,14 @@ def test_generated_operator_preflight_keeps_only_unqualified_cartesian_kernels()
             identities = (identities,)
         assert all(identity in emitted for identity in identities)
         assert preflight < emitted.index(allocation)
+
+    source_branch = branch("source", "apply")
+    assert "ctx.require_cartesian_generated_operator" not in source_branch
+    assert "_emit_source_kernel(" in source_branch
+    rhs_branch = branch("rhs", "source")
+    assert 'json.dumps("named_source")' not in rhs_branch
+    assert "for source_subslot, s in enumerate(named," in rhs_branch
+    assert "_emit_source_kernel(" in rhs_branch
 
 
 def test_local_transform_name_collisions_are_rejected() -> None:

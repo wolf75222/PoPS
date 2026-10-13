@@ -13,9 +13,9 @@ ABI errors are never caught or converted into a skip.
 """
 from __future__ import annotations
 
-from importlib.util import find_spec
 from pathlib import Path
 import sys
+import json
 
 from pops.codegen import Production
 from pops.codegen.program_codegen import emit_cpp_program
@@ -327,11 +327,22 @@ chk(
 # replaces an earlier live Module view before validation.
 pc_plan = _resolved_case("pc_public", "predictor_corrector")
 pc_src = _emit_resolved(pc_plan)
+pc_field_solves = tuple(value for value in pc_plan.time._values if value.op == "solve_fields")
+pc_field_calls = tuple(
+    "ctx.solve_fields_from_state_at(field_boundary_point_%d, %s, 0, u%d);" % (
+        solve.id,
+        json.dumps(pc_plan.field_plans[solve.attrs["field"].local_id].native_options["provider_slot"]),
+        solve.inputs[0].id,
+    )
+    for solve in pc_field_solves
+)
 chk(
-    pc_src.count("ctx.solve_fields_from_state_at(") == 2
+    len(pc_field_solves) == 2
+    and all(solve.field_context.stage_sources == ((solve.inputs[0].block, solve.inputs[0].id),)
+            for solve in pc_field_solves)
+    and pc_src.count("ctx.solve_fields_from_state_at(") == 2
     and pc_src.count("const auto field_boundary_point_") == 2
-    and ", 0, u0);" in pc_src
-    and ", 0, u7);" in pc_src,
+    and all(call in pc_src for call in pc_field_calls),
     "predictor and corrector re-solve exact providers from their own level/stage states",
 )
 chk(
@@ -348,11 +359,14 @@ if missing is not None:
         print("FAIL test_predictor_corrector: %d failure(s)" % fails)
         sys.exit(1)
     _skip("public native lifecycle unavailable: %s" % missing)
-if find_spec("pops._pops") is None:
+try:
+    from pops._native_selector import select_native_dimension
+    select_native_dimension(2)  # The public fixture declares a Cartesian2D layout.
+except (ImportError, RuntimeError) as error:
     if fails:
         print("FAIL test_predictor_corrector: %d failure(s)" % fails)
         sys.exit(1)
-    _skip("public native lifecycle unavailable: pops._pops is not installed")
+    _skip("public native lifecycle unavailable: %s" % error)
 
 manual_fe_artifact = _compile(manual_fe_plan)
 reference_fe_artifact = _compile(_resolved_case("pc_rate_fe", "rate_fe"))

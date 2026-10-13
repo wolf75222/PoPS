@@ -1,6 +1,5 @@
 """Public explicit monomial/State binding; genuine Source authoring and lowering."""
-import sys
-from pathlib import Path
+import inspect
 import pytest
 import pops
 from pops.domain import Rectangle
@@ -9,6 +8,7 @@ from pops.moments import CartesianMonomialBasis
 from pops.codegen.module_lowering import lower_and_validate
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen.program_emit_affine_moments import emit_affine_moment_kernel
+from tests.python.support.python_source_authority import assert_current_python_sources, native_module_bindings
 
 
 def authored(order=2):
@@ -31,8 +31,10 @@ def authored(order=2):
 
 
 def test_source_origin_and_public_permuted_binding():
-    assert Path(pops.__file__).resolve().is_relative_to(Path(__file__).resolve().parents[4]/'python')
-    assert 'pops._pops' not in sys.modules
+    native_before = native_module_bindings()
+    assert_current_python_sources(pops, inspect.getmodule(pops.Model),
+                                  inspect.getmodule(emit_cpp_program),
+                                  inspect.getmodule(emit_affine_moment_kernel))
     model,program,updated,basis,binding,names=authored()
     assert tuple(updated.attrs['component_binding']) == tuple(binding[i] for i in basis.indices)
     lowered,_=lower_and_validate(model,facade=model)
@@ -43,6 +45,7 @@ def test_source_origin_and_public_permuted_binding():
         assert f'old_moments[{i}] = u0A(index, {slot});' in source
         assert f'outA(index, {slot}) = valid ? mapped[{i}] : old_moments[{i}];' in source
     assert program._serialize(include_provenance=False)['version']==23
+    assert native_module_bindings() == native_before
 
 
 def test_order_five_public_emission_no_demonstrator_ceiling():

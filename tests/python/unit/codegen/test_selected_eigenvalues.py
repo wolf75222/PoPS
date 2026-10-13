@@ -51,6 +51,7 @@ def test_single_state_orphan_wave_declaration_remains_invalid():
 
 
 def test_selected_transport_flux_does_not_silently_inherit_foreign_waves():
+    from types import MappingProxyType
     frame = Rectangle("two_flux_box", (0., 0.), (1., 1.)).frame(Cartesian2D())
     model = pops.Model("two_fluxes", frame=frame)
     a = model.species("A", state=("a",))
@@ -63,5 +64,15 @@ def test_selected_transport_flux_does_not_silently_inherit_foreign_waves():
     model.rate("advance_a", equation=math.ddt(a) == -math.div(flux_a))
     model.rate("advance_b", equation=math.ddt(b) == -math.div(flux_b))
 
-    with pytest.raises(ValueError, match="foreign qualified quantity"):
+    carrier_a, module = lower_and_validate(model, state_space="A")
+    carrier_b, _ = lower_and_validate(model, state_space="B")
+    assert carrier_a._m._flux and not carrier_a._m._eig
+    assert carrier_b._m._flux and carrier_b._m._eig
+    # An absent law is valid documentary metadata; borrowing another output
+    # State's authenticated law must still fail at the selected-flux boundary.
+    operator_a = module.operator_registry().get(flux_a.reg_name)
+    operator_b = module.operator_registry().get(flux_b.reg_name)
+    object.__setattr__(operator_a, "lowering", MappingProxyType({
+        **operator_a.lowering, "flux_wave_law": operator_b.lowering["flux_wave_law"]}))
+    with pytest.raises(ValueError, match="wave law output State differs"):
         lower_and_validate(model, state_space="A")

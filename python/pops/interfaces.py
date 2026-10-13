@@ -244,7 +244,10 @@ def required_native_interface_tables(signature: Mapping[str, Any], primary: Comp
     for row in rows:
         if not isinstance(row,Mapping) or type(row.get("id")) is not int or type(row.get("version")) is not int:
             raise ValueError("native-interface-extensions@1 requires exact catalog identities")
-        try:interface=resolve(row.get("name"))
+        name=row.get("name")
+        if not isinstance(name,str):
+            raise ValueError("native-interface-extensions@1 contains an unknown interface")
+        try:interface=resolve(name)
         except (TypeError,ValueError,KeyError):
             raise ValueError("native-interface-extensions@1 contains an unknown interface") from None
         expected=interface.signature_declaration()

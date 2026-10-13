@@ -373,7 +373,7 @@ class AuxSpace(_ImmutableTypeValue):
             "aux_kind": self.kind,
             "representation": self.representation,
             "centering": self.centering,
-            "unit": self.unit.to_data() if hasattr(self.unit, "to_data") else self.unit,
+            "unit": getattr(self.unit, "to_data")() if hasattr(self.unit, "to_data") else self.unit,
             "frame": self.frame,
             "clock": self.clock,
         }

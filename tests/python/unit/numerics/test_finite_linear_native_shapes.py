@@ -1,18 +1,11 @@
 """Actual native finite map templates beyond the W06 widths, host only."""
 from pathlib import Path
-import shutil
 import subprocess
-import sys
-import pytest
+from tests.python.support.native_syntax_toolchain import configured_kokkos_toolchain
 
 
 def test_rectangular_native_shapes_and_joint_failure(tmp_path):
-    compiler=shutil.which("clang++") or shutil.which("c++")
-    if compiler is None:
-        pytest.skip("host C++ compiler unavailable")
-    kokkos=Path(sys.prefix)/"include"
-    if not (kokkos/"Kokkos_Array.hpp").exists():
-        pytest.skip("Kokkos headers unavailable")
+    compiler,_,compile_flags,link_flags=configured_kokkos_toolchain()
     cpp=tmp_path/"native_shapes.cpp"
     cpp.write_text(r"""
 #include <pops/numerics/linalg/finite_linear.hpp>
@@ -43,7 +36,7 @@ int main() {
 """)
     executable=tmp_path/"native_shapes"
     result=subprocess.run([compiler,"-std=c++20","-O2","-fno-fast-math",
-        "-I"+str(Path(__file__).resolve().parents[4]/"include"),"-I"+str(kokkos),
-        str(cpp),"-o",str(executable)],capture_output=True,text=True)
+        "-I"+str(Path(__file__).resolve().parents[4]/"include"),*compile_flags,
+        str(cpp),"-o",str(executable),*link_flags],capture_output=True,text=True)
     assert result.returncode==0,result.stderr
     subprocess.run([str(executable)],check=True)

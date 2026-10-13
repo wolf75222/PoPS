@@ -7,8 +7,9 @@ import pops
 import pytest
 
 from pops import math
-from pops._native_collectives import allgather_value
-from pops._native_selector import select_native_dimension
+from tests.python.support.public_native_profile import (
+    native_profile, rank_and_size, profile_gather_value, profile_gather_bytes,
+)
 from pops.domain import CartesianDomain
 from pops.frames import Cartesian1D
 from pops.initial import InitialCondition
@@ -19,7 +20,7 @@ from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import CoupledGradient, DiscretizationPlan
 from pops.projection import ConservativeCellAverage
 from pops.time import FixedDt
-from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
+from tests.python.support.public_native_profile import compile_profile_plan_once as compile_resolved_plan_once
 from tests.python.support.collective_checks import (
     collective_attempt, collective_call, collective_check, state_snapshots,
 )
@@ -70,28 +71,19 @@ def _rate(values):
     return sum(WEIGHTS)*(D+R)@laplacian
 
 
-def _stage_states(contexts, initial, predictor):
+def _stage_states(program, contexts, initial, predictor):
     """Use the retained IR stage identity, independently of ledger ordering."""
-    result = {}
-    seen = set()
-    assert len(contexts) == 2
-    for context in contexts:
-        stages = re.findall(r"StagePoint\(name='ssprk2_stage_([01])',", context)
-        assert len(stages) == 1, context
-        stage = int(stages[0])
-        assert stage not in seen, contexts
-        seen.add(stage)
-        result[context] = (initial, predictor)[stage]
-    assert seen == {0, 1}
-    return result
+    from tests.python.support.diffusion_ledger_stages import ssprk2_stage_indices
+    indices = ssprk2_stage_indices(program, contexts)
+    return {context: (initial, predictor)[index] for context, index in indices.items()}
 
 
 @pytest.mark.parametrize("order", ((0,1,2), (2,0,1)))
 def test_matrix_flux_occurrences_and_rollback(isolated_native_cache, native_cxx,
         kokkos_root, tmp_path, record_property, order):
     del isolated_native_cache, native_cxx, kokkos_root
-    native = select_native_dimension(1)
-    world = native.mpi_world()
+    native, world = native_profile(dimension=1, scope="coupled gradient Dim1")
+    rank, ranks = rank_and_size(world)
     resolved, subject = collective_call(world, lambda: _case(order))
     artifact = compile_resolved_plan_once(world, resolved,
         route="independent coupled matrix", compile_artifact=pops.compile)
@@ -109,20 +101,20 @@ def test_matrix_flux_occurrences_and_rollback(isolated_native_cache, native_cxx,
     collective_call(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
     actual = state_snapshots(runtime, world, ("mixture",))[0]
     local = collective_call(world, runtime._executor._program_exchange_records)
-    batches = allgather_value(world,local)
+    batches = profile_gather_value(world,local)
     with collective_check(world):
         records = [row for batch in batches for row in batch]
         assert runtime.time() == DT and runtime.macro_step() == 1
         assert len(records) == 3*CELLS*2*2*2
-        if world.size == 2:
+        if ranks == 2:
             assert sorted(map(len, batches)) == [0, len(records)]
-        if world.rank == 0:
+        if rank == 0:
             predictor = initial+DT*_rate(initial)
             expected = .5*(initial+predictor+DT*_rate(predictor))
             actual = actual.reshape(3,CELLS)[np.argsort(order)]
             np.testing.assert_allclose(actual,expected,rtol=0,atol=3.e-12)
             contexts = tuple(dict.fromkeys(row['evaluation_context'] for row in records))
-            stages = _stage_states(contexts, initial, predictor)
+            stages = _stage_states(resolved.time, contexts, initial, predictor)
             increments = np.zeros_like(initial)
             identities = set()
             assert len({row['operation_identity'] for row in records}) == 1
@@ -171,5 +163,5 @@ def test_matrix_flux_occurrences_and_rollback(isolated_native_cache, native_cxx,
         after = state_snapshots(failed,world,("mixture",))[0]
         with collective_check(world):
             assert ledger_after == ledger_before
-            if world.rank == 0:
+            if rank == 0:
                 np.testing.assert_array_equal(after,before)

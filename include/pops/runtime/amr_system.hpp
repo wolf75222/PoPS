@@ -1,4 +1,5 @@
 #pragma once
+#include <pops/runtime/system/analytic_mapped_input.hpp>
 #include <pops/runtime/system/prepared_field_rhs_inputs.hpp>
 
 #include <pops/runtime/program/accepted_exchange.hpp>
@@ -540,6 +541,9 @@ class AmrSystem {
 
   /// Exact level geometry/topology and model speed retained by the prepared hierarchy graph.
   POPS_EXPORT Geometry<Dim> prepared_amr_level_geometry(int level) const;
+  /// Exact installed physical faces; scalar field regions remain separate equation constraints.
+  POPS_EXPORT PhysicalBoundaryConditions<Dim> prepared_amr_field_boundary_conditions(
+      int runtime_block, int level, std::string_view provider_slot) const;
   POPS_EXPORT BoundaryTopology<Dim> prepared_amr_boundary_topology() const;
   POPS_EXPORT Real prepared_amr_level_maximum_speed(int level, const MultiFab<Dim>& state) const;
   POPS_EXPORT Real prepared_amr_block_level_maximum_speed(int runtime_block, int level,
@@ -790,6 +794,9 @@ class AmrSystem {
                                     const std::string& topology_digest);
   std::vector<runtime::field::FieldTopologyReportRow> field_topology_report(
       const std::string& provider_slot) const;
+  /// Last successful accepted solve; failed candidates and warm seeds leave it unchanged.
+  [[nodiscard]] POPS_EXPORT std::optional<SolveReport> field_solve_report(
+      const std::string& provider_slot) const;
   void set_field_boundary_plan(const std::string& provider_slot,
                                const std::vector<std::string>& kind,
                                const std::vector<double>& alpha, const std::vector<double>& beta,
@@ -882,6 +889,15 @@ class AmrSystem {
   /// hierarchy lane and is rolled back by the enclosing bootstrap snapshot.
   std::size_t recompute_bootstrap_field(const std::string& subject_id,
                                         const std::string& provider_slot);
+  void stage_bootstrap_initial_program_seed(const std::string& subject_id,
+      const std::string& runtime_block, const analytic::AnalyticOpcodeRows& opcodes,
+      const analytic::AnalyticLiteralRows& literals);
+  std::pair<std::size_t, SolveReport> solve_bootstrap_initial_field(const std::string& subject_id,
+      const std::string& provider_slot, int ordinal);
+  std::size_t map_bootstrap_state_hierarchy(const std::string& subject_id,
+      const analytic::AnalyticOpcodeRows& opcodes, const analytic::AnalyticLiteralRows& literals,
+      const std::vector<runtime::system::AnalyticMappedInput>& inputs,
+      const std::string& consumer_qid, const std::string& provider_slot);
   /// Restrict one already-materialized fine state onto its live parent during an explicit
   /// bootstrap transaction.  The subject must own the exact cell-conservative volume-average
   /// restriction authority for this ranked transition; publication is collective on the prepared
@@ -939,6 +955,15 @@ class AmrSystem {
   /// and flux consumers retain their prepared level-qualified views.
   POPS_EXPORT void publish_program_field_components(const std::string& publication_identity,
                                                     const std::vector<ProgramFieldLevel>& levels);
+  /// Publish only the initial iterate of the next composite solve, after all-level admission.
+  POPS_EXPORT void publish_program_field_warm_start(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int runtime_block, const std::vector<const MultiFab<Dim>*>& potentials,
+      const std::string& publication_identity);
+  /// Sample the accepted solved scalar with its native constrained ghosts and exact producer point.
+  POPS_EXPORT void copy_program_solved_field_scalar_sample(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int runtime_block, const MultiFab<Dim>& stage_state, MultiFab<Dim>& destination) const;
 
   /// Durable accepted metadata for each AMR hierarchy level.  The native checkpoint backend owns
   /// rank-local group payload staging; this image authenticates its exact group identities,

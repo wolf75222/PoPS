@@ -58,6 +58,7 @@ from pops.params import ConstParam
 from pops.numerics.terms import DefaultSource, Flux, Flux as FinalFlux, SourceTerm
 from pops.time import FailRun, FixedDt
 import sys
+import json
 from tests.python.support.requirements import (
     default_cxx,
     missing_native_compile_requirement,
@@ -304,8 +305,21 @@ chk(
 loader_emit = named_model("me_nam_loader").__pops_compiler_lowering__().emit_model
 loader = loader_emit.__pops_native_loader_source__(target="system")
 chk("Ell_phi2" in loader, "the named elliptic RHS brick is emitted in the native loader")
+named_output_keys = tuple(
+    next(key for key in loader_emit._m._auxiliary_provider_pack.keys()
+         if key.space_kind == "field" and key.component == component)
+    for component in ("phi2", "g2x", "g2y")
+)
+named_output_cpp = ", ".join(
+    "pops::runtime::system::AuxiliaryComponentKey{%s}" %
+    ", ".join(json.dumps(part) for part in key.to_data().values())
+    for key in named_output_keys
+)
 chk(
-    'package.elliptic_attachments.push_back({"phi2",' in loader,
+    'attachment.field = "phi2";' in loader
+    and "attachment.outputs = {%s};" % named_output_cpp in loader
+    and "attachment.gradient_sign = 1;" in loader
+    and "package.elliptic_attachments.push_back(std::move(attachment));" in loader,
     "the named field registers its exact aux-component attachment",
 )
 chk(

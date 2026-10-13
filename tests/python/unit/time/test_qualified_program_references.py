@@ -70,6 +70,10 @@ class _Model:
     def operator_registry(self) -> OperatorRegistry:
         return self._registry
 
+    def primitive_recipes(self):
+        # This source fixture declares no derived primitive quantities.
+        return {}
+
 
 def _declarations(*, with_rate: bool = False):
     model = _Model(with_rate=with_rate)
@@ -199,7 +203,7 @@ def test_program_serialization_is_canonical_and_contains_no_authoring_capability
     assert first_data == second_data
     assert first._ir_hash() == second._ir_hash()
     assert all("#authoring=" not in state.local_id for state in first._time_states.values())
-    assert first_data["version"] == 4
+    assert first_data["version"] == 5
     assert first_data["nodes"][0]["block"]["kind"] == "block"
     assert first_data["nodes"][0]["state"]["kind"] == "state"
     assert first_data["commits"][0]["state"] == first_data["nodes"][0]["state"]

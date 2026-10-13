@@ -18,6 +18,7 @@ from .bootstrap import (
     BootstrapSelection,
     ConstraintProvider,
     ProlongFromParent,
+    NativeProgramSeed,
     resolve_bootstrap,
 )
 from .hierarchy import (
@@ -510,5 +511,6 @@ __all__ = [
     "BootstrapSelection",
     "ConstraintProvider",
     "ProlongFromParent",
+    "NativeProgramSeed",
     "resolve_bootstrap",
 ]

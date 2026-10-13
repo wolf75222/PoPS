@@ -12,10 +12,11 @@ import numpy as np
 import pops
 import pytest
 
-from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
+from tests.python.support.public_native_profile import compile_profile_plan_once as compile_resolved_plan_once
 from tests.python.support.collective_checks import collective_call, collective_check, collective_attempt
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.public_native_profile import rank_and_size
 from tests.python.support.spatial_interaction_receipts import (
     CELLS, DT, GAMMA, WORKSPACE, build, bound_initial_values, capture, arrays, same, digest,
 )
@@ -29,8 +30,9 @@ def bind(world, artifact, width, *, failure=None):
                                                    resources={"execution_context": context}))
 
 
-def prepare(world, width, adaptive, failure):
-    case, layout, selected, _ = collective_call(world, lambda: build(width, adaptive=adaptive, failure=failure))
+def prepare(world, width, adaptive, failure, *, amr_periodic=False):
+    case, layout, selected, _ = collective_call(world, lambda: build(
+        width, adaptive=adaptive, failure=failure, amr_periodic=amr_periodic))
     resolved = collective_call(world, lambda: pops.resolve(pops.validate(case), layout=layout))
     artifact = compile_resolved_plan_once(world, resolved, route="direct native spatial interaction",
                                           compile_artifact=pops.compile)
@@ -38,9 +40,8 @@ def prepare(world, width, adaptive, failure):
 
 
 def world_and_native():
-    from pops._native_selector import select_native_dimension
-    native = select_native_dimension(2)
-    world = native.mpi_world()
+    from tests.python.support.public_native_profile import native_profile
+    native, world = native_profile(scope="public spatial interaction")
     with collective_check(world):
         assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
     return world, native
@@ -74,7 +75,7 @@ def save_origins(artifact, directory):
 
 def save(world, native, artifact, directory, images, checkpoints, *, width, adaptive, selected, failure=None, failure_errors=()):
     with collective_check(world):
-        if world.rank == 0:
+        if rank_and_size(world)[0] == 0:
             phases = {}
             for name, image in images.items():
                 path = directory/(name+".npz")
@@ -89,7 +90,7 @@ def save(world, native, artifact, directory, images, checkpoints, *, width, adap
             receipt = {"schema": "pops.spatial-interaction-native-fixture@1", "dimension": 2,
                 "width": width, "components": selected, "cells": CELLS, "adaptive": adaptive,
                 "dt": DT, "gamma": GAMMA, "workspace": 1 if failure == "budget" else WORKSPACE, "failure": failure,
-                "rank": world.rank, "size": world.size, "phases": phases, "checkpoints": checkpoints,
+                "rank": rank_and_size(world)[0], "size": rank_and_size(world)[1], "phases": phases, "checkpoints": checkpoints,
                 "failure_errors": failure_errors,
                 "fixture_sources": [{"path": str(path), "sha256": digest(path)} for path in
                     (Path(__file__).resolve(), Path(sys.modules[build.__module__].__file__).resolve())],
@@ -100,6 +101,9 @@ def save(world, native, artifact, directory, images, checkpoints, *, width, adap
                     "accepted": "initial", "continuous": "accepted", "reloaded": "initial", "replay": "reloaded"},
                 "history_source_contract": "pops.spatial-interaction-history-source@1",
                 "raw_coverage_semantics": "true_is_covered", "coordinate_authority": "bound-normalized-native-Cartesian",
+                "transport_boundary_profile": "periodic" if adaptive else "physical_no_flux",
+                "interaction_domain_profile": "bounded_cartesian_cell_midpoint_without_periodic_images",
+                "amr_qualification_scope": "periodic transport topology only; active nonperiodic EB is refused at bind" if adaptive else None,
                 "association": "fixture-recorded actual execution; ROOT owner approval pending",
                 "aggregate_cryptographic_binding": False, "m26_pde_qualification": False}
             (directory/"receipt.json").write_text(json.dumps(receipt, sort_keys=True, indent=2)+"\n")
@@ -114,7 +118,7 @@ def test_public_spatial_interaction_saved_history_and_exact_replay(
         isolated_native_cache, tmp_path, record_property, width, adaptive):
     del isolated_native_cache
     world, native = world_and_native()
-    artifact, selected = prepare(world, width, adaptive, None)
+    artifact, selected = prepare(world, width, adaptive, None, amr_periodic=adaptive)
     runtime = bind(world, artifact, width)
     directory = collective_directory(world, tmp_path/"spatial-interaction")
     initial = capture(world, runtime, width, adaptive=adaptive, step=0)
@@ -149,6 +153,10 @@ def test_public_spatial_interaction_saved_history_and_exact_replay(
     checkpoints["replay"] = checkpoint(world, restored, directory, "replay")
     with collective_check(world):
         same(continuous, replay)
+        for image in (initial, accepted, continuous, reloaded, replay):
+            assert all(np.all(np.isfinite(np.asarray(piece["values"])))
+                for level in image["levels"] for copy in level["copies"]
+                for piece in copy["pieces"]["rho"]), "zero-flux source-only domain must stay finite"
         assert accepted["clock"] == (DT, 1) and continuous["clock"] == (2*DT, 2)
         for old, new in zip(accepted["levels"], continuous["levels"], strict=True):
             for first, second in zip(old["copies"], new["copies"], strict=True):
@@ -160,8 +168,8 @@ def test_public_spatial_interaction_saved_history_and_exact_replay(
     save(world, native, artifact, directory,
          dict(initial=initial, accepted=accepted, continuous=continuous, reloaded=reloaded, replay=replay),
          checkpoints, width=width, adaptive=adaptive, selected=selected)
-    for key, value in (("evidence_path", str(directory)), ("dimension", 2), ("rank", world.rank),
-                       ("size", world.size), ("adaptive", adaptive), ("width", width),
+    for key, value in (("evidence_path", str(directory)), ("dimension", 2), ("rank", rank_and_size(world)[0]),
+                       ("size", rank_and_size(world)[1]), ("adaptive", adaptive), ("width", width),
                        ("fixture_schema", "pops.spatial-interaction-native-fixture@1")):
         record_property(key, value)
 
@@ -178,17 +186,120 @@ def test_public_spatial_interaction_refuses_without_publication(
     runtime = bind(world, artifact, 1, failure=failure)
     directory = collective_directory(world, tmp_path/("spatial-interaction-"+failure))
     initial = capture(world, runtime, 1, adaptive=False, step=0)
+    if failure == "nonfinite":
+        with collective_check(world):
+            resident = [tuple(np.asarray(piece["values"]) for piece in pieces)
+                for level in initial["levels"] for copy in level["copies"]
+                for pieces in zip(copy["pieces"]["rho"], copy["pieces"]["active"],
+                                  copy["pieces"]["kappa"], strict=True)]
+            assert all(np.all(np.isfinite(rho)) for rho, _active, _kappa in resident)
+            assert any(np.any((rho == 3.) & (active == 1) & (kappa > 0))
+                       for rho, active, kappa in resident), "native active source pole is absent"
     checkpoints = {"initial": checkpoint(world, runtime, directory, "initial")}
     _, errors = collective_attempt(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
     with collective_check(world):
         assert all(error is not None for error in errors), errors
         assert all("direct spatial interaction" in error[1] or "direct interaction" in error[1] for error in errors), errors
+        if failure == "nonfinite" and rank_and_size(world)[1] == 1:
+            assert all("nonfinite active source" in error[1] for error in errors), errors
     rejected = capture(world, runtime, 1, adaptive=False, step=0)
     with collective_check(world):
         same(initial, rejected)
     checkpoints["rejected"] = checkpoint(world, runtime, directory, "rejected")
     save(world, native, artifact, directory, dict(initial=initial, rejected=rejected), checkpoints,
          width=1, adaptive=False, selected=selected, failure=failure, failure_errors=errors)
-    for key, value in (("evidence_path", str(directory)), ("rank", world.rank), ("size", world.size), ("failure", failure),
+    for key, value in (("evidence_path", str(directory)), ("rank", rank_and_size(world)[0]), ("size", rank_and_size(world)[1]), ("failure", failure),
                        ("fixture_schema", "pops.spatial-interaction-native-fixture@1")):
         record_property(key, value)
+
+
+@pytest.mark.compiler
+@pytest.mark.kokkos
+@pytest.mark.native_loader
+def test_public_spatial_interaction_ignores_inactive_source_pole(
+        isolated_native_cache, tmp_path, record_property):
+    del isolated_native_cache
+    world, native = world_and_native()
+    artifact, _selected = prepare(world, 1, False, "nonfinite-inactive")
+    runtime = bind(world, artifact, 1, failure="nonfinite-inactive")
+    directory = collective_directory(world, tmp_path/"spatial-interaction-inactive-pole")
+    initial = capture(world, runtime, 1, adaptive=False, step=0)
+    with collective_check(world):
+        source_pieces = [tuple(np.asarray(piece["values"]) for piece in pieces)
+            for level in initial["levels"] for copy in level["copies"]
+            for pieces in zip(copy["pieces"]["rho"], copy["pieces"]["active"],
+                              copy["pieces"]["kappa"], strict=True)]
+        assert all(np.all(np.isfinite(rho)) for rho, _active, _kappa in source_pieces)
+        assert any(np.any((rho == 3.) & (active == 0) & (kappa == 0))
+                   for rho, active, kappa in source_pieces)
+        assert not any(np.any((rho == 3.) & (active == 1))
+                       for rho, active, _kappa in source_pieces)
+    checkpoints = {"initial": checkpoint(world, runtime, directory, "initial")}
+    collective_call(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
+    accepted = capture(world, runtime, 1, adaptive=False, step=1)
+    checkpoints["accepted"] = checkpoint(world, runtime, directory, "accepted")
+    with collective_check(world):
+        assert accepted["clock"] == (DT, 1)
+        for old, new in zip(initial["levels"], accepted["levels"], strict=True):
+            for first, second in zip(old["copies"], new["copies"], strict=True):
+                for before, active, after in zip(first["pieces"]["rho"], first["pieces"]["active"],
+                                                  second["pieces"]["rho"], strict=True):
+                    rho, mask = np.asarray(before["values"]), np.asarray(active["values"])
+                    rate = np.zeros_like(rho)
+                    np.divide(rho, 3-rho, out=rate, where=mask == 1)
+                    values = np.asarray(after["values"])
+                    assert np.all(np.isfinite(values))
+                    np.testing.assert_allclose(values, rho+DT*rate, rtol=5e-12, atol=5e-12)
+                    np.testing.assert_array_equal(values[mask == 0], rho[mask == 0])
+                assert np.all(np.isfinite(second["history_values"]["I_accepted"]))
+        if rank_and_size(world)[0] == 0:
+            phases = {}
+            for name, image in (("initial", initial), ("accepted", accepted)):
+                path = directory/(name+".npz")
+                np.savez(path, **arrays(image))
+                phases[name] = dict(path=str(path), sha256=digest(path))
+            receipt = dict(schema="pops.spatial-source-inactive-pole-native-fixture@1",
+                source_law="rho/(3-rho)", dt=DT, dimension=2, rank=0,
+                size=rank_and_size(world)[1], phases=phases, checkpoints=checkpoints,
+                native=dict(path=str(native.__file__), sha256=digest(native.__file__)),
+                artifact_identity=artifact.artifact_identity.token,
+                components_origins=save_origins(artifact, directory),
+                fixture_sources=[dict(path=str(path), sha256=digest(path)) for path in
+                    (Path(__file__).resolve(), Path(sys.modules[build.__module__].__file__).resolve())])
+            (directory/"receipt.json").write_text(json.dumps(receipt, sort_keys=True, indent=2)+"\n")
+    record_property("evidence_path", str(directory))
+    record_property("fixture_schema", "pops.spatial-source-inactive-pole-native-fixture@1")
+
+
+@pytest.mark.compiler
+@pytest.mark.kokkos
+@pytest.mark.native_loader
+def test_public_spatial_interaction_nonperiodic_amr_refuses_at_bind(
+        isolated_native_cache, tmp_path, record_property):
+    del isolated_native_cache
+    world, native = world_and_native()
+    artifact, _selected = prepare(world, 3, True, None, amr_periodic=False)
+    context = collective_call(world, lambda: artifact_execution_context(artifact))
+    values = collective_call(world, lambda: bound_initial_values(artifact.plan.initial_condition_plan, 3))
+    result, errors = collective_attempt(world, lambda: pops.bind(
+        artifact, initial_values=values, resources={"execution_context": context}))
+    with collective_check(world):
+        assert result is None
+        guard = "active AMR embedded transport has no EB-qualified physical-boundary provider"
+        assert all(error is not None and guard in error[1] for error in errors), errors
+    directory = collective_directory(world, tmp_path/"spatial-interaction-nonperiodic-amr-bind-refusal")
+    with collective_check(world):
+        if rank_and_size(world)[0] == 0:
+            receipt = dict(schema="pops.spatial-amr-nonperiodic-bind-refusal@1",
+                dimension=2, width=3, rank=0, size=rank_and_size(world)[1],
+                transport_boundary_profile="physical_no_flux", embedded_boundary_profile="cutcell_zero_flux",
+                interaction_domain_profile="bounded_cartesian_cell_midpoint_without_periodic_images",
+                qualification_scope="nonperiodic active AMR EB intentionally unsupported; bind must fail before runtime publication",
+                failure_errors=errors, artifact_identity=artifact.artifact_identity.token,
+                platform=artifact.platform_manifest.to_data(), components_origins=save_origins(artifact, directory),
+                native=dict(path=str(native.__file__), sha256=digest(native.__file__)),
+                fixture_sources=[dict(path=str(path), sha256=digest(path)) for path in
+                    (Path(__file__).resolve(), Path(sys.modules[build.__module__].__file__).resolve())])
+            (directory/"receipt.json").write_text(json.dumps(receipt, sort_keys=True, indent=2)+"\n")
+    record_property("evidence_path", str(directory))
+    record_property("fixture_schema", "pops.spatial-amr-nonperiodic-bind-refusal@1")

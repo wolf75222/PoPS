@@ -185,14 +185,12 @@ def test_detached_global_proof_does_not_retain_case_or_source_program():
 
 @pytest.mark.parametrize("physical_global", (False, True))
 @pytest.mark.parametrize("periodic", (False, True))
-def test_detached_emission_preserves_exact_parent_ir_manifest_and_cpp(
+def test_detached_emission_preserves_exact_live_parent_ir_manifest_and_cpp(
         physical_global, periodic):
     from pops.codegen.program_codegen import emit_cpp_program
     from pops.codegen.program_models import ProgramModelGraph
     from pops.time._program.detach import detach_compiled_program
     from pops.identity import canonical_bytes
-    parent = Path(__file__).resolve().parents[4] / "docs/development/api_040/sol61_global_authority_parent_parity.json"
-    expected = json.loads(parent.read_text())[str((physical_global, periodic))]
     case, layout, program, _, _ = build_feedback(physical_global=physical_global, periodic=periodic)
     manifest = case._block_registry.spec("fluid")["model"].module.manifest().to_dict()
     plan = pops.resolve(pops.validate(case), layout=layout)
@@ -202,12 +200,13 @@ def test_detached_emission_preserves_exact_parent_ir_manifest_and_cpp(
     full_manifest = source_module.manifest().to_dict()
     live_payload = canonical_bytes(plan._payload())
     live_snapshot = plan.snapshot._artifact_canonical_json
+    live_ir = program._ir_hash()
     live_cpp = {target: emit_cpp_program(plan.time, model_graph=graph, target=target)
                 for target in ("system", "amr_system")}
     detached = detach_compiled_program(plan.time, physical_global_sources=plan._physical_global_sources)
     detached_plan = replace(plan, time=detached)
-    assert program._ir_hash() == detached._ir_hash() == expected["ir"]
-    assert manifest["schema_version"] == expected["manifest_version"]
+    assert program._ir_hash() == detached._ir_hash() == live_ir
+    assert manifest == full_manifest
     # Preserve genuine file/line provenance from this exact input. Historical
     # cross-version comparison belongs to the explicit review checker, while
     # these unit cases need no Git history, checkout path, fetch, or skip.
@@ -219,6 +218,14 @@ def test_detached_emission_preserves_exact_parent_ir_manifest_and_cpp(
     for target in ("system", "amr_system"):
         cpp = emit_cpp_program(detached, model_graph=graph, target=target)
         assert cpp == live_cpp[target]
-        assert hashlib.sha256(cpp.encode()).hexdigest() == expected[target]
+        assert hashlib.sha256(cpp.encode()).hexdigest() == hashlib.sha256(live_cpp[target].encode()).hexdigest()
     assert source_module.module_hash() == module_hash
     assert source_module.manifest().to_dict() == full_manifest
+
+
+def test_historical_parent_receipt_remains_byte_exact():
+    parent = Path(__file__).resolve().parents[4] / "docs/development/api_040/sol61_global_authority_parent_parity.json"
+    raw = parent.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == "6e088b12ec19cbaa84c47f36edd84d90900320573d1343b973ee037cd626f6b0"
+    assert set(json.loads(raw)) == {str((physical, periodic))
+                                  for physical in (False, True) for periodic in (False, True)}

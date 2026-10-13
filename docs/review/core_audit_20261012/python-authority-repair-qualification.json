@@ -1,0 +1,253 @@
+{
+  "schema": "pops.python-authority-repair-reception@1",
+  "identity": {
+    "source_commit": "2e0d2eaffe64311b6987ae11ae303192f6f2d84a",
+    "native_cpp_commit": "6b50905b5e51770cbcb545d890d82945d616fd25",
+    "native_sha256": "f67ecd7e90e11842db84950da92edf93610f0076ca8dbb2228b66581d3c36403",
+    "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.3.34.2);std=202002L;headers=e1b678510d7b4dc24a3286ad6fd8433f1c31412bc18582e8a2c9d0de2b40289c;kokkos=1;stdlib=libc++_220106;mpi=1;mpi_abi=40d6e65d7f79f247f867711ee0854b6220e3b9c1950da10f38add6e0977b9e89;dim=2",
+    "abi_version": 13,
+    "dimension": 2,
+    "python_files": [
+      {
+        "module": "pops.codegen.program_emit_ops",
+        "sha256": "8a1cb22073478793eff08b8e208fe8d5ab1fd0ca1ab9dc4634b39527a399be3c"
+      },
+      {
+        "module": "pops.codegen.program_emit_control",
+        "sha256": "f30038f6a7413d9c309fb3e9d412044aeb7bc72de37feb612dd350edbcbd49ae"
+      },
+      {
+        "module": "pops.codegen.program_integral_transfers",
+        "sha256": "1f1475a28254de00cf9de07feb8972809ee1c93821067138ef6b01ecaadb8665"
+      },
+      {
+        "module": "pops.codegen.program_static_provider_proof",
+        "sha256": "74a4246b8447ddd496983e35202cbed4cdcc113f8d7c771e02dc1022cf6e4e7a"
+      },
+      {
+        "module": "pops.runtime._step_strategy",
+        "sha256": "649fc5eefc24519006d44bd7bdb68636d27b66b0f5d727e6a04ae9bd2b09a9f2"
+      }
+    ]
+  },
+  "scope": "New source branches only: no repeat of the original four-bug campaign",
+  "native_cases": [
+    {
+      "target": "tests/python/integration/runtime/test_integral_diffusion_trace_runtime.py::test_public_diffusive_integral_constant_gradient_balance_and_restart[uniform]",
+      "mpi_world_size": 1,
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_seconds": 14.793200959000387,
+      "watchdog_seconds": 240,
+      "ranks": [
+        0
+      ],
+      "source_fixture_sha256": {
+        "tests/python/integration/runtime/test_integral_diffusion_trace_runtime.py": "2c8ff87bf44e44faa35cbaf4e1d52a5100e7c26b534349b42acb5e09ecd8a275",
+        "tests/python/support/integral_diffusion_case.py": "955c53e60a09068d7076b14a8d24522428c89887f0c33fb48935ee124599a567",
+        "tests/python/support/integral_state_receipts.py": "bd8e4d7cf6bebfe1b816709433ce777e53c19514dd6900ab3293a9754879d4ca",
+        "tests/python/support/collective_checks.py": "f135d322e35e27fba908d2d65781b5d1fe7598f9033a0e424220263e3a0266d5",
+        "tests/python/support/native_execution_context.py": "b6699b5b447930aa485399b176f41959d5560c8fe67136c374c35101e61ccf52",
+        "tests/python/integration/runtime/test_combined_transport_derived_auxiliary.py": "63565a1ca42be8df3b04b0009c36139a0fe124f2dfe05234fd61d5d25d9de484",
+        "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py": "95a25f7b360035ab73ec732ff39c73b28f5edb2d94a01f7f319db26fc5884b9b",
+        "tests/python/integration/mpi/_compile_once.py": "4f64621f125643c980c64ca635ebb4ebaaf35850297dfe1ae8dcbbfebd1d9691"
+      },
+      "source_receipt_sha256": "2b95d437b09ecb0c9c777634ad9c214c95e5d34f9530c0b122abe5bc9629d279"
+    },
+    {
+      "target": "tests/python/integration/runtime/test_integral_diffusion_trace_runtime.py::test_public_diffusive_integral_constant_gradient_balance_and_restart[amr2]",
+      "mpi_world_size": 1,
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_seconds": 32.04322650001268,
+      "watchdog_seconds": 240,
+      "ranks": [
+        0
+      ],
+      "source_fixture_sha256": {
+        "tests/python/integration/runtime/test_integral_diffusion_trace_runtime.py": "2c8ff87bf44e44faa35cbaf4e1d52a5100e7c26b534349b42acb5e09ecd8a275",
+        "tests/python/support/integral_diffusion_case.py": "955c53e60a09068d7076b14a8d24522428c89887f0c33fb48935ee124599a567",
+        "tests/python/support/integral_state_receipts.py": "bd8e4d7cf6bebfe1b816709433ce777e53c19514dd6900ab3293a9754879d4ca",
+        "tests/python/support/collective_checks.py": "f135d322e35e27fba908d2d65781b5d1fe7598f9033a0e424220263e3a0266d5",
+        "tests/python/support/native_execution_context.py": "b6699b5b447930aa485399b176f41959d5560c8fe67136c374c35101e61ccf52",
+        "tests/python/integration/runtime/test_combined_transport_derived_auxiliary.py": "63565a1ca42be8df3b04b0009c36139a0fe124f2dfe05234fd61d5d25d9de484",
+        "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py": "95a25f7b360035ab73ec732ff39c73b28f5edb2d94a01f7f319db26fc5884b9b",
+        "tests/python/integration/mpi/_compile_once.py": "4f64621f125643c980c64ca635ebb4ebaaf35850297dfe1ae8dcbbfebd1d9691"
+      },
+      "source_receipt_sha256": "2b95d437b09ecb0c9c777634ad9c214c95e5d34f9530c0b122abe5bc9629d279"
+    },
+    {
+      "target": "tests/python/integration/runtime/test_integral_diffusion_trace_runtime.py::test_public_diffusive_integral_refusal_restores_state_clock_and_mailbox[periodic_trace]",
+      "mpi_world_size": 1,
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_seconds": 13.700575709008262,
+      "watchdog_seconds": 240,
+      "ranks": [
+        0
+      ],
+      "source_fixture_sha256": {
+        "tests/python/integration/runtime/test_integral_diffusion_trace_runtime.py": "2c8ff87bf44e44faa35cbaf4e1d52a5100e7c26b534349b42acb5e09ecd8a275",
+        "tests/python/support/integral_diffusion_case.py": "955c53e60a09068d7076b14a8d24522428c89887f0c33fb48935ee124599a567",
+        "tests/python/support/integral_state_receipts.py": "bd8e4d7cf6bebfe1b816709433ce777e53c19514dd6900ab3293a9754879d4ca",
+        "tests/python/support/collective_checks.py": "f135d322e35e27fba908d2d65781b5d1fe7598f9033a0e424220263e3a0266d5",
+        "tests/python/support/native_execution_context.py": "b6699b5b447930aa485399b176f41959d5560c8fe67136c374c35101e61ccf52",
+        "tests/python/integration/runtime/test_combined_transport_derived_auxiliary.py": "63565a1ca42be8df3b04b0009c36139a0fe124f2dfe05234fd61d5d25d9de484",
+        "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py": "95a25f7b360035ab73ec732ff39c73b28f5edb2d94a01f7f319db26fc5884b9b",
+        "tests/python/integration/mpi/_compile_once.py": "4f64621f125643c980c64ca635ebb4ebaaf35850297dfe1ae8dcbbfebd1d9691"
+      },
+      "source_receipt_sha256": "2b95d437b09ecb0c9c777634ad9c214c95e5d34f9530c0b122abe5bc9629d279"
+    },
+    {
+      "target": "tests/python/integration/runtime/test_integral_diffusion_trace_runtime.py::test_public_diffusive_integral_refusal_restores_state_clock_and_mailbox[unsafe_dt]",
+      "mpi_world_size": 1,
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_seconds": 13.2395800420054,
+      "watchdog_seconds": 240,
+      "ranks": [
+        0
+      ],
+      "source_fixture_sha256": {
+        "tests/python/integration/runtime/test_integral_diffusion_trace_runtime.py": "2c8ff87bf44e44faa35cbaf4e1d52a5100e7c26b534349b42acb5e09ecd8a275",
+        "tests/python/support/integral_diffusion_case.py": "955c53e60a09068d7076b14a8d24522428c89887f0c33fb48935ee124599a567",
+        "tests/python/support/integral_state_receipts.py": "bd8e4d7cf6bebfe1b816709433ce777e53c19514dd6900ab3293a9754879d4ca",
+        "tests/python/support/collective_checks.py": "f135d322e35e27fba908d2d65781b5d1fe7598f9033a0e424220263e3a0266d5",
+        "tests/python/support/native_execution_context.py": "b6699b5b447930aa485399b176f41959d5560c8fe67136c374c35101e61ccf52",
+        "tests/python/integration/runtime/test_combined_transport_derived_auxiliary.py": "63565a1ca42be8df3b04b0009c36139a0fe124f2dfe05234fd61d5d25d9de484",
+        "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py": "95a25f7b360035ab73ec732ff39c73b28f5edb2d94a01f7f319db26fc5884b9b",
+        "tests/python/integration/mpi/_compile_once.py": "4f64621f125643c980c64ca635ebb4ebaaf35850297dfe1ae8dcbbfebd1d9691"
+      },
+      "source_receipt_sha256": "2b95d437b09ecb0c9c777634ad9c214c95e5d34f9530c0b122abe5bc9629d279"
+    },
+    {
+      "target": "tests/python/integration/runtime/test_combined_transport_derived_auxiliary.py::test_combined_transport_consumes_changed_derived_auxiliary[euler]",
+      "mpi_world_size": 1,
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_seconds": 57.22238095800276,
+      "watchdog_seconds": 240,
+      "ranks": [
+        0
+      ],
+      "source_fixture_sha256": {
+        "tests/python/integration/runtime/test_integral_diffusion_trace_runtime.py": "2c8ff87bf44e44faa35cbaf4e1d52a5100e7c26b534349b42acb5e09ecd8a275",
+        "tests/python/support/integral_diffusion_case.py": "955c53e60a09068d7076b14a8d24522428c89887f0c33fb48935ee124599a567",
+        "tests/python/support/integral_state_receipts.py": "bd8e4d7cf6bebfe1b816709433ce777e53c19514dd6900ab3293a9754879d4ca",
+        "tests/python/support/collective_checks.py": "f135d322e35e27fba908d2d65781b5d1fe7598f9033a0e424220263e3a0266d5",
+        "tests/python/support/native_execution_context.py": "b6699b5b447930aa485399b176f41959d5560c8fe67136c374c35101e61ccf52",
+        "tests/python/integration/runtime/test_combined_transport_derived_auxiliary.py": "63565a1ca42be8df3b04b0009c36139a0fe124f2dfe05234fd61d5d25d9de484",
+        "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py": "95a25f7b360035ab73ec732ff39c73b28f5edb2d94a01f7f319db26fc5884b9b",
+        "tests/python/integration/mpi/_compile_once.py": "4f64621f125643c980c64ca635ebb4ebaaf35850297dfe1ae8dcbbfebd1d9691"
+      },
+      "source_receipt_sha256": "2b95d437b09ecb0c9c777634ad9c214c95e5d34f9530c0b122abe5bc9629d279"
+    },
+    {
+      "target": "tests/python/integration/runtime/test_combined_transport_derived_auxiliary.py::test_combined_transport_consumes_changed_derived_auxiliary[ssprk2]",
+      "mpi_world_size": 1,
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_seconds": 65.13025724999898,
+      "watchdog_seconds": 240,
+      "ranks": [
+        0
+      ],
+      "source_fixture_sha256": {
+        "tests/python/integration/runtime/test_integral_diffusion_trace_runtime.py": "2c8ff87bf44e44faa35cbaf4e1d52a5100e7c26b534349b42acb5e09ecd8a275",
+        "tests/python/support/integral_diffusion_case.py": "955c53e60a09068d7076b14a8d24522428c89887f0c33fb48935ee124599a567",
+        "tests/python/support/integral_state_receipts.py": "bd8e4d7cf6bebfe1b816709433ce777e53c19514dd6900ab3293a9754879d4ca",
+        "tests/python/support/collective_checks.py": "f135d322e35e27fba908d2d65781b5d1fe7598f9033a0e424220263e3a0266d5",
+        "tests/python/support/native_execution_context.py": "b6699b5b447930aa485399b176f41959d5560c8fe67136c374c35101e61ccf52",
+        "tests/python/integration/runtime/test_combined_transport_derived_auxiliary.py": "63565a1ca42be8df3b04b0009c36139a0fe124f2dfe05234fd61d5d25d9de484",
+        "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py": "95a25f7b360035ab73ec732ff39c73b28f5edb2d94a01f7f319db26fc5884b9b",
+        "tests/python/integration/mpi/_compile_once.py": "4f64621f125643c980c64ca635ebb4ebaaf35850297dfe1ae8dcbbfebd1d9691"
+      },
+      "source_receipt_sha256": "2b95d437b09ecb0c9c777634ad9c214c95e5d34f9530c0b122abe5bc9629d279"
+    },
+    {
+      "target": "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py::test_public_mpi_generated_cell_local_multiblock_regrids_and_matches_forward_euler",
+      "mpi_world_size": 2,
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_seconds": 92.40097174998664,
+      "watchdog_seconds": 240,
+      "ranks": [
+        0,
+        1
+      ],
+      "source_fixture_sha256": {
+        "tests/python/integration/runtime/test_integral_diffusion_trace_runtime.py": "2c8ff87bf44e44faa35cbaf4e1d52a5100e7c26b534349b42acb5e09ecd8a275",
+        "tests/python/support/integral_diffusion_case.py": "955c53e60a09068d7076b14a8d24522428c89887f0c33fb48935ee124599a567",
+        "tests/python/support/integral_state_receipts.py": "bd8e4d7cf6bebfe1b816709433ce777e53c19514dd6900ab3293a9754879d4ca",
+        "tests/python/support/collective_checks.py": "f135d322e35e27fba908d2d65781b5d1fe7598f9033a0e424220263e3a0266d5",
+        "tests/python/support/native_execution_context.py": "b6699b5b447930aa485399b176f41959d5560c8fe67136c374c35101e61ccf52",
+        "tests/python/integration/runtime/test_combined_transport_derived_auxiliary.py": "63565a1ca42be8df3b04b0009c36139a0fe124f2dfe05234fd61d5d25d9de484",
+        "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py": "95a25f7b360035ab73ec732ff39c73b28f5edb2d94a01f7f319db26fc5884b9b",
+        "tests/python/integration/mpi/_compile_once.py": "4f64621f125643c980c64ca635ebb4ebaaf35850297dfe1ae8dcbbfebd1d9691"
+      },
+      "source_receipt_sha256": "2b95d437b09ecb0c9c777634ad9c214c95e5d34f9530c0b122abe5bc9629d279"
+    },
+    {
+      "target": "test_original_nonlinear_product_from_saved_native_observations[order0]",
+      "mpi_world_size": 1,
+      "ranks": [
+        0
+      ],
+      "rank_xml_sha256": [
+        "3e509c699723595e85a70a2c8621e2bfc3a66d0daf2b718a19cc68fab8307837"
+      ],
+      "exit_code": 0,
+      "watchdog_seconds": 840,
+      "elapsed_seconds": 20.415
+    },
+    {
+      "target": "test_original_nonlinear_product_from_saved_native_observations[order1]",
+      "mpi_world_size": 1,
+      "ranks": [
+        0
+      ],
+      "rank_xml_sha256": [
+        "3e509c699723595e85a70a2c8621e2bfc3a66d0daf2b718a19cc68fab8307837"
+      ],
+      "exit_code": 0,
+      "watchdog_seconds": 840,
+      "elapsed_seconds": 19.833
+    },
+    {
+      "target": "test_original_nonlinear_product_from_saved_native_observations[order2]",
+      "mpi_world_size": 1,
+      "ranks": [
+        0
+      ],
+      "rank_xml_sha256": [
+        "3e509c699723595e85a70a2c8621e2bfc3a66d0daf2b718a19cc68fab8307837"
+      ],
+      "exit_code": 0,
+      "watchdog_seconds": 840,
+      "elapsed_seconds": 20.441
+    },
+    {
+      "target": "test_symbolic_path_actual_stage_cfl_failure_keeps_two_level_accepted_state",
+      "mpi_world_size": 2,
+      "ranks": [
+        0,
+        1
+      ],
+      "rank_xml_sha256": [
+        "a7f8f4c1cc9e6264f0337f745ecd6fb5b4f797ae6475341f97842273ae2aa16f",
+        "8f709ca16e075fcbddacb8877858d5bf12378751a9f58037a2048286bfe1301a"
+      ],
+      "exit_code": 0,
+      "watchdog_seconds": 840,
+      "elapsed_seconds": 32.045
+    }
+  ],
+  "source_receipts": [],
+  "limitations": [
+    "Local MPI Dim2 only; remote final-SHA gate remains separately assessed.",
+    "Seeded32/order(2,0,1) diagnostic is excluded from successful qualification."
+  ],
+  "original_equations_solver_controls_tolerances_retained": true,
+  "received_variants": 11,
+  "received_rank_results": 13
+}

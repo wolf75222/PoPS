@@ -1,4 +1,5 @@
 #include "generated_fan_li15.hpp"
+#include <pops/numerics/moments/normalized_hermite.hpp>
 // Standalone Kokkos witness for the prepared face/residual seam. This does not
 // load the generated runtime or qualify an AMR/time-integration campaign.
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>

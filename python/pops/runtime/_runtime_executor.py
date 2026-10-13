@@ -405,7 +405,7 @@ def _install_adaptive_native_engine(plan: Any) -> Any:
     schema = artifact.bind_schema
     by_id = {handle.qualified_id: value for handle, value in plan.initial_values.items()}
     initial_rows = []
-    from pops.mesh._amr import AnalyticReprojection
+    from pops.mesh._amr import AnalyticReprojection, NativeProgramSeed
 
     selections = {
         row.subject.qualified_id: row.method for row in plan.bootstrap_plan.selections
@@ -433,6 +433,7 @@ def _install_adaptive_native_engine(plan: Any) -> Any:
                 centering,
                 "analytic"
                 if type(selections[subject.qualified_id]) is AnalyticReprojection
+                else "initial_program" if type(selections[subject.qualified_id]) is NativeProgramSeed
                 else "prolong",
                 binding.source.options.to_data(),
             )

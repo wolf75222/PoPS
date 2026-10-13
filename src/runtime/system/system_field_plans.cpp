@@ -47,6 +47,10 @@ struct ConfiguredFieldOptions {
 
 ConfiguredFieldOptions decode_configured_field_options(std::string_view family_route,
                                                        const PreparedProviderOptions& options) {
+  if (family_route == "red_black_geometric_mg") {
+    const auto decoded = runtime::system::decode_red_black_geometric_mg_options<kNativeDimension>(options);
+    return {static_cast<double>(decoded.relative_tolerance), static_cast<double>(decoded.absolute_tolerance), decoded.maximum_cycles};
+  }
   if (family_route == "geometric_mg")
     throw std::invalid_argument(
         "GeometricMG is reserved for the AMR MG/FAC route; uniform System requires cartesian_cg");
@@ -243,6 +247,58 @@ std::vector<runtime::field::FieldTopologyReportRow> System<Dim>::field_topology_
   if (!p_->field_plans_.contains(provider_slot))
     throw std::runtime_error("unknown qualified field provider slot");
   return {};
+}
+
+template <int Dim>
+PhysicalBoundaryConditions<Dim> System<Dim>::prepared_field_boundary_conditions(
+    int runtime_block, std::string_view provider_slot) const {
+  p_->require_field_plan_consensus();
+  if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->sp.size())
+    throw std::out_of_range("Program field boundary names an invalid runtime block");
+  if (provider_slot.empty() && p_->field_plans_.size() != 1)
+    throw std::invalid_argument(
+        "Program field boundary requires an exact installed slot when the field plan is absent or ambiguous");
+  const auto found = provider_slot.empty() ? p_->field_plans_.begin()
+                                         : p_->field_plans_.find(std::string(provider_slot));
+  if (found == p_->field_plans_.end())
+    throw std::invalid_argument("Program field boundary names an unknown installed slot");
+  const auto& plan = found->second;
+  if (plan.output_block != p_->sp[static_cast<std::size_t>(runtime_block)].name ||
+      plan.output_owner_identity.empty() || plan.output_key.empty() || plan.plan_identity.empty())
+    throw std::invalid_argument("Program field boundary lost its exact output block and owner");
+  constexpr std::size_t face_count = static_cast<std::size_t>(2 * Dim);
+  if (plan.boundary_kind.size() != face_count || plan.boundary_alpha.size() != face_count ||
+      plan.boundary_beta.size() != face_count || plan.boundary_value.size() != face_count ||
+      !plan.boundary_state_blocks.empty() || !plan.boundary_state_components.empty() ||
+      !plan.boundary_field_blocks.empty() || !plan.boundary_field_keys.empty() ||
+      !plan.boundary_field_components.empty() || !plan.boundary_parameters.empty())
+    throw std::invalid_argument(
+        "Program scalar field stencils require a complete static numerical boundary plan");
+  std::array<bool, Dim> periodic{};
+  std::array<PhysicalBoundaryFace, face_count> faces{};
+  RealVector<Dim> spacing{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    spacing[axis] = p_->geom.spacing(axis);
+    const std::size_t lower = static_cast<std::size_t>(2 * axis);
+    const std::size_t upper = lower + 1;
+    periodic[axis] = plan.boundary_kind[lower] == "periodic";
+    if (periodic[axis] != (plan.boundary_kind[upper] == "periodic"))
+      throw std::invalid_argument("Program field periodic topology requires a paired axis");
+    for (std::size_t ordinal : {lower, upper}) {
+      const auto& kind = plan.boundary_kind[ordinal];
+      auto& face = faces[ordinal];
+      if (kind == "periodic") face.kind = PhysicalBoundaryKind::external;
+      else if (kind == "dirichlet") face.kind = PhysicalBoundaryKind::dirichlet;
+      else if (kind == "neumann") face.kind = PhysicalBoundaryKind::neumann;
+      else if (kind == "mixed") face.kind = PhysicalBoundaryKind::robin;
+      else throw std::invalid_argument("Program field boundary kind is unsupported");
+      face.alpha = static_cast<Real>(plan.boundary_alpha[ordinal]);
+      face.beta = static_cast<Real>(plan.boundary_beta[ordinal]);
+      face.value = static_cast<Real>(plan.boundary_value[ordinal]);
+    }
+  }
+  return PhysicalBoundaryConditions<Dim>(BoundaryTopology<Dim>::axis_periodic(periodic), faces,
+                                          spacing);
 }
 
 template <int Dim>
@@ -497,6 +553,8 @@ template void System<kNativeDimension>::set_field_boundary_plan(const std::strin
                                                                 const std::vector<double>&,
                                                                 const std::vector<double>&,
                                                                 const std::vector<double>&);
+template PhysicalBoundaryConditions<kNativeDimension>
+System<kNativeDimension>::prepared_field_boundary_conditions(int, std::string_view) const;
 template void System<kNativeDimension>::set_field_boundary_dependencies(
     const std::string&, const std::vector<std::string>&, const std::vector<int>&,
     const std::vector<std::string>&, const std::vector<std::string>&, const std::vector<int>&);

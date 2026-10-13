@@ -12,7 +12,9 @@ import pytest
 
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 from tests.python.integration.runtime.test_public_captured_diffusion import bounded_bytes
-from tests.python.integration.runtime.test_public_evolved_original_stage import checkpoint_provenance, compare_checkpoint_replay
+from tests.python.integration.runtime.test_public_evolved_original_stage import (
+    checkpoint_provenance, checkpoint_restart_authority, compare_checkpoint_replay_v2,
+)
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.completed_original_interaction import (
     ACCEPTANCE, CELLS, CONTROLS, KINDS, SCHEMA, WORKSPACE,
@@ -20,6 +22,7 @@ from tests.python.support.completed_original_interaction import (
 )
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.public_native_profile import native_profile, rank_and_size
 from tests.python.support.evolved_stage_amr import DENSE_BYTES, DT, FD_STEP
 
 
@@ -100,14 +103,14 @@ def test_reference_kernel_math_is_signed_nonsymmetric_and_uses_finest_measures(t
 def test_public_completed_original_interaction_exact_restart_and_saved_reductions(
         isolated_native_cache, tmp_path, record_property, width):
     del isolated_native_cache
-    from pops._native_selector import select_native_dimension
-    native = select_native_dimension(2)
-    world = native.mpi_world()
-    with collective_check(world):
-        assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+    native, world = native_profile(scope="public completed original interaction")
+    rank, size = rank_and_size(world)
+    record_property("native_abi_version", native.__abi_version__)
+    record_property("native_profile", "MPI" if world is not None else "Serial")
     case, layout, profile = collective_call(world, lambda: build(width))
     resolved = collective_call(world, lambda: pops.resolve(pops.validate(case), layout=layout))
-    artifact = compile_resolved_plan_once(world, resolved, route="completed original composite source IR19", compile_artifact=pops.compile)
+    artifact = (pops.compile(resolved) if world is None else compile_resolved_plan_once(
+        world, resolved, route="completed original composite source IR19", compile_artifact=pops.compile))
     context = collective_call(world, lambda: artifact_execution_context(artifact))
     def bind():
         # The helper has genuine declared Analytic ICs. No ad-hoc array/index
@@ -122,9 +125,13 @@ def test_public_completed_original_interaction_exact_restart_and_saved_reduction
     phases = {"initial":capture(world,runtime,width,initial=True)}
     provenance = {}
     for phase, owner in (("accepted",runtime),("continuous",runtime),("replay",None)):
+        restart_authority = None
         if phase == "replay":
             owner = collective_call(world, bind)
+            restart_authority = collective_call(world, lambda: checkpoint_restart_authority(owner))
             collective_call(world, lambda owner=owner: owner.restart(checkpoints["accepted"]["path"]))
+            restart_authority["restored_source_run"] = collective_call(world,
+                lambda: owner.last_run_identity.token)
             checkpoints["reloaded"] = checkpoint(world,owner,directory,"reloaded")
             phases["reloaded"] = capture(world,owner,width)
             with collective_check(world):
@@ -133,7 +140,7 @@ def test_public_completed_original_interaction_exact_restart_and_saved_reduction
         collective_call(world, lambda owner=owner,end=end: pops.run(owner,t_end=end,max_steps=1,console=False))
         checkpoints[phase] = checkpoint(world,owner,directory,phase)
         provenance[phase] = collective_call(world, lambda owner=owner,phase=phase:
-            checkpoint_provenance(owner,checkpoints[phase]["path"]))
+            checkpoint_provenance(owner,checkpoints[phase]["path"],restart_authority=restart_authority))
         phases[phase] = capture(world,owner,width)
     with collective_check(world):
         same(phases["continuous"],phases["replay"])
@@ -145,9 +152,9 @@ def test_public_completed_original_interaction_exact_restart_and_saved_reduction
         for latest, previous in zip(phases["continuous"]["rows"],phases["accepted"]["rows"],strict=True):
             for name in (*tuple("T%d" % index for index in range(width)), *(("z",) if width == 2 else ())):
                 np.testing.assert_array_equal(latest[name+"-previous"],previous[name])
-        if world.rank == 0:
+        if rank == 0:
             import tests.python.support.evolved_stage_amr as original_helper
-            equivalence = compare_checkpoint_replay({phase:row["path"] for phase,row in checkpoints.items()},provenance)
+            equivalence = compare_checkpoint_replay_v2({phase:row["path"] for phase,row in checkpoints.items()},provenance)
             observations = {}
             for phase, image in phases.items():
                 expected, metrics = (None,None) if phase == "initial" else check(image,phases["initial"],
@@ -160,7 +167,7 @@ def test_public_completed_original_interaction_exact_restart_and_saved_reduction
             assert {Path(row["path"]).resolve() for row in checkpoints.values()}.isdisjoint(
                 Path(part["path"]).resolve() for row in observations.values() for key,part in row.items() if key in ("wire","npz"))
             receipt = {"schema":SCHEMA,"artifact":artifact.artifact_identity.token,"dimension":2,
-                "rank":world.rank,"size":world.size,"cells":CELLS,"width":width,"profile":profile,
+                "rank":rank,"size":size,"cells":CELLS,"width":width,"profile":profile,
                 "dt":DT,"newton":CONTROLS,"fd_step":FD_STEP,"acceptance":ACCEPTANCE,
                 "original_realization":"FullResidualBasisLU@1","max_dense_bytes":DENSE_BYTES,
                 "interaction":"DirectSpatialInteraction@1","max_workspace_bytes":WORKSPACE,
@@ -181,6 +188,6 @@ def test_public_completed_original_interaction_exact_restart_and_saved_reduction
                     Path(original_helper.__file__).resolve())]}
             (directory/"receipt.json").write_text(json.dumps(receipt,sort_keys=True,indent=2)+"\n")
         for name,value in (("artifact_identity",artifact.artifact_identity.token),("dimension",2),
-                ("rank",world.rank),("size",world.size),("completed_original_interaction_receipt",str(directory/"receipt.json")),
+                ("rank",rank),("size",size),("completed_original_interaction_receipt",str(directory/"receipt.json")),
                 ("fixture_schema",SCHEMA),("width",width)):
             record_property(name,value)

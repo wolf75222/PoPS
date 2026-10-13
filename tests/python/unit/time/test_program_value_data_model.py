@@ -223,12 +223,19 @@ def test_ssa_aliases_are_canonical_in_every_public_inspection_view():
     program = Program("canonical_inspection")
     state = typed_state(program, "transport")
     first = program.value("first", state)
-    program.value("consumer", first)
+    consumer = program.value("consumer", first)
 
-    program.value("renamed", first)
+    renamed = program.value("renamed", first)
 
     assert "renamed" in program.dump_operator_ir()
     assert "renamed" in program.dump_cpp_plan()
     nodes = program.ir_nodes()
-    assert [node["name"] for node in nodes] == ["renamed"]
+    expected = (state, first, consumer, renamed)
+    assert [node["name"] for node in nodes] == [value.name for value in expected]
+    serialized = program._serialize()["nodes"]
+    assert [node["id"] for node in serialized] == [value.id for value in expected]
+    assert len({value.id for value in expected}) == len(expected)
     assert nodes[0]["inputs"] == []
+    assert [node["inputs"] for node in nodes[1:]] == [[state.name], [first.name], [first.name]]
+    assert [node["inputs"] for node in serialized[1:]] == [[state.id], [first.id], [first.id]]
+    assert first.name == "first" and consumer.inputs[0] is first and renamed.inputs[0] is first

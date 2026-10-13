@@ -564,6 +564,15 @@ void init_core(py::module_& m) {
   // every method returning SolveReport (notably System::solve_fields) has a concrete Python value
   // type.  Status/action are exposed as their stable semantic names instead of leaking C++ enum
   // ordinals into the private bootstrap ABI.
+  py::class_<pops::ResidualEvaluationEvidence>(m, "_ResidualEvaluationEvidence")
+      .def_readonly("initial_residual_norm", &pops::ResidualEvaluationEvidence::initial_residual_norm)
+      .def_readonly("rhs_norm", &pops::ResidualEvaluationEvidence::rhs_norm)
+      .def_readonly("initial_evaluation_bound", &pops::ResidualEvaluationEvidence::initial_evaluation_bound)
+      .def_readonly("evaluation_bound", &pops::ResidualEvaluationEvidence::evaluation_bound)
+      .def_readonly("requested_threshold", &pops::ResidualEvaluationEvidence::requested_threshold)
+      .def_readonly("applied_threshold", &pops::ResidualEvaluationEvidence::applied_threshold)
+      .def_readonly("roundoff_limited", &pops::ResidualEvaluationEvidence::roundoff_limited)
+      .def_readonly("relative_to_rhs_upper", &pops::ResidualEvaluationEvidence::relative_to_rhs_upper);
   py::class_<pops::SolveReport>(m, "_SolveReport")
       .def_readonly("iters", &pops::SolveReport::iters)
       .def_readonly("evaluations", &pops::SolveReport::evaluations)
@@ -573,6 +582,7 @@ void init_core(py::module_& m) {
       .def_readonly("residual_norm", &pops::SolveReport::residual_norm)
       .def_readonly("step_norm", &pops::SolveReport::step_norm)
       .def_readonly("condition_evidence", &pops::SolveReport::condition_evidence)
+      .def_readonly("residual_evaluation", &pops::SolveReport::residual_evaluation)
       .def_property_readonly("failure_index",
                              [](const pops::SolveReport& report) -> py::object {
                                if (!report.failure.found)

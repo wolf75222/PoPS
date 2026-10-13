@@ -96,6 +96,7 @@ class _SystemUnifiedInstall(_System):
         row: Mapping[str, Any],
         *,
         params: Any,
+        field_plans: Any = None,
     ) -> None:
         source = row.get("source")
         from pops.runtime._initial_source_lowering import (
@@ -112,6 +113,17 @@ class _SystemUnifiedInstall(_System):
             if value is None:
                 raise ValueError("uniform BindArray initial source has no bound value")
             self.set_state(name, value)
+            return
+        if route == "bootstrap_program":
+            if row.get("space") != "cell" or row.get("centering") != "cell":
+                raise ValueError("uniform BootstrapProgram requires a cell-centred state")
+            from pops.runtime._initial_program_execution import execute_uniform_initial_program
+
+            reports = execute_uniform_initial_program(self._s, name, source, params=params,
+                                                      field_plans=field_plans)
+            if not hasattr(self, "_initial_program_reports"):
+                self._initial_program_reports = {}
+            self._initial_program_reports[name] = reports
             return
         projection = source.get("projection", {})
         if (
@@ -402,7 +414,7 @@ class _SystemUnifiedInstall(_System):
         # conservative vector. Still before install_program/mark_bound, so this remains bind-time data.
         for name, initial, source in pending_initials:
             if source is not None:
-                self._install_initial_source(name, source, params=params)
+                self._install_initial_source(name, source, params=params, field_plans=field_plans)
             elif initial is not None:
                 self.set_state(name, initial)
 

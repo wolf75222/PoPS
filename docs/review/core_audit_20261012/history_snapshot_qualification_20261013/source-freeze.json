@@ -1,0 +1,95 @@
+{
+  "source_revision": "f94b82ea9d2c4ee571e994dd29ce3e699a82809e",
+  "recorded_base_head": "a9297394d5fbf6c191195bc69563822da3169bbe",
+  "source_receipt_origin": {
+    "ref": "external-evidence:ci/a9297394-spatial-history-snapshot-review/applied-freeze.json",
+    "sha256": "725a5be7eee0e826e37bbf629324074ccbeecd9523be407e9963ad55c01b6d0e"
+  },
+  "files": [
+    {
+      "path": "include/pops/runtime/program/amr_program_context.hpp",
+      "sha256": "50a5c6a53bdb3c18938dc414f664e3ed0b02f2b7d038b482bfd6267af04f1018"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_field_runtime_services.inc",
+      "sha256": "d69cefb85207b54d9bcbafd0185b313ddd07514627e5e6e23adcfd0c71d4ae08"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_history_checkpoint_definitions.inc",
+      "sha256": "a79c4224e69d346e644c7ddabc046c9fe0a8769d2daf4cf45bc4f8855f1882a8"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_mapping_continuation.inc",
+      "sha256": "26adc964bc89a8c0c18613e093e0c169f2b4610f7f740359bddc3c2661fd275c"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_spatial.inc",
+      "sha256": "8339b9179cab8fdb67cebadad77a275901e9b92910bf13a81bd414c89a9d3eae"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_spatial_history_snapshot.inc",
+      "sha256": "13ad190942e598b3f9bbbe0baa32eaf61870aa3d464e1443e54588eb13b7a511"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_spatial_interaction.inc",
+      "sha256": "11df3f8b7887318d8598ab93c5fecf234ac749102b50e54b9ee0a1f511bf5275"
+    },
+    {
+      "path": "include/pops/runtime/program/amr_program_context_subcycling_runtime.inc",
+      "sha256": "acff4a0acec3d0a089862f329c0c47ffa94f03b5b1e76dc433b083219e8c8516"
+    },
+    {
+      "path": "python/pops/codegen/program_emit_control.py",
+      "sha256": "0f5c804d1e3acdd8f3e6babeab273d71a054efa8b779e40243554230090802ed"
+    },
+    {
+      "path": "python/pops/codegen/program_emit_spatial_interaction.py",
+      "sha256": "94ffff9da56b523b7276d0c9d885f55300e708fd161e0b8abb4f28d32983a417"
+    },
+    {
+      "path": "tests/python/unit/codegen/test_spatial_history_snapshot_codegen.py",
+      "sha256": "4feff7cde2e95ccc58e0c033767c9ae38f6da590fad743fe26c90f2c665b8d4e"
+    }
+  ],
+  "source_test": {
+    "cases": 4,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 6.509,
+    "xml": "$EVIDENCE/ci/a9297394-spatial-history-snapshot-review/source-pytest.xml",
+    "identity": {
+      "before": {
+        "pops_file": "$REPO/python/pops/__init__.py",
+        "native_modules": [],
+        "python_executable": "$AUDIT_ENV/bin/python"
+      },
+      "after": {
+        "pops_file": "$REPO/python/pops/__init__.py",
+        "native_modules": [],
+        "exit_code": 0,
+        "wall_seconds": 6.594143458001781
+      }
+    }
+  },
+  "pyright": {
+    "path": "$EVIDENCE/ci/a9297394-spatial-history-snapshot-review/global-pyright.json",
+    "version": "1.1.414",
+    "summary": {
+      "filesAnalyzed": 802,
+      "errorCount": 0,
+      "warningCount": 3,
+      "informationCount": 0,
+      "timeInSec": 24.936
+    }
+  },
+  "unchanged_proofs": {
+    "history_guard_sha256": "593acd63cb4b14e1dcfd15f907c903f3fed0fb63e59b0bcc2af9d5a1469fc8e6",
+    "ir17_cpp_body_sha256": "77f1b74d3520be0fe0e2568f675836f76d68676d7f1e328d3a6ec6c0c02f1a77",
+    "existing_python_emitter_function_sha256": "124e39043768bd0da07f697a1aa3a7319e6606a2b94fc0e91fc855face0b694a"
+  },
+  "snapshot_cap": 240,
+  "scope": "Four source-only code-generation cases and full source typing; neither imports a native Python extension or qualifies a new installed binary.",
+  "recorded_intermediate_snapshot_lines": 238,
+  "final_structural_metrics": "final-inventory-metrics.json"
+}

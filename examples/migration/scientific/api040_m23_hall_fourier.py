@@ -8,6 +8,10 @@ compare that polynomial separately from continuous and spatial phase.
 """
 from __future__ import annotations
 
+from _native_example_profile import (
+    rank_and_size, gather_bytes, broadcast_bytes, execution_context,
+)
+
 import hashlib
 import json
 import math as pymath
@@ -97,7 +101,7 @@ def _collective_call(world, label, operation):
         result = operation()
     except Exception as exception:
         failure = (label+": "+type(exception).__name__+": "+str(exception)).encode()
-    failures = world.allgather_bytes(failure)
+    failures = gather_bytes(world, failure)
     if any(failures):
         raise RuntimeError("; ".join(row.decode() for row in failures if row))
     return result
@@ -134,7 +138,7 @@ def run_and_archive(destination: Path):
             artifact = pops.compile(resolved)
         if artifact.resolved_dimension != 1:
             raise RuntimeError("M23 requires the genuine one-dimensional package")
-        execution = pops.ExecutionContext.mpi_world(artifact)
+        execution = execution_context(artifact)
         world = execution.communicator.handle
         initial = initial_means(cells, order)
         simulation = _collective_call(world, "bind", lambda artifact=artifact,
@@ -154,11 +158,11 @@ def run_and_archive(destination: Path):
             world, "status", lambda simulation=simulation, report=report: json.dumps((
                 report.accepted_steps, report.rejected_steps,
                 simulation.macro_step(), simulation.time())).encode())
-        statuses = world.allgather_bytes(status)
+        statuses = gather_bytes(world, status)
         if len(set(statuses)) != 1:
             raise RuntimeError("M23 accepted-step/time status differs across MPI ranks")
         error = b""
-        if world.rank == 0:
+        if rank_and_size(world)[0] == 0:
             try:
                 before = np.asarray(before_global).reshape(initial.shape)
                 final = np.asarray(final_global).reshape(initial.shape)
@@ -206,19 +210,19 @@ def run_and_archive(destination: Path):
                     "norm_discrete_error": norm_error,
                     "time_error": time_error,
                     "accepted_steps": report.accepted_steps,
-                    "mpi_ranks": world.size,
+                    "mpi_ranks": rank_and_size(world)[1],
                     "saved_state": saved.name,
                     "saved_state_sha256": hashlib.sha256(saved.read_bytes()).hexdigest(),
                     "run_report": report.to_data(),
                 })
             except Exception as exception:
                 error = (type(exception).__name__+": "+str(exception)).encode()
-        error = world.broadcast_bytes(error, root=0)
+        error = broadcast_bytes(world, error)
         if error:
             raise RuntimeError(error.decode())
     payload = b""
     error = b""
-    if world.rank == 0:
+    if rank_and_size(world)[0] == 0:
         try:
             payload = (receipt_json({
                 "schema_version": 1, "case": "M23_normalized_Hall_Fourier",
@@ -226,16 +230,16 @@ def run_and_archive(destination: Path):
                 "criteria": CRITERIA, "records": records, "native_sha256": hashlib.sha256(
                     Path(native.__file__).read_bytes()).hexdigest(),
                 "threads_requested": int(os.environ.get("OMP_NUM_THREADS", "1")),
-                "mpi_ranks": world.size,
+                "mpi_ranks": rank_and_size(world)[1],
             })+"\n").encode()
             destination.mkdir(parents=True, exist_ok=True)
             (destination / "receipt.json").write_bytes(payload)
         except Exception as exception:
             error = (type(exception).__name__+": "+str(exception)).encode()
-    error = world.broadcast_bytes(error, root=0)
+    error = broadcast_bytes(world, error)
     if error:
         raise RuntimeError(error.decode())
-    payload = world.broadcast_bytes(payload, root=0)
+    payload = broadcast_bytes(world, payload)
     return json.loads(payload)["records"]
 
 

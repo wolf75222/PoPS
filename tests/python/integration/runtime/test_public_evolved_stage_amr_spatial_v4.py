@@ -3,17 +3,17 @@ import hashlib
 from io import BytesIO
 import json
 from pathlib import Path
-import sys
 
 import numpy as np
 import pops
 import pytest
 from tests.python.support.original_field_acceptance import selected_native_mixed_rule, STOP_RULE
-from pops._native_collectives import allgather_value
 
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 from tests.python.integration.runtime.test_public_captured_diffusion import bounded_bytes
-from tests.python.integration.runtime.test_public_evolved_original_stage import checkpoint_provenance, compare_checkpoint_replay
+from tests.python.integration.runtime.test_public_evolved_original_stage import (
+    checkpoint_provenance, checkpoint_restart_authority, compare_checkpoint_replay_v2,
+)
 from tests.python.support.amr_snapshots import level_valid_mask
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.evolved_stage_amr_spatial import (
@@ -22,13 +22,15 @@ from tests.python.support.evolved_stage_amr_spatial import (
 from tests.python.integration.runtime.test_public_evolved_stage_amr import capture as base_capture, same_images
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.public_native_profile import native_profile, rank_and_size
+from tests.python.support.evolved_stage_v_capture import world_allgather
 
 
 def capture(world, runtime, width, *, histories=True):
     rows, metadata = base_capture(world, runtime, width, histories=histories)
     shape = collective_call(world, runtime.spatial_shape)
     boxes = collective_call(world, lambda: tuple(runtime.patch_boxes()))
-    manifests = collective_call(world, lambda: allgather_value(world, metadata[1]))
+    manifests = collective_call(world, lambda: world_allgather(world, metadata[1]))
     full_boxes = collective_call(world, lambda: carrier_patch_boxes(manifests))
     with collective_check(world):
         assert len(shape) == 2 and shape[0] == shape[1]
@@ -49,21 +51,21 @@ def capture(world, runtime, width, *, histories=True):
 def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux_v4(isolated_native_cache, tmp_path, record_property, cells):
     width = 2
     del isolated_native_cache
-    from pops._native_selector import select_native_dimension
-    native = select_native_dimension(2)
-    world = native.mpi_world()
-    with collective_check(world):
-        assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+    native, world = native_profile(scope="public evolved AMR spatial stage")
+    rank, size = rank_and_size(world)
+    record_property("native_abi_version", native.__abi_version__)
+    record_property("native_profile", "MPI" if world is not None else "Serial")
     case, layout = collective_call(world, lambda: build(cells))
     resolved = collective_call(world, lambda: pops.resolve(pops.validate(case), layout=layout))
-    artifact = compile_resolved_plan_once(world, resolved, route="nonconstant original evolved composite AMR stage", compile_artifact=pops.compile)
+    artifact = (pops.compile(resolved) if world is None else compile_resolved_plan_once(
+        world, resolved, route="nonconstant original evolved composite AMR stage", compile_artifact=pops.compile))
     context = collective_call(world, lambda: artifact_execution_context(artifact))
     def bind():
         return pops.bind(artifact, resources={"execution_context":context})
     runtime = collective_call(world, bind)
     directory = collective_directory(world, tmp_path/"evolved-stage-amr-spatial")
     with collective_check(world):
-        if world.rank == 0:
+        if rank == 0:
             components = [("block-"+row.name, row.model) for row in artifact.blocks]
             components += [("program-"+row.layout_id, row.program) for row in artifact.layout_programs]
             compilation = []
@@ -95,25 +97,30 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux_v4(isolated
                     seed_selection = request["initialization_identity"]
                 compilation.append(entry)
     initial = capture(world, runtime, width, histories=False)
-    registry_phases = {"initial": {"rows_by_rank": collective_call(world, lambda: allgather_value(world, initial[1][1]))}}
+    registry_phases = {"initial": {"rows_by_rank": collective_call(world, lambda: world_allgather(world, initial[1][1]))}}
     paths, seals, authorities, phases = {}, {}, {}, {}
     for phase, owner in (("accepted", runtime), ("continuous", runtime), ("replay", None)):
+        restart_authority = None
         if phase == "replay":
             owner = collective_call(world, bind)
+            restart_authority = collective_call(world, lambda: checkpoint_restart_authority(owner))
             collective_call(world, lambda owner=owner: owner.restart(paths["accepted"]))
+            restart_authority["restored_source_run"] = collective_call(world,
+                lambda: owner.last_run_identity.token)
             reloaded = capture(world, owner, width)
             with collective_check(world):
                 same_images(reloaded, phases["accepted"])
             phases["reloaded"] = reloaded
-            registry_phases["reloaded"] = {"rows_by_rank": collective_call(world, lambda: allgather_value(world, reloaded[1][1]))}
+            registry_phases["reloaded"] = {"rows_by_rank": collective_call(world, lambda: world_allgather(world, reloaded[1][1]))}
         end = DT if phase == "accepted" else 2*DT
         collective_call(world, lambda owner=owner, end=end: pops.run(owner, t_end=end, max_steps=1, console=False))
         path = collective_call(world, lambda owner=owner, phase=phase: owner.checkpoint(directory/(phase+"-checkpoint")))
         seals[phase] = collective_call(world, lambda path=path: hashlib.sha256(bounded_bytes(path)).hexdigest())
-        authorities[phase] = collective_call(world, lambda owner=owner, path=path: checkpoint_provenance(owner, path))
+        authorities[phase] = collective_call(world, lambda owner=owner, path=path:
+            checkpoint_provenance(owner, path, restart_authority=restart_authority))
         paths[phase] = path
         phases[phase] = capture(world, owner, width)
-        registry_phases[phase] = {"rows_by_rank": collective_call(world, lambda phase=phase: allgather_value(world, phases[phase][1][1]))}
+        registry_phases[phase] = {"rows_by_rank": collective_call(world, lambda phase=phase: world_allgather(world, phases[phase][1][1]))}
     with collective_check(world):
         same_images(phases["continuous"], phases["replay"])
         assert phases["accepted"][1][-1][:2] == (DT, 1)
@@ -121,8 +128,8 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux_v4(isolated
         for row, old in zip(phases["continuous"][0], phases["accepted"][0], strict=True):
             for name in (*tuple("T%d" % i for i in range(width)), *(("z",) if width == 2 else ())):
                 np.testing.assert_array_equal(row[name+"-previous"], old[name])
-        if world.rank == 0:
-            equivalent = compare_checkpoint_replay(paths, authorities)
+        if rank == 0:
+            equivalent = compare_checkpoint_replay_v2(paths, authorities)
             observations, stored_images = {}, {}
             for phase, image in (("initial", initial), *phases.items()):
                 files, reloaded_rows = [], []
@@ -136,7 +143,7 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux_v4(isolated
                 observations[phase] = {"levels":files, "metadata":image[1]}
             registry_path = directory/"carrier-registry.json"
             registry_path.write_text(json.dumps({"schema":"sol61.amr.carrier-registry@1",
-                "dimension":2, "size":world.size, "phases":registry_phases}, sort_keys=True, indent=2)+"\n")
+                "dimension":2, "size":size, "phases":registry_phases}, sort_keys=True, indent=2)+"\n")
             registry_pin = {"path":str(registry_path.resolve()), "sha256":hashlib.sha256(bounded_bytes(registry_path)).hexdigest()}
             # Preserve every actual native capture even if a scientific guard fails.
             (directory/"observation-index.json").write_text(json.dumps({
@@ -171,7 +178,7 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux_v4(isolated
                 {Path(row["path"]).resolve() for phase in observations.values()
                     for row in (*phase["levels"], *phase["independent_references"])})
             receipt = {"fixture_schema":"pops.evolved-stage-amr-spatial-native-fixture@4", "stop_rule":STOP_RULE, "independent_original_l2_threshold":CONTROLS["tolerance"], "seed_selection":seed_selection, "carrier_registry":registry_pin, "artifact":artifact.artifact_identity.token,
-                "dimension":2, "rank":world.rank, "size":world.size, "cells":cells, "width":width,
+                "dimension":2, "rank":rank, "size":size, "cells":cells, "width":width,
                 "qualification":"nonconstant periodic full-y strips; composite flux and nonlinear restriction",
                 "initial_temperature":{"T0":[.15, .02, "cos(2*pi*x)"], "T1":[.25, .015, "sin(2*pi*x)"]},
                 "metric_authority":{"kind":"derived-from-declared-Cartesian-unit-square-and-native-shape",
@@ -190,5 +197,5 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux_v4(isolated
                 "phases":observations, "checkpoints":checkpoints, "checkpoint_equivalence":equivalent}
             (directory/"receipt.json").write_text(json.dumps(receipt, sort_keys=True, indent=2)+"\n")
         for name, value in (("artifact_identity", artifact.artifact_identity.token), ("dimension",2),
-            ("rank",world.rank), ("size",world.size), ("evolved_stage_amr_spatial_receipt",str(directory/"receipt.json"))):
+            ("rank",rank), ("size",size), ("evolved_stage_amr_spatial_receipt",str(directory/"receipt.json"))):
             record_property(name, value)

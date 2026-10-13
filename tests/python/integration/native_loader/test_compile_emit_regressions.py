@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+import re
 
 from pops.codegen import Production
 from pops.codegen._compile_emit import _BACKEND_CAPS, compiled_capability_flags
@@ -117,7 +118,7 @@ def _assert_bound_elliptic_closures(loader: str) -> None:
     if "PreparedNativeSystemPackage" in loader:
         install = loader.index("package.block = pops::prepare_compiled_system_block<")
         attach = loader.index('package.elliptic_attachments.push_back({"fields_from_state", ')
-        named_attach = loader.index('package.elliptic_attachments.push_back({"psi", ')
+        named_attach = loader.index('attachment.field = "psi";')
     else:
         install = loader.index("package.block = pops::prepare_compiled_amr_system_block<")
         attach = loader.index('attachment.field = "fields_from_state";')
@@ -128,7 +129,8 @@ def _assert_bound_elliptic_closures(loader: str) -> None:
     assert install < attach
     assert "make_poisson_rhs(pops_generated::RuntimeEllipticGenEll{})" not in loader
     if "PreparedNativeSystemPackage" in loader:
-        assert 'package.elliptic_attachments.push_back({"psi", ' in loader
+        assert 'attachment.rhs = std::move(named_elliptic_rhs_0);' in loader
+        assert "package.elliptic_attachments.push_back(std::move(attachment));" in loader
 
     # The composable default elliptic brick keeps its rhs(State) contract.  The loader fixes the
     # call site by capturing ProdModel; it must not inflate GenEll into a second model interface.
@@ -160,7 +162,9 @@ def test_named_elliptic_rhs_declares_its_exact_consumer_dimension(dimension: int
     assert "static constexpr int n_vars = 1;" in brick
     assert "using State = pops::StateVec<1>;" in brick
     assert "elliptic_rhs(const State& U)" in brick
-    assert "return state;" in brick
+    state_read = re.search(r"const pops::Real (\w+) = U\[0\];", brick)
+    assert state_read is not None
+    assert "return %s;" % state_read.group(1) in brick
 
 
 def _distinct_provider_roles_model() -> Model:

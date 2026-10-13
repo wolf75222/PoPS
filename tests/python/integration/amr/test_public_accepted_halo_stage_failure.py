@@ -2,16 +2,16 @@
 from pathlib import Path
 import json
 import hashlib
-import sys
 import numpy as np
 import pops
 import pytest
-from pops._native_collectives import allgather_value
 from pops.runtime._checkpoint_manifest import MANIFEST_KEY,IDENTITY_KEY
 from tests.python.integration.amr.test_public_accepted_halo_substep_growth import build_growth,DT
 from tests.python.integration.amr.test_public_evolving_accepted_halo import observe,publish,same
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.public_native_profile import native_profile, profile_gather_value as world_allgather
+from tests.python.support.evolved_stage_v_capture import world_rank, world_size
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.collective_checks import collective_call,collective_attempt,collective_check
 
@@ -28,12 +28,14 @@ def same_accepted_payload(before,after):
         assert a.dtype==b.dtype and a.shape==b.shape and a.tobytes()==b.tobytes(),key
 
 def accepted_attempt(payload):
-    # Exact current checkpoint.hpp write_state prefix: magic8, i32 stored as
+    # Exact current POPSANDA write_state prefix: magic8, i32 stored as
     # i64, string(u64 length+bytes), topology u64, generation u64, attempt u64.
+    # ANDA adds history ghost depths later in the image; the byte-exact full
+    # payload comparison above retains those fields and every continuation byte.
     array=payload['program_accepted_state']
     assert array.dtype==np.uint8 and array.ndim==1
     wire=array.tobytes()
-    assert wire[:8]==b'POPSAND9' and len(wire)>=24
+    assert wire[:8]==b'POPSANDA' and len(wire)>=24
     assert int.from_bytes(wire[8:16],'little')==2
     length=int.from_bytes(wire[16:24],'little')
     offset=24+length+16
@@ -65,15 +67,13 @@ def receipt(engine):
 def test_public_accepted_halo_rank_local_failure_restores_before_publication(
         isolated_native_cache,tmp_path,record_property):
     del isolated_native_cache
-    from pops._native_selector import select_native_dimension
-    native=select_native_dimension(2);world=native.mpi_world()
-    with collective_check(world):
-        assert native.__abi_version__==8
-        assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
-        assert Path(native.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+    native,world=native_profile(scope="public accepted halo stage failure")
+    record_property("native_abi_version",native.__abi_version__)
+    record_property("native_profile","MPI" if world is not None else "Serial")
     case,layout=collective_call(world,build_growth)
     resolved=collective_call(world,lambda:pops.resolve(pops.validate(case),layout=layout))
-    artifact=compile_resolved_plan_once(world,resolved,route='accepted-halo-test-failure@1',compile_artifact=pops.compile)
+    artifact=(pops.compile(resolved) if world is None else compile_resolved_plan_once(
+        world,resolved,route='accepted-halo-test-failure@1',compile_artifact=pops.compile))
     context=collective_call(world,lambda:artifact_execution_context(artifact))
     def bind():return pops.bind(artifact,resources={'execution_context':context})
     runtime=collective_call(world,bind);control=collective_call(world,bind)
@@ -89,13 +89,13 @@ def test_public_accepted_halo_rank_local_failure_restores_before_publication(
     continuous_before=observe(world,control);publish(world,directory,'continuous-before',continuous_before)
     collective_call(world,lambda:control.checkpoint(directory/'continuous-before-checkpoint'))
     engine=runtime._executor._s
-    target=int(world.size)-1
+    target=int(world_size(world))-1
     # Genuine Native preflight adversaries: all ranks enter the same collective
     # call and a rejected request leaves the diagnostic owner unarmed.
     invalid_requests=(dict(version=2,block=0,level=0,rank=target),
         dict(block=-1,level=0,rank=target),dict(block=1,level=0,rank=target),
         dict(block=0,level=-1,rank=target),dict(block=0,level=2,rank=target),
-        dict(block=0,level=0,rank=-1),dict(block=0,level=0,rank=int(world.size)))
+        dict(block=0,level=0,rank=-1),dict(block=0,level=0,rank=int(world_size(world))))
     preflight_failures=[]
     for arguments in invalid_requests:
         invalid=collective_call(world,lambda arguments=arguments:native._AcceptedHaloTestFailureRequest(**arguments))
@@ -105,8 +105,8 @@ def test_public_accepted_halo_rank_local_failure_restores_before_publication(
             assert all(refusals)
             assert not receipt(engine)['requested']
     divergent_failures=[]
-    if world.size>1:
-        divergent=collective_call(world,lambda:native._AcceptedHaloTestFailureRequest(block=0,level=0,rank=int(world.rank)))
+    if world_size(world)>1:
+        divergent=collective_call(world,lambda:native._AcceptedHaloTestFailureRequest(block=0,level=0,rank=int(world_rank(world))))
         _,divergent_failures=collective_attempt(world,lambda:engine._arm_accepted_halo_test_failure(divergent))
         with collective_check(world):
             assert all(divergent_failures)
@@ -121,13 +121,13 @@ def test_public_accepted_halo_rank_local_failure_restores_before_publication(
         assert receipt(engine)==armed
     _,failures=collective_attempt(world,lambda:pops.run(runtime,t_end=2*DT,max_steps=1,console=False))
     local_proof=collective_call(world,lambda:receipt(engine))
-    proofs=allgather_value(world,local_proof)
+    proofs=world_allgather(world,local_proof)
     after=observe(world,runtime);publish(world,directory,'after-failure',after)
     restored=collective_call(world,lambda:runtime.checkpoint(directory/'after-failure-checkpoint'))
     with collective_check(world):
-        assert len(failures)==world.size and all(failures)
+        assert len(failures)==world_size(world) and all(failures)
         assert all(row[0] in ('RuntimeError','ValueError') for row in failures),failures
-        boundary='accepted halo test failure after block-level preparation fence' if world.size==1 else 'accepted halo test failure after block-level preparation fence failed collectively'
+        boundary='accepted halo test failure after block-level preparation fence' if world_size(world)==1 else 'accepted halo test failure after block-level preparation fence failed collectively'
         assert all(boundary in row[1] for row in failures),failures
         for rank,r in enumerate(proofs):
             assert r['version']==1 and r['phase']==1 and r['requested'] and r['reached'] and r['consumed'] and r['before_publication']
@@ -135,14 +135,14 @@ def test_public_accepted_halo_rank_local_failure_restores_before_publication(
             assert r['local_error']==(rank==target)
             assert r['armed_tick']==r['tick']==1 and r['time']==2*DT and r['dt']==DT
         same(before,after)
-        if world.rank==0:
+        if world_rank(world)==0:
             a,b=read_payload(original),read_payload(restored)
             assert int(a['pops_amr_checkpoint_version'])==12
             assert json.loads(str(a['amr_accepted_contract']))['schema_version']==9
             same_accepted_payload(a,b)
             (directory/'failure-proof.json').write_text(json.dumps({'failures':failures,'receipts':proofs,
                 'invalid_request_refusals':preflight_failures,'duplicate_arm_refusals':duplicate,
-                'divergent_request_applicable':bool(world.size>1),'divergent_request_refusals':divergent_failures,
+                'divergent_request_applicable':bool(world_size(world)>1),'divergent_request_refusals':divergent_failures,
                 'lifecycle_seal_differences':[key for key in (MANIFEST_KEY,IDENTITY_KEY) if a[key].tobytes()!=b[key].tobytes()]},indent=2)+'\n')
     # No rearming: successful retry proves consumption survived the physical rollback.
     collective_call(world,lambda:pops.run(runtime,t_end=2*DT,max_steps=1,console=False))
@@ -157,15 +157,15 @@ def test_public_accepted_halo_rank_local_failure_restores_before_publication(
     collective_call(world,lambda:aligned_engine._arm_accepted_halo_test_failure(request))
     _,aligned_failures=collective_attempt(world,lambda:pops.run(aligned,t_end=2*DT,max_steps=1,console=False))
     aligned_local_proof=collective_call(world,lambda:receipt(aligned_engine))
-    aligned_proofs=allgather_value(world,aligned_local_proof)
+    aligned_proofs=world_allgather(world,aligned_local_proof)
     aligned_after=observe(world,aligned);publish(world,directory,'aligned-after-failure',aligned_after)
     aligned_restored=collective_call(world,lambda:aligned.checkpoint(directory/'aligned-after-failure-checkpoint'))
     with collective_check(world):
-        assert len(aligned_failures)==world.size and all(aligned_failures)
+        assert len(aligned_failures)==world_size(world) and all(aligned_failures)
         assert all(boundary in row[1] for row in aligned_failures)
         assert aligned_proofs==proofs
         same(aligned_before,aligned_after)
-        if world.rank==0:
+        if world_rank(world)==0:
             same_accepted_payload(read_payload(aligned_original),read_payload(aligned_restored))
             (directory/'aligned-failure-proof.json').write_text(json.dumps({
                 'failures':aligned_failures,'receipts':aligned_proofs},indent=2)+'\n')
@@ -174,7 +174,7 @@ def test_public_accepted_halo_rank_local_failure_restores_before_publication(
     aligned_checkpoint=collective_call(world,lambda:aligned.checkpoint(directory/'aligned-retry-checkpoint'))
     with collective_check(world):
         same(retry,aligned_retry)
-        if world.rank==0:
+        if world_rank(world)==0:
             proof=checkpoint_pair_proof(retry_checkpoint,aligned_checkpoint)
             (directory/'retry-aligned-control-checkpoint-proof.json').write_text(json.dumps(proof,indent=2)+'\n')
             a,b=read_payload(retry_checkpoint),read_payload(control_checkpoint)

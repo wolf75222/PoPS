@@ -1,0 +1,216 @@
+{
+  "adaptive": false,
+  "aggregate_cryptographic_binding": false,
+  "artifact_identity": "pops.artifact.v1:sha256:635ea818acb915c0f75bee3bd92b6f49eb2dd0f793281914f1291da1f90b04c5",
+  "association": "fixture-recorded actual execution; ROOT owner approval pending",
+  "cells": [
+    8,
+    6
+  ],
+  "checkpoints": {
+    "accepted": {
+      "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/accepted-checkpoint.npz",
+      "sha256": "87ee89c5a37f54364136ba9c0aacf4aa9b71e159417f015d10c55d81aa6f0475"
+    },
+    "continuous": {
+      "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/continuous-checkpoint.npz",
+      "sha256": "bc5bf84354c62b4968140954a818308be9c8ee8ef68691e488a598541e3030d7"
+    },
+    "initial": {
+      "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/initial-checkpoint.npz",
+      "sha256": "3f8853ed898e654966c6fb40281d0c42db2947a5981b5eab081a7b858c5658e4"
+    },
+    "reloaded": {
+      "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/reloaded-checkpoint.npz",
+      "sha256": "87ee89c5a37f54364136ba9c0aacf4aa9b71e159417f015d10c55d81aa6f0475"
+    },
+    "replay": {
+      "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/replay-checkpoint.npz",
+      "sha256": "2af1865bb19b329d18e3efad75ebdca8809677a0baa0649e9055df3f14d16155"
+    }
+  },
+  "components": [
+    0
+  ],
+  "components_origins": [
+    {
+      "binary": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/99f525d22232484d8953541e5426becc8ad8d07b3ee2d9ad982c1c2d85f89f95.so",
+      "binary_sha256": "3e83229a838a1531c171272646bde1c87e080feeac8edbfa0ede7c5793635cf1",
+      "component": "block-density",
+      "sidecar": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/99f525d22232484d8953541e5426becc8ad8d07b3ee2d9ad982c1c2d85f89f95.so.pops-artifact.json",
+      "sidecar_sha256": "bcfbda0121d153abd680ef7da60b802931d4249eecdd72db5c47a07be4c1a683"
+    },
+    {
+      "binary": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/3b9c6c9ac1c1c4a7eb4b083a0d82e55a463a210f91ad645e3414951d724055b9.so",
+      "binary_sha256": "ea279c75641857c09e48ca18de92822f9caeb01ab5283f96132b2bd566ea4ec3",
+      "component": "program-pops.handle.v1::case:actual_spatial_interaction::layout::default",
+      "cpp": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/program-1.cpp",
+      "cpp_sha256": "f8b591d4b050c925b373a4f433fa6e2c0d6d49e9ab09d7d19e7447a91576d2c2",
+      "ir": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/program-1.ir.json",
+      "ir_sha256": "f00ecfa3cdf0f6311d4fd567609b3e312b26b877e8f6febee954d4ac577fc310",
+      "program_hash": "5dc67deeb3a9c9f0b742958d1064521dbf8bb8317dd0104991816bb277dc3ae0",
+      "sidecar": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/pops-native-cache/3b9c6c9ac1c1c4a7eb4b083a0d82e55a463a210f91ad645e3414951d724055b9.so.pops-artifact.json",
+      "sidecar_sha256": "4c3864a3f09524a35336ba727e18d05e38f9843a5c8530b4a97e9f12843aabdc"
+    }
+  ],
+  "consumption_anchors": {
+    "accepted": "initial",
+    "continuous": "accepted",
+    "reloaded": "initial",
+    "replay": "reloaded"
+  },
+  "coordinate_authority": "bound-normalized-native-Cartesian",
+  "dimension": 2,
+  "dt": 0.01,
+  "failure": null,
+  "failure_errors": [],
+  "fixture_sources": [
+    {
+      "path": "$REPO/tests/python/integration/runtime/test_public_spatial_interaction.py",
+      "sha256": "f6d4edfad01b598192e972c7239c7fc602cf70270d19ad3539bdf59718d2f315"
+    },
+    {
+      "path": "$REPO/tests/python/support/spatial_interaction_receipts.py",
+      "sha256": "bd12ddd777b631a3f70929e35695686dcf51d1e866529677420449926cfb6b67"
+    }
+  ],
+  "gamma": 0.2,
+  "history_source_contract": "pops.spatial-interaction-history-source@1",
+  "m26_pde_qualification": false,
+  "native": {
+    "path": "$AUDIT_ENV/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+    "sha256": "f67ecd7e90e11842db84950da92edf93610f0076ca8dbb2228b66581d3c36403"
+  },
+  "phases": {
+    "accepted": {
+      "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/accepted.npz",
+      "role": "ACTUAL_NATIVE_OUTPUT_AND_NEXT_SOURCE",
+      "sha256": "b635802dc7019a9eba6c984b32dfc3b3a73db1cef49c1e7c15895675f15e9b14"
+    },
+    "continuous": {
+      "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/continuous.npz",
+      "role": "ACTUAL_NATIVE_OUTPUT_AND_NEXT_SOURCE",
+      "sha256": "db1b4e20b92dae16b29a0ebf2c5c63fc55e53af45b82fb905caa12b3d49b555e"
+    },
+    "initial": {
+      "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/initial.npz",
+      "role": "SOURCE_SNAPSHOT_ONLY",
+      "sha256": "234e025264dcefd0c11eb34a5ab8a8a5fc04bd52d06a5d6e4e4be249b1fc9be6"
+    },
+    "reloaded": {
+      "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/reloaded.npz",
+      "role": "ACTUAL_NATIVE_OUTPUT_AND_NEXT_SOURCE",
+      "sha256": "b635802dc7019a9eba6c984b32dfc3b3a73db1cef49c1e7c15895675f15e9b14"
+    },
+    "replay": {
+      "path": "$EVIDENCE/ci/a9297394-spatial-source-only-freeze/a9297394-uniform-spatial-reception-mpi2/tmp/pytest-of-$USER/pytest-0/test_public_spatial_interactio0/spatial-interaction/replay.npz",
+      "role": "ACTUAL_NATIVE_OUTPUT_AND_NEXT_SOURCE",
+      "sha256": "db1b4e20b92dae16b29a0ebf2c5c63fc55e53af45b82fb905caa12b3d49b555e"
+    }
+  },
+  "platform": {
+    "abi": {
+      "evidence": "pops.compiled-component-metadata.v1",
+      "value": "e1b678510d7b4dc24a3286ad6fd8433f1c31412bc18582e8a2c9d0de2b40289c|/usr/bin/clang++|c++20|dim=2"
+    },
+    "backend": {
+      "evidence": "pops.compiled-component-metadata.v1",
+      "value": "production"
+    },
+    "capabilities": {
+      "centerings": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7b6ecdbd91bd605fd8b535d26b64b3cda0e8afdd4394e65de42a40bdbe94b765",
+        "value": [
+          "cell"
+        ]
+      },
+      "execution_backend": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7b6ecdbd91bd605fd8b535d26b64b3cda0e8afdd4394e65de42a40bdbe94b765",
+        "value": "OpenMP"
+      },
+      "generic_field_view": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7b6ecdbd91bd605fd8b535d26b64b3cda0e8afdd4394e65de42a40bdbe94b765",
+        "value": true
+      },
+      "layouts": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7b6ecdbd91bd605fd8b535d26b64b3cda0e8afdd4394e65de42a40bdbe94b765",
+        "value": [
+          "right",
+          "left",
+          "strided"
+        ]
+      },
+      "ownership": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7b6ecdbd91bd605fd8b535d26b64b3cda0e8afdd4394e65de42a40bdbe94b765",
+        "value": [
+          "borrowed",
+          "owned",
+          "shared"
+        ]
+      },
+      "scalars": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7b6ecdbd91bd605fd8b535d26b64b3cda0e8afdd4394e65de42a40bdbe94b765",
+        "value": [
+          "float64"
+        ]
+      },
+      "shared_space": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7b6ecdbd91bd605fd8b535d26b64b3cda0e8afdd4394e65de42a40bdbe94b765",
+        "value": "Host"
+      },
+      "stream_identity": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7b6ecdbd91bd605fd8b535d26b64b3cda0e8afdd4394e65de42a40bdbe94b765",
+        "value": "Kokkos::OpenMP::synchronous"
+      },
+      "supported_dimensions": {
+        "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7b6ecdbd91bd605fd8b535d26b64b3cda0e8afdd4394e65de42a40bdbe94b765",
+        "value": [
+          2
+        ]
+      }
+    },
+    "communicator": {
+      "evidence": "pops.compiled-component-metadata.v1",
+      "value": "MPI_COMM_WORLD"
+    },
+    "device": {
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7b6ecdbd91bd605fd8b535d26b64b3cda0e8afdd4394e65de42a40bdbe94b765",
+      "value": "cpu"
+    },
+    "memory_spaces": {
+      "evidence": "pops.native.2d-float64.mpi-world.v2;execution=OpenMP;device=cpu;shared=Host;kabi=7b6ecdbd91bd605fd8b535d26b64b3cda0e8afdd4394e65de42a40bdbe94b765",
+      "value": [
+        "host"
+      ]
+    },
+    "precision": {
+      "accumulation": {
+        "evidence": "pops.compiled-component-metadata.v1",
+        "value": "float64"
+      },
+      "compute": {
+        "evidence": "pops.compiled-component-metadata.v1",
+        "value": "float64"
+      },
+      "reduction": {
+        "evidence": "pops.compiled-component-metadata.v1",
+        "value": "float64"
+      },
+      "storage": {
+        "evidence": "pops.compiled-component-metadata.v1",
+        "value": "float64"
+      }
+    },
+    "schema_version": 1,
+    "target": {
+      "evidence": "pops.compiled-component-metadata.v1",
+      "value": "system"
+    }
+  },
+  "rank": 0,
+  "raw_coverage_semantics": "true_is_covered",
+  "schema": "pops.spatial-interaction-native-fixture@1",
+  "size": 2,
+  "width": 1,
+  "workspace": 8388608
+}

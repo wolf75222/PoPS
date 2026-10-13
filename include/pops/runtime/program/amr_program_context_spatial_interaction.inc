@@ -130,10 +130,22 @@ field_type& spatial_interaction_history_owned(std::int64_t value_id, int program
       throw std::length_error("direct spatial interaction level metadata exceeds its budget");
     levels.reserve(static_cast<std::size_t>(count));
   });
+  std::shared_ptr<const InteractionHistorySnapshot> frozen;
+  std::optional<InteractionHistoryDeclaration> issued;
+  interaction_phase(lane, [&] {
+    if (count > 1) {
+      issued.emplace(InteractionHistoryDeclaration{owner, history_name, history_lag,
+          std::string(seed_state), std::string(seed_space), std::string(source_clock),
+          std::string(interpolation), max_bytes, std::string(identity)});
+      frozen = require_interaction_history_snapshot_(value_id, *issued);
+    }
+  });
   bool cold = false;
   auto history_authority = [&] {
     ExactContractBuilder exact;
-    const auto& history = runtime_state().hist_;
+    if (frozen && require_interaction_history_snapshot_(value_id, *issued) != frozen)
+      throw std::logic_error("interaction history macro snapshot was revoked");
+    const auto& history = frozen ? frozen->history : runtime_state().hist_;
     const auto reference = history_key_(history_name, family->direct_level);
     if (accepted_composite || family->family != Family::History ||
         family->history_name != history_name || family->history_lag != history_lag)
@@ -161,11 +173,14 @@ field_type& spatial_interaction_history_owned(std::int64_t value_id, int program
   for (int level = 0; level < count; ++level) {
     const auto geom = facade_->prepared_amr_level_geometry(level);
     interaction_phase(lane, [&] {
-      const auto& field = cold ?  facade_->prepared_amr_block_state(owner, level)
-          : resolve_owner_field_(owner, source, *family, level, "direct spatial interaction");
       const auto history_key = history_key_(history_name, level);
-      if (cold && runtime_state().hist_.initialized.at(history_key))
-        interaction_history_cold_equal(runtime_state().hist_.histories.at(history_key).at(history_lag), field);
+      const auto& history = frozen ? frozen->history : runtime_state().hist_;
+      const auto& field = frozen
+          ? (cold ? frozen->cold_seed.at(level) : history.histories.at(history_key).at(history_lag))
+          : (cold ? facade_->prepared_amr_block_state(owner, level)
+                  : resolve_owner_field_(owner, source, *family, level, "direct spatial interaction"));
+      if (cold && history.initialized.at(history_key))
+        interaction_history_cold_equal(history.histories.at(history_key).at(history_lag), field);
       const auto* active = facade_->prepared_amr_block_level_active_mask(owner, level);
       const auto& coverage = facade_->prepared_amr_block_level_coverage_mask(owner, level);
       const auto* kappa = facade_->prepared_amr_block_level_volume_fraction(owner, level);
@@ -181,6 +196,7 @@ field_type& spatial_interaction_history_owned(std::int64_t value_id, int program
     exact.scalar(static_cast<std::uint8_t>(family->family)).scalar(accepted_composite)
         .text(family->history_name).scalar(family->history_lag);
     exact.text("pops.spatial-interaction-history-source@1").text(history_snapshot);
+    if (frozen) exact.text(frozen->authority).scalar(frozen->retained_bytes);
     authority = std::move(exact).release();
   });
   const field_type* output_prototype = nullptr;
@@ -188,7 +204,8 @@ field_type& spatial_interaction_history_owned(std::int64_t value_id, int program
     output_prototype = &facade_->prepared_amr_block_state(owner, active_level_);
   });
   auto result = direct_spatial_interaction<Dim, MemorySpace>(
-      levels, static_cast<std::size_t>(active_level_), components, max_bytes, authority,
+      levels, static_cast<std::size_t>(active_level_), components,
+      frozen ? max_bytes - frozen->retained_bytes : max_bytes, authority,
       lane, kernel, output_prototype);
   interaction_phase(lane, [&] {
     if (history_snapshot != history_authority())
@@ -210,8 +227,8 @@ field_type& spatial_interaction_history_owned(std::int64_t value_id, int program
   }
   // Node transfer uses the same allocator and the built-in integral tuple key;
   // it allocates no storage and invokes no user comparator after the vote.
-  auto issued = scratches_.insert(staged.extract(staged.begin()));
-  return issued.position->second;
+  auto issued_scratch = scratches_.insert(staged.extract(staged.begin()));
+  return issued_scratch.position->second;
 }
 
 template <class Function>

@@ -57,8 +57,8 @@ int main() {
  int checked=0;
  for (int depth:{2,3,9,257}) for(int width:{1,3,5}) {
  Runtime r;
- r.checkpoint_metadata_.histories.push_back({"ring",1,"exact-issued-observation","pops.program.scalar-output-history-projection@2","clock","interp",depth,width});
- auto call=[&](Runtime& v){return v.require_frozen_output_history_projection("ring",5,"exact-issued-observation","pops.program.scalar-output-history-projection@2","clock","interp",depth,width,1);};
+ r.checkpoint_metadata_.histories.push_back({"ring",1,"exact-issued-observation","pops.program.scalar-output-history-projection@2","clock","interp",depth,width,1});
+ auto call=[&](Runtime& v){return v.require_frozen_output_history_projection("ring",5,"exact-issued-observation","pops.program.scalar-output-history-projection@2","clock","interp",depth,width,1,1);};
  assert(call(r)==r.checkpoint_metadata_.histories.front()); ++checked;
  std::vector<std::function<void(Runtime&)>> attacks{
   [](auto& v){v.artifact_backed_=false;}, [](auto& v){v.installed_hash_.clear();},
@@ -72,14 +72,15 @@ int main() {
   [](auto& v){v.checkpoint_metadata_.histories[0].clock_identity="other";},
   [](auto& v){v.checkpoint_metadata_.histories[0].interpolation_identity="other";},
   [](auto& v){++v.checkpoint_metadata_.histories[0].depth;},
-  [](auto& v){++v.checkpoint_metadata_.histories[0].components;}};
+  [](auto& v){++v.checkpoint_metadata_.histories[0].components;},
+  [](auto& v){++v.checkpoint_metadata_.histories[0].ghost_depth;}};
  for(const auto& attack:attacks) {
   Runtime wrong=r;attack(wrong); bool refused=false;
   try{call(wrong);}catch(const std::invalid_argument&){refused=true;}
   assert(refused);++checked;
  }
  }
- assert(checked==180);
+ assert(checked==192);
 }
 """
     )

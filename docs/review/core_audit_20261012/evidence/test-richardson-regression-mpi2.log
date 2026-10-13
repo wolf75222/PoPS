@@ -1,0 +1,34 @@
+Note: Google Test filter = test_krylov_workspace_reentrancy.richardson_*:test_krylov_workspace_reentrancy.numerical_actions_do_not_downgrade_explicit_provider_failure_or_false_convergence
+[==========] Running 4 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 4 tests from test_krylov_workspace_reentrancy
+[ RUN      ] test_krylov_workspace_reentrancy.richardson_confirms_the_last_allowed_correction_before_staged_publication
+Note: Google Test filter = test_krylov_workspace_reentrancy.richardson_*:test_krylov_workspace_reentrancy.numerical_actions_do_not_downgrade_explicit_provider_failure_or_false_convergence
+[==========] Running 4 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 4 tests from test_krylov_workspace_reentrancy
+[ RUN      ] test_krylov_workspace_reentrancy.richardson_confirms_the_last_allowed_correction_before_staged_publication
+[       OK ] test_krylov_workspace_reentrancy.richardson_confirms_the_last_allowed_correction_before_staged_publication (23 ms)
+[ RUN      ] test_krylov_workspace_reentrancy.richardson_late_convergence_and_iteration_limit_preserve_acceptance_controls
+[       OK ] test_krylov_workspace_reentrancy.richardson_confirms_the_last_allowed_correction_before_staged_publication (23 ms)
+[ RUN      ] test_krylov_workspace_reentrancy.richardson_late_convergence_and_iteration_limit_preserve_acceptance_controls
+[       OK ] test_krylov_workspace_reentrancy.richardson_late_convergence_and_iteration_limit_preserve_acceptance_controls (1 ms)
+[ RUN      ] test_krylov_workspace_reentrancy.richardson_last_correction_retains_invalid_controls_and_nonfinite_guards
+[       OK ] test_krylov_workspace_reentrancy.richardson_late_convergence_and_iteration_limit_preserve_acceptance_controls (1 ms)
+[ RUN      ] test_krylov_workspace_reentrancy.richardson_last_correction_retains_invalid_controls_and_nonfinite_guards
+[       OK ] test_krylov_workspace_reentrancy.richardson_last_correction_retains_invalid_controls_and_nonfinite_guards (1 ms)
+[ RUN      ] test_krylov_workspace_reentrancy.numerical_actions_do_not_downgrade_explicit_provider_failure_or_false_convergence
+[       OK ] test_krylov_workspace_reentrancy.richardson_last_correction_retains_invalid_controls_and_nonfinite_guards (1 ms)
+[ RUN      ] test_krylov_workspace_reentrancy.numerical_actions_do_not_downgrade_explicit_provider_failure_or_false_convergence
+[       OK ] test_krylov_workspace_reentrancy.numerical_actions_do_not_downgrade_explicit_provider_failure_or_false_convergence (1 ms)
+[----------] 4 tests from test_krylov_workspace_reentrancy (27 ms total)
+
+[----------] Global test environment tear-down
+[==========] 4 tests from 1 test suite ran. (27 ms total)
+[  PASSED  ] 4 tests.
+[       OK ] test_krylov_workspace_reentrancy.numerical_actions_do_not_downgrade_explicit_provider_failure_or_false_convergence (1 ms)
+[----------] 4 tests from test_krylov_workspace_reentrancy (27 ms total)
+
+[----------] Global test environment tear-down
+[==========] 4 tests from 1 test suite ran. (27 ms total)
+[  PASSED  ] 4 tests.

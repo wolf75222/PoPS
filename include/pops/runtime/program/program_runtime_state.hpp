@@ -234,6 +234,19 @@ struct HistoryManager {
   std::map<std::string, std::string> space_identity;
   std::map<std::string, std::string> clock_identity;
   std::map<std::string, std::string> interpolation_identity;
+  /// Exact declared storage halo: -1 retains the owning State's halo; >=0 is isotropic.
+  std::map<std::string, int> ghost_depth;
+
+  [[nodiscard]] Extent<Dim> declared_ghosts(const std::string& name,
+                                          Extent<Dim> owner_ghosts) const {
+    const int depth = ghost_depth.at(name);
+    if (depth < -1)
+      throw std::invalid_argument("history has an invalid declared halo depth");
+    if (depth >= 0)
+      for (int axis = 0; axis < Dim; ++axis)
+        owner_ghosts[axis] = depth;
+    return owner_ghosts;
+  }
   /// PER-SLOT outgoing dt (ADC-626). keep_history snapshots U^n before the tail commit; after the
   /// ledger rotates with the ring, slot_dt[name][s] is the macro-step interval from the sample in
   /// slot s toward the newer sample in slot s-1. Reconstructing omitted slot j from exact older
@@ -991,10 +1004,10 @@ struct ProgramRuntimeState {
   const ProgramCheckpointHistoryMetadata& require_frozen_output_history_projection(
       const std::string& name, int runtime_owner, const std::string& state,
       const std::string& space, const std::string& clock, const std::string& interpolation,
-      int depth, int components, int program_owner = -1) const {
+      int depth, int components, int program_owner = -1, int ghost_depth = -1) const {
     if (!artifact_backed_ || installed_hash_.empty() || space != kOutputHistoryProjectionSpace ||
         name.empty() || state.empty() || clock.empty() || interpolation.empty() ||
-        depth < 2 || components < 1 || runtime_owner < 0)
+        depth < 2 || components < 1 || runtime_owner < 0 || ghost_depth < -1)
       throw std::invalid_argument("AMR output history projection lacks its frozen artifact capability");
     const ProgramCheckpointHistoryMetadata* issued = nullptr;
     for (const auto& row : checkpoint_metadata_.histories)
@@ -1009,7 +1022,7 @@ struct ProgramRuntimeState {
         (program_owner >= 0 && issued->program_owner != program_owner) ||
         issued->state_identity != state || issued->space_identity != space ||
         issued->clock_identity != clock || issued->interpolation_identity != interpolation ||
-        issued->depth != depth || issued->components != components)
+        issued->depth != depth || issued->components != components || issued->ghost_depth != ghost_depth)
       throw std::invalid_argument("AMR output history projection differs from its frozen DSO tuple");
     return *issued;
   }

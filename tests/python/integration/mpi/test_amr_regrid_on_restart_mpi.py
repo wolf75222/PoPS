@@ -297,8 +297,9 @@ def _shared_ab2_program(left_state, right_state, rate):
     left = program.state(left_state)
     right = program.state(right_state)
     stage = StagePoint("shared_ab2_stage", {"main": TimePoint(program.clock, 0)})
-    left_rate = program.value("left_rate", rate(left.n), at=stage)
-    right_rate = program.value("right_rate", rate(right.n), at=stage)
+    left_now, right_now = left.n, right.n
+    left_rate = program.value("left_rate", rate(left_now), at=stage)
+    right_rate = program.value("right_rate", rate(right_now), at=stage)
 
     histories = []
     for temporal, current, name in (
@@ -497,6 +498,38 @@ def _shared_interface_resolved(component):
     )
 
 
+def _transformed_restart_source_run(source_run, restart_identity, receipt):
+    from collections.abc import Mapping
+    import math
+    from pops.identity import make_identity
+    from pops.output import RegridOnRestart
+
+    # Independent reconstruction from the public receipt, preserving binary64 spellings.
+    normalized = dict(receipt)
+    accepted_time = normalized["accepted_time"]
+    if type(accepted_time) is not float or not math.isfinite(accepted_time):
+        raise AssertionError("restart receipt requires one finite binary64 accepted time")
+    normalized["accepted_time"] = accepted_time.hex()
+    for section in ("composite_integrals_before", "composite_integrals_after"):
+        if not isinstance(normalized[section], (list, tuple)):
+            raise AssertionError("restart receipt integral section requires a list or tuple")
+        normalized[section] = [dict(row) for row in normalized[section] if isinstance(row, Mapping)]
+        if len(normalized[section]) != len(receipt[section]):
+            raise AssertionError("restart receipt integral rows require mappings")
+        for row in normalized[section]:
+            value = row["value"]
+            if type(value) is not float or not math.isfinite(value):
+                raise AssertionError("restart receipt integrals require finite binary64 values")
+            row["value"] = value.hex()
+    return make_identity("run", {
+        "continuation": "regrid_on_restart",
+        "source_run_identity": source_run.to_data(),
+        "restart_identity": restart_identity.to_data(),
+        "hierarchy_policy_identity": RegridOnRestart().identity.to_data(),
+        "regrid_receipt": normalized,
+    })
+
+
 def test_regrid_on_restart_mpi_collective_rollback_and_lineage() -> None:
     _require_world()
     if int(_COMM.rank) == 0:
@@ -596,7 +629,8 @@ def test_regrid_on_restart_mpi_collective_rollback_and_lineage() -> None:
         )
 
         restart_identity = restarted.restart(checkpoint)
-        continuation_identity = restarted.last_run_identity
+        source_run_identity = restarted.last_run_identity
+        continuation_identity = restarted._executor._restart_lineage_identity
         receipt = restarted._executor.last_restart_regrid_receipt()
         chk(
             restart_identity == restarted.last_restart_identity,
@@ -608,6 +642,17 @@ def test_regrid_on_restart_mpi_collective_rollback_and_lineage() -> None:
             "successful retry performs one real structural hierarchy transform",
         )
         from pops.identity import Identity
+
+        chk(
+            type(source_run_identity) is Identity
+            and source_run_identity.domain == "run"
+            and source_run_identity == _transformed_restart_source_run(
+                source.last_run_identity, restart_identity, receipt)
+            and type(continuation_identity) is Identity
+            and continuation_identity.domain == "run"
+            and continuation_identity != source_run_identity,
+            "restart authenticates the transformed source run and a distinct continuation lineage",
+        )
 
         chk(
             receipt["schema_version"] == 3

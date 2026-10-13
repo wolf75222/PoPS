@@ -115,7 +115,7 @@ def delegated_output_boundaries(value: Any, var: Any, lines: list[str],
 
 
 def prepare_program_value_authority(program: Any, authority: Any,
-                                    field_plans: Any) -> ProgramValueAuthorityPlan:
+                                    field_plans: Any, *, target: str = "system") -> ProgramValueAuthorityPlan:
     """Select exact Auxiliary packs, then seal their readable SSA dependency closure."""
     from pops.codegen.program_emit_field_routes import _walk_program_nodes, resolved_field_route
     from pops.codegen.program_models import ProgramModelGraph
@@ -152,7 +152,12 @@ def prepare_program_value_authority(program: Any, authority: Any,
             if len(packs[key]):
                 v2_owners.add(owner)
         sources = {block_name(source.block): source for source in node.inputs}
-        for owner in sorted(v2_owners):
+        # Composite AMR stages authenticate every explicit source, including a V1 RHS.
+        # Otherwise another level could silently substitute an accepted image.
+        owners = v2_owners | (set(sources) if target == "amr_system" else set())
+        if target == "amr_system":
+            owners |= {route["owner_block"] for route in routes}
+        for owner in sorted(owners):
             if owner not in owner_names:
                 owner_names.append(owner)
             source = sources.get(owner)
@@ -174,8 +179,11 @@ def prepare_program_value_authority(program: Any, authority: Any,
         source_owner = blocks.get(source.block, owner)
         if source_owner != owner:
             raise ValueError("Field value authority mixes distinct state owners")
+        # The fused reconstruction writes its input State in place. Its scalar solve
+        # and coefficient captures keep their solver-owned authorities; they are not State SSA.
         readable = tuple(value for value in source.inputs
-                         if value.vtype in _BUFFER_TYPES or value.op == "solve_outcome")
+                         if (value.vtype == "state" if source.op == "condensed_reconstruct" else
+                             value.vtype in _BUFFER_TYPES or value.op == "solve_outcome"))
         inputs = tuple(visit(value, owner).ssa for value in readable)
         storage, storage_id, subslot, history, lag = "", source.id, 0, "", 0
         if source.op == "state":
@@ -190,7 +198,7 @@ def prepare_program_value_authority(program: Any, authority: Any,
                 storage = "StateScratch"
             else:
                 storage = "Alias"
-        elif source.op in ("fill_boundary", "project"):
+        elif source.op in ("fill_boundary", "project", "condensed_reconstruct"):
             if len(inputs) != 1:
                 raise ValueError("in-place SSA producer requires one authenticated value")
             storage = "Alias"
@@ -199,8 +207,9 @@ def prepare_program_value_authority(program: Any, authority: Any,
                 raise NotImplementedError("Field RHS path producer requires its actual delegated storage hook")
             storage = "RhsScratch"
         elif source.op in _STATE_STORAGE:
-            storage = ("ScalarScratch" if source.op == "pointwise_expression"
-                       and "field_product_seed" in source.attrs else "StateScratch")
+            storage = ("ScalarScratch" if source.vtype == "scalar_field" or
+                       source.op == "pointwise_expression" and "field_product_seed" in source.attrs
+                       else "StateScratch")
         elif source.op == "cell_compare":
             storage = "ScalarScratch"
         else:
@@ -239,6 +248,8 @@ def field_value_overrides_cpp(value: Any, var: Any, block_indices: Any) -> str:
     plan = _plan(var)
     rows = []
     for source in value.inputs:
+        if plan is None:
+            raise ValueError("Field overrides require their installed value authority plan")
         owner = block_indices[source.block]
         edge = next((item for item in plan.fields
                      if item.field_node == value.id and item.block == owner), None)
@@ -251,8 +262,16 @@ def field_value_overrides_cpp(value: Any, var: Any, block_indices: Any) -> str:
 
 def _dependencies(row: ValueProducer, var: Any) -> str:
     plan = _plan(var)
-    return ", ".join("ctx.program_value(%d, %d, %s)" % (
-        item, plan.producer(item).block, var[item]) for item in row.inputs)
+    dependencies = []
+    for item in row.inputs:
+        if plan is None:
+            raise ValueError("value dependencies require their installed authority plan")
+        producer = plan.producer(item)
+        if producer is None:
+            raise ValueError("value dependency is not an issued Program producer")
+        dependencies.append("ctx.program_value(%d, %d, %s)" % (
+            item, producer.block, var[item]))
+    return ", ".join(dependencies)
 
 
 def begin_value_write_cpp(value: Any, var: Any, *, alternate: bool = False) -> list[str]:

@@ -54,6 +54,8 @@ def prepare_path_carrier(emitter, module, resolved_operations, numerics):
         from pops._ir.values import RuntimeParamRef
         from pops._ir.visitors import _children
         registry = getattr(emitter, "_param_registry", None)
+        if registry is None:
+            raise ValueError("coordinated face runtime read has no model parameter authority")
         registered_parameters = {handle._resolved(): handle for handle in registry.handles()}
         pending, seen = list(kernel["parameter_expressions"]), set()
         while pending:
@@ -62,9 +64,13 @@ def prepare_path_carrier(emitter, module, resolved_operations, numerics):
                 continue
             seen.add(id(node))
             if isinstance(node, RuntimeParamRef):
-                if node.handle.is_instance and node.handle.block_ref != numerics.block:
+                handle = node.handle
+                if handle is None:
+                    raise ValueError("coordinated face parameter requires its declaring Handle")
+                if handle.is_instance and handle.block_ref != numerics.block:
                     raise ValueError("coordinated face parameter belongs to another block instance")
-                handle = node.handle.declaration_ref if node.handle.is_instance else node.handle
+                if handle.is_instance:
+                    handle, _ = handle._instance_refs()
                 try:
                     registered = registry.handle(registered_parameters[handle._resolved()])
                 except (AttributeError, KeyError, ValueError) as exc:

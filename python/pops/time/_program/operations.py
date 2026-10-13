@@ -428,13 +428,16 @@ class _ProgramCore(
             for value in inputs[1:]:
                 scalar_co_location(inputs[0], value, "linear_combine scalar fields")
             scalar_attrs = {key: inputs[0].attrs[key] for key in
-                            ("scalar_storage", "scalar_owner", "scalar_sampling_contract")
+                            ("scalar_storage", "scalar_owner", "scalar_sampling_contract", "scalar_storage_component")
                             if key in inputs[0].attrs}
             coeffs = [c.to_polynomial() for _, c in aff]
+            from pops.time.field_context import merge_field_provenance
+            scalar_context = merge_field_provenance(*(value.field_context for value in inputs))
             return self._new(
                 "scalar_field", "linear_combine", inputs,
                 {"coeffs": coeffs, "stencil_access": StencilAccess.pointwise(), **scalar_attrs},
-                name, block, space=space, point=at, inherit_state_ref=not scalar_attrs)
+                name, block, space=space, point=at, field_context=scalar_context,
+                inherit_state_ref=not scalar_attrs)
         inputs = tuple(v for v, _ in aff)
         # Structural type errors outrank the secondary block-label mismatch.
         state_space = merge_state_spaces(inputs, "linear_combine")
@@ -525,7 +528,7 @@ class _ProgramCore(
             from pops.time.field_context import require_field_read
             field_context = require_field_read(fields, state, "source")
         inputs = (state, fields) if fields is not None else (state,)
-        attrs = {"source": name}
+        attrs: dict[str, object] = {"source": name}
         if global_bindings:
             offset = len(inputs)
             attrs["physical_global_inputs_v1"] = tuple({**row, "input": row["input"]+offset}

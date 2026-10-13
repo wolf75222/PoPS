@@ -47,6 +47,7 @@ struct AmrProgramHistoryDescriptor {
   std::string interpolation_identity;
   int depth = 0;
   int components = 0;
+  int ghost_depth = -1;
 
   friend bool operator==(const AmrProgramHistoryDescriptor&,
                          const AmrProgramHistoryDescriptor&) = default;
@@ -191,8 +192,11 @@ HistoryMetadata history_metadata(const Manager& manager, const BlockMap& block_m
   struct AccumulatedHistory {
     AmrProgramHistoryDescriptor descriptor;
     std::set<int> levels;
+    std::vector<std::int64_t> ghosts;
   };
   std::map<std::string, AccumulatedHistory> histories;
+  if (manager.ghost_depth.size() != manager.histories.size())
+    throw std::runtime_error("AMR Program history declared halo registry is incomplete");
   for (const auto& [key, ring] : manager.histories) {
     const auto decoded = decode_history_key(key);
     if (!decoded || ring.empty())
@@ -214,9 +218,27 @@ HistoryMetadata history_metadata(const Manager& manager, const BlockMap& block_m
                                            manager.clock_identity.at(key),
                                            manager.interpolation_identity.at(key),
                                            manager.depth.at(key),
-                                           ring.front().ncomp()};
+                                           ring.front().ncomp(), manager.ghost_depth.at(key)};
+    if (descriptor.ghost_depth < -1)
+      throw std::runtime_error("AMR Program history has an invalid declared halo");
+    const auto ghost_extent = ring.front().ghosts();
+    std::vector<std::int64_t> ghosts;
+    ghosts.reserve(ghost_extent.rank);
+    for (int axis = 0; axis < ghost_extent.rank; ++axis)
+      ghosts.push_back(ghost_extent[axis]);
+    for (const auto& slot : ring) {
+      if (slot.ghosts() != ring.front().ghosts() || slot.ncomp() != descriptor.components ||
+          slot.layout() != ring.front().layout() ||
+          slot.distribution() != ring.front().distribution() ||
+          slot.local_rank() != ring.front().local_rank())
+        throw std::runtime_error("AMR Program history slots have incompatible declared storage");
+      if (descriptor.ghost_depth >= 0 &&
+          std::any_of(ghosts.begin(), ghosts.end(),
+                      [&](std::int64_t depth) { return depth != descriptor.ghost_depth; }))
+        throw std::runtime_error("AMR Program history slot differs from its declared halo");
+    }
     auto [entry, inserted] =
-        histories.try_emplace(name, AccumulatedHistory{descriptor, std::set<int>{level}});
+        histories.try_emplace(name, AccumulatedHistory{descriptor, std::set<int>{level}, ghosts});
     if (!inserted) {
       const auto& retained = entry->second.descriptor;
       if (retained.program_owner != descriptor.program_owner ||
@@ -225,6 +247,8 @@ HistoryMetadata history_metadata(const Manager& manager, const BlockMap& block_m
           retained.clock_identity != descriptor.clock_identity ||
           retained.interpolation_identity != descriptor.interpolation_identity ||
           retained.depth != descriptor.depth || retained.components != descriptor.components ||
+          retained.ghost_depth != descriptor.ghost_depth ||
+          entry->second.ghosts != ghosts ||
           !entry->second.levels.insert(level).second)
         throw std::runtime_error("AMR Program history differs between active levels");
     }
@@ -251,7 +275,8 @@ HistoryMetadata history_metadata(const Manager& manager, const BlockMap& block_m
   return result;
 }
 
-inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '9'};
+inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', 'A'};
+inline constexpr std::array<std::uint8_t, 8> kLegacyMagic9{'P', 'O', 'P', 'S', 'A', 'N', 'D', '9'};
 inline constexpr std::array<std::uint8_t, 8> kLegacyMagic7{'P', 'O', 'P', 'S', 'A', 'N', 'D', '7'};
 inline constexpr std::array<std::uint8_t, 8> kLegacyMagic6{'P', 'O', 'P', 'S', 'A', 'N', 'D', '6'};
 inline constexpr std::array<std::uint8_t, 8> kLegacyMagic5{'P', 'O', 'P', 'S', 'A', 'N', 'D', '5'};
@@ -434,7 +459,8 @@ inline constexpr std::size_t kEncodedClockBytes = 5 * kEncodedScalarBytes;
 // String minima below include their eight-byte length prefixes; zero-length strings remain a
 // credible binary shape even when semantic validation later rejects them.
 inline constexpr std::size_t kMinLogicalClockBytes = 2 * kEncodedScalarBytes;
-inline constexpr std::size_t kMinHistoryDescriptorBytes = 8 * kEncodedScalarBytes;
+inline constexpr std::size_t kLegacyMinHistoryDescriptorBytes = 8 * kEncodedScalarBytes;
+inline constexpr std::size_t kMinHistoryDescriptorBytes = 9 * kEncodedScalarBytes;
 inline constexpr std::size_t kLegacyMinHistorySlotBytes = 6 * kEncodedScalarBytes;
 inline constexpr std::size_t kMinHistorySlotBytes = 10 * kEncodedScalarBytes;
 inline constexpr std::size_t kMinTemporalPartitionRecordBytes = 4 * kEncodedScalarBytes;
@@ -489,6 +515,10 @@ inline void write_pending_ring_contract(
   out.string(history.interpolation_identity);
   out.i32(history.depth);
   out.i32(history.components);
+  if (history.ghost_depth >= 0) {
+    out.string("pops.amr.history-declared-halo.v1");
+    out.i32(history.ghost_depth);
+  }
   for (const auto& slot : slots) {
     out.i32(slot.level);
     out.i32(slot.slot);
@@ -788,7 +818,8 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
   for (const AmrProgramHistoryDescriptor& history : state.histories) {
     if (history.name.empty() || history.program_owner < 0 || history.state_identity.empty() ||
         history.space_identity.empty() || history.clock_identity.empty() ||
-        history.interpolation_identity.empty() || history.depth < 2 || history.components < 1)
+        history.interpolation_identity.empty() || history.depth < 2 || history.components < 1 ||
+        history.ghost_depth < -1)
       throw std::invalid_argument(
           "exact AMR Program checkpoint has an incomplete history descriptor");
     if (!previous_history.empty() && previous_history >= history.name)
@@ -1034,6 +1065,7 @@ void write_state(Output& out, const AmrProgramAcceptedState<Dim>& state) {
     out.string(history.interpolation_identity);
     out.i32(history.depth);
     out.i32(history.components);
+    out.i32(history.ghost_depth);
   }
   out.size(state.history_slots.size());
   for (const AmrProgramHistorySlotProvenance& slot : state.history_slots) {
@@ -1214,7 +1246,8 @@ std::size_t serialized_amr_program_accepted_state_capacity(
   for (const AmrProgramHistoryDescriptor& history : capacity.histories) {
     if (history.name.empty() || history.program_owner < 0 || history.state_identity.empty() ||
         history.space_identity.empty() || history.clock_identity.empty() ||
-        history.interpolation_identity.empty() || history.depth < 2 || history.components < 1)
+        history.interpolation_identity.empty() || history.depth < 2 || history.components < 1 ||
+        history.ghost_depth < -1)
       throw std::invalid_argument("AMR Program checkpoint capacity has an invalid history row");
     out.string_size(history.name.size());
     out.i32(history.program_owner);
@@ -1224,6 +1257,7 @@ std::size_t serialized_amr_program_accepted_state_capacity(
     out.string_size(history.interpolation_identity.size());
     out.i32(history.depth);
     out.i32(history.components);
+    out.i32(history.ghost_depth);
     const std::size_t depth = static_cast<std::size_t>(history.depth);
     if (capacity.level_count > std::numeric_limits<std::size_t>::max() / depth ||
         capacity.level_count * depth > std::numeric_limits<std::size_t>::max() - history_slot_count)
@@ -1330,10 +1364,12 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
   const bool legacy5 = has_magic(checkpoint_detail::kLegacyMagic5);
   const bool legacy6 = has_magic(checkpoint_detail::kLegacyMagic6);
   const bool legacy7 = has_magic(checkpoint_detail::kLegacyMagic7);
+  const bool legacy9 = has_magic(checkpoint_detail::kLegacyMagic9);
   in.expect_raw(legacy4   ? checkpoint_detail::kLegacyMagic4
                 : legacy5 ? checkpoint_detail::kLegacyMagic5
                 : legacy6 ? checkpoint_detail::kLegacyMagic6
                 : legacy7 ? checkpoint_detail::kLegacyMagic7
+                : legacy9 ? checkpoint_detail::kLegacyMagic9
                           : checkpoint_detail::kMagic);
   if (in.i32() != Dim)
     throw std::runtime_error(
@@ -1356,7 +1392,9 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
       throw std::runtime_error(
           "invalid exact AMR Program checkpoint: duplicate logical clock identity");
   }
-  state.histories.resize(in.size(checkpoint_detail::kMinHistoryDescriptorBytes));
+  state.histories.resize(in.size(legacy4 || legacy5 || legacy6 || legacy7 || legacy9
+                                     ? checkpoint_detail::kLegacyMinHistoryDescriptorBytes
+                                     : checkpoint_detail::kMinHistoryDescriptorBytes));
   for (AmrProgramHistoryDescriptor& history : state.histories) {
     history.name = in.string();
     history.program_owner = in.i32();
@@ -1366,6 +1404,7 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
     history.interpolation_identity = in.string();
     history.depth = in.i32();
     history.components = in.i32();
+    history.ghost_depth = legacy4 || legacy5 || legacy6 || legacy7 || legacy9 ? -1 : in.i32();
   }
   state.history_slots.resize(in.size(legacy4 || legacy5 || legacy6
                                          ? checkpoint_detail::kLegacyMinHistorySlotBytes

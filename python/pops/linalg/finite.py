@@ -1,12 +1,14 @@
 """Version 1: immutable explicit finite DOF maps, evaluated in native kernels."""
+from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal
 from fractions import Fraction
 import json
 import math
+from typing import Any, cast
 
 
-def _retain_scalar(value):
+def _retain_scalar(value: Any) -> Any:
     """Retain a literal or a symbolic scalar without importing its owning layer."""
     if isinstance(value, int) and not isinstance(value, bool):
         return _ScalarPlan("number", (int(value),))
@@ -111,7 +113,7 @@ class FiniteSupport:
     def bind(self, values):
         binder = getattr(values, "__pops_finite_components__", None)
         if callable(binder):
-            values = binder(self.dofs)
+            values = cast(Iterable[Any], binder(self.dofs))
         return FiniteVector(self, tuple(values))
 
 
@@ -212,9 +214,9 @@ class FiniteMeasure:
         if not isinstance(left, FiniteVector) or not isinstance(right, FiniteVector) \
                 or left.support != self.support or right.support != self.support:
             raise ValueError("finite pairing requires the measure's exact ordered support")
-        total = _wrap(0)
+        total = _retain_scalar(0)
         for weight, x, y in zip(self.weights, left, right, strict=True):
-            total = total + _wrap(weight) * x * y
+            total = total + _retain_scalar(weight) * x * y
         return total
 
 
@@ -260,7 +262,7 @@ class FiniteSymmetricInteraction:
         return self.map.apply(value)
 
     def energy(self, density: FiniteVector):
-        return _wrap(0.5) * self.measure.pair(density, self.apply(density))
+        return _retain_scalar(0.5) * self.measure.pair(density, self.apply(density))
 
     def directional_derivative(self, density: FiniteVector, direction: FiniteVector):
         return self.measure.pair(direction, self.apply(density))

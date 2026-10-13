@@ -7,12 +7,8 @@ void prepare_spatial_collectively(Prepare&& prepare) const {
   } catch (...) {
     error = std::current_exception();
   }
-  const auto& lane = prepared_execution_lane();
-  if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && error)
-      std::rethrow_exception(error);
-    throw std::runtime_error("composite spatial preparation failed collectively");
-  }
+  collectively_rethrow_exception(error, prepared_execution_lane(),
+                                  "composite spatial preparation failed collectively");
 }
 
 std::shared_ptr<PreparedAmrSpatialResidual<Dim>> prepare_spatial_hierarchy(

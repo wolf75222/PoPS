@@ -39,6 +39,9 @@ FROZEN_UNIFORM_V2_SHA256 = (
 )
 
 _CHECKPOINT_EXCHANGE_IMAGE = b"POPSEX01" + bytes(8)
+_CHECKPOINT_DIAGNOSTIC_IMAGE = b"POPSDIA1" + b"".join(
+    value.to_bytes(8, "little") for value in (64, 0, 1, 0)
+)
 
 
 def _serial_checkpoint_context():
@@ -64,11 +67,38 @@ def _empty_continuation_plan():
 
 
 def _checkpoint_owner(native):
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+    from pops.output._checkpoint_contract import CheckpointResourceBudget
+    from pops.runtime._checkpoint_resource_budget import (
+        _compiled_diagnostic_inventory, _diagnostic_capacity_budget, _diagnostic_inventory_capacity,
+    )
+    from tests.python.unit.runtime.test_runtime_planning import _artifact
+
+    # A controlled compiler-source fixture owns the diagnostic capacity; no native table or
+    # installed backend is treated as an inferred source inventory.
+    declared = _artifact(names=("blk",))
+    declared.program._generated_cpp = ""
+    artifact = CompiledSimulationArtifact(
+        declared.plan, declared.program, declared.blocks, declared.layout_programs,
+    )
+    inventory = _compiled_diagnostic_inventory(artifact)
+    capacity = _diagnostic_inventory_capacity(inventory)
+    member_names = ("program_diagnostics_state", "program_diagnostics_offsets")
+    base = CheckpointResourceBudget("uniform", 2, 100, 100, 1000, 5000, "temporal-fixture")
+    chosen, images = _diagnostic_capacity_budget(base, member_names, capacity, 1)
     return SimpleNamespace(
         _s=native,
         _execution_context=_serial_checkpoint_context(),
         _continuation_transition_plan=_empty_continuation_plan(),
         _checkpoint_exchange_byte_capacity=4096,
+        _checkpoint_program_diagnostic_artifact=artifact,
+        _checkpoint_program_diagnostic_inventory=inventory,
+        _checkpoint_program_diagnostic_base_budget=base,
+        _checkpoint_program_diagnostic_member_names=member_names,
+        _checkpoint_program_diagnostic_capacity_per_rank=capacity,
+        _checkpoint_program_diagnostic_ranks=1,
+        _checkpoint_program_diagnostic_byte_capacity=images,
+        _checkpoint_resource_budget=chosen,
     )
 
 
@@ -1218,6 +1248,7 @@ class _Payload(dict):
 def test_uniform_preflight_rejects_incomplete_dynamic_indexes_before_native_restore():
     payload = _Payload(
         {
+            "pops_checkpoint_version": np.array(8, dtype=np.int64),
             "t": np.array(0.0, dtype=np.float64),
             "macro_step": np.array(0, dtype=np.int64),
             "pops_spatial_contract": np.array("{}"),
@@ -1248,6 +1279,7 @@ def test_uniform_preflight_rejects_incomplete_dynamic_indexes_before_native_rest
 def test_uniform_preflight_rejects_noncanonical_scheduled_cache_name():
     payload = _Payload(
         {
+            "pops_checkpoint_version": np.array(8, dtype=np.int64),
             "t": np.array(1.0, dtype=np.float64),
             "macro_step": np.array(1, dtype=np.int64),
             "pops_spatial_contract": np.array("{}"),
@@ -1383,6 +1415,9 @@ def test_uniform_restart_restores_clock_before_selective_history_replay(monkeypa
         def _restore_checkpoint_program_exchanges(self, values):
             assert values == _CHECKPOINT_EXCHANGE_IMAGE
 
+        def _restore_checkpoint_program_diagnostics(self, values):
+            assert values == _CHECKPOINT_DIAGNOSTIC_IMAGE
+
         def restore_program_cadence_window(
             self,
             accumulated_dt,
@@ -1433,6 +1468,8 @@ def test_uniform_restart_restores_clock_before_selective_history_replay(monkeypa
         ),
         auxiliary_checkpoint=b"POPSAUX2",
         exchange_checkpoint=_CHECKPOINT_EXCHANGE_IMAGE,
+        program_diagnostic_checkpoint=_CHECKPOINT_DIAGNOSTIC_IMAGE,
+        state_carriers=None,
     )
 
     owner = _checkpoint_owner(native)
@@ -1480,6 +1517,9 @@ def test_uniform_capture_uses_field_slots_without_materializing_default_field(
 
         def _checkpoint_program_exchanges(self):
             return _CHECKPOINT_EXCHANGE_IMAGE
+
+        def _checkpoint_capture_program_diagnostics(self):
+            return _CHECKPOINT_DIAGNOSTIC_IMAGE
 
     monkeypatch.setattr(history_io, "capture_histories", lambda *_args: None)
     monkeypatch.setattr(
@@ -1599,6 +1639,9 @@ def test_uniform_capture_default_field_keeps_the_legacy_phi_as_an_exact_alias(mo
         def _checkpoint_program_exchanges(self):
             return _CHECKPOINT_EXCHANGE_IMAGE
 
+        def _checkpoint_capture_program_diagnostics(self):
+            return _CHECKPOINT_DIAGNOSTIC_IMAGE
+
     monkeypatch.setattr(history_io, "capture_histories", lambda *_args: None)
     monkeypatch.setattr(
         checkpoint_manifest,
@@ -1693,6 +1736,9 @@ def test_uniform_phi_alias_validation_and_restore_uses_default_once():
         def _restore_checkpoint_program_exchanges(self, values):
             assert values == _CHECKPOINT_EXCHANGE_IMAGE
 
+        def _restore_checkpoint_program_diagnostics(self, values):
+            assert values == _CHECKPOINT_DIAGNOSTIC_IMAGE
+
         def restore_program_cadence_window(self, *_args):
             pass
 
@@ -1719,6 +1765,8 @@ def test_uniform_phi_alias_validation_and_restore_uses_default_once():
         cadence_state=ProgramCadenceCheckpointState(1, 1, 0, 0.0, 0.0, 0.0),
         auxiliary_checkpoint=b"POPSAUX2",
         exchange_checkpoint=_CHECKPOINT_EXCHANGE_IMAGE,
+        program_diagnostic_checkpoint=_CHECKPOINT_DIAGNOSTIC_IMAGE,
+        state_carriers=None,
     )
     owner = _checkpoint_owner(Native())
     owner._temporal_restart_state = None
@@ -1742,6 +1790,8 @@ def test_uniform_phi_alias_validation_and_restore_uses_default_once():
             cadence_state=ProgramCadenceCheckpointState(1, 1, 0, 0.0, 0.0, 0.0),
             auxiliary_checkpoint=b"POPSAUX2",
             exchange_checkpoint=_CHECKPOINT_EXCHANGE_IMAGE,
+            program_diagnostic_checkpoint=_CHECKPOINT_DIAGNOSTIC_IMAGE,
+            state_carriers=None,
         ),
     )
     assert calls == []

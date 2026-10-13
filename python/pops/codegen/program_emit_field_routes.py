@@ -38,6 +38,11 @@ def validate_program_field_routes(program: Any, field_plans: Any) -> None:
     if dt_bound is not None:
         roots.extend(dt_bound[0])
     for node in _walk_program_nodes(roots):
+        if getattr(node, "attrs", {}).get("field_boundary_owner") is not None:
+            from pops.time.field_boundaries import resolved_field_boundary_route
+            if node.attrs.get("field_boundary_contract") != "pops.installed-field-boundary@1":
+                raise ValueError("field stencil boundary contract changed after authoring")
+            resolved_field_boundary_route(node.attrs["field_boundary_owner"], node.block, field_plans)
         if getattr(node, "op", None) not in ("solve_fields", "solve_fields_from_blocks"):
             continue
         attrs = getattr(node, "attrs", {})

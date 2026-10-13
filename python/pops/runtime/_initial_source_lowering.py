@@ -24,6 +24,10 @@ _SOURCE_KEYS = {
         "native_route", "frame_id", "seed_components", "components", "consumer_qid", "inputs",
         "projection",
     },
+    "bootstrap_program": {
+        "native_route", "frame_id", "seed_sampling", "seed_components", "consumer_qid",
+        "stages", "projection",
+    },
 }
 
 _CARTESIAN_AXIS_NAMES = ("x", "y", "z")
@@ -104,6 +108,82 @@ def validate_initial_source(source: Any, *, where: str) -> str:
             from pops.analytic._cell_bounds import validate_cell_integral_contract
             validate_cell_integral_contract(source["cell_integrals"], frame_id=source["frame_id"],
                                             component_count=len(components))
+    elif route == "bootstrap_program":
+        if not isinstance(source["frame_id"], str) or not source["frame_id"] \
+                or source["seed_sampling"] != "cell_center" \
+                or not isinstance(source["consumer_qid"], str) or not source["consumer_qid"]:
+            raise ValueError("%s requires exact frame, consumer and cell_center seed" % where)
+        from pops.analytic import ScalarExpr
+
+        seed = source["seed_components"]
+        if not isinstance(seed, Sequence) or isinstance(seed, (str, bytes)) or not seed:
+            raise TypeError("%s requires a non-empty cell-centre seed" % where)
+        for raw in seed:
+            expression = ScalarExpr.from_data(raw)
+            if expression.frame_id not in (None, source["frame_id"]) \
+                    or expression.input_references() or expression.time_clocks():
+                raise ValueError("%s seed has an incompatible input, frame or clock" % where)
+        stages = source["stages"]
+        if not isinstance(stages, Sequence) or isinstance(stages, (str, bytes)) or not stages:
+            raise TypeError("%s requires an ordered non-empty stage sequence" % where)
+        for stage in stages:
+            if not isinstance(stage, Mapping):
+                raise TypeError("%s stage must be a canonical mapping" % where)
+            operation = stage.get("operation")
+            if operation == "solve_fields":
+                if set(stage) != {"operation"}:
+                    raise TypeError("%s field solve has an unsupported shape" % where)
+                continue
+            if operation != "map_state" or set(stage) != {
+                    "operation", "consumer_qid", "components", "inputs"}:
+                raise TypeError("%s state map has an unsupported shape" % where)
+            if not isinstance(stage["consumer_qid"], str) or not stage["consumer_qid"] \
+                    or not isinstance(stage["components"], Sequence) \
+                    or isinstance(stage["components"], (str, bytes)) \
+                    or len(stage["components"]) != len(seed):
+                raise ValueError("%s state map changes its consumer or complete state shape" % where)
+            inputs = stage["inputs"]
+            if not isinstance(inputs, Sequence) or isinstance(inputs, (str, bytes)):
+                raise TypeError("%s state map inputs must be an ordered sequence" % where)
+            ids = []
+            for row in inputs:
+                if not isinstance(row, Mapping) or type(row.get("value_id")) is not int \
+                        or row["value_id"] < 0:
+                    raise TypeError("%s map input requires an integer value_id" % where)
+                ids.append(row["value_id"])
+                if row.get("source") == "state":
+                    if set(row) != {"value_id", "source", "component"} \
+                            or type(row["component"]) is not int \
+                            or not 0 <= row["component"] < len(seed):
+                        raise ValueError("%s map state input has an unsupported shape" % where)
+                    continue
+                derivative = row.get("source") == "provider_derivative"
+                expected = {"value_id", "source", "key"} | (
+                    {"axis", "edge_order"} if derivative else set())
+                if row.get("source") not in ("provider", "provider_derivative") \
+                        or set(row) != expected:
+                    raise TypeError("%s map provider input has an unsupported shape" % where)
+                key = row["key"]
+                if not isinstance(key, Mapping) or set(key) != {
+                        "owner_qid", "space_kind", "space_name", "component"} \
+                        or not all(isinstance(value, str) and value for value in key.values()):
+                    raise TypeError("%s requires an exact owner-qualified ComponentKey" % where)
+                if derivative and (type(row["axis"]) is not int or row["axis"] not in (0, 1, 2)
+                                   or type(row["edge_order"]) is not int or row["edge_order"] != 2):
+                    raise ValueError("%s derivative requires a ranked axis and edge_order=2" % where)
+            if sorted(ids) != list(range(len(ids))):
+                raise ValueError("%s map input ids must be contiguous from zero" % where)
+            used = set()
+            for raw in stage["components"]:
+                expression = ScalarExpr.from_data(raw)
+                if expression.frame_id not in (None, source["frame_id"]) or expression.time_clocks():
+                    raise ValueError("%s map has an incompatible frame or clock" % where)
+                used.update(value_id for value_id, _ in expression.input_references())
+            if sorted(used) != list(range(len(ids))):
+                raise ValueError("%s map must use exactly every declared input id" % where)
+        if stages[0]["operation"] != "solve_fields" \
+                or stages[-1]["operation"] != "solve_fields":
+            raise ValueError("%s stages must start and finish with a field solve" % where)
     elif route == "field_mapped_analytic_expression":
         if not isinstance(source["frame_id"], str) or not source["frame_id"]:
             raise TypeError("%s field-mapped analytic frame_id must be non-empty" % where)

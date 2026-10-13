@@ -29,8 +29,12 @@ def _signature(program, *, live):
             if (not isinstance(port, GlobalQuantityHandle) or not port.is_instance
                     or port.block_ref != value.state_ref.block_ref):
                 raise ValueError("physical global source binding block owner changed")
-            if live and port.block_ref[port.declaration_ref] is not port:
-                raise ValueError("physical global source input is not the registry-issued port")
+            if live:
+                from pops.problem.handles import BlockHandle
+                block = port.block_ref
+                declaration = port.declaration_ref
+                if not isinstance(block, BlockHandle) or declaration is None or block[declaration] is not port:
+                    raise ValueError("physical global source input is not the registry-issued port")
             index = row["input"]
             if type(index) is not int or not 1 <= index < len(value.inputs):
                 raise ValueError("physical global source binding input index changed")

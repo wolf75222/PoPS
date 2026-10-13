@@ -87,6 +87,9 @@ _HIERARCHY_POTENTIAL_AMPLITUDE = 0.01
         {"coarse_preconditioner": None},
         {"coarse_preconditioner": "Polar_Poisson"},
         {"coarse_preconditioner": "polar_poisson"},
+        {"coarse_preconditioner": "tensor_diagonal_mg"},
+        {"coarse_method": "gauss_seidel", "coarse_preconditioner": "tensor_diagonal_mg"},
+        {"coarse_method": "gmres", "coarse_preconditioner": "TENSOR_DIAGONAL_MG"},
         {"coarse_method": "gmres", "coarse_preconditioner": "polar_poisson"},
         {"coarse_method": "gauss_seidel", "coarse_preconditioner": "polar_poisson", "diagonal_average": "arithmetic"},
         {"coarse_rel_tol": True},
@@ -242,28 +245,37 @@ def test_explicit_diagonal_preconditioner_preserves_default_identity_and_emissio
     assert "fac.coarse_preconditioner" not in explicit_source
 
 
-def test_polar_preconditioner_is_authenticated_and_emitted_as_a_distinct_option():
+@pytest.mark.parametrize("kind,averaging", (
+    ("polar_poisson", "arithmetic"),
+    ("tensor_diagonal_mg", "arithmetic"),
+    ("tensor_diagonal_mg", "harmonic"),
+))
+def test_coarse_preconditioner_is_authenticated_and_emitted_as_a_distinct_option(kind, averaging):
     from test_hierarchy_scoped_solve_emit import _build
 
-    diagonal = CompositeTensorFAC(coarse_method="gmres", diagonal_average="arithmetic")
-    polar = replace(diagonal, coarse_preconditioner="polar_poisson")
-    assert polar.identity != diagonal.identity
-    prepared = polar.prepare_program_solve()
-    assert prepared.identity == polar.identity
-    assert prepared.options["coarse_preconditioner"] == "polar_poisson"
-    program, source = _build(polar)
-    assert '{"fac.coarse_preconditioner", std::string{"polar_poisson"}}' in source
+    diagonal = CompositeTensorFAC(coarse_method="gmres", diagonal_average=averaging)
+    selected = replace(diagonal, coarse_preconditioner=kind)
+    assert selected.identity != diagonal.identity
+    prepared = selected.prepare_program_solve()
+    assert prepared.identity == selected.identity
+    assert prepared.options["coarse_preconditioner"] == kind
+    program, source = _build(selected)
+    assert ('{"fac.coarse_preconditioner", std::string{"%s"}}' % kind) in source
+    other_kind = "tensor_diagonal_mg" if kind == "polar_poisson" else "polar_poisson"
+    assert ('{"fac.coarse_preconditioner", std::string{"%s"}}' % other_kind) not in source
     assert '{"fac.coarse_method", std::string{"gmres"}}' in source
     solve = next(value for value in program._values if value.op == "solve_linear")
-    assert solve.attrs["hierarchy_solver_identity"] == polar.identity.token
+    assert solve.attrs["hierarchy_solver_identity"] == selected.identity.token
     assert prepared_hierarchy_solver_provider_from_attrs(solve.attrs).provider_id == (
         "pops.hierarchy.composite-tensor-fac"
     )
     provider = prepared_hierarchy_solver_provider_by_id("pops.hierarchy.composite-tensor-fac")
-    for change in ({"coarse_preconditioner": "diagonal"},
-                   {"coarse_preconditioner": "POLAR_POISSON"},
-                   {"coarse_method": "gauss_seidel"},
-                   {"diagonal_average": "harmonic"}):
+    changes = [{"coarse_preconditioner": value} for value in
+               ("diagonal", other_kind, kind.upper(), True, 1, None)]
+    changes.append({"coarse_method": "gauss_seidel"})
+    if kind == "polar_poisson":
+        changes.append({"diagonal_average": "harmonic"})
+    for change in changes:
         forged = replace(prepared, _options_json=json.dumps(
             {**prepared.options, **change}, sort_keys=True, separators=(",", ":")))
         with pytest.raises((TypeError, ValueError)):

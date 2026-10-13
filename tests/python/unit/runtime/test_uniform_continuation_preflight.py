@@ -22,6 +22,9 @@ def continuation_payload():
 
 def _payload(continuation):
     payload = {
+        # This isolated continuation fixture uses the supported v8 envelope; full v9
+        # native State carriers are exercised by the producer/restart integration tests.
+        "pops_checkpoint_version": np.array(8, dtype=np.int64),
         "t": np.array(0.0, dtype=np.float64),
         "macro_step": np.array(0, dtype=np.int64),
         "pops_spatial_contract": np.array("{}"),

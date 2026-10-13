@@ -447,6 +447,10 @@ class InitialCondition:
         return InitialConditionSource(provider, InitialConditionOptions(options))
 
     def bootstrap_method(self) -> Any:
+        source = _thaw_captured_json(self._source_options_data)
+        if source.get("native_route") == "bootstrap_program":
+            from pops.mesh._amr import NativeProgramSeed
+            return NativeProgramSeed()
         if self._reprojectable is True:
             from pops.mesh._amr import AnalyticReprojection
 

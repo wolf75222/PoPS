@@ -5,6 +5,8 @@ The example keeps every authority inspectable: the physical operators live on ``
 methods and boundaries live on ``DiscretizationPlan``; the additive Runge--Kutta coefficients and
 stage points live in an ordinary ``Program``; the adaptive hierarchy owns tagging, transfers,
 subcycling and reflux requirements; accepted-step consumers own publication and restart.
+The executed field-stage profile uses common-time levels with spatial refinement ratio two.
+Recursive ratio-two stage mapping is a separate explicit refusal/rollback witness.
 """
 from __future__ import annotations
 
@@ -482,7 +484,9 @@ def build_initial(
         state=core.tracer_state, value=profile, projection=ConservativeCellAverage())
 
 
-def build_layout(core: IMEXAMRAuthoring) -> Any:
+def build_layout(core: IMEXAMRAuthoring, *, temporal_ratio: int = 1) -> Any:
+    if type(temporal_ratio) is not int or temporal_ratio not in (1, 2):
+        raise TypeError("the IMEX example requires an exact temporal ratio one or two")
     from pops.amr import (
         AMRClockRelation,
         AMRExecution,
@@ -532,8 +536,9 @@ def build_layout(core: IMEXAMRAuthoring) -> Any:
         # outcome and must remain bit-identical across restart.
         regrid=AMRRegrid(schedule=every(1, clock=core.program.clock)),
         transfer=transfer,
-        # Temporal subcycling is declared independently from spatial refinement.
-        execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)),
+        # Field-stage barriers execute at common time. Recursive ratio two remains
+        # independently authored for the explicit refusal witness below.
+        execution=AMRExecution.subcycled((AMRClockRelation(0, 1, temporal_ratio),)),
     )
 
 
@@ -573,6 +578,7 @@ def build_final_case(
     relaxation_domain: Any | None = None,
     initial_background: float = 0.05, initial_amplitude: float = 0.95,
     output_mode: Any = None,
+    temporal_ratio: int = 1,
 ) -> FinalIMEXAMRCase:
     core = build_authoring(
         use_preset=use_preset,
@@ -585,7 +591,7 @@ def build_final_case(
         core, background=initial_background, amplitude=initial_amplitude))
     core.case.program(core.program)
     core.case.consumers(build_consumers(core, output_mode=output_mode))
-    return FinalIMEXAMRCase(core, build_layout(core))
+    return FinalIMEXAMRCase(core, build_layout(core, temporal_ratio=temporal_ratio))
 
 
 def build_bind_params(
@@ -609,6 +615,7 @@ def build_bind_params(
 def compile_final_case(
     *, use_preset: bool = False,
     relaxation_domain: Any | None = None,
+    temporal_ratio: int = 1,
 ) -> tuple[FinalIMEXAMRCase, Any, Any]:
     """Compile one exact manual or preset-authored target through the public lifecycle."""
 
@@ -616,6 +623,7 @@ def compile_final_case(
         use_preset=use_preset,
         relaxation_domain=relaxation_domain,
         output_mode=_native_output_mode(),
+        temporal_ratio=temporal_ratio,
     )
     resolved = pops.resolve(pops.validate(target.authoring.case), layout=target.layout)
     return target, resolved, pops.compile(resolved)
@@ -867,6 +875,31 @@ def _reopen_scientific_outputs(root: Path) -> tuple[Path, Path, str, str]:
     )
 
 
+def run_recursive_stage_mapping_refusal(output_dir: Any) -> IMEXRejectedAttemptEvidence:
+    """Retain recursive temporal authoring as an exact unsupported-profile witness."""
+    root = Path(output_dir)
+    if root.exists() and any(root.iterdir()):
+        raise ValueError("recursive stage-mapping proof requires an empty output directory")
+    target, _resolved, artifact = compile_final_case(temporal_ratio=2)
+    simulation = _bind_artifact(artifact, params=build_bind_params(target.authoring))
+    before = _snapshot(simulation)
+    try:
+        pops.run(simulation, t_end=target.authoring.run_controls["t_end"], max_steps=1,
+                 output_dir=root, console=False)
+    except RuntimeError as error:
+        message = str(error)
+        if message != "AMR stage mapping requires common-time continuation for recursive subcycling":
+            raise RuntimeError("recursive stage-mapping proof failed for an unexpected reason: "
+                               + message) from error
+    else:
+        raise RuntimeError("recursive stage mapping unexpectedly accepted its macro-step")
+    after = _snapshot(simulation)
+    _require_same_snapshot(before, after, where="recursive stage-mapping refusal")
+    if any(path.is_file() for path in root.rglob("*")):
+        raise RuntimeError("recursive stage-mapping refusal published files")
+    return IMEXRejectedAttemptEvidence(message, before, after)
+
+
 def run_rejected_attempt_rollback(output_dir: Any) -> IMEXRejectedAttemptEvidence:
     """Force one singular IMEX solve and prove complete rollback before publication."""
 
@@ -1042,6 +1075,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     output_dir = args.output_dir.resolve()
 
+    recursive = run_recursive_stage_mapping_refusal(output_dir / "recursive_refused")
     rejected = run_rejected_attempt_rollback(output_dir / "rejected")
     evidence = run_manual_and_restart(output_dir / "manual")
     preset = run_preset_parity(output_dir / "preset", evidence.accepted)
@@ -1087,6 +1121,12 @@ def main(argv: list[str] | None = None) -> None:
         "flux_ledger_levels": list(evidence.program_evidence.flux_ledger_levels),
         "levels": evidence.level_count,
         "manual_preset_bit_identical": preset_equal,
+        "temporal_ratio": 1,
+        "spatial_ratio": 2,
+        "recursive_stage_mapping_ratio2_refused": _snapshots_bit_identical(
+            recursive.before, recursive.after,
+        ),
+        "recursive_stage_mapping_refusal": recursive.error,
         "rejected_attempt_error": rejected.error,
         "rejected_attempt_rollback": _snapshots_bit_identical(
             rejected.before, rejected.after,

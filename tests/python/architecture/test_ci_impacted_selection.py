@@ -339,6 +339,8 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
     }
     assert variant_targets == {
         "test_amr_history_ring": (2,),
+        "test_amr_history_remap_collective": (2,),
+        "test_amr_interaction_history_snapshot": (2,),
         "test_prepared_field_rhs_inputs": (2,),
         "test_amr_multiblock_coupled_source": (2,),
         "test_amr_multiblock_implicit_transaction": (2,),
@@ -371,6 +373,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_pure_field_algebra_extreme_dot": (2,),
         "test_system_interface_core_session": (2,),
         "test_tensor_coarse_gmres": (2,),
+        "test_tensor_diagonal_mg_preconditioner": (2,),
         "test_tensor_fac_conservative_interface": (2,),
         "test_tensor_fac_partial_hierarchy": (2,),
         "test_world_communicator": (1, 2),
@@ -389,7 +392,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 123
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 126
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
@@ -397,6 +400,9 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
     assert ctest_plan["test_mpi_amr_program_reflux_np4"] == 4
     assert ctest_plan["test_mpi_system_analytic_level_set_np2"] == 2
     assert ctest_plan["test_world_communicator_np2"] == 2
+    assert ctest_plan["test_amr_history_remap_collective_np2"] == 2
+    assert ctest_plan["test_amr_interaction_history_snapshot_np2"] == 2
+    assert ctest_plan["test_tensor_diagonal_mg_preconditioner_np2"] == 2
 
 
 def test_manifest_rejects_ambiguous_mpi_only_launch_contracts():
@@ -855,18 +861,157 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
             "path": "tests/python/integration/mpi/test_uniform_history_checkpoint_mpi.py",
             "nproc": 2,
         },
+        {
+            "suite": "pops_python_integration_runtime",
+            "path": "tests/python/integration/runtime/test_m15_mpi_collective_rejection.py",
+            "nproc": 2,
+            "native_dimension": 1,
+        },
+        {
+            "suite": "pops_python_integration_runtime",
+            "path": "tests/python/integration/runtime/test_mapped_field_binding_collective_runtime.py",
+            "nproc": 2,
+        },
     ]
 
 
 def test_manifest_projects_serial_python_mpi_orchestrators():
-    """Topology-changing drivers use pytest outside MPI and launch their own worlds."""
+    """Independent-world drivers use pytest outside MPI and launch their own worlds."""
     sel = _load("ci_select_tests")
-    assert sel.manifest_python_mpi_orchestrators(sel.load_manifest()) == [
+    expected = [
         {
             "suite": "pops_python_integration_mpi",
             "path": "tests/python/integration/mpi/test_amr_rank_change_restart.py",
         },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_initial_field_ghost_mpi.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_accepted_halo_mpi1.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_accepted_halo_mpi2.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_amr12_carrier_mpi1.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_amr12_carrier_mpi2.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_amr_original_field_mpi1.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_amr_original_field_mpi2.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_amr_profile_mpi1.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_amr_profile_mpi2.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_captured_diffusion_mpi1.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_captured_diffusion_mpi2.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_completed_original_interaction_mpi1.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_completed_original_interaction_mpi2.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_evolved_original_stage_mpi1.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_evolved_original_stage_mpi2.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_imex_checkpoint_mpi1.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_imex_checkpoint_mpi2.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi1.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi2.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi1.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi2.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_scalar_bound_capture_mpi1.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_scalar_bound_capture_mpi2.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_spatial_interaction_mpi1.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_spatial_interaction_mpi2.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_typed_newton_mpi1.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_typed_newton_mpi2.py",
+        },
     ]
+
+    for row in expected:
+        path = row["path"]
+        if "test_public_amr_profile_mpi" in path:
+            ids = ("tag_selection", "stationary_regrids", "evolving_halo", "evolved_spatial", "evolved_spatial_v4")
+            function = "test_public_amr_fixtures"
+        elif "test_public_amr_original_field_mpi" in path:
+            ids = ("saved_restart", "parent_rollback_retry")
+            function = "test_public_amr_original"
+        elif "test_public_typed_newton_mpi" in path:
+            ids = ("relative_uniform", "relative_amr", "floor_uniform", "floor_amr",
+                   "absolute_uniform", "absolute_amr", "overflow_uniform", "overflow_amr")
+            function = "test_public_typed_newton"
+        else:
+            continue
+        world = int(path[-4])
+        row["partitions"] = [{"id": identity, "parent_node": function +
+                              "_on_authenticated_mpi%d_world[%s]" % (world, identity)}
+                             for identity in ids]
+    assert sel.manifest_python_mpi_orchestrators(sel.load_manifest()) == expected
 
 
 def test_python_mpi_contracts_are_excluded_from_serial_pytest_suites():
@@ -903,19 +1048,47 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         "2\ttests/python/integration/mpi/test_external_amr_field_solver_mpi.py",
         "2\ttests/python/integration/mpi/test_scientific_output_mpi.py",
         "2\ttests/python/integration/mpi/test_uniform_history_checkpoint_mpi.py",
+        "2\ttests/python/integration/runtime/test_mapped_field_binding_collective_runtime.py",
     ]
     assert (
         tmp_path / "python-mpi-orchestrators.txt"
     ).read_text().splitlines() == [
         "tests/python/integration/mpi/test_amr_rank_change_restart.py",
+        "tests/python/integration/mpi/test_initial_field_ghost_mpi.py",
+        "tests/python/integration/mpi/test_public_accepted_halo_mpi1.py",
+        "tests/python/integration/mpi/test_public_accepted_halo_mpi2.py",
+        "tests/python/integration/mpi/test_public_amr12_carrier_mpi1.py",
+        "tests/python/integration/mpi/test_public_amr12_carrier_mpi2.py",
+        "tests/python/integration/mpi/test_public_amr_original_field_mpi1.py",
+        "tests/python/integration/mpi/test_public_amr_original_field_mpi2.py",
+        "tests/python/integration/mpi/test_public_amr_profile_mpi1.py",
+        "tests/python/integration/mpi/test_public_amr_profile_mpi2.py",
+        "tests/python/integration/mpi/test_public_captured_diffusion_mpi1.py",
+        "tests/python/integration/mpi/test_public_captured_diffusion_mpi2.py",
+        "tests/python/integration/mpi/test_public_completed_original_interaction_mpi1.py",
+        "tests/python/integration/mpi/test_public_completed_original_interaction_mpi2.py",
+        "tests/python/integration/mpi/test_public_evolved_original_stage_mpi1.py",
+        "tests/python/integration/mpi/test_public_evolved_original_stage_mpi2.py",
+        "tests/python/integration/mpi/test_public_imex_checkpoint_mpi1.py",
+        "tests/python/integration/mpi/test_public_imex_checkpoint_mpi2.py",
+        "tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi1.py",
+        "tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi2.py",
+        "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi1.py",
+        "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi2.py",
+        "tests/python/integration/mpi/test_public_scalar_bound_capture_mpi1.py",
+        "tests/python/integration/mpi/test_public_scalar_bound_capture_mpi2.py",
+        "tests/python/integration/mpi/test_public_spatial_interaction_mpi1.py",
+        "tests/python/integration/mpi/test_public_spatial_interaction_mpi2.py",
+        "tests/python/integration/mpi/test_public_typed_newton_mpi1.py",
+        "tests/python/integration/mpi/test_public_typed_newton_mpi2.py",
     ]
     outputs = dict(
         line.partition("=")[::2]
         for line in (tmp_path / "github-output.txt").read_text().splitlines()
     )
-    assert outputs["python_mpi_count"] == "10"
-    assert outputs["python_mpi_entrypoint_count"] == "9"
-    assert outputs["python_mpi_orchestrator_count"] == "1"
+    assert outputs["python_mpi_count"] == "38"
+    assert outputs["python_mpi_entrypoint_count"] == "10"
+    assert outputs["python_mpi_orchestrator_count"] == "28"
 
 
 def test_python_mpi_orchestrator_contract_is_fail_closed():
@@ -931,10 +1104,183 @@ def test_python_mpi_orchestrator_contract_is_fail_closed():
             },
         ],
     }
-    with pytest.raises(SystemExit, match="expected exactly one path field"):
+    with pytest.raises(SystemExit, match="expected path and optional exact partitions"):
         sel.manifest_python_mpi_orchestrators(
             {"python": {"suite": [suite]}}
         )
+
+
+def test_python_mpi_dim1_plan_is_exact_and_isolated_from_dim2(tmp_path):
+    sel = _load("ci_select_tests")
+    args = type("Args", (), {
+        "native_dimension": 1,
+        "plan_file": str(tmp_path / "mpi1.tsv"),
+        "orchestrator_plan_file": str(tmp_path / "mpi1-orchestrators.txt"),
+        "github_output": str(tmp_path / "out.txt"),
+        "explain_file": str(tmp_path / "explain.json"),
+    })()
+    assert sel.plan_python_mpi(args) == 0
+    assert (tmp_path / "mpi1.tsv").read_text().splitlines() == [
+        "2\ttests/python/integration/runtime/test_m15_mpi_collective_rejection.py",
+    ]
+    assert (tmp_path / "mpi1-orchestrators.txt").read_text() == ""
+    explanation = json.loads((tmp_path / "explain.json").read_text())
+    assert explanation["native_dimension"] == 1
+    assert explanation["selected_count"] == 1
+
+
+@pytest.mark.parametrize("dimension", (True, 0, 4, "1"))
+def test_python_mpi_dimension_contract_refuses_nonexact_values(dimension):
+    sel = _load("ci_select_tests")
+    suite = {
+        "name": "runtime_mpi", "path": "tests/python/integration/runtime",
+        "labels": ["mpi"],
+        "mpi_entrypoints": [{
+            "path": "tests/python/integration/runtime/test_m15_mpi_collective_rejection.py",
+            "nproc": 2, "native_dimension": dimension,
+        }],
+    }
+    with pytest.raises(SystemExit, match="exact native_dimension"):
+        sel.manifest_python_mpi_entrypoints({"python": {"suite": [suite]}})
+
+
+def test_required_mpi_dim1_job_builds_and_authenticates_only_its_declared_native_profile():
+    workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text()
+    block = workflow.split("\n  mpi-dim1:\n", 1)[1].split("\n  gate:\n", 1)[0]
+    assert "if: needs.set-mode.outputs.mpi_required == 'true'" in block
+    assert 'POPS_NATIVE_DIM: "1"' in block
+    assert "-DPOPS_NATIVE_DIM=1 -DPOPS_BUILD_TESTS=OFF -DPOPS_BUILD_PYTHON=ON" in block
+    assert "--parallel 2 --target _pops" in block
+    assert "--dimension 1 --backend mpi" in block
+    assert "scripts/prove_installed_wheel.py" in block
+    assert 'wheel_directory="$RUNNER_TEMP/pops-mpi-dim1-wheel"' in block
+    assert '--output-dir "$wheel_directory"' in block
+    assert 'wheels=("$wheel_directory"/pops-*.whl)' in block
+    assert 'build-mpi-dim1/wheel' not in block
+    assert "--expect-dim 1 --expect-mpi --expect-parallel-hdf5" in block
+    assert "--native-dimension 1" in block
+    assert "select_native_dimension(1)" in block
+    assert "test \"$count\" -eq 1" in block
+    assert "--signal=TERM --kill-after=30s 14m" in block
+    assert 'POPS_REQUIRE_MPI_TESTS: "1"' in block
+    assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in block
+    assert "ctest" not in block
+    gate = workflow.split("\n  gate:\n", 1)[1].split("\n  mpi:\n", 1)[0]
+    assert 'mpi-dim1' in gate
+    assert '--gate mpi-dim1 "${{ needs.mpi-dim1.result }}"' in gate
+
+
+def test_cpu_plan_records_the_exact_declared_hardware_exclusion(tmp_path):
+    sel = _load("ci_select_tests")
+    path = "tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py"
+    hardware = sel.manifest_python_hardware_entrypoints(sel.load_manifest())
+    assert hardware == [{
+        "suite": "pops_python_integration_native_loader", "path": path,
+        "hardware": "gpu", "native_dimension": 2,
+        "expected_cases": {"test_installed_gpu_external_field_dispatch_rollback_retry": 4},
+    }]
+    assert path not in {test for suite in sel.manifest_python_suites(sel.load_manifest())
+                        for test in suite["files"]}
+    changed = tmp_path / "changed.txt"
+    changed.write_text("python/pops/fields/__init__.py\n")
+    explanation = tmp_path / "cpu.json"
+    args = SimpleNamespace(changed_files=str(changed), force_all=True, shard_index=None,
+                           shard_total=None, tests_file=None, github_output=None,
+                           explain_file=str(explanation))
+    assert sel.plan_python(args) == 0
+    received = json.loads(explanation.read_text())
+    assert received["hardware_exclusions"] == hardware
+    assert path not in received["selected"]
+
+
+@pytest.mark.parametrize("mutation", ("unknown", "missing", "wrong_hardware", "bool_dimension",
+                                      "zero_cases", "bool_cases", "outside_owner", "duplicate"))
+def test_hardware_contract_refuses_incomplete_ambiguous_or_unowned_coverage(mutation):
+    sel = _load("ci_select_tests")
+    row = dict(sel.manifest_python_hardware_entrypoints(sel.load_manifest())[0])
+    row.pop("suite")
+    row["expected_cases"] = dict(row["expected_cases"])
+    rows = [row]
+    if mutation == "unknown":
+        row["optional"] = True
+    elif mutation == "missing":
+        row.pop("expected_cases")
+    elif mutation == "wrong_hardware":
+        row["hardware"] = "cpu"
+    elif mutation == "bool_dimension":
+        row["native_dimension"] = True
+    elif mutation in ("zero_cases", "bool_cases"):
+        row["expected_cases"]["test_installed_gpu_external_field_dispatch_rollback_retry"] = (
+            0 if mutation == "zero_cases" else True)
+    elif mutation == "outside_owner":
+        row["path"] = "tests/python/integration/runtime/test_public_scalar_field_sample.py"
+    else:
+        rows.append(dict(row))
+    suite = {"name": "native_loader", "path": "tests/python/integration/native_loader",
+             "labels": ["native_loader"], "hardware_entrypoints": rows}
+    with pytest.raises(SystemExit):
+        sel.manifest_python_hardware_entrypoints({"python": {"suite": [suite]}})
+
+
+def test_gpu_plan_preserves_all_four_cases_and_cpu_execution_fails_closed(tmp_path, monkeypatch):
+    runner = _load("ci_python_hardware")
+    planned = tmp_path / "planned"
+    assert runner.main(["--hardware", "gpu", "--receipt-dir", str(planned)]) == 0
+    receipt = json.loads((planned / "hardware-plan.json").read_text())
+    assert receipt["status"] == "planned" and receipt["case_count"] == 4
+    assert receipt["entrypoints"] == runner.ci_select_tests.manifest_python_hardware_entrypoints(
+        runner.ci_select_tests.load_manifest())
+    def reject_cpu(dimension):
+        assert dimension == 2
+        runner.require_gpu_facts({"supports_gpu": False, "dimension": 2, "real_bytes": 8},
+                                {"has_kokkos": True, "kokkos_device": "serial",
+                                 "field_memory_space": "host"}, dimension)
+    monkeypatch.setattr(runner, "authenticate_gpu", reject_cpu)
+    def unexpected_launch(*args, **kwargs):
+        raise AssertionError("CPU profile must be refused before launching the GPU positive")
+    monkeypatch.setattr(runner.subprocess, "run", unexpected_launch)
+    rejected = tmp_path / "rejected"
+    assert runner.main(["--hardware", "gpu", "--execute", "--receipt-dir", str(rejected)]) == 1
+    receipt = json.loads((rejected / "hardware-plan.json").read_text())
+    assert receipt["status"] == "failed" and "genuine CUDA/HIP" in receipt["reason"]
+
+
+def test_gpu_receipt_requires_exact_cases_without_missing_skipped_or_duplicate_parameters(tmp_path):
+    import xml.etree.ElementTree as ET
+    runner = _load("ci_python_hardware")
+    expected = {"test_installed_gpu_external_field_dispatch_rollback_retry": 4}
+    root = ET.Element("testsuite")
+    for fault in ("positive", "callback_throw", "table_preparation", "nonfinite"):
+        ET.SubElement(root, "testcase", name="test_installed_gpu_external_field_dispatch_rollback_retry[%s]" % fault)
+    receipt = tmp_path / "cases.xml"
+    ET.ElementTree(root).write(receipt)
+    runner.require_case_receipt(receipt, expected)
+    root[-1].attrib["name"] = root[0].attrib["name"]
+    ET.ElementTree(root).write(receipt)
+    with pytest.raises(RuntimeError, match="case inventory differs"):
+        runner.require_case_receipt(receipt, expected)
+    root[-1].attrib["name"] = "test_installed_gpu_external_field_dispatch_rollback_retry[nonfinite]"
+    ET.SubElement(root[0], "skipped")
+    ET.ElementTree(root).write(receipt)
+    with pytest.raises(RuntimeError, match="every mandatory case"):
+        runner.require_case_receipt(receipt, expected)
+    receipt.unlink()
+    with pytest.raises(RuntimeError, match="omitted its case receipt"):
+        runner.require_case_receipt(receipt, expected)
+
+
+def test_gpu_cmake_projection_preserves_real_device_route_and_existing_watchdogs():
+    source = (REPO_ROOT / "python/CMakeLists.txt").read_text()
+    block = source.split("set(_pops_py_gpu_entrypoints", 1)[1].split(")", 1)[0]
+    sel = _load("ci_select_tests")
+    assert tuple(re.findall(r"tests/[^\s)]+\.py", block)) == tuple(
+        row["path"] for row in sel.manifest_python_hardware_entrypoints(sel.load_manifest()))
+    assert '"--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_gpu_entrypoint}"' in source
+    assert "if(Kokkos_ENABLE_CUDA OR Kokkos_ENABLE_HIP)" in source
+    gpu = source.split("add_test(NAME pops_python_gpu_external_field_dispatch", 1)[1].split("endif()", 1)[0]
+    assert "${Python_EXECUTABLE} -I" in gpu and "--hardware gpu --execute" in gpu
+    assert "TIMEOUT 900" in gpu and "POPS_REQUIRE_NATIVE_TESTS=1" in gpu
+    assert "_pops_py_test_env" not in gpu
 
 
 @pytest.mark.parametrize(
@@ -951,78 +1297,41 @@ def test_python_mpi_orchestrator_contract_is_fail_closed():
 def test_python_mpi_workflow_executes_every_plan_row_with_stdin_reading_child(
     tmp_path, scenario, status,
 ):
-    """A child draining stdin must neither skip a manifest row nor hide a failure."""
-    sel = _load("ci_select_tests")
-    manifest = sel.load_manifest()
-    entries = sel.manifest_python_mpi_entrypoints(manifest)
-    orchestrators = sel.manifest_python_mpi_orchestrators(manifest)
-    assert len(entries) > 1 and orchestrators
-    entry_paths = [entry["path"] for entry in entries]
-    orchestrator_paths = [entry["path"] for entry in orchestrators]
-    for relative in entry_paths + orchestrator_paths:
-        path = tmp_path / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.touch()
-    plan_dir = tmp_path / "build-mpi"
-    plan_dir.mkdir()
-    plan_entries = entries[:-1] if scenario == "missing_entrypoint" else entries
-    plan_orchestrators = [] if scenario == "missing_orchestrator" else orchestrators
-    (plan_dir / "python-mpi-plan.tsv").write_text(
-        "".join(f"{entry['nproc']}\t{entry['path']}\n" for entry in plan_entries)
-    )
-    (plan_dir / "python-mpi-orchestrators.txt").write_text(
-        "".join(f"{entry['path']}\n" for entry in plan_orchestrators)
-    )
-    workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text()
-    step = workflow.split("- name: Test Python MPI contracts + native lifecycle", 1)[1].split(
-        "\n      - name:", 1
-    )[0]
-    shell = textwrap.dedent(step[step.index("          run_mpi() {"):])
-    for output, count in (
-        ("python_mpi_entrypoint_count", len(entries)),
-        ("python_mpi_orchestrator_count", len(orchestrators)),
-    ):
-        shell = shell.replace("${{ steps.mpi-test-plan.outputs." + output + " }}", str(count))
-    assert "${{" not in shell
-    # Execute the real workflow loop and run_mpi status handling, but no Python/MPI code.
-    # The replacement child models a launcher forwarding/reading its inherited stdin.
-    prefix = r'''set -eo pipefail
-mpi_failfast_args=()
-timeout() {
-  local child_path="${@: -1}"
-  printf '%s\n' "$child_path" >> launched.txt
-  cat >/dev/null
-  if [ "$child_path" = "$FAIL_PATH" ]; then
-    return "$FAIL_STATUS"
-  fi
-  return 0
-}
-'''
-    fail_path = ""
-    if scenario.startswith("entrypoint_"):
-        fail_path = entry_paths[0]
-    elif scenario == "orchestrator_failure":
-        fail_path = orchestrator_paths[0]
-    result = subprocess.run(
-        ["bash", "-c", prefix + shell], cwd=tmp_path, text=True, capture_output=True,
-        env={**os.environ, "FAIL_PATH": fail_path, "FAIL_STATUS": str(status)}, timeout=10,
-    )
-    assert result.returncode == status, result.stdout + result.stderr
-    launched = (tmp_path / "launched.txt").read_text().splitlines()
-    if scenario == "missing_entrypoint":
-        expected = entry_paths[:-1]
-    elif scenario == "missing_orchestrator":
-        expected = entry_paths
-    elif scenario.startswith("entrypoint_"):
-        expected = entry_paths[:1]
-    elif scenario == "orchestrator_failure":
-        expected = entry_paths + orchestrator_paths[:1]
-    else:
-        expected = entry_paths + orchestrator_paths
-    assert launched == expected
-    if scenario == "complete":
-        assert f"Python MPI entrypoints completed={len(entries)}" in result.stdout
-        assert f"Python MPI orchestrators completed={len(orchestrators)}" in result.stdout
+    """Every matrix allocation keeps status and isolates child stdin from its plan."""
+    from scripts import ci_python_mpi as runner
+    from tests.python.architecture.test_ci_python_mpi import fake_timeout_environment
+
+    plan = runner.make_plan()
+    all_launches = [row for group in plan["groups"] for row in group["launches"]]
+    if scenario.startswith("missing_"):
+        kind = "ranked" if scenario == "missing_entrypoint" else "orchestrator"
+        for group in plan["groups"]:
+            matches = [row for row in group["launches"] if row["kind"] == kind]
+            if matches:
+                group["launches"].remove(matches[0])
+                break
+        path = tmp_path / "invalid-plan.json"
+        path.write_text(json.dumps(plan))
+        with pytest.raises(ValueError, match="exact current manifest/revision"):
+            runner.validate_plan(path)
+        return
+    kind = "ranked" if scenario.startswith("entrypoint_") else "orchestrator"
+    fail_path = next(row["path"] for row in all_launches if row["kind"] == kind) if status else ""
+    environment = fake_timeout_environment(tmp_path / "tools", failed_path=fail_path, failed_status=status)
+    received = []
+    for group in plan["groups"]:
+        received.append(runner.run_launches(group, sys.executable, environment,
+                                           tmp_path / "receipts" / group["group"]))
+    assert next((code for code in received if code), 0) == status
+    launched = [json.loads(line) for line in pathlib.Path(environment["LAUNCH_LOG"]).read_text().splitlines()]
+    expected_selectors = [
+        row["path"] + ("::" + row["parent_node"] if row.get("parent_node") else "")
+        for row in all_launches
+    ]
+    assert [row["path"] for row in launched] == expected_selectors
+    for row in launched:
+        assert row["argv"][:2] == ["--signal=TERM", "--kill-after=30s"]
+        assert row["argv"][2] in {"900s", "1200s", "1500s"}
 
 
 @pytest.mark.parametrize(
@@ -1124,7 +1433,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 40" in cpp_shards_block
     assert "timeout-minutes: 30" in cpp_shards_block
     assert "shard: ${{ fromJSON(needs.set-mode.outputs.cpp_matrix) }}" in cpp_shards_block
-    assert "--shard-total 13" in cpp_shards_block
+    assert "--shard-total 14" in cpp_shards_block
     assert "needs: [changes, set-mode, gate-cpp-prewarm]" in cpp_shards_block
     assert "actions/download-artifact@v8" in cpp_shards_block
     assert "test \"${#cache_archives[@]}\" -eq 3" in cpp_shards_block
@@ -1143,7 +1452,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
 
     gate_block = workflow.split("\n  gate:\n", 1)[1].split("\n  mpi:\n", 1)[0]
     assert "needs: [changes, set-mode," in gate_block
-    assert "mpi, kokkos-openmp" in gate_block
+    assert "mpi, mpi-dim1, mpi-python, kokkos-openmp" in gate_block
     assert "needs.set-mode.result" in gate_block
     assert "scripts/ci_route_mode.py check" in gate_block
     assert "needs.set-mode.outputs.architecture_required" in gate_block
@@ -1175,9 +1484,8 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     )
     assert "compression-level: 0" in mpi_prewarm_block
 
-    mpi_block = workflow.split("\n  mpi:\n", 1)[1].split(
-        "\n  # PREWARM OPENMP NATIF.", 1
-    )[0]
+    mpi_block = workflow.split("\n  mpi:\n", 1)[1].split("\n  mpi-python:\n", 1)[0]
+    mpi_runner = (SCRIPTS / "ci_python_mpi.py").read_text()
     assert "needs: [set-mode, changes, gate-mpi-prewarm]" in mpi_block
     assert "if: needs.set-mode.outputs.mpi_required == 'true'" in mpi_block
     assert "actions/download-artifact@v8" in mpi_block
@@ -1221,47 +1529,35 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "ctest --preset ci-mpi --output-on-failure" in mpi_block
     assert "POPS_REQUIRE_MPI_TESTS: \"1\"" in mpi_block
     assert "MPIEXEC_PREFLAGS=--mca;orte_abort_on_non_zero_status;1" in mpi_block
-    assert "grep -Eqi 'Open MPI|OpenRTE'" in mpi_block
-    assert "mpi_failfast_args+=(--mca orte_abort_on_non_zero_status 1)" in mpi_block
-    assert 'run_mpi "Python MPI contract ${mpi_test}"' in mpi_block
-    assert "Running serial Python MPI orchestrator: ${mpi_orchestrator}" in mpi_block
-    assert (
-        '/usr/bin/python3 -m pytest -q -ra --maxfail=1 "$mpi_orchestrator"'
-        in mpi_block
-    )
-    assert 'run_mpi "Python MPI orchestrator' not in mpi_block
-    assert 'run_mpi "collective HDF5 writer"' not in mpi_block
-    assert "timeout --signal=TERM --kill-after=30s 20m" in mpi_block
-    assert "timeout --signal=TERM --kill-after=30s 4m" not in mpi_block
+    assert "Open MPI|OpenRTE" in mpi_runner
+    assert "'--mca', 'orte_abort_on_non_zero_status', '1'" in mpi_runner
+    assert "stdin=subprocess.DEVNULL" in mpi_runner
+    assert "for index, launch in enumerate(group['launches'])" in mpi_runner
+    assert "status = status or code" in mpi_runner
     assert "read -r processors expected regex <&3" in mpi_block
     assert "done 3< build-mpi/mpi-ctest-groups.tsv" in mpi_block
-    assert mpi_block.count("</dev/null") == 4
-    assert "read -r mpi_ranks mpi_test <&3" in mpi_block
-    assert "read -r mpi_orchestrator <&3" in mpi_block
-    assert mpi_block.count("</dev/null 3<&-") == 2
-    assert "steps.mpi-test-plan.outputs.python_mpi_entrypoint_count" in mpi_block
-    assert "steps.mpi-test-plan.outputs.python_mpi_orchestrator_count" in mpi_block
+    assert mpi_block.count("</dev/null") == 2
     assert "MPI CTest processor group ${processors} failed" in mpi_block
     assert "selected_count=$(python3 -c" in mpi_block
     assert "selected ${selected_count}/${expected} launches" in mpi_block
     assert "ctest --preset ci-mpi --output-on-failure --parallel 4 --no-tests=error" in mpi_block
-    # The complete M4 installed-package gate now runs after the native MPI,
-    # Python MPI and collective-HDF5 matrices in this same required job.  Keep
-    # the outer watchdog aligned with that complete sequential contract.
+    # C++ and M4 remain in the required producer. Python launches are an exact
+    # authenticated matrix cover with their original bounded per-contract caps.
     assert "timeout-minutes: 180" in mpi_block
     assert "timeout-minutes: 35" in mpi_block
-    assert "native_script_bootstrap=" in mpi_block
-    assert "select_native_dimension(2)" in mpi_block
-    assert '-u -c "$native_script_bootstrap" "$mpi_test"' in mpi_block
-    assert '/usr/bin/python3 -u "$mpi_test"' not in mpi_block
-    assert "mpiexec -n \"$mpi_ranks\"" not in mpi_block
+    assert "scripts/ci_python_mpi.py plan" in mpi_block
+    assert "scripts/ci_python_mpi.py authenticate" in mpi_block
+    assert "scripts/ci_assemble_installed_wheel.py" in mpi_block
+    assert "--dimension 2 --backend mpi" in mpi_block
+    assert "name: gate-mpi-python-wheel" in mpi_block
     assert "test_amr_clean_route_program_mpi.py" not in mpi_block
     assert "test_amr_history_mpi.py" not in mpi_block
     assert "test_scientific_output_mpi.py" not in mpi_block
     assert "cmake --build --preset ci-mpi\n" not in mpi_block
-    assert "build-mpi/python-package" in mpi_block
-    assert "collective HDF5 lifecycle requires an MPI-enabled _pops" in mpi_block
+    assert "build-mpi/python-package" not in mpi_block
+    assert 'pops-mpi-producer-installed/bin/python" scripts/run_m4_gate.py' in mpi_block
     assert "This writer is pure Python" not in mpi_block
+
 
     openmp_prewarm_block = workflow.split("\n  gate-openmp-prewarm:\n", 1)[1].split(
         "\n  kokkos-openmp:\n", 1
@@ -1328,13 +1624,13 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert cpp_job_minutes == 70
     assert "needs: [set-mode, gate-openmp-prewarm]" in openmp_block
     assert "fail-fast: false" in openmp_block
-    assert openmp_block.count("- lane: cpp-") == 13
-    for shard in range(13):
+    assert openmp_block.count("- lane: cpp-") == 14
+    for shard in range(14):
         assert (
             f"- lane: cpp-{shard}\n"
             "            kind: cpp\n"
             f"            shard: {shard}\n"
-            "            shard_total: 13\n"
+            "            shard_total: 14\n"
             "            ccache_maxsize: 2G"
         ) in openmp_block
     assert (
@@ -1345,7 +1641,8 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "            ccache_maxsize: 2G"
     ) in openmp_block
     assert openmp_block.count("if: matrix.kind == 'cpp'") == 6
-    assert openmp_block.count("if: matrix.kind == 'python'") == 12
+    assert openmp_block.count("if: matrix.kind == 'python'") == 13
+    assert "Install MPI SDK for required Python syntax witnesses" in openmp_block
     assert "CCACHE_MAXSIZE: ${{ matrix.ccache_maxsize }}" in openmp_block
     assert "uses: actions/cache/restore@v6" in openmp_block
     assert "uses: actions/cache/save@v6" in openmp_block

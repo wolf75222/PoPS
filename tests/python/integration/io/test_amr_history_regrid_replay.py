@@ -2,8 +2,10 @@
 """Two-block AMR selective history: exact frozen-grid replay and active-remap refusal.
 
 The original N16 two-level composition has both "blk" and "bg" advancing through affine dynamics.
-The original depth3/depth5 active-regrid graphs request new fine coverage that retained state rings
-cannot currently populate. They remain explicit refusal/rollback controls with unchanged geometry,
+The depth3/depth5 active-regrid graphs seed one coarse cell just below the tag threshold outside the
+initial refined region; the unchanged physical source creates new tags before the declared regrid.
+Retained numerical padding does not create tags. The retained state rings cannot currently populate
+that new fine coverage. These remain explicit refusal/rollback controls with unchanged geometry,
 depth, schedules and step budgets. This is an M6.4/M7 limitation, not qualified live regrid replay.
 Separately declared frozen-grid 1:1 runs preserve the full restart, omitted-slot and corrupted-fingerprint
 oracles. Frozen-grid 2:1 selective restart is a separate refusal/rollback control.
@@ -42,7 +44,7 @@ try:
     from tests.python.integration.io.test_amr_history_checkpoint import (
         _accepted_image, _assert_accepted_image_equal,
         _assert_multirate_restart_refusal, _assert_new_coverage_refusal, _bind_checkpoint_artifact,
-        _compile_checkpoint_program, _program_states,
+        _compile_checkpoint_program, _new_coverage_blob, _program_states,
     )
 except Exception as exc:  # noqa: BLE001
     require_native_or_skip(
@@ -66,7 +68,7 @@ def chk(cond, label):
 
 
 def _passive_source_model(name):
-    """One scalar, zero flux and linear source S=_C*rho; refinement tags read its density.
+    """One tested scalar, zero flux and linear source S=_C*rho; tags read its physical density.
 
     The field-free dynamics retain the deterministic affine replay class.
     """
@@ -130,12 +132,13 @@ _COMPILED_CASES = {}
 
 def _build(program_factory, regrid_every, *, temporal_ratio=2):
     key = (program_factory, regrid_every, temporal_ratio)
-    initials = {"blk": _blob(), "bg": np.full((N, N), 0.5)}
+    initials = {"blk": _new_coverage_blob() if regrid_every > 0 else _blob(),
+                "bg": np.full((N, N), 0.5)}
     if key not in _COMPILED_CASES:
         model = _passive_source_model("history_regrid_model")
         _COMPILED_CASES[key] = _compile_checkpoint_program(
             model, program_factory(model), regrid_every=regrid_every, initials=initials,
-            temporal_ratio=temporal_ratio,
+            temporal_ratio=temporal_ratio, new_coverage=regrid_every > 0,
         )
     return _bind_checkpoint_artifact(_COMPILED_CASES[key], initials), None
 

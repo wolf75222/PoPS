@@ -10,6 +10,7 @@
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/analytic/expression.hpp>
 #include <pops/runtime/analytic/initial_materialization.hpp>
+#include <pops/runtime/analytic/initial_derivative.hpp>
 
 #include <array>
 #include <cmath>
@@ -630,4 +631,161 @@ TEST(AnalyticExpression, ExactGaussianProjectionRetainsNeutralityAcrossRefinemen
     EXPECT_EQ(pops::analytic::materialize_cell_average(exact, lane.communicator()), box.numPts());
     EXPECT_LE(std::abs(moment()), tolerance) << "N=" << n;
   }
+}
+
+TEST(AnalyticExpression, InitialDerivativeUsesGlobalEdgesAcrossOneCellPatchesAndMpi) {
+  constexpr int Dim = 2;
+  const auto lane = pops::ExecutionLane::duplicate_world_collectively(
+      "test.initial-provider-derivative-partitions");
+  const auto domain = pops::Box<Dim>::from_extents(pops::Extent<Dim>{8, 8});
+  const auto geometry = pops::Geometry<Dim>::from_bounds(domain, pops::RealVector<Dim>{-4, -4},
+                                                         pops::RealVector<Dim>{4, 4});
+  std::vector<pops::Box<Dim>> boxes;
+  std::vector<pops::Index<Dim>> owners;
+  const pops::mesh::RankSpace<Dim> ranks(pops::Index<Dim>{}, pops::Extent<Dim>{lane.size(), 1});
+  // Width-one patches force the global-edge stencil to read the next two patches.
+  // Internal patch and rank edges must retain the centred difference.
+  for (int x = 0; x < 8; ++x) {
+    boxes.emplace_back(pops::Index<Dim>{x, 0}, pops::Index<Dim>{x, 7});
+    owners.push_back(ranks.coordinate(x % lane.size()));
+  }
+  const pops::mesh::BoxArray<Dim> layout(boxes);
+  const auto distribution = pops::mesh::Distribution<Dim>::partitioned(layout, ranks, owners);
+  pops::MultiFab<Dim> source(layout, distribution, ranks.coordinate(lane.rank()), 2,
+                             pops::Extent<Dim>{});
+  source.set_val(Real(-123));
+  const auto x = AnalyticNode::x();
+  const auto y = AnalyticNode::y();
+  const auto expression = binary(AnalyticOp::Add,
+                                 binary(AnalyticOp::Add, binary(AnalyticOp::Mul, x, x),
+                                        binary(AnalyticOp::Mul, AnalyticNode::constant(Real(3)),
+                                               binary(AnalyticOp::Mul, y, y))),
+                                 binary(AnalyticOp::Mul, x, y));
+  const auto program = compile_analytic_expression(expression);
+  for (std::size_t local = 0; local < source.local_size(); ++local) {
+    auto host = source.fab(local).create_host_mirror();
+    for_each_host_index(source.box(local), [&](const auto& index) {
+      host(host_offset(source.fab(local).grown_box(), index, 0)) = Real(-123);
+      host(host_offset(source.fab(local).grown_box(), index, 1)) =
+          program.view().eval(index, geometry);
+    });
+    source.fab(local).copy_from_host(host);
+  }
+  for (int axis = 0; axis < Dim; ++axis) {
+    const auto derivative =
+        pops::analytic::materialize_initial_derivative(source, 1, geometry, axis, 2, lane);
+    for (std::size_t local = 0; local < derivative->local_size(); ++local) {
+      auto host = derivative->fab(local).create_host_mirror();
+      derivative->fab(local).copy_to_host(host);
+      for_each_host_index(derivative->box(local), [&](const auto& index) {
+        const auto position = geometry.cell_center(index);
+        const Real expected =
+            axis == 0 ? Real(2) * position[0] + position[1] : position[0] + Real(6) * position[1];
+        EXPECT_EQ(host(host_offset(derivative->fab(local).grown_box(), index)), expected);
+      });
+    }
+  }
+}
+
+TEST(AnalyticExpression, InitialDerivativeHandlesEmptyRanksAndRefusesSparseCoverage) {
+  constexpr int Dim = 2;
+  const auto lane = pops::ExecutionLane::duplicate_world_collectively(
+      "test.initial-provider-derivative-empty-ranks");
+  const auto domain = pops::Box<Dim>::from_extents(pops::Extent<Dim>{5, 5});
+  const auto geometry = unit_geometry(domain);
+  const pops::mesh::RankSpace<Dim> ranks(pops::Index<Dim>{}, pops::Extent<Dim>{lane.size(), 1});
+  const pops::mesh::BoxArray<Dim> layout(std::vector<pops::Box<Dim>>{domain});
+  const auto distribution =
+      pops::mesh::Distribution<Dim>::partitioned(layout, ranks, {ranks.coordinate(0)});
+  pops::MultiFab<Dim> source(layout, distribution, ranks.coordinate(lane.rank()), 1,
+                             pops::Extent<Dim>{});
+  source.set_val(Real(0));
+  const auto result =
+      pops::analytic::materialize_initial_derivative(source, 0, geometry, 0, 2, lane);
+  EXPECT_EQ(result->local_size(), lane.rank() == 0 ? 1u : 0u);
+  EXPECT_ANY_THROW(pops::analytic::materialize_initial_derivative(
+      source, 0, geometry, lane.rank() == 0 ? -1 : 0, 2, lane));
+  EXPECT_ANY_THROW(pops::analytic::materialize_initial_derivative(source, 0, geometry, 0, 1, lane));
+  const pops::mesh::BoxArray<Dim> sparse_layout(
+      std::vector<pops::Box<Dim>>{pops::Box<Dim>{pops::Index<Dim>{1, 1}, pops::Index<Dim>{3, 3}}});
+  const auto sparse_distribution =
+      pops::mesh::Distribution<Dim>::partitioned(sparse_layout, ranks, {ranks.coordinate(0)});
+  pops::MultiFab<Dim> sparse(sparse_layout, sparse_distribution, ranks.coordinate(lane.rank()), 1,
+                             pops::Extent<Dim>{});
+  sparse.set_val(Real(0));
+  EXPECT_ANY_THROW(pops::analytic::materialize_initial_derivative(sparse, 0, geometry, 0, 2, lane));
+}
+
+TEST(AnalyticExpression, PreparedInitialDerivativeUsesSolvedHaloAtSparseInterfacesAndGlobalEdges) {
+  constexpr int Dim = 2;
+  const auto lane = pops::ExecutionLane::duplicate_world_collectively(
+      "test.prepared-initial-derivative-sparse");
+  const auto domain = pops::Box<Dim>::from_extents(pops::Extent<Dim>{16, 16});
+  const auto geometry = pops::Geometry<Dim>::from_bounds(
+      domain, pops::RealVector<Dim>{-8, -8}, pops::RealVector<Dim>{8, 8});
+  const std::vector<pops::Box<Dim>> boxes{
+      {pops::Index<Dim>{0, 0}, pops::Index<Dim>{3, 3}},
+      {pops::Index<Dim>{6, 6}, pops::Index<Dim>{9, 9}},
+      {pops::Index<Dim>{12, 12}, pops::Index<Dim>{15, 15}}};
+  const pops::mesh::BoxArray<Dim> layout(boxes);
+  const pops::mesh::RankSpace<Dim> ranks(pops::Index<Dim>{}, pops::Extent<Dim>{lane.size(), 1});
+  std::vector<pops::Index<Dim>> owners;
+  for (int patch = 0; patch < 3; ++patch)
+    owners.push_back(ranks.coordinate(patch % lane.size()));
+  const auto distribution = pops::mesh::Distribution<Dim>::partitioned(layout, ranks, owners);
+  pops::MultiFab<Dim> phi(layout, distribution, ranks.coordinate(lane.rank()), 1,
+                          pops::Extent<Dim>{1, 1});
+  for (std::size_t local = 0; local < phi.local_size(); ++local) {
+    auto host = phi.fab(local).create_host_mirror();
+    for_each_host_index(phi.fab(local).grown_box(), [&](const auto& index) {
+      const auto position = geometry.cell_center(index);
+      host(host_offset(phi.fab(local).grown_box(), index)) =
+          position[0]*position[0] + Real(3)*position[1]*position[1] + position[0]*position[1];
+    });
+    phi.fab(local).copy_from_host(host);
+  }
+  // The sparse patch halo is already supplied by the qualified field solve. The derivative
+  // kernel must read it as given and may not invent a one-sided CF boundary or refill it.
+  for (int axis = 0; axis < Dim; ++axis) {
+    const auto result = pops::analytic::materialize_initial_derivative_from_prepared_halo(
+        phi, geometry, axis, lane);
+    for (std::size_t local = 0; local < result->local_size(); ++local) {
+      auto host = result->fab(local).create_host_mirror();
+      result->fab(local).copy_to_host(host);
+      for_each_host_index(result->box(local), [&](const auto& index) {
+        const auto position = geometry.cell_center(index);
+        const Real expected = axis == 0 ? Real(2)*position[0]+position[1]
+                                       : position[0]+Real(6)*position[1];
+        EXPECT_EQ(host(host_offset(result->fab(local).grown_box(), index)), expected);
+      });
+    }
+  }
+  EXPECT_ANY_THROW(pops::analytic::materialize_initial_derivative_from_prepared_halo(
+      phi, geometry, lane.rank() == 0 ? -1 : 0, lane));
+  phi.set_val(std::numeric_limits<Real>::quiet_NaN());
+  EXPECT_ANY_THROW(pops::analytic::materialize_initial_derivative_from_prepared_halo(
+      phi, geometry, 0, lane));
+}
+
+TEST(AnalyticExpression, PreparedInitialDerivativeRefusesMissingHaloAndUndersizedGlobalPatch) {
+  constexpr int Dim = 2;
+  const auto lane = pops::ExecutionLane::duplicate_world_collectively(
+      "test.prepared-initial-derivative-contract");
+  const auto domain = pops::Box<Dim>::from_extents(pops::Extent<Dim>{8, 8});
+  const auto geometry = unit_geometry(domain);
+  const pops::mesh::RankSpace<Dim> ranks(pops::Index<Dim>{}, pops::Extent<Dim>{lane.size(), 1});
+  const pops::mesh::BoxArray<Dim> layout(std::vector<pops::Box<Dim>>{
+      {pops::Index<Dim>{0, 0}, pops::Index<Dim>{1, 7}}});
+  const auto distribution = pops::mesh::Distribution<Dim>::partitioned(
+      layout, ranks, {ranks.coordinate(0)});
+  pops::MultiFab<Dim> phi(layout, distribution, ranks.coordinate(lane.rank()), 1,
+                          pops::Extent<Dim>{1, 1});
+  phi.set_val(Real(0));
+  EXPECT_ANY_THROW(pops::analytic::materialize_initial_derivative_from_prepared_halo(
+      phi, geometry, 0, lane));
+  pops::MultiFab<Dim> no_halo(layout, distribution, ranks.coordinate(lane.rank()), 1,
+                              pops::Extent<Dim>{});
+  no_halo.set_val(Real(0));
+  EXPECT_ANY_THROW(pops::analytic::materialize_initial_derivative_from_prepared_halo(
+      no_halo, geometry, 1, lane));
 }

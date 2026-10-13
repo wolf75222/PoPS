@@ -1,5 +1,7 @@
 """Whole-Program lowering dispatches every node through its own model owner."""
 from __future__ import annotations
+import re
+
 from pops.codegen.program_codegen import emit_cpp_program
 
 from pops.codegen._plans import ResolvedBlock
@@ -52,10 +54,14 @@ def test_two_model_program_emits_each_models_own_source_kernel():
     ))
     source = emit_cpp_program(program, model_graph=graph)
 
-    assert source.count('ctx.require_cartesian_generated_operator(') == 2
-    assert source.index('ctx.require_cartesian_generated_operator(') < source.index(
-        'ctx.rhs_scratch('
-    )
+    assert '"named_source"' not in source
+    assert source.count("ctx.pointwise_active_mask(block_index, kernel_input);") == 2
+    for block_index, state, rate in ((0, first_state, first_rate), (1, second_state, second_rate)):
+        assert re.search(
+            r'pops_shared_source_[0-9a-f]{64}\(ctx, "[^"]+", %d, u%d, r%d\);' %
+            (block_index, state.n.id, rate.id), source)
+    assert source.count("if (source_has_active_mask_ &&") == 2
+    assert source.count("outA(index, 0) = pops::Real(0);") == 2
     assert "first_physics" in source and "second_physics" in source
     assert "pops::Real(-2) * u" in source
     assert "pops::Real(-7) * u" in source

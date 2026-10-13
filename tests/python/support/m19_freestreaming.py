@@ -66,9 +66,11 @@ def build(nx, nv):
     program = pops.Program("SSPRK2 kinetic transport")
     f = program.state(block[POPULATION])
     stage = program.stage("forward Euler stage", c=Fraction(1))
-    predictor = program.value("kinetic predictor", f.n + program.dt * RATE(f.n, program.input_fields(f.n, for_rate=RATE)), at=stage)
+    # The selected rate has one StateSpace input. Its declared analytic velocity
+    # auxiliary is retained by the provider pack, without a FieldSpace argument.
+    predictor = program.value("kinetic predictor", f.n + program.dt * RATE(f.n), at=stage)
     accepted = program.value("kinetic accepted", Fraction(1, 2) * f.n
-                             + Fraction(1, 2) * (predictor + program.dt * RATE(predictor, program.input_fields(predictor, for_rate=RATE))), at=f.next.point)
+                             + Fraction(1, 2) * (predictor + program.dt * RATE(predictor)), at=f.next.point)
     program.commit(f.next, accepted)
     # max |v| < 1, so this exact binary dt gives Courant <=1/4 and exactly
     # nx/2 steps to FINAL_TIME. No endpoint clipping changes the issued dt.

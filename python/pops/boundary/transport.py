@@ -198,7 +198,10 @@ def _dependency_handles(
         rows=children() if callable(children) else NotImplemented
         if rows is NotImplemented:
             rows=tuple(getattr(value,name) for name in ("a","b") if hasattr(value,name))
-        if rows:return _unique_references(*(storage_references(child) for child in rows))
+        if rows:
+            if not isinstance(rows,Iterable):
+                raise TypeError("boundary expression children must be iterable")
+            return _unique_references(*(storage_references(child) for child in rows))
         return value.declaration_references() if isinstance(value,Expr) else value.parameter_handles()
     references = _unique_references(*(storage_references(value) for value in values))
     states = [reference for reference in references if reference.kind == "state"]
@@ -823,6 +826,8 @@ class ResolvedTransportBoundarySet:
             rows=children() if callable(children) else NotImplemented
             if rows is NotImplemented:
                 rows=tuple(getattr(node,name) for name in ("a","b") if hasattr(node,name))
+            if not isinstance(rows,Iterable):
+                raise TypeError("boundary expression children must be iterable")
             return any(reads_time(child) for child in rows)
         return (condition.condition_type == "inflow"
             and deps.characteristic.mode is ClosureMode.NONE

@@ -1,0 +1,145 @@
+{
+  "scope": "Original/public digests for the copied XML and registration log. The consolidated receipt and source/inventory summaries are new public documents and cite their original JSON digest. No binary or full build log is published.",
+  "files": [
+    {
+      "public_path": "xml/AmrInteractionHistorySnapshot.AllocationVoteAndOverflowConvergeAndEmptyRegistryStaysEmpty.xml",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-xml/AmrInteractionHistorySnapshot.AllocationVoteAndOverflowConvergeAndEmptyRegistryStaysEmpty.xml",
+      "origin_sha256": "a91143fb21cb7ff5143e4e2bb1fa6a17ab9c525b37ff8ee40e753d4eb4d94c30",
+      "public_sha256": "c88c540b01fbf35aba9be016ba36a94ecc58afd10af3e0068122cce511308cd0",
+      "sanitized": true
+    },
+    {
+      "public_path": "xml/AmrInteractionHistorySnapshot.AttemptAndExactMacroTagsRefuseStaleImages.xml",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-xml/AmrInteractionHistorySnapshot.AttemptAndExactMacroTagsRefuseStaleImages.xml",
+      "origin_sha256": "a9915ab5c0ec901b4dee419865e94b810bf97d0523b833ba51326a11a29eb7fb",
+      "public_sha256": "512bcd9d0fbda6f58c6391fdb7482d570f4386371254d999a930c1b6a1f339b3",
+      "sanitized": true
+    },
+    {
+      "public_path": "xml/AmrInteractionHistorySnapshot.ColdAcceptedSeedIsAlsoDeepCopied.xml",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-xml/AmrInteractionHistorySnapshot.ColdAcceptedSeedIsAlsoDeepCopied.xml",
+      "origin_sha256": "0962ce8fa7fc14910465cade58f5cae422593c2568f88d965dd09fcde3847cac",
+      "public_sha256": "df3d12b43e4614bd453f024f4ee43ceea7e840e67f440ebfada00a09e6bd666c",
+      "sanitized": true
+    },
+    {
+      "public_path": "xml/AmrInteractionHistorySnapshot.ColdAndWarmCoarseRotationPreservesFineOracleAndEvolution.xml",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-xml/AmrInteractionHistorySnapshot.ColdAndWarmCoarseRotationPreservesFineOracleAndEvolution.xml",
+      "origin_sha256": "a3330ff09229c52c8f2f3e3a5925b39c330e3acdc81be329978f7a2dfd4f96b1",
+      "public_sha256": "be004b86f487d471cbdebeb1e5b584fce5408e63b7ae6a6edd71706a107657ac",
+      "sanitized": true
+    },
+    {
+      "public_path": "xml/AmrInteractionHistorySnapshot.ColdAndWarmRatioTwoRefuseWithoutAcceptedPublication.xml",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-xml/AmrInteractionHistorySnapshot.ColdAndWarmRatioTwoRefuseWithoutAcceptedPublication.xml",
+      "origin_sha256": "fd13c4efc121e3ade4ec472df2583d20b1aeb728e2b5d57c61849a9a277a3fe7",
+      "public_sha256": "a5b8bf345b1cb33ab663bfbf35e7e11289c7929a42e11ccaa79a8003a85b1ca8",
+      "sanitized": true
+    },
+    {
+      "public_path": "xml/AmrInteractionHistorySnapshot.ContextRollbackRevokesAndNextAttemptRecaptures.xml",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-xml/AmrInteractionHistorySnapshot.ContextRollbackRevokesAndNextAttemptRecaptures.xml",
+      "origin_sha256": "d8e04a8460bc7cd146bbab8782ae0c14cbd738573786c295d85a10e33b2a45cd",
+      "public_sha256": "a04ca35aa191781d3dd6c4bfb7522308405d82e94b23070e314c6cb0ae5efb46",
+      "sanitized": true
+    },
+    {
+      "public_path": "xml/AmrInteractionHistorySnapshot.ExactDeclarationsAreIdempotentAndRegistrySeals.xml",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-xml/AmrInteractionHistorySnapshot.ExactDeclarationsAreIdempotentAndRegistrySeals.xml",
+      "origin_sha256": "a1d3b54de8c482031c4a1004e3af655670680a3992d52e089144137573688e57",
+      "public_sha256": "5ddfc47848b65fd6ed25e9977b04bb846cec73e1b37e4a5b466defdde65b6cc7",
+      "sanitized": true
+    },
+    {
+      "public_path": "xml/AmrInteractionHistorySnapshot.FullRingsAndDeclaredGhostsAreDeepCopiedAndDeduplicated.xml",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-xml/AmrInteractionHistorySnapshot.FullRingsAndDeclaredGhostsAreDeepCopiedAndDeduplicated.xml",
+      "origin_sha256": "baceb1a6bebc90bf7871eec2cef383af25c2369a99da12fb37e1062e8a5b119b",
+      "public_sha256": "b94cf399fa3d99c6d73dc5bfc6db529439bb84d81e9b316882a4d05e0f497834",
+      "sanitized": true
+    },
+    {
+      "public_path": "xml/AmrInteractionHistorySnapshot.OuterTransactionAndExplicitContextRollbackReplayMacroImages.xml",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-xml/AmrInteractionHistorySnapshot.OuterTransactionAndExplicitContextRollbackReplayMacroImages.xml",
+      "origin_sha256": "82ce972ce00764bfe54350b3a3577853f438cfeee512320108d708d7faba0d7d",
+      "public_sha256": "2b69d05125096c8dcc05fbc69a90b7e1fa2ff7324a15e4c693718b0e2b5a5fab",
+      "sanitized": true
+    },
+    {
+      "public_path": "xml/AmrInteractionHistorySnapshot.PublicCheckpointRestoreRejectsOldAttemptAtSameMacroTime.xml",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-xml/AmrInteractionHistorySnapshot.PublicCheckpointRestoreRejectsOldAttemptAtSameMacroTime.xml",
+      "origin_sha256": "b5f3286f5c20d16655a6b72fbb1baaa3831c3578b1826150f1924b1d49275b73",
+      "public_sha256": "823c9b6ab5893b9e1a3a61673ab0cc904becc93863f54544d9607797677f2fb0",
+      "sanitized": true
+    },
+    {
+      "public_path": "xml/AmrInteractionHistorySnapshot.PublicRuntimeRebuildRevokesColdSourceBeforeRebind.xml",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-xml/AmrInteractionHistorySnapshot.PublicRuntimeRebuildRevokesColdSourceBeforeRebind.xml",
+      "origin_sha256": "cc93d0015d6de65a8e3e2c37d8e3f6d299ad8a113e44b79d6fdd7474acf811b8",
+      "public_sha256": "22f338a11983326f1340b102d1d011c831adea5228f266bc37f7292fbc8ded61",
+      "sanitized": true
+    },
+    {
+      "public_path": "xml/AmrInteractionHistorySnapshot.RankLocalMetadataCorruptionsRefuseCaptureCollectively.xml",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-xml/AmrInteractionHistorySnapshot.RankLocalMetadataCorruptionsRefuseCaptureCollectively.xml",
+      "origin_sha256": "ed0356e30f715c71ffd4e3cb8fcbb2f68ac25b65d343c4551433ff062f1f674d",
+      "public_sha256": "c74383282f24752c6bd829a1e995898ebfd094316ad890d1e8d0030970e50c3f",
+      "sanitized": true
+    },
+    {
+      "public_path": "xml/AmrInteractionHistorySnapshot.SourceAndWorkspaceBudgetsFailBeforePublication.xml",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-xml/AmrInteractionHistorySnapshot.SourceAndWorkspaceBudgetsFailBeforePublication.xml",
+      "origin_sha256": "731a57bad293f5048c432ad435da9d5a4f194c98702e0a94872ae9a7d7251665",
+      "public_sha256": "66574862de52149f9ec5f2550ca966390f3a917d4145668605780dd63c95dd14",
+      "sanitized": true
+    },
+    {
+      "public_path": "xml/AmrInteractionHistorySnapshot.SuccessfulAndCancelledMappingRevokeImages.xml",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-xml/AmrInteractionHistorySnapshot.SuccessfulAndCancelledMappingRevokeImages.xml",
+      "origin_sha256": "b918e6cdbe78314851861402864b5a136b34e1817a3daa7e81c37d96f1f39c5d",
+      "public_sha256": "9c59b8135925fddac28af4cb1926420b9dd117c690e3d120b48acba733377389",
+      "sanitized": true
+    },
+    {
+      "public_path": "xml/test_amr_interaction_history_snapshot_np2.rank0.xml",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-xml/test_amr_interaction_history_snapshot_np2.rank0.xml",
+      "origin_sha256": "914d228b18c7747af93b11c65f025cdf8923a392a41bc3e1349e10887644f513",
+      "public_sha256": "d51712105f5a3dda198869ab90c4edc04095c9b7b0ea0302adb387fd2efe5460",
+      "sanitized": true
+    },
+    {
+      "public_path": "xml/test_amr_interaction_history_snapshot_np2.rank1.xml",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-xml/test_amr_interaction_history_snapshot_np2.rank1.xml",
+      "origin_sha256": "02127d80a15647d8c896969b70b0ee218d7ebe62330ad8297f8ec59ecf9a8be9",
+      "public_sha256": "32040004f5790bcb21ead81db3a39284a4a6e09c99ba54068ef67e41ac09cef1",
+      "sanitized": true
+    },
+    {
+      "public_path": "xml/a9297394-history-snapshot-cpp-serial.xml",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-serial.xml",
+      "origin_sha256": "2da31acbe921c262059275b8dba1648c6d3bb870cd6900aab487a1da8749cac6",
+      "public_sha256": "2da31acbe921c262059275b8dba1648c6d3bb870cd6900aab487a1da8749cac6",
+      "sanitized": false
+    },
+    {
+      "public_path": "xml/a9297394-history-snapshot-cpp-np2.xml",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-np2.xml",
+      "origin_sha256": "b9a1036b3fab22a1b88bc55a64ec96f0df2002a200a64b09e24fea36b61c6a2f",
+      "public_sha256": "b9a1036b3fab22a1b88bc55a64ec96f0df2002a200a64b09e24fea36b61c6a2f",
+      "sanitized": false
+    },
+    {
+      "public_path": "source-registration.log",
+      "origin_ref": "external-evidence:ci/a9297394-history-snapshot-cpp-registration.log",
+      "origin_sha256": "efb4cc1ce219481f3402d2af55e9136236d8c64373d15989442ebcea41df9cb3",
+      "public_sha256": "efb4cc1ce219481f3402d2af55e9136236d8c64373d15989442ebcea41df9cb3",
+      "sanitized": false
+    },
+    {
+      "public_path": "final-inventory-metrics.json",
+      "origin_ref": "external-evidence:ci/f94b82ea-final-snapshot-inventory-metrics.json",
+      "origin_sha256": "0856d3f0d585036a9404129d48f3690cb9070b813b292093749dccb04b870b4e",
+      "public_sha256": "0856d3f0d585036a9404129d48f3690cb9070b813b292093749dccb04b870b4e",
+      "sanitized": false
+    }
+  ]
+}

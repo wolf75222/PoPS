@@ -41,7 +41,7 @@ class ConsumedFieldPort:
 
     def _declaration(self):
         from ._program_problem import _identity
-        registration = self.field._field_registry.resolved_registration(self.field)
+        registration = getattr(self.field, "_field_registry").resolved_registration(self.field)
         problem = registration.operator
         unknowns = tuple(row for row in problem.unknowns if _identity(row) == _identity(self.unknown))
         if len(unknowns) != 1 or not getattr(problem, "unknown_spaces", None):
@@ -52,7 +52,7 @@ class ConsumedFieldPort:
         problem, scalar = self._declaration()
         unit = scalar.units[0]
         if self.derivative_axis is not None:
-            axes = getattr(self.field._field_registry.resolved_registration(self.field).discretization, "observation_axes", None)
+            axes = getattr(getattr(self.field, "_field_registry").resolved_registration(self.field).discretization, "observation_axes", None)
             if axes is None or self.derivative_axis not in axes or len(problem.coordinate_units) != len(axes):
                 raise ValueError("consumed Field derivative axis has no active physical-coordinate binding")
             coordinate = axes.index(self.derivative_axis)
@@ -70,6 +70,6 @@ class ConsumedFieldPort:
         return {"contract": "mapped-consumed-output@1", "field": _identity(self.field),
             "field_problem_identity": problem.identity.token, "unknown": _identity(self.unknown),
             "derivative_axis": self.derivative_axis,
-            "observation_axes": list(getattr(self.field._field_registry.resolved_registration(self.field).discretization, "observation_axes", ()) or ()),
+            "observation_axes": list(getattr(getattr(self.field, "_field_registry").resolved_registration(self.field).discretization, "observation_axes", ()) or ()),
             "factor": {"numerator": str(self.factor.numerator), "denominator": str(self.factor.denominator)},
             "space": self.quantity_space().to_data()}

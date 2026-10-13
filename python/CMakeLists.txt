@@ -246,8 +246,79 @@ if(POPS_NATIVE_DIM STREQUAL "2")
       tests/python/integration/mpi/test_external_amr_field_solver_mpi.py
       tests/python/integration/mpi/test_scientific_output_mpi.py
       tests/python/integration/mpi/test_uniform_history_checkpoint_mpi.py)
-  set(_pops_py_rank_change_orchestrator
-      tests/python/integration/mpi/test_amr_rank_change_restart.py)
+  set(_pops_py_runtime_mpi_entrypoints
+      tests/python/integration/runtime/test_mapped_field_binding_collective_runtime.py)
+  set(_pops_py_gpu_entrypoints
+      tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py)
+  set(_pops_py_mpi_orchestrators
+      tests/python/integration/mpi/test_amr_rank_change_restart.py
+      tests/python/integration/mpi/test_initial_field_ghost_mpi.py
+      tests/python/integration/mpi/test_public_accepted_halo_mpi1.py
+      tests/python/integration/mpi/test_public_accepted_halo_mpi2.py
+      tests/python/integration/mpi/test_public_amr12_carrier_mpi1.py
+      tests/python/integration/mpi/test_public_amr12_carrier_mpi2.py
+      tests/python/integration/mpi/test_public_amr_original_field_mpi1.py
+      tests/python/integration/mpi/test_public_amr_original_field_mpi2.py
+      tests/python/integration/mpi/test_public_amr_profile_mpi1.py
+      tests/python/integration/mpi/test_public_amr_profile_mpi2.py
+      tests/python/integration/mpi/test_public_captured_diffusion_mpi1.py
+      tests/python/integration/mpi/test_public_captured_diffusion_mpi2.py
+      tests/python/integration/mpi/test_public_completed_original_interaction_mpi1.py
+      tests/python/integration/mpi/test_public_completed_original_interaction_mpi2.py
+      tests/python/integration/mpi/test_public_evolved_original_stage_mpi1.py
+      tests/python/integration/mpi/test_public_evolved_original_stage_mpi2.py
+      tests/python/integration/mpi/test_public_imex_checkpoint_mpi1.py
+      tests/python/integration/mpi/test_public_imex_checkpoint_mpi2.py
+      tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi1.py
+      tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi2.py
+      tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi1.py
+      tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi2.py
+      tests/python/integration/mpi/test_public_scalar_bound_capture_mpi1.py
+      tests/python/integration/mpi/test_public_scalar_bound_capture_mpi2.py
+      tests/python/integration/mpi/test_public_spatial_interaction_mpi1.py
+      tests/python/integration/mpi/test_public_spatial_interaction_mpi2.py
+      tests/python/integration/mpi/test_public_typed_newton_mpi1.py
+      tests/python/integration/mpi/test_public_typed_newton_mpi2.py)
+
+  # Exact compound parent selectors owned by the MPI manifest; each keeps 900 s.
+  set(_pops_py_mpi_partition_nodes
+      "tests/python/integration/mpi/test_public_amr_original_field_mpi1.py|saved_restart|test_public_amr_original_on_authenticated_mpi1_world[saved_restart]"
+      "tests/python/integration/mpi/test_public_amr_original_field_mpi1.py|parent_rollback_retry|test_public_amr_original_on_authenticated_mpi1_world[parent_rollback_retry]"
+      "tests/python/integration/mpi/test_public_amr_original_field_mpi2.py|saved_restart|test_public_amr_original_on_authenticated_mpi2_world[saved_restart]"
+      "tests/python/integration/mpi/test_public_amr_original_field_mpi2.py|parent_rollback_retry|test_public_amr_original_on_authenticated_mpi2_world[parent_rollback_retry]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi1.py|tag_selection|test_public_amr_fixtures_on_authenticated_mpi1_world[tag_selection]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi1.py|stationary_regrids|test_public_amr_fixtures_on_authenticated_mpi1_world[stationary_regrids]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi1.py|evolving_halo|test_public_amr_fixtures_on_authenticated_mpi1_world[evolving_halo]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi1.py|evolved_spatial|test_public_amr_fixtures_on_authenticated_mpi1_world[evolved_spatial]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi1.py|evolved_spatial_v4|test_public_amr_fixtures_on_authenticated_mpi1_world[evolved_spatial_v4]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi2.py|tag_selection|test_public_amr_fixtures_on_authenticated_mpi2_world[tag_selection]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi2.py|stationary_regrids|test_public_amr_fixtures_on_authenticated_mpi2_world[stationary_regrids]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi2.py|evolving_halo|test_public_amr_fixtures_on_authenticated_mpi2_world[evolving_halo]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi2.py|evolved_spatial|test_public_amr_fixtures_on_authenticated_mpi2_world[evolved_spatial]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi2.py|evolved_spatial_v4|test_public_amr_fixtures_on_authenticated_mpi2_world[evolved_spatial_v4]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi1.py|relative_uniform|test_public_typed_newton_on_authenticated_mpi1_world[relative_uniform]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi1.py|relative_amr|test_public_typed_newton_on_authenticated_mpi1_world[relative_amr]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi1.py|floor_uniform|test_public_typed_newton_on_authenticated_mpi1_world[floor_uniform]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi1.py|floor_amr|test_public_typed_newton_on_authenticated_mpi1_world[floor_amr]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi1.py|absolute_uniform|test_public_typed_newton_on_authenticated_mpi1_world[absolute_uniform]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi1.py|absolute_amr|test_public_typed_newton_on_authenticated_mpi1_world[absolute_amr]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi1.py|overflow_uniform|test_public_typed_newton_on_authenticated_mpi1_world[overflow_uniform]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi1.py|overflow_amr|test_public_typed_newton_on_authenticated_mpi1_world[overflow_amr]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi2.py|relative_uniform|test_public_typed_newton_on_authenticated_mpi2_world[relative_uniform]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi2.py|relative_amr|test_public_typed_newton_on_authenticated_mpi2_world[relative_amr]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi2.py|floor_uniform|test_public_typed_newton_on_authenticated_mpi2_world[floor_uniform]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi2.py|floor_amr|test_public_typed_newton_on_authenticated_mpi2_world[floor_amr]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi2.py|absolute_uniform|test_public_typed_newton_on_authenticated_mpi2_world[absolute_uniform]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi2.py|absolute_amr|test_public_typed_newton_on_authenticated_mpi2_world[absolute_amr]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi2.py|overflow_uniform|test_public_typed_newton_on_authenticated_mpi2_world[overflow_uniform]"
+      "tests/python/integration/mpi/test_public_typed_newton_mpi2.py|overflow_amr|test_public_typed_newton_on_authenticated_mpi2_world[overflow_amr]")
+  set(_pops_py_mpi_partitioned_orchestrators)
+  foreach(_pops_py_mpi_partition IN LISTS _pops_py_mpi_partition_nodes)
+    string(REPLACE "|" ";" _pops_py_mpi_partition_fields "${_pops_py_mpi_partition}")
+    list(GET _pops_py_mpi_partition_fields 0 _pops_py_mpi_partition_path)
+    list(APPEND _pops_py_mpi_partitioned_orchestrators "${_pops_py_mpi_partition_path}")
+  endforeach()
+  list(REMOVE_DUPLICATES _pops_py_mpi_partitioned_orchestrators)
 
   set(_pops_py_io_ignore_args)
   foreach(_pops_py_mpi_entrypoint IN LISTS _pops_py_io_mpi_entrypoints)
@@ -259,8 +330,16 @@ if(POPS_NATIVE_DIM STREQUAL "2")
     list(APPEND _pops_py_mpi_ignore_args
          "--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_mpi_entrypoint}")
   endforeach()
-  list(APPEND _pops_py_mpi_ignore_args
-       "--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_rank_change_orchestrator}")
+  set(_pops_py_runtime_ignore_args
+      "--ignore=${CMAKE_SOURCE_DIR}/tests/python/integration/runtime/test_m15_mpi_collective_rejection.py")
+  foreach(_pops_py_mpi_entrypoint IN LISTS _pops_py_runtime_mpi_entrypoints)
+    list(APPEND _pops_py_runtime_ignore_args
+         "--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_mpi_entrypoint}")
+  endforeach()
+  foreach(_pops_py_mpi_orchestrator IN LISTS _pops_py_mpi_orchestrators)
+    list(APPEND _pops_py_mpi_ignore_args
+         "--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_mpi_orchestrator}")
+  endforeach()
 
   pops_add_pytest_suite(pops_python_unit_descriptors tests/python/unit/descriptors "unit;python;descriptors;fast")
   pops_add_pytest_suite(pops_python_unit_codegen tests/python/unit/codegen "unit;python;codegen;fast")
@@ -271,9 +350,24 @@ if(POPS_NATIVE_DIM STREQUAL "2")
   pops_add_pytest_suite(pops_python_unit_runtime tests/python/unit/runtime "unit;python;runtime;fast")
 
   pops_add_pytest_suite(pops_python_integration_bindings tests/python/integration/bindings "integration;python;bindings;medium")
-  pops_add_pytest_suite(pops_python_integration_runtime tests/python/integration/runtime "integration;python;runtime;medium")
+  pops_add_pytest_suite(pops_python_integration_runtime tests/python/integration/runtime "integration;python;runtime;medium" ${_pops_py_runtime_ignore_args})
   pops_add_pytest_suite(pops_python_integration_amr tests/python/integration/amr "integration;python;amr;medium")
-  pops_add_pytest_suite(pops_python_integration_native_loader tests/python/integration/native_loader "integration;python;native_loader;compiler;medium")
+  set(_pops_py_native_loader_ignore_args)
+  foreach(_pops_py_gpu_entrypoint IN LISTS _pops_py_gpu_entrypoints)
+    list(APPEND _pops_py_native_loader_ignore_args
+         "--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_gpu_entrypoint}")
+  endforeach()
+  pops_add_pytest_suite(pops_python_integration_native_loader tests/python/integration/native_loader "integration;python;native_loader;compiler;medium" ${_pops_py_native_loader_ignore_args})
+  if(Kokkos_ENABLE_CUDA OR Kokkos_ENABLE_HIP)
+    add_test(NAME pops_python_gpu_external_field_dispatch
+             COMMAND ${Python_EXECUTABLE} -I ${CMAKE_SOURCE_DIR}/scripts/ci_python_hardware.py
+                     --hardware gpu --execute
+                     --receipt-dir ${CMAKE_CURRENT_BINARY_DIR}/gpu-profile-receipts)
+    set_tests_properties(pops_python_gpu_external_field_dispatch PROPERTIES
+      ENVIRONMENT "POPS_REQUIRE_NATIVE_TESTS=1;PYTHONNOUSERSITE=1"
+      LABELS "integration;python;native_loader;compiler;gpu"
+      TIMEOUT 900)
+  endif()
   pops_add_pytest_suite(pops_python_integration_io tests/python/integration/io "integration;python;io;hdf5;medium" ${_pops_py_io_ignore_args})
   pops_add_pytest_suite(pops_python_integration_mpi tests/python/integration/mpi "integration;python;mpi;medium" ${_pops_py_mpi_ignore_args})
 
@@ -296,18 +390,41 @@ if(POPS_NATIVE_DIM STREQUAL "2")
         TIMEOUT 900)
     endfunction()
 
-    foreach(_pops_py_mpi_entrypoint IN LISTS _pops_py_io_mpi_entrypoints _pops_py_mpi_entrypoints)
+    foreach(_pops_py_mpi_entrypoint IN LISTS _pops_py_io_mpi_entrypoints _pops_py_mpi_entrypoints _pops_py_runtime_mpi_entrypoints)
       pops_add_mpi_pytest_entrypoint("${_pops_py_mpi_entrypoint}")
     endforeach()
 
-    add_test(
-      NAME pops_python_mpi_test_amr_rank_change_restart_orchestrator
-      COMMAND ${Python_EXECUTABLE} -m pytest "${CMAKE_SOURCE_DIR}/${_pops_py_rank_change_orchestrator}" -q)
-    set_tests_properties(pops_python_mpi_test_amr_rank_change_restart_orchestrator PROPERTIES
-      ENVIRONMENT "${_pops_py_test_env};POPS_REQUIRE_MPI_TESTS=1"
-      LABELS "integration;python;mpi;orchestrator"
-      PROCESSORS 2
-      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-      TIMEOUT 900)
+    function(pops_add_mpi_pytest_orchestrator path parent_node partition)
+      get_filename_component(_pops_py_mpi_stem "${path}" NAME_WE)
+      set(_pops_py_mpi_name "pops_python_mpi_${_pops_py_mpi_stem}")
+      set(_pops_py_mpi_selector "${CMAKE_SOURCE_DIR}/${path}")
+      if(NOT "${partition}" STREQUAL "")
+        string(APPEND _pops_py_mpi_name "_${partition}")
+        string(APPEND _pops_py_mpi_selector "::${parent_node}")
+      endif()
+      string(APPEND _pops_py_mpi_name "_orchestrator")
+      add_test(NAME "${_pops_py_mpi_name}"
+        COMMAND ${Python_EXECUTABLE} -m pytest "${_pops_py_mpi_selector}" -q)
+      set_tests_properties("${_pops_py_mpi_name}" PROPERTIES
+        ENVIRONMENT "${_pops_py_test_env};POPS_REQUIRE_MPI_TESTS=1"
+        LABELS "integration;python;mpi;orchestrator"
+        PROCESSORS 2
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        TIMEOUT 900)
+    endfunction()
+
+    foreach(_pops_py_mpi_orchestrator IN LISTS _pops_py_mpi_orchestrators)
+      if(NOT _pops_py_mpi_orchestrator IN_LIST _pops_py_mpi_partitioned_orchestrators)
+        pops_add_mpi_pytest_orchestrator("${_pops_py_mpi_orchestrator}" "" "")
+      endif()
+    endforeach()
+    foreach(_pops_py_mpi_partition IN LISTS _pops_py_mpi_partition_nodes)
+      string(REPLACE "|" ";" _pops_py_mpi_partition_fields "${_pops_py_mpi_partition}")
+      list(GET _pops_py_mpi_partition_fields 0 _pops_py_mpi_partition_path)
+      list(GET _pops_py_mpi_partition_fields 1 _pops_py_mpi_partition_id)
+      list(GET _pops_py_mpi_partition_fields 2 _pops_py_mpi_partition_parent)
+      pops_add_mpi_pytest_orchestrator("${_pops_py_mpi_partition_path}"
+        "${_pops_py_mpi_partition_parent}" "${_pops_py_mpi_partition_id}")
+    endforeach()
   endif()
 endif()

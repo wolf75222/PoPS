@@ -446,8 +446,9 @@ template <int Dim, class MemorySpace>
 std::int64_t materialize_discrete_mapped_state(
     MultiFab<Dim, MemorySpace>& values, const Geometry<Dim>& geometry,
     const std::vector<AnalyticProgram>& programs,
-    const std::vector<detail::AnalyticMappedInputField<Dim, MemorySpace>>& inputs) {
-  bool target_invalid = detail::invalid_materialization_target(values, geometry, programs) != 0;
+    const std::vector<detail::AnalyticMappedInputField<Dim, MemorySpace>>& inputs,
+    const CommunicatorView communicator = world_communicator_view()) {
+  bool target_invalid = detail::invalid_materialization_target_local(values, geometry, programs);
   target_invalid = target_invalid || inputs.size() > kAnalyticMaxStack;
   for (const auto& input : inputs)
     target_invalid =
@@ -457,7 +458,7 @@ std::int64_t materialize_discrete_mapped_state(
         (input.field != nullptr && input.field->distribution() != values.distribution()) ||
         (input.field != nullptr && input.field->local_rank() != values.local_rank()) ||
         (input.field != nullptr && input.field->local_size() != values.local_size());
-  if (all_reduce_sum(target_invalid ? 1L : 0L) != 0)
+  if (all_reduce_sum(target_invalid ? 1L : 0L, communicator) != 0)
     throw std::invalid_argument("analytic mapped initial state target/profile mismatch");
   long invalid_local = 0;
   for (std::size_t local = 0; local < values.local_size(); ++local) {
@@ -473,7 +474,7 @@ std::int64_t materialize_discrete_mapped_state(
           detail::AnalyticMappedInitialFiniteKernel<Dim>{
               patch_inputs, programs[static_cast<std::size_t>(component)].view(), geometry}));
   }
-  const long invalid = all_reduce_sum(invalid_local);
+  const long invalid = all_reduce_sum(invalid_local, communicator);
   if (invalid != 0)
     throw std::runtime_error(
         "analytic mapped initial expression produced non-finite cell values (count=" +

@@ -72,6 +72,32 @@ field_type& scalar_scratch(std::int64_t value_id, int subslot, const field_type&
                              uniform_ghosts_(ghost_depth));
 }
 
+void require_scalar_sampling_layout(int program_block, const field_type& source,
+                                    const field_type& destination, int component) const {
+  const int owner=sys_block(program_block);
+  prepare_spatial_collectively([&] {
+    if(resource_epoch_!=runtime_->topology_epoch() ||
+       resource_generation_!=runtime_->materialization_generation() || active_level_<0 || active_level_>=nlev() ||
+       scratch_prototype_owner_(source)!=owner || scratch_prototype_owner_(destination)!=owner ||
+       component<0 || component>=source.ncomp() || destination.ncomp()!=1 ||
+       source.layout()!=destination.layout() || source.distribution()!=destination.distribution() ||
+       source.local_rank()!=destination.local_rank() || source.local_size()!=destination.local_size())
+      throw std::invalid_argument("AMR scalar sample lost active-level owner/layout/family authority");
+    for(std::size_t local=0;local<source.local_size();++local)
+      if(source.global_index(local)!=destination.global_index(local) ||
+         source.box(local)!=destination.box(local))
+        throw std::invalid_argument("AMR scalar sample changed local patch ownership");
+  });
+}
+
+void copy_solved_field_scalar_sample(std::string_view slot, int program_block,
+                                    const field_type& stage_state, field_type& destination,
+                                    int evaluation_id) const {
+  require_scalar_sampling_layout(program_block,stage_state,destination,0);
+  facade_->copy_program_solved_field_scalar_sample(boundary_evaluation_point(evaluation_id),
+      std::string(slot),sys_block(program_block),stage_state,destination);
+}
+
 field_type& retained_scalar(std::int64_t value_id, int program_block, int ncomp,
                             bool produce) const {
   return persistent_scratch_(ScratchKind::Scalar, value_id, 0, state(program_block), ncomp,

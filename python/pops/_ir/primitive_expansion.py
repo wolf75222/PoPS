@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from types import MappingProxyType
+from typing import Any
 
 from .expr import Expr, Var
 
 
-def expand_primitive_recipes(expressions, recipes):
+def expand_primitive_recipes(expressions: Any, recipes: Any) -> Any:
     """Expand only Var(kind='prim') recipes supplied by the exact owning model."""
     memo, active = {}, []
 
@@ -43,7 +44,7 @@ def expand_primitive_recipes(expressions, recipes):
     return clone(expressions)
 
 
-def expand_evaluation_boundaries(expressions, recipes):
+def expand_evaluation_boundaries(expressions: Any, recipes: Any) -> Any:
     """Inline owned recipes only when an evaluation boundary needs their scopes."""
     from .control_expr import has_evaluation_boundary
     expanded = expand_primitive_recipes(expressions, recipes)

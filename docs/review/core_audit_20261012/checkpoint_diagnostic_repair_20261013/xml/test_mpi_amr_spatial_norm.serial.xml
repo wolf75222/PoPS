@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="1" failures="0" disabled="0" errors="0" time="0.027" timestamp="2026-10-13T03:11:23.258" name="AllTests">
+  <testsuite name="AmrSpatialMaterialization" tests="1" failures="0" disabled="0" skipped="0" errors="0" time="0.011" timestamp="2026-10-13T03:11:23.273">
+    <testcase name="PendingProofSurvivesPublicationAndRejectsRankLocalDamage" file="$REPO/tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp" line="327" status="run" result="completed" time="0.011" timestamp="2026-10-13T03:11:23.273" classname="AmrSpatialMaterialization" />
+  </testsuite>
+</testsuites>

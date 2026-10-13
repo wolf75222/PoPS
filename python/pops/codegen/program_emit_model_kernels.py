@@ -153,13 +153,33 @@ def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, blo
         if shared_call is not None:
             return shared_call
     params_block = block_idx if _has_runtime_param(exprs) else None
+    active_mask = "source_active_mask_" + _cpp_identifier(out_var)
+    mask_setup = [
+        "const pops::MultiFab<pops::kNativeDimension>* %s = ctx.pointwise_active_mask(%d, %s);"
+        % (active_mask, block_idx, state_var),
+    ]
     body = _kernel_open(out_var, state_var, params_block, provider_binding=provider_binding,
                         program_block=block_idx)
+    lambda_index = next(index for index, line in enumerate(body) if "pops::for_each_cell" in line)
+    body[lambda_index:lambda_index] = [
+        "  const bool source_has_active_mask_ = %s != nullptr;" % active_mask,
+        "  const pops::FieldView<const pops::Real, pops::kNativeDimension> source_activeA_ = "
+        "source_has_active_mask_ ? std::as_const(*%s).fab(li).view() "
+        ": pops::FieldView<const pops::Real, pops::kNativeDimension>{};" % active_mask,
+    ]
+    # A source is a pointwise rate. Inactive cells contribute zero before any
+    # conservative, primitive, provider or authored expression is evaluated.
+    body += [
+        "    if (source_has_active_mask_ && !(source_activeA_(index, 0) >= pops::Real(0.5))) {",
+        *("      outA(index, %d) = pops::Real(0);" % component for component in range(len(exprs))),
+        "      return;",
+        "    }",
+    ]
     body += ["    " + ln for ln in _cell_locals(impl, exprs, state_var, with_cons=True,
                                                  with_prim=True, provider_binding=provider_binding)]
     body += ["    outA(index, %d) = %s;" % (c, _checked_inline_expr(e)) for c, e in enumerate(exprs)]
     body += _kernel_close()
-    return global_prelude + body
+    return mask_setup + global_prelude + body
 
 
 def _component_sources(

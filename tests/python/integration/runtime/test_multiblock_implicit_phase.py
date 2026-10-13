@@ -6,6 +6,8 @@ name-based block table; positional binding produces the wrong analytic result.
 """
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pytest
 
@@ -271,8 +273,19 @@ def test_generated_native_multiblock_implicit_phase_uses_exact_name_routes(
     assert generated.count('"solve_coupled_implicit"') == 2
     assert 'ctx.require_cartesian_generated_operator(1, "solve_coupled_implicit");' in generated
     assert 'ctx.require_cartesian_generated_operator(0, "solve_coupled_implicit");' in generated
-    assert 'ctx.require_cartesian_generated_operator(0, "named_source");' in generated
-    assert 'ctx.require_cartesian_generated_operator(1, "named_source");' in generated
+    assert '"named_source"' not in generated
+    block_indices = {name: index for index, name in artifact.program_block_routes}
+    for value in resolved.time._values:
+        if value.op != "source":
+            continue
+        block_index = block_indices[value.block.name]
+        direct_query = "ctx.pointwise_active_mask(%d, u%d);" % (block_index, value.inputs[0].id)
+        owned_call = re.search(
+            r'pops_shared_source_[0-9a-f]{64}\(ctx, "[^"]+", %d, u%d, r%d\);' %
+            (block_index, value.inputs[0].id, value.id), generated)
+        assert direct_query in generated or (
+            "ctx.pointwise_active_mask(block_index, kernel_input);" in generated and owned_call)
+    assert "if (source_has_active_mask_ &&" in generated
 
     simulation = pops.bind(
         artifact,

@@ -1,0 +1,19 @@
+Test project <repository>/build-mpi
+    Start 754: test_krylov_workspace_reentrancy.richardson_confirms_the_last_allowed_correction_before_staged_publication
+1/4 Test #754: test_krylov_workspace_reentrancy.richardson_confirms_the_last_allowed_correction_before_staged_publication ...........   Passed    0.76 sec
+    Start 755: test_krylov_workspace_reentrancy.richardson_late_convergence_and_iteration_limit_preserve_acceptance_controls
+2/4 Test #755: test_krylov_workspace_reentrancy.richardson_late_convergence_and_iteration_limit_preserve_acceptance_controls ........   Passed    0.05 sec
+    Start 756: test_krylov_workspace_reentrancy.richardson_last_correction_retains_invalid_controls_and_nonfinite_guards
+3/4 Test #756: test_krylov_workspace_reentrancy.richardson_last_correction_retains_invalid_controls_and_nonfinite_guards ............   Passed    0.05 sec
+    Start 757: test_krylov_workspace_reentrancy.numerical_actions_do_not_downgrade_explicit_provider_failure_or_false_convergence
+4/4 Test #757: test_krylov_workspace_reentrancy.numerical_actions_do_not_downgrade_explicit_provider_failure_or_false_convergence ...   Passed    0.05 sec
+
+100% tests passed out of 4
+
+Label Time Summary:
+cpp-target:test_krylov_workspace_reentrancy    =   0.91 sec*proc (4 tests)
+elliptic                                       =   0.91 sec*proc (4 tests)
+fast                                           =   0.91 sec*proc (4 tests)
+unit                                           =   0.91 sec*proc (4 tests)
+
+Total Test time (real) =   1.03 sec

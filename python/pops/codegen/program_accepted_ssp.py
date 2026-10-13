@@ -25,6 +25,25 @@ def _exact_terms(value):
     return _coeff_metadata_terms(value)
 
 
+def _proved_affine_coefficients(value):
+    """Authenticate affine algebra and its optional pointwise storage contract.
+
+    Stencil access is typed storage metadata rather than an evaluation effect.
+    A neighbour read or any other attribute still needs a separate proof.
+    """
+    attrs = value.attrs
+    if set(attrs) not in ({"coeffs"}, {"coeffs", "stencil_access"}):
+        raise ValueError("affine accepted input has an unproved evaluation effect")
+    if "stencil_access" in attrs:
+        from pops.time.stencil import StencilAccess
+        access = attrs["stencil_access"]
+        if (type(access) is not StencilAccess
+                or type(access.required_ghost_depth) is not int
+                or access.required_ghost_depth != 0):
+            raise ValueError("affine accepted input lacks exact pointwise stencil access")
+    return attrs["coeffs"]
+
+
 def successful_guard_input(value):
     """A typed terminal guard is a value alias only on its successful path."""
     from pops.time.solve_outcome import FailRun, RejectAttempt
@@ -68,7 +87,7 @@ def _convex_coefficient_one(A, b):
     inverse = [[Fraction(int(i == j)) for j in range(n)] for i in range(n)]
     for i in range(n):
         for j in range(i):
-            inverse[i][j] = -sum(K[i][k] * inverse[k][j] for k in range(j, i))
+            inverse[i][j] = -sum((K[i][k] * inverse[k][j] for k in range(j, i)), Fraction())
     base = tuple(sum(row, Fraction()) for row in inverse)
     alpha = tuple(tuple(Fraction(int(i == j)) - inverse[i][j]
                         for j in range(n)) for i in range(n))
@@ -148,8 +167,8 @@ def prove_accepted_update_ssp(program: Any, *, model_authority: Any = None) -> t
                 return frozen_atoms(successful_guard_input(value),weight,out)
             if value.op=='state':
                 out[value.state_ref]=out.get(value.state_ref,Fraction())+weight
-            elif value.op=='linear_combine' and set(value.attrs)=={'coeffs'}:
-                for child,factors in zip(value.inputs,value.attrs['coeffs'],strict=True):
+            elif value.op=='linear_combine':
+                for child,factors in zip(value.inputs,_proved_affine_coefficients(value),strict=True):
                     terms=tuple(_exact_terms(factors))
                     if any(power!=0 for power,_,_ in terms):return False
                     if not frozen_atoms(child,weight*sum((Fraction(a,b) for _,a,b in terms),Fraction()),out):return False
@@ -233,8 +252,7 @@ def prove_accepted_update_ssp(program: Any, *, model_authority: Any = None) -> t
                     if value.state_ref != state_ref or evaluation_stage_fraction(value) != 0:
                         raise ValueError("accepted base is not its exact initial State")
                 elif value.op == "linear_combine":
-                    if set(value.attrs) != {"coeffs"}:
-                        raise ValueError("affine accepted input has an unproved evaluation effect")
+                    _proved_affine_coefficients(value)
                     for child in value.inputs:visit(child)  # include zero-weight effect inputs
                 elif value.op == "diffusive_rhs":
                     if not value.inputs:
@@ -329,7 +347,7 @@ def prove_accepted_update_ssp(program: Any, *, model_authority: Any = None) -> t
                         cache[key]=result;return result
                     if value.op != "linear_combine":
                         raise ValueError("accepted affine input lacks an exact coefficient expression")
-                    for child,coeffs in zip(value.inputs,value.attrs['coeffs'],strict=True):
+                    for child,coeffs in zip(value.inputs,_proved_affine_coefficients(value),strict=True):
                         terms=expression(child,stage)
                         for power,numerator,denominator in _exact_terms(coeffs):
                             if type(power) is not int or power<0:

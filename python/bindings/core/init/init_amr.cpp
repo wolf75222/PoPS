@@ -708,6 +708,8 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("provider_slot"))
       .def("set_field_reaction", &AmrSystem::set_field_reaction, py::arg("provider_slot"),
            py::arg("reaction"))
+      .def("field_solve_report", &AmrSystem::field_solve_report, py::arg("provider_slot"),
+           "Return the last accepted SolveReport, or None before a successful solve.")
       .def("set_field_composite_mean_neutralizing",
            &AmrSystem::set_field_composite_mean_neutralizing, py::arg("provider_slot"),
            py::arg("block"), py::arg("component"), py::arg("eps"))
@@ -972,6 +974,42 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
            py::arg("subject_id"), py::arg("action"), py::arg("action_route"), py::arg("level"))
       .def("_recompute_bootstrap_field", &AmrSystem::recompute_bootstrap_field,
            py::arg("subject_id"), py::arg("provider_slot"))
+      .def("_stage_bootstrap_initial_program_seed", &AmrSystem::stage_bootstrap_initial_program_seed,
+           py::arg("subject_id"), py::arg("runtime_block"), py::arg("opcodes"), py::arg("literals"))
+      .def("_solve_bootstrap_initial_field", &AmrSystem::solve_bootstrap_initial_field,
+           py::arg("subject_id"), py::arg("provider_slot"), py::arg("ordinal"))
+      .def("_map_bootstrap_state_hierarchy", [](AmrSystem& system, const std::string& subject,
+          const pops::analytic::AnalyticOpcodeRows& opcodes, const pops::analytic::AnalyticLiteralRows& literals,
+          const std::vector<py::dict>& rows, const std::string& consumer, const std::string& field) {
+        std::vector<pops::runtime::system::AnalyticMappedInput> inputs;
+        inputs.reserve(rows.size());
+        for(const auto& row:rows) {
+          if(!row.contains("source")) throw std::invalid_argument("initial map input has no exact source");
+          const auto kind=py::cast<std::string>(row["source"]);
+          if(kind=="state") {
+            if(row.size()!=2 || !row.contains("component"))
+              throw std::invalid_argument("initial map State input requires exactly source/component");
+            inputs.push_back(pops::runtime::system::AnalyticMappedInput::state(py::cast<int>(row["component"])));
+            continue;
+          }
+          const bool derivative=kind=="provider_derivative";
+          if((kind!="provider" && !derivative) || row.size()!=(derivative?4:2) || !row.contains("key") ||
+              (derivative && (!row.contains("axis") || !row.contains("edge_order"))))
+            throw std::invalid_argument("initial map provider input changed its exact shape");
+          const auto key=py::cast<py::dict>(row["key"]);
+          if(key.size()!=4 || !key.contains("owner_qid") || !key.contains("space_kind") ||
+             !key.contains("space_name") || !key.contains("component"))
+            throw std::invalid_argument("initial map provider input requires an exact ComponentKey");
+          pops::runtime::system::AuxiliaryComponentKey component{
+            py::cast<std::string>(key["owner_qid"]),py::cast<std::string>(key["space_kind"]),
+            py::cast<std::string>(key["space_name"]),py::cast<std::string>(key["component"])};
+          inputs.push_back(derivative ? pops::runtime::system::AnalyticMappedInput::derivative(
+            std::move(component),py::cast<int>(row["axis"]),py::cast<int>(row["edge_order"])) :
+            pops::runtime::system::AnalyticMappedInput::provider(std::move(component)));
+        }
+        return system.map_bootstrap_state_hierarchy(subject,opcodes,literals,inputs,consumer,field);
+      }, py::arg("subject_id"),py::arg("opcodes"),py::arg("literals"),py::arg("inputs"),
+         py::arg("consumer_qid"),py::arg("provider_slot"))
       .def("_synchronize_bootstrap_state", &AmrSystem::synchronize_bootstrap_state,
            py::arg("subject_id"), py::arg("fine_level"))
       .def("_begin_bootstrap_plan", &AmrSystem::begin_bootstrap_plan)

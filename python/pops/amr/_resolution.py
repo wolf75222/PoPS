@@ -152,6 +152,7 @@ class ResolvedAMRStateStorage:
         from pops.codegen._plans import ResolvedBlock
         from pops.numerics import StateStorage
         from pops.numerics.plan import ResolvedDiscretizationPlan
+        from pops.problem.handles import BlockHandle
 
         if type(block) is not ResolvedBlock or type(block.spatial) is not StateStorage:
             return False
@@ -159,6 +160,7 @@ class ResolvedAMRStateStorage:
             return True
         plan = block.numerics
         return (type(plan) is ResolvedDiscretizationPlan
+                and isinstance(plan.block, BlockHandle)
                 and str(plan.block.instance_owner_path.canonical()) == block.instance_owner_qid
                 and all(type(row.method) is StateStorage for row in plan.rates)
                 and block.spatial.to_data() == plan.primary_spatial().to_data())
@@ -183,8 +185,8 @@ class ResolvedAMRStateStorage:
                         or signature != declared.signature
                         or operator.kind != declared.kind
                         or not isinstance(signature.output, RateSpace)
-                        or signature.output.base_space != self.subject.space
-                        or not signature.inputs or signature.inputs[0] != self.subject.space):
+                        or signature.output.base_space != getattr(self.subject, "space")
+                        or not signature.inputs or signature.inputs[0] != getattr(self.subject, "space")):
                     raise ValueError("AMR local storage rate must match its exact resolved block state")
                 contracts = [contract for handle, contract in module._rate_contracts.items()
                              if handle.local_id == operator.local_id

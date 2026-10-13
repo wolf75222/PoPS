@@ -95,6 +95,9 @@ struct MappingContinuation {
 mutable std::unique_ptr<MappingContinuation> mapping_continuation_;
 
 void cancel_mapping_hierarchy_() const noexcept {
+  revoke_interaction_history_snapshots_();
+  prepared_field_stages_.clear();
+  program_values_.revoke_();
   staged_path_rhs_.clear();
   rhs_input_traces_.clear();
   if (multiblock_subcycling_)
@@ -150,7 +153,8 @@ void resume_mapping_hierarchy_(std::shared_ptr<AmrProgramContext> owner) const {
         const auto kind = frame.ports.front().kind;
         suspended = kind == MappingPortKind::map;
         internal = kind == MappingPortKind::linear_solve ||
-                   kind == MappingPortKind::field_publication || kind == MappingPortKind::spatial_rhs;
+                   kind == MappingPortKind::field_publication || kind == MappingPortKind::spatial_rhs ||
+                   kind == MappingPortKind::named_field_solve || kind == MappingPortKind::field_warm_start;
         if (internal) {
           runtime::program::collective_step_rejection_phase(
               prepared_execution_lane().communicator(),
@@ -176,7 +180,12 @@ void resume_mapping_hierarchy_(std::shared_ptr<AmrProgramContext> owner) const {
                   });
                 });
         }
-        clear_active_multiblock_group_();
+        // A qualified barrier resumes the same synchronized envelopes. Keep their successful
+        // SSA proofs until completion or cancellation; only detach the currently selected group.
+        if (suspended || internal)
+          detach_qualified_hierarchy_barrier_group_();
+        else
+          clear_active_multiblock_group_();
       });
       if (internal)
         continue;
@@ -189,8 +198,8 @@ void resume_mapping_hierarchy_(std::shared_ptr<AmrProgramContext> owner) const {
         return;
       }
       prepare_spatial_collectively([&] {
-        if (!staged_path_rhs_.empty())
-          throw std::logic_error("AMR hierarchy completed with an unpublished path RHS stage");
+        if (!staged_path_rhs_.empty() || !prepared_field_stages_.empty())
+          throw std::logic_error("AMR hierarchy completed with an unpublished hierarchy stage");
       });
       multiblock_subcycling_->finish_synchronized(
           [&](multiblock_reflux_context_type& reflux) { reconcile_multiblock_reflux_(reflux); },
@@ -212,6 +221,7 @@ void resume_mapping_hierarchy_(std::shared_ptr<AmrProgramContext> owner) const {
       clear_active_multiblock_group_();
       swap_level_attempt_envelope_(frame.prior);
       auto completed = std::move(frame.completed);
+      revoke_interaction_history_snapshots_();
       mapping_continuation_.reset();
       if (completed)
         completed();

@@ -1,0 +1,102 @@
+{
+  "schema": "pops.history-snapshot-installed-identity@1",
+  "source_commit": "f94b82ea9d2c4ee571e994dd29ce3e699a82809e",
+  "cpp_source_commit": "f94b82ea9d2c4ee571e994dd29ce3e699a82809e",
+  "header_signature": "da8e04dab4c1e22cf3c31dc75e253eecf26f3350a09b900667cc8a1c05eacb4d",
+  "abi_version": 13,
+  "native_variants": [
+    {
+      "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.3.34.2);std=202002L;headers=da8e04dab4c1e22cf3c31dc75e253eecf26f3350a09b900667cc8a1c05eacb4d;kokkos=1;stdlib=libc++_220106;mpi=1;mpi_abi=40d6e65d7f79f247f867711ee0854b6220e3b9c1950da10f38add6e0977b9e89;dim=1",
+      "dimension": 1,
+      "has_kokkos": true,
+      "has_mpi": true,
+      "path": "dim1/_pops.cpython-312-darwin.so",
+      "sha256": "55ec7372dda0d2cd86f1ded53a95c73ab8ce0366c3bca28c8db350fa461e4206",
+      "version": "1.1.0"
+    },
+    {
+      "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.3.34.2);std=202002L;headers=da8e04dab4c1e22cf3c31dc75e253eecf26f3350a09b900667cc8a1c05eacb4d;kokkos=1;stdlib=libc++_220106;mpi=1;mpi_abi=40d6e65d7f79f247f867711ee0854b6220e3b9c1950da10f38add6e0977b9e89;dim=2",
+      "dimension": 2,
+      "has_kokkos": true,
+      "has_mpi": true,
+      "path": "dim2/_pops.cpython-312-darwin.so",
+      "sha256": "e9b1c76cb0927f0df939bad9d1e785cd565cd582cd06bd3b24dba9cca0f765fc",
+      "version": "1.1.0"
+    }
+  ],
+  "source_receipt_origins": [
+    {
+      "ref": "external-evidence:ci/f94b82ea-installed-dim1-identity.json",
+      "sha256": "e4de0b63cb52ba317cf60ec0283de9f30c67c3218dbafe81f22564b465b19b74"
+    },
+    {
+      "ref": "external-evidence:ci/f94b82ea-installed-dim2-identity.json",
+      "sha256": "31b57f0cdc21280bf3f732087c5d6efb465419979b2c1f9fc92a79d5c59f9fce"
+    }
+  ],
+  "official_install_scope": "Sequential official Dim2 MPI and Dim1 MPI builds; both retained variants authenticate the new common SDK header signature. Historical a929 installed identity is a separate receipt.",
+  "selected_dimensions": [
+    {
+      "dimension": 1,
+      "native_sha256": "55ec7372dda0d2cd86f1ded53a95c73ab8ce0366c3bca28c8db350fa461e4206",
+      "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.3.34.2);std=202002L;headers=da8e04dab4c1e22cf3c31dc75e253eecf26f3350a09b900667cc8a1c05eacb4d;kokkos=1;stdlib=libc++_220106;mpi=1;mpi_abi=40d6e65d7f79f247f867711ee0854b6220e3b9c1950da10f38add6e0977b9e89;dim=1",
+      "has_mpi": true,
+      "pythonpath_absent": true,
+      "runtime_environment": {
+        "dimension": 1,
+        "precision": "double",
+        "real_bytes": 8,
+        "has_kokkos": true,
+        "kokkos_backend": "OpenMP",
+        "kokkos_device": "cpu",
+        "kokkos_concurrency": 2,
+        "mpi_compiled": true,
+        "mpi_active": true,
+        "mpi_rank": 0,
+        "mpi_ranks": 1,
+        "communicator": "MPI_COMM_WORLD"
+      }
+    },
+    {
+      "dimension": 2,
+      "native_sha256": "e9b1c76cb0927f0df939bad9d1e785cd565cd582cd06bd3b24dba9cca0f765fc",
+      "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.3.34.2);std=202002L;headers=da8e04dab4c1e22cf3c31dc75e253eecf26f3350a09b900667cc8a1c05eacb4d;kokkos=1;stdlib=libc++_220106;mpi=1;mpi_abi=40d6e65d7f79f247f867711ee0854b6220e3b9c1950da10f38add6e0977b9e89;dim=2",
+      "has_mpi": true,
+      "pythonpath_absent": true,
+      "runtime_environment": {
+        "dimension": 2,
+        "precision": "double",
+        "real_bytes": 8,
+        "has_kokkos": true,
+        "kokkos_backend": "OpenMP",
+        "kokkos_device": "cpu",
+        "kokkos_concurrency": 2,
+        "mpi_compiled": true,
+        "mpi_active": true,
+        "mpi_rank": 0,
+        "mpi_ranks": 1,
+        "communicator": "MPI_COMM_WORLD"
+      }
+    }
+  ],
+  "installed_python_source_parity": {
+    "files": 801,
+    "recorded_source_and_installed_bytes_equal": true,
+    "both_dimension_receipts_same_tree": true,
+    "manifest_digest": "601fd8448ae47f8e2aba6374fb89887177b8928a6ef722faad267851a7410f46",
+    "manifest_digest_encoding": "SHA256 of UTF-8 json.dumps(python_tree, sort_keys=True, separators=(\",\", \":\"))",
+    "changed_emitters": {
+      "codegen/program_emit_control.py": "0f5c804d1e3acdd8f3e6babeab273d71a054efa8b779e40243554230090802ed",
+      "codegen/program_emit_spatial_interaction.py": "94ffff9da56b523b7276d0c9d885f55300e708fd161e0b8abb4f28d32983a417"
+    }
+  },
+  "scientific_execution": {
+    "claimed_by_this_identity_receipt": false,
+    "older_execution_receipts_transferred_to_these_variants": false
+  },
+  "remote_ci": {
+    "verdict_location": "https://github.com/wolf75222/PoPS/pull/686",
+    "requires_exact_final_revision_and_required_aggregate_gate": true,
+    "green_claimed_by_this_receipt": false
+  }
+}

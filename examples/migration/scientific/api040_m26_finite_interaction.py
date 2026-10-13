@@ -27,6 +27,7 @@ from pops.time import FixedDt
 
 from api040_m26_finite_oracle import NODES, PERMUTATION, density_pair, metrics
 from api040_receipts import receipt_json
+from _native_example_profile import execution_context as native_execution_context
 
 
 DIAGNOSTICS = (
@@ -107,6 +108,22 @@ def build_case(*, permuted: bool = False):
     return case, layout, subjects, order
 
 
+def _rank_and_size(world):
+    return (0, 1) if world is None else (int(world.rank), int(world.size))
+
+
+def _gather_bytes(world, payload):
+    if type(payload) is not bytes:
+        raise TypeError("M26 control payload must be exact bytes")
+    return (payload,) if world is None else tuple(world.allgather_bytes(payload))
+
+
+def _broadcast_bytes(world, payload):
+    if type(payload) is not bytes:
+        raise TypeError("M26 broadcast payload must be exact bytes")
+    return payload if world is None else world.broadcast_bytes(payload, root=0)
+
+
 def _collective_call(world, label, operation):
     result = None
     failure = b""
@@ -114,7 +131,7 @@ def _collective_call(world, label, operation):
         result = operation()
     except Exception as exception:
         failure = (label + ": " + type(exception).__name__ + ": " + str(exception)).encode()
-    failures = world.allgather_bytes(failure)
+    failures = _gather_bytes(world, failure)
     if any(failures):
         raise RuntimeError("; ".join(row.decode() for row in failures if row))
     return result
@@ -176,7 +193,10 @@ def run_and_archive(destination: Path) -> list[dict]:
     from pops.codegen._native_mpi import native_mpi_communicator
 
     native = select_native_dimension(1)
-    bootstrap = native.mpi_world()
+    route = native_mpi_communicator(native)
+    if route not in ("serial", "MPI_COMM_WORLD"):
+        raise RuntimeError("M26 has no authenticated native communicator route")
+    bootstrap = native.mpi_world() if route == "MPI_COMM_WORLD" else None
 
     def authenticate():
         package = Path(pops.__file__).resolve()
@@ -187,7 +207,7 @@ def run_and_archive(destination: Path) -> list[dict]:
 
     destination = _collective_call(bootstrap, "installed identity", authenticate)
     route = _collective_call(bootstrap, "MPI route", lambda: native_mpi_communicator(native))
-    if len(set(bootstrap.allgather_bytes(route.encode()))) != 1:
+    if len(set(_gather_bytes(bootstrap, route.encode()))) != 1:
         raise RuntimeError("M26 MPI route differs across ranks")
     compile_once = None
     if route == "MPI_COMM_WORLD":
@@ -221,14 +241,15 @@ def run_and_archive(destination: Path) -> list[dict]:
             return True
 
         _collective_call(bootstrap, "Dim1 artifact", require_dim1)
-        execution = _collective_call(
-            bootstrap, "execution context", lambda artifact=artifact:
-            pops.ExecutionContext.mpi_world(artifact))
+        def execution_context(artifact=artifact):
+            return native_execution_context(artifact)
+
+        execution = _collective_call(bootstrap, "execution context", execution_context)
         world = _collective_call(
             bootstrap, "execution communicator", lambda execution=execution:
             execution.communicator.handle)
-        mismatch = world.rank != bootstrap.rank or world.size != bootstrap.size
-        if any(row == b"different" for row in bootstrap.allgather_bytes(
+        mismatch = _rank_and_size(world) != _rank_and_size(bootstrap)
+        if any(row == b"different" for row in _gather_bytes(bootstrap,
                 b"different" if mismatch else b"same")):
             raise RuntimeError("M26 execution communicator differs from preflight")
         for variation in ((False, True) if not permuted else (False,)):
@@ -250,10 +271,10 @@ def run_and_archive(destination: Path) -> list[dict]:
                 world, "accepted status", lambda runtime=runtime, report=report:
                 json.dumps((runtime.time(), runtime.macro_step(),
                             report.accepted_steps, report.rejected_steps)).encode())
-            if len(set(world.allgather_bytes(status))) != 1:
+            if len(set(_gather_bytes(world, status))) != 1:
                 raise RuntimeError("M26 native status differs across ranks")
             failure = b""
-            if world.rank == 0:
+            if _rank_and_size(world)[0] == 0:
                 try:
                     if report.accepted_steps != 1 or report.rejected_steps != 0:
                         raise AssertionError("M26 finite batch must accept exactly one step")
@@ -273,24 +294,24 @@ def run_and_archive(destination: Path) -> list[dict]:
                         "artifact_identity": artifact.artifact_identity.token,
                         "artifact_abi_key": artifact.abi_key,
                         "native_sha256": hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest(),
-                        "mpi_ranks": world.size, "execution_context": execution.to_data(),
+                        "mpi_ranks": _rank_and_size(world)[1], "communicator": route, "execution_context": execution.to_data(),
                         "run_report": report.to_data(), "saved_state": path.name,
                         "saved_state_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                     })
                 except Exception as exception:
                     failure = (type(exception).__name__ + ": " + str(exception)).encode()
-            failure = world.broadcast_bytes(failure, root=0)
+            failure = _broadcast_bytes(world, failure)
             if failure:
                 raise RuntimeError(failure.decode())
     payload = b""
     failure = b""
-    if world.rank == 0:
+    if _rank_and_size(world)[0] == 0:
         try:
             payload = (receipt_json({
                 "schema_version": 1, "case": "M26_finite_symmetric_interaction",
                 "status": "passed", "criteria": CRITERIA, "records": records,
                 "scope": "N12 measured finite DOFs only, not an aggregation-diffusion PDE",
-                "mpi_ranks": world.size,
+                "mpi_ranks": _rank_and_size(world)[1], "communicator": route,
                 "threads_requested": int(os.environ.get("POPS_THREADS", "1")),
                 "example_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                 "oracle_sha256": hashlib.sha256(
@@ -300,10 +321,10 @@ def run_and_archive(destination: Path) -> list[dict]:
             (destination / "receipt.json").write_bytes(payload)
         except Exception as exception:
             failure = (type(exception).__name__ + ": " + str(exception)).encode()
-    failure = world.broadcast_bytes(failure, root=0)
+    failure = _broadcast_bytes(world, failure)
     if failure:
         raise RuntimeError(failure.decode())
-    return json.loads(world.broadcast_bytes(payload, root=0))["records"]
+    return json.loads(_broadcast_bytes(world, payload))["records"]
 
 
 if __name__ == "__main__":

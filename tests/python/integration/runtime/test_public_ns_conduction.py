@@ -9,14 +9,15 @@ import numpy as np
 import pops
 import pytest
 
-from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
+from tests.python.support.public_native_profile import compile_profile_plan_once as compile_resolved_plan_once
 from tests.python.integration.runtime.test_public_captured_diffusion import bounded_bytes
 from tests.python.integration.runtime.test_public_evolved_original_stage import (
-    checkpoint_provenance, compare_checkpoint_replay,
+    checkpoint_provenance, checkpoint_restart_authority, compare_checkpoint_replay_v2,
 )
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.public_native_profile import rank_and_size
 from tests.python.support.ns_conduction import (
     ACCEPTANCE, CONTROLS, CV, DT, FD_STEP, GAMMA, GAS_R, KAPPA, MU,
     build, check_step, convective_action, initial_data, primitives,
@@ -67,9 +68,8 @@ def exact_images(left, right):
 def test_public_compressible_ns_conduction_original_stage_exact_replay(
         isolated_native_cache, tmp_path, record_property, cells):
     del isolated_native_cache
-    from pops._native_selector import select_native_dimension
-    native = select_native_dimension(1)
-    world = native.mpi_world()
+    from tests.python.support.public_native_profile import native_profile
+    native, world = native_profile(dimension=1, scope="NS conduction")
     with collective_check(world):
         assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
     case, layout, _ = collective_call(world, lambda: build(cells))
@@ -94,20 +94,23 @@ def test_public_compressible_ns_conduction_original_stage_exact_replay(
         authorities[phase] = collective_call(world, lambda phase=phase: checkpoint_provenance(runtime, checkpoints[phase]))
         phases[phase] = capture(world, runtime, cells, step)
     restored = collective_call(world, bind)
+    restart_authority = collective_call(world, lambda: checkpoint_restart_authority(restored))
     collective_call(world, lambda: restored.restart(checkpoints["accepted"]))
+    restart_authority["restored_source_run"] = collective_call(world, lambda: restored.last_run_identity.token)
     phases["reloaded"] = capture(world, restored, cells, 1)
     with collective_check(world):
         exact_images(phases["reloaded"], phases["accepted"])
     collective_call(world, lambda: pops.run(restored, t_end=2*DT, max_steps=1, console=False))
     checkpoints["replay"] = collective_call(world, lambda: restored.checkpoint(directory/"replay-checkpoint"))
     cp_hashes["replay"] = collective_call(world, lambda: hashlib.sha256(bounded_bytes(checkpoints["replay"])).hexdigest())
-    authorities["replay"] = collective_call(world, lambda: checkpoint_provenance(restored, checkpoints["replay"]))
+    authorities["replay"] = collective_call(world, lambda: checkpoint_provenance(
+        restored, checkpoints["replay"], restart_authority=restart_authority))
     phases["replay"] = capture(world, restored, cells, 2)
     with collective_check(world):
         exact_images(phases["replay"], phases["continuous"])
         np.testing.assert_array_equal(phases["continuous"][0]["temperature-slot0"], phases["accepted"][0]["temperature-slot1"])
-        if world.rank == 0:
-            equivalence = compare_checkpoint_replay(checkpoints, authorities)
+        if rank_and_size(world)[0] == 0:
+            equivalence = compare_checkpoint_replay_v2(checkpoints, authorities)
             initial_path = directory/"initial.npz"
             np.savez(initial_path, Q=initial, inverse_EOS=primitives(initial),
                      coordinates=(np.arange(cells)+.5)/cells, cell_volumes=np.full(cells, 1/cells))
@@ -151,7 +154,7 @@ def test_public_compressible_ns_conduction_original_stage_exact_replay(
             for phase, path in checkpoints.items():
                 assert hashlib.sha256(bounded_bytes(path)).hexdigest() == cp_hashes[phase]
             receipt = {"fixture_schema": "pops.compressible-NS-conduction-native@1", "dimension": 1,
-                "cells": cells, "dt": DT, "rank": world.rank, "size": world.size,
+                "cells": cells, "dt": DT, "rank": rank_and_size(world)[0], "size": rank_and_size(world)[1],
                 "EOS": {"gamma": GAMMA, "R": GAS_R, "Cv": CV}, "mu": MU, "kappa": KAPPA,
                 "mesh": {"cell_shape": [cells], "lower": [0.], "upper": [1.], "periodic_axes": ["x"],
                          "geometry_reference": "declared Uniform grid; coordinates and volumes are derived references"},
@@ -167,6 +170,6 @@ def test_public_compressible_ns_conduction_original_stage_exact_replay(
                 "flux_reference_provenance": "COMPUTED_REFERENCE from saved actual fields, not a native face getter"}
             (directory/"receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True)+"\n")
         for name, value in (("artifact_identity", artifact.artifact_identity.token), ("dimension", 1),
-                            ("rank", world.rank), ("size", world.size), ("evidence_path", str(directory)),
+                            ("rank", rank_and_size(world)[0]), ("size", rank_and_size(world)[1]), ("evidence_path", str(directory)),
                             ("ns_conduction_receipt", str(directory/"receipt.json"))):
             record_property(name, value)

@@ -583,7 +583,7 @@
       ]
     },
     "ci_20260914_field_provider_install": "Conservative 5-second scheduling estimate for mocked field-provider installation contracts; not a measured CI duration. Replace from a complete per-file timing receipt.",
-    "estimated_count": 822,
+    "estimated_count": 832,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -651,7 +651,6 @@
       "tests/python/integration/native_loader/test_external_field_dispatch_faults_runtime.py",
       "tests/python/integration/native_loader/test_external_field_solver_runtime.py",
       "tests/python/integration/native_loader/test_external_interface_backend.py",
-      "tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py",
       "tests/python/integration/native_loader/test_native_abi_std.py",
       "tests/python/integration/native_loader/test_native_brick_typed_ctors.py",
       "tests/python/integration/native_loader/test_normalized_program_execution.py",
@@ -734,7 +733,6 @@
       "tests/python/integration/runtime/test_m10_self_consistent_sg.py",
       "tests/python/integration/runtime/test_m11_w10_constrained_runtime.py",
       "tests/python/integration/runtime/test_m15_axial_b1_runtime.py",
-      "tests/python/integration/runtime/test_m15_mpi_collective_rejection.py",
       "tests/python/integration/runtime/test_m18_discrete_entropy_runtime.py",
       "tests/python/integration/runtime/test_m18_w09_declared_domain_runtime.py",
       "tests/python/integration/runtime/test_m19_amr_consumed_runtime.py",
@@ -745,7 +743,6 @@
       "tests/python/integration/runtime/test_m19_vlasov_poisson_runtime.py",
       "tests/python/integration/runtime/test_m23_hall_fourier_runtime.py",
       "tests/python/integration/runtime/test_mapped_condensed_disk_runtime.py",
-      "tests/python/integration/runtime/test_mapped_field_binding_collective_runtime.py",
       "tests/python/integration/runtime/test_multi_layout_runtime.py",
       "tests/python/integration/runtime/test_multiblock_implicit_phase.py",
       "tests/python/integration/runtime/test_multicomponent_diffusion_exchange_ledger.py",
@@ -814,6 +811,7 @@
       "tests/python/integration/runtime/test_w11_child_trace_rollback.py",
       "tests/python/unit/amr/test_accepted_halo_preparation.py",
       "tests/python/unit/amr/test_explicit_local_storage_authority.py",
+      "tests/python/unit/amr/test_initial_field_ghost_profile.py",
       "tests/python/unit/amr/test_external_amr_providers.py",
       "tests/python/unit/amr/test_local_state_storage_adversarial.py",
       "tests/python/unit/amr/test_local_state_storage_amr.py",
@@ -827,6 +825,7 @@
       "tests/python/unit/codegen/test_amr_artifact_metadata.py",
       "tests/python/unit/codegen/test_amr_diffusion_codegen.py",
       "tests/python/unit/codegen/test_amr_implicit_diffusion_codegen.py",
+      "tests/python/unit/codegen/test_amr_named_field_barriers.py",
       "tests/python/unit/codegen/test_amr_route_introspection.py",
       "tests/python/unit/codegen/test_amr_tensor_diffusion_codegen.py",
       "tests/python/unit/codegen/test_analytic_aux.py",
@@ -868,6 +867,7 @@
       "tests/python/unit/codegen/test_component_provider_pack.py",
       "tests/python/unit/codegen/test_component_registry.py",
       "tests/python/unit/codegen/test_composite_tensor_fac_provider.py",
+      "tests/python/unit/codegen/test_condensed_source_flux_budget.py",
       "tests/python/unit/codegen/test_conditional_consumers.py",
       "tests/python/unit/codegen/test_conditional_rounding.py",
       "tests/python/unit/codegen/test_conditional_rounding_adversarial.py",
@@ -1037,6 +1037,7 @@
       "tests/python/unit/codegen/test_selected_eigenvalues.py",
       "tests/python/unit/codegen/test_shared_interface_validation.py",
       "tests/python/unit/codegen/test_source_state_storage.py",
+      "tests/python/unit/codegen/test_spatial_history_snapshot_codegen.py",
       "tests/python/unit/codegen/test_stage_provider_ssp_proof.py",
       "tests/python/unit/codegen/test_state_read_extent.py",
       "tests/python/unit/codegen/test_static_provider_ssp_proof.py",
@@ -1044,9 +1045,11 @@
       "tests/python/unit/codegen/test_symbolic_data_model.py",
       "tests/python/unit/codegen/test_symbolic_exp_local_residual.py",
       "tests/python/unit/codegen/test_symbolic_path_name_hygiene.py",
+      "tests/python/unit/codegen/test_tensor_diagonal_mg_preconditioner.py",
       "tests/python/unit/codegen/test_tensor_transport_composition.py",
       "tests/python/unit/codegen/test_transport_quadrature.py",
       "tests/python/unit/codegen/test_typed_phase_records.py",
+      "tests/python/unit/codegen/test_typed_product_seed_history.py",
       "tests/python/unit/codegen/test_uniform_clock_manifest_contract.py",
       "tests/python/unit/codegen/test_uniform_field_roles.py",
       "tests/python/unit/codegen/test_user_joint_reconstruction.py",
@@ -1090,6 +1093,8 @@
       "tests/python/unit/identity/test_native_parity.py",
       "tests/python/unit/identity/test_semantic_identity.py",
       "tests/python/unit/identity/test_semantic_program.py",
+      "tests/python/unit/initial/test_amr_bootstrap_program.py",
+      "tests/python/unit/initial/test_bootstrap_program.py",
       "tests/python/unit/initial/test_cell_integral_authoring.py",
       "tests/python/unit/initial/test_initial_authoring.py",
       "tests/python/unit/lib/time/test_final_imex_amr.py",
@@ -1232,6 +1237,7 @@
       "tests/python/unit/runtime/test_amr_accepted_state_inspector.py",
       "tests/python/unit/runtime/test_amr_bind_lowering.py",
       "tests/python/unit/runtime/test_amr_checkpoint_contract.py",
+      "tests/python/unit/runtime/test_amr_empty_diagnostic_rank_restart.py",
       "tests/python/unit/runtime/test_amr_execution_contract.py",
       "tests/python/unit/runtime/test_amr_local_box_bounds_contract.py",
       "tests/python/unit/runtime/test_amr_refinement_ratio_rank.py",
@@ -1249,6 +1255,7 @@
       "tests/python/unit/runtime/test_checkpoint_candidate_engine_routing.py",
       "tests/python/unit/runtime/test_checkpoint_embedded_boundary.py",
       "tests/python/unit/runtime/test_checkpoint_history_flux_snapshots.py",
+      "tests/python/unit/runtime/test_checkpoint_private_filesystem.py",
       "tests/python/unit/runtime/test_checkpoint_sealed_replay.py",
       "tests/python/unit/runtime/test_collective_fixture_checks.py",
       "tests/python/unit/runtime/test_computed_program_frontier.py",
@@ -1321,6 +1328,7 @@
       "tests/python/unit/runtime/test_shared_interface_flux_budget.py",
       "tests/python/unit/runtime/test_spatial_identity.py",
       "tests/python/unit/runtime/test_spatial_lowering_protocol.py",
+      "tests/python/unit/runtime/test_staircase_field_domain.py",
       "tests/python/unit/runtime/test_step_strategy.py",
       "tests/python/unit/runtime/test_step_transaction_runtime.py",
       "tests/python/unit/runtime/test_temporal_restart_state.py",
@@ -1356,6 +1364,7 @@
       "tests/python/unit/time/test_lib_time_exact_coefficients.py",
       "tests/python/unit/time/test_local_transform.py",
       "tests/python/unit/time/test_method_tableaux.py",
+      "tests/python/unit/time/test_mpi_restart_fixture_contracts.py",
       "tests/python/unit/time/test_multirate_history_contract.py",
       "tests/python/unit/time/test_operator_handle_resolution.py",
       "tests/python/unit/time/test_post_synchronization.py",
@@ -1373,6 +1382,7 @@
       "tests/python/unit/time/test_provenance_contract.py",
       "tests/python/unit/time/test_qualified_program_references.py",
       "tests/python/unit/time/test_solve_outcome_contract.py",
+      "tests/python/unit/time/test_solved_field_sampling.py",
       "tests/python/unit/time/test_sparse_nested_detach_independent.py",
       "tests/python/unit/time/test_sparse_program_detach.py",
       "tests/python/unit/time/test_split_evaluation_partition.py",
@@ -1506,7 +1516,7 @@
       "scope": "M0-M7 migration additions",
       "timing_limit": "The inherited scalar-advection pipeline estimate is not refreshed from the local OMP qualification, where a full run exceeded 4299 s. CI Serial hardware/cache behavior differs; no observed CI fit is claimed. Preserve the indivisible full scientific test and refresh its estimate from the next complete CI artifact."
     },
-    "total_files": 887,
+    "total_files": 897,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -4802,6 +4812,78 @@
         "tests/python/integration/runtime/test_public_scalar_field_sample.py": 600
       },
       "basis": "Unmeasured CI scheduling estimates using the existing source/runtime tiers: 5 seconds for strict SDK metadata and public typed FieldSample authoring/codegen contracts; 600 seconds for one complete native Dim2 projected Poisson witness. The architecture setup contract remains in its existing dedicated source-only lane. These weights are not measured Native or CI durations and do not establish ADC reproduction or MPI qualification. Existing watchdogs and shard capacities are unchanged; replace estimates only from complete per-file CI receipts."
+    },
+    "ci_20261012_initial_field_ghost_profile": {
+      "path": "tests/python/unit/amr/test_initial_field_ghost_profile.py",
+      "estimated_seconds": 5,
+      "analogue": "tests/python/unit/amr/test_accepted_halo_preparation.py",
+      "basis": "Unmeasured five-second source-only scheduling estimate for exact Serial/MPI profile, ABI and SDK admission plus per-rank mandatory receipt checks. Uses the existing pure AMR contract tier; no native execution or CI duration measured. MPI1/MPI2 runtime drivers remain manifest-owned dedicated orchestrators, outside this serial catalog."
+    },
+    "ci_20261012_real_compiler_fixtures": {
+      "estimates_seconds": {
+        "tests/python/unit/codegen/test_m23_complete_program_syntax.py": 180,
+        "tests/python/unit/codegen/test_m26_complete_program_review.py": 120,
+        "tests/python/unit/codegen/test_m27_complete_program_review.py": 90,
+        "tests/python/unit/numerics/test_coordinated_face.py": 90
+      },
+      "basis": "Unmeasured conservative scheduling allowances for mandatory real compiler witnesses: nine M23 full Program MPI-branch syntax cases over Dim1/2/3; four M26 and two M27 Dim1 full Program cases; and coordinated-face source contracts plus two genuine composite executables. The old five-second source-only classification missed their compiler work. Local compiler receipts support these allowances but are not complete CI timing measurements. Existing native runtime weights, 71 Python shards, watchdogs and fail-closed coverage are unchanged; replace estimates only from complete per-file CI receipts.",
+      "source_sha256": {
+        "tests/python/unit/codegen/test_m23_complete_program_syntax.py": "4d4ecb8fba62e957b0871ee9cce58bc228926814550565042d5b3361f2256a92",
+        "tests/python/unit/codegen/test_m26_complete_program_review.py": "ea1484a001b77c778726c4dfb260a959985d77cf7e13315ff5c24d4448071cb3",
+        "tests/python/unit/codegen/test_m27_complete_program_review.py": "a03b491d68885f4e93ed01f114b92948561820477e2b3e59dc9a237e9e5f5481",
+        "tests/python/unit/numerics/test_coordinated_face.py": "65edea674d02bb3199b7d3e38ef76e58704e2917663ee0f1d29e07aca7119e92"
+      }
+    },
+    "declared_hardware_profiles": {
+      "gpu": {
+        "files": [
+          "tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py"
+        ],
+        "case_count": 4,
+        "native_dimension": 2,
+        "estimated_seconds": 120,
+        "estimate_is_hardware_timing": false,
+        "basis": "Existing 120-second CPU scheduling estimate retained as provenance only; authentic CUDA/HIP device/managed Field storage is mandatory. No GPU execution or timing received. CPU plans exclude this exact manifest-declared profile; scripts/ci_python_hardware.py --hardware gpu --execute fails closed on CPU."
+      }
+    },
+    "ci_20261013_typed_product_seed_history": {
+      "path": "tests/python/unit/codegen/test_typed_product_seed_history.py",
+      "estimated_seconds": 60,
+      "source_sha256": "e81f6134d172dce2b55b6779bd7cd1af23efb308f92615f19975495f203a9847",
+      "local_source_cases": 14,
+      "local_source_phase_seconds": 30.648,
+      "local_source_session_cases": 26,
+      "local_source_session_seconds": 39.96,
+      "basis": "Conservative 60-second scheduling estimate for fourteen source-only NS typed-product and named-producer history/codegen regressions. The local checkout source receipt has fourteen testcase phases totaling 30.648 seconds in a complete 26-case source session lasting 39.96 seconds, with no native selected before or after and no DSO compilation. These local figures are not GitHub CI file wall times or native Dim1 qualification. Existing suite ownership, 71 shards, dimensions, MPI inventories and watchdogs remain unchanged; replace the estimate only from a complete CI per-file receipt."
+    },
+    "ci_20261013_spatial_history_snapshot_codegen": {
+      "path": "tests/python/unit/codegen/test_spatial_history_snapshot_codegen.py",
+      "estimated_seconds": 15,
+      "source_sha256": "4feff7cde2e95ccc58e0c033767c9ae38f6da590fad743fe26c90f2c665b8d4e",
+      "local_source_cases": 4,
+      "local_source_phase_seconds": 6.25,
+      "local_source_session_seconds": 6.51,
+      "basis": "Conservative 15-second scheduling estimate for four source-only AMR/uniform keeper history declaration and detach/codegen authority cases. The complete local source session passed in 6.51 seconds with no native modules loaded before or after and no DSO compilation. This is an estimate, not a GitHub CI per-file timing measurement or native snapshot qualification. Existing codegen suite, 71 shards, native dimensions, MPI inventories and watchdogs remain unchanged; replace only from a complete CI per-file receipt."
+    },
+    "ci_20261013_mpi_restart_fixture_contracts": {
+      "files": {
+        "tests/python/unit/time/test_mpi_restart_fixture_contracts.py": {
+          "estimated_seconds": 5,
+          "source_sha256": "dd8c502eb54201a6ca977c5dd1617945906f7fa697f516d8f83cd18a4d523079",
+          "local_source_cases": 4,
+          "local_source_phase_seconds": 0.335,
+          "source_session_seconds": 0.60
+        },
+        "tests/python/unit/runtime/test_amr_empty_diagnostic_rank_restart.py": {
+          "estimated_seconds": 5,
+          "source_sha256": "75d710f2dd6ba7a9edaad00585966b7111a049fe2607d8e90f4d78081bd836b4",
+          "local_source_cases": 22,
+          "local_source_phase_seconds": 0.002
+        }
+      },
+      "local_source_session_cases": 128,
+      "local_source_session_seconds": 1.76,
+      "basis": "Conservative five-second source-only scheduling estimates for restart fixture namespace/portable lineage receipt admission and empty-rank AMR diagnostic/restart propagation. The final temporal file has four source cases totaling 0.335 seconds in its 0.60-second source session; the diagnostic file has twenty-two cases totaling 0.002 seconds in the earlier 128-case 1.76-second source session. No native loaded or DSO compilation. These are estimates, not GitHub CI per-file measurements or native MPI restart qualification. Existing suites, 71 shards, dimensions, MPI inventories and watchdogs remain unchanged; replace only from complete CI per-file receipts."
     }
   },
   "tests/python/integration/amr/test_accepted_halo_extent_binding.py": 600,
@@ -4813,7 +4895,6 @@
   "tests/python/integration/amr/test_public_tag_selection_native.py": 600,
   "tests/python/integration/amr/test_symbolic_path_amr_runtime.py": 600,
   "tests/python/integration/native_loader/test_external_field_dispatch_faults_runtime.py": 120,
-  "tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py": 120,
   "tests/python/integration/runtime/test_affine_push_forward_amr_runtime.py": 600,
   "tests/python/integration/runtime/test_affine_push_forward_runtime.py": 600,
   "tests/python/integration/runtime/test_amr_gather_object_bytes_runtime.py": 600,
@@ -4858,7 +4939,6 @@
   "tests/python/integration/runtime/test_m10_self_consistent_sg.py": 600,
   "tests/python/integration/runtime/test_m11_w10_constrained_runtime.py": 600,
   "tests/python/integration/runtime/test_m15_axial_b1_runtime.py": 600,
-  "tests/python/integration/runtime/test_m15_mpi_collective_rejection.py": 600,
   "tests/python/integration/runtime/test_m18_discrete_entropy_runtime.py": 600,
   "tests/python/integration/runtime/test_m18_w09_declared_domain_runtime.py": 600,
   "tests/python/integration/runtime/test_m19_amr_consumed_runtime.py": 600,
@@ -4868,7 +4948,6 @@
   "tests/python/integration/runtime/test_m19_thermal_consumed_runtime.py": 600,
   "tests/python/integration/runtime/test_m19_vlasov_poisson_runtime.py": 600,
   "tests/python/integration/runtime/test_m23_hall_fourier_runtime.py": 600,
-  "tests/python/integration/runtime/test_mapped_field_binding_collective_runtime.py": 600,
   "tests/python/integration/runtime/test_native_amr12_state_carrier_failures.py": 600,
   "tests/python/integration/runtime/test_nonlinear_mixed_field_runtime.py": 600,
   "tests/python/integration/runtime/test_nonnegative_diagonal_diffusion_runtime.py": 600,
@@ -4913,6 +4992,7 @@
   "tests/python/integration/runtime/test_w11_child_trace_rollback.py": 600,
   "tests/python/unit/amr/test_accepted_halo_preparation.py": 5,
   "tests/python/unit/amr/test_explicit_local_storage_authority.py": 5,
+  "tests/python/unit/amr/test_initial_field_ghost_profile.py": 5,
   "tests/python/unit/amr/test_local_state_storage_adversarial.py": 5,
   "tests/python/unit/amr/test_local_state_storage_amr.py": 5,
   "tests/python/unit/codegen/test_accepted_exchange_coverage_independent.py": 5,
@@ -4964,9 +5044,9 @@
   "tests/python/unit/codegen/test_m10_independent_review.py": 5,
   "tests/python/unit/codegen/test_m19_product_mpi_publication.py": 5,
   "tests/python/unit/codegen/test_m19_product_support_contracts.py": 5,
-  "tests/python/unit/codegen/test_m23_complete_program_syntax.py": 5,
-  "tests/python/unit/codegen/test_m26_complete_program_review.py": 5,
-  "tests/python/unit/codegen/test_m27_complete_program_review.py": 5,
+  "tests/python/unit/codegen/test_m23_complete_program_syntax.py": 180,
+  "tests/python/unit/codegen/test_m26_complete_program_review.py": 120,
+  "tests/python/unit/codegen/test_m27_complete_program_review.py": 90,
   "tests/python/unit/codegen/test_moving_interval_codegen.py": 5,
   "tests/python/unit/codegen/test_physical_global_primitive_authority.py": 300,
   "tests/python/unit/codegen/test_physical_global_source.py": 5,
@@ -5031,7 +5111,7 @@
   "tests/python/unit/numerics/test_api040_m26_finite_interaction.py": 5,
   "tests/python/unit/numerics/test_api040_path_consumer_stability.py": 5,
   "tests/python/unit/numerics/test_api040_path_ssp_stability.py": 5,
-  "tests/python/unit/numerics/test_coordinated_face.py": 5,
+  "tests/python/unit/numerics/test_coordinated_face.py": 90,
   "tests/python/unit/numerics/test_coupled_gradient_hall_source.py": 5,
   "tests/python/unit/numerics/test_coupled_gradient_independent_review.py": 5,
   "tests/python/unit/numerics/test_coupled_gradient_nd_independent.py": 5,
@@ -5073,6 +5153,7 @@
   "tests/python/unit/runtime/test_atomic_diagnostic_checkpoint_candidate.py": 5,
   "tests/python/unit/runtime/test_bound_initial_checkpoint_envelope.py": 5,
   "tests/python/unit/runtime/test_checkpoint_candidate_engine_routing.py": 300,
+  "tests/python/unit/runtime/test_checkpoint_private_filesystem.py": 5,
   "tests/python/unit/runtime/test_checkpoint_sealed_replay.py": 5,
   "tests/python/unit/runtime/test_collective_fixture_checks.py": 5,
   "tests/python/unit/runtime/test_computed_program_frontier.py": 5,
@@ -5118,5 +5199,16 @@
   "tests/python/unit/codegen/test_stage_provider_ssp_proof.py": 100,
   "tests/python/unit/codegen/test_native_toolchain_metadata.py": 5,
   "tests/python/unit/time/test_field_sampling.py": 5,
-  "tests/python/integration/runtime/test_public_scalar_field_sample.py": 600
+  "tests/python/integration/runtime/test_public_scalar_field_sample.py": 600,
+  "tests/python/unit/codegen/test_amr_named_field_barriers.py": 5,
+  "tests/python/unit/codegen/test_condensed_source_flux_budget.py": 5,
+  "tests/python/unit/codegen/test_tensor_diagonal_mg_preconditioner.py": 5,
+  "tests/python/unit/initial/test_amr_bootstrap_program.py": 5,
+  "tests/python/unit/initial/test_bootstrap_program.py": 5,
+  "tests/python/unit/runtime/test_staircase_field_domain.py": 5,
+  "tests/python/unit/time/test_solved_field_sampling.py": 5,
+  "tests/python/unit/codegen/test_typed_product_seed_history.py": 60,
+  "tests/python/unit/codegen/test_spatial_history_snapshot_codegen.py": 15,
+  "tests/python/unit/time/test_mpi_restart_fixture_contracts.py": 5,
+  "tests/python/unit/runtime/test_amr_empty_diagnostic_rank_restart.py": 5
 }

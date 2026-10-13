@@ -49,8 +49,14 @@ class ProgramSourceKernelHelpers:
 
         # These fixed input/output names are private C++ argument names, never
         # scientific identities. Authentication has already bound every leaf.
-        numerical = _cell_locals(impl, roots, "kernel_input", with_cons=True,
-                                 with_prim=True, provider_binding=binding)
+        numerical = [
+            "if (source_has_active_mask_ && !(source_activeA_(index, 0) >= pops::Real(0.5))) {",
+            *("  outA(index, %d) = pops::Real(0);" % component for component in range(len(roots))),
+            "  return;",
+            "}",
+        ]
+        numerical += _cell_locals(impl, roots, "kernel_input", with_cons=True,
+                                  with_prim=True, provider_binding=binding)
         numerical += ["outA(index, %d) = %s;" % (i, _checked_inline_expr(root))
                       for i, root in enumerate(roots)]
         owner = str(impl.owner_path.canonical())
@@ -63,6 +69,8 @@ class ProgramSourceKernelHelpers:
             "inline void %s(Context& ctx, const char* consumer_qid, int block_index," % name,
             "    const pops::MultiFab<pops::kNativeDimension>& kernel_input,",
             "    pops::MultiFab<pops::kNativeDimension>& kernel_output) {",
+            "  const pops::MultiFab<pops::kNativeDimension>* source_active_mask_ = "
+            "ctx.pointwise_active_mask(block_index, kernel_input);",
             "  for (int li = 0; li < kernel_output.local_size(); ++li) {",
             "    const pops::FieldView<pops::Real, pops::kNativeDimension> outA = "
             "kernel_output.fab(li).view();",
@@ -72,6 +80,10 @@ class ProgramSourceKernelHelpers:
             # in execution order; no numerical work occurs at helper definition.
             "    const auto providers = ctx.template provider_values_view<0>("
             "consumer_qid, block_index, li);",
+            "    const bool source_has_active_mask_ = source_active_mask_ != nullptr;",
+            "    const pops::FieldView<const pops::Real, pops::kNativeDimension> source_activeA_ = "
+            "source_has_active_mask_ ? std::as_const(*source_active_mask_).fab(li).view() "
+            ": pops::FieldView<const pops::Real, pops::kNativeDimension>{};",
             "    pops::for_each_cell(kernel_output.box(li), [=] POPS_HD("
             "const pops::CellIndex<pops::kNativeDimension>& index) {",
             *("      " + line for line in numerical),

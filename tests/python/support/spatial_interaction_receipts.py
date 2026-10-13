@@ -22,18 +22,18 @@ LOWER, UPPER = (.3, -.4), (2.3, 2.6)
 DT, GAMMA, WORKSPACE = .01, .2, 8 << 20
 
 
-def build(width, *, adaptive=False, failure=None):
+def build(width, *, adaptive=False, failure=None, amr_periodic=False):
     from pops.domain import CartesianDomain
     from pops.frames import Cartesian2D
-    from pops.mesh import CartesianGrid
+    from pops.mesh import CartesianGrid, PeriodicAxes
     from pops.mesh.geometry import Disc, EmbeddedBoundary
     from pops.mesh.masks import CutCell
-    from pops.boundary import ZeroFlux
+    from pops.boundary import TransportBoundarySet, ZeroFlux
+    from pops.boundary.transport import NoFlux
     from pops.layouts import Uniform
     from pops.numerics import DiscretizationPlan, FiniteVolume, reconstruction, riemann, variables
     from pops.math import ddt, div
     from pops._ir.expr import Const
-    from pops.numerics.terms import Flux, DefaultSource
     from pops.time import Program, FixedDt
     from pops.initial import InitialCondition
     from pops.lib.initial import BindArray
@@ -50,15 +50,22 @@ def build(width, *, adaptive=False, failure=None):
     flux = model.flux("zero_flux", frame=frame, state=rho,
         components={axis: tuple(0*rho[c] for c in range(width)) for axis in frame.axes},
         waves={axis: (Const(0),)*width for axis in frame.axes})
-    reaction = model.source("invalid_input" if failure == "nonfinite" else "decay", on=rho,
-        value=tuple(rho[c]/(3-rho[c]) if failure == "nonfinite" else -GAMMA*rho[c] for c in range(width)))
+    invalid_source = failure in ("nonfinite", "nonfinite-inactive")
+    reaction = model.source("invalid_input" if invalid_source else "decay", on=rho,
+        value=tuple(rho[c]/(3-rho[c]) if invalid_source else -GAMMA*rho[c] for c in range(width)))
     rate = model.rate("evolve", equation=ddt(rho) == -div(flux)+reaction)
     case = pops.Case("actual_spatial_interaction")
     block = case.block("density", model)
     numerics = DiscretizationPlan()
     numerics.rates.add(rate, FiniteVolume(flux=flux, variables=variables.Conservative(rho),
         reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov()))
+    if not (adaptive and amr_periodic):
+        numerics.boundaries.add(TransportBoundarySet({
+            boundary: NoFlux(state=block[rho]) for boundary in
+            (frame.boundaries.x_min, frame.boundaries.x_max,
+             frame.boundaries.y_min, frame.boundaries.y_max)}))
     case.numerics(numerics, block=block)
+    source_operator = block[model.module.operator_handle(reaction.reg_name)]
     program = Program("actual_direct_interaction")
     u = program.state(block[rho])
     program.keep_history(u, depth=1)
@@ -70,23 +77,28 @@ def build(width, *, adaptive=False, failure=None):
     realization = DirectSpatialInteraction(1 if failure == "budget" else WORKSPACE)
     accepted_source = u.n
     accepted_scope = "accepted"
-    if failure == "nonfinite":
-        # The IC stays finite and identical on every rank. A single actual cell
-        # with rho=3 produces nonfinite issued data on its real resident ranks.
+    if invalid_source:
+        # The IC stays finite and identical on every rank. A cell with rho=3
+        # probes whether native activity is checked before this source law.
         accepted_source = program.value("invalid_issued",
-            u.n+program.dt*program.rhs(state=u.n, terms=[DefaultSource()]), at=u.next.point)
+            u.n+program.dt*program.source(source_operator, state=u.n), at=u.next.point)
         accepted_scope = "issued"
     for name, source, scope in (("I_accepted", accepted_source, accepted_scope), ("I_history", u.prev, "issued")):
         field = program.spatial_interaction(source, kernel, output_space=output, components=selected,
             measure=CellVolumeMeasure(), quadrature=CellMidpoint(), realization=realization, source_scope=scope)
         program.store_history(name, field, depth=1)
-    candidate = program.value("decayed", u.n+program.dt*program.rhs(state=u.n, terms=[Flux(), DefaultSource()]),
+    # Every authored flux is zero on finite states, and every wave is exactly
+    # zero, so this is the declared balance's exact Euler update on that domain.
+    # The named source retains its typed owner;
+    # DefaultSource() would select this model's empty composite source instead.
+    candidate = program.value("decayed", u.n+program.dt*program.source(source_operator, state=u.n),
                               at=u.next.point)
     program.commit(u.next, candidate)
     program.step_strategy(FixedDt(DT))
     case.program(program)
     case.initials.add(InitialCondition(state=block[rho], value=BindArray(), projection=ConservativeCellAverage()))
-    grid = CartesianGrid(frame=frame, cells=CELLS)
+    grid = CartesianGrid(frame=frame, cells=CELLS,
+        periodic=PeriodicAxes(frame.axes) if adaptive and amr_periodic else None)
     embedded = EmbeddedBoundary(Disc(center=(1.3, 1.1), radius=1.1), CutCell(), ZeroFlux())
     layout = Uniform(grid, embedded_boundary=embedded)
     if adaptive:
@@ -117,6 +129,8 @@ def initial_values(width, *, failure=None):
         # This finite value is bound to the declared BindArray initial plan;
         # its declared source alone creates nonfinite issued candidate data.
         result[0, CELLS[1]//2, CELLS[0]//2] = 3.
+    elif failure == "nonfinite-inactive":
+        result[0, 0, 0] = 3.
     return result
 
 
@@ -249,7 +263,8 @@ def _allgather_array_values(world, value):
     from pops._native_collectives import allgather_value
     # A local encoding error must vote before peers enter the payload collective.
     encoded = collective_call(world, lambda: array_wire_encode(value))
-    gathered = collective_call(world, lambda: tuple(allgather_value(world, encoded)))
+    gathered = collective_call(world, lambda: (encoded,) if world is None
+                              else tuple(allgather_value(world, encoded)))
     return collective_call(world, lambda: tuple(array_wire_decode(copy) for copy in gathered))
 
 def capture(world, runtime, width, *, adaptive, step):

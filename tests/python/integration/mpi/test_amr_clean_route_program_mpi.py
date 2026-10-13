@@ -138,7 +138,18 @@ def _forward_euler_pack(states: Any, rate: Any) -> pops.Program:
 
 
 def _cell_local_forward_euler_pack(states: Any, rate: Any) -> pops.Program:
-    program = _forward_euler_pack(states, rate)
+    # The published cell-local route accepts its exact three-node FE graph per
+    # State. Materialize every initial State before evaluating either block;
+    # the ordinary RK factory's extra named rate alias is not part of this route.
+    program = pops.Program("cell_local_forward_euler")
+    temporal = tuple(program.state(state) for state in
+                     (states if isinstance(states, tuple) else (states,)))
+    initial = tuple(state.n for state in temporal)
+    rates = tuple(rate(value) for value in initial)
+    for index, (state, value, residual) in enumerate(zip(temporal, initial, rates, strict=True)):
+        accepted = program.value("fe_update_%d" % index,
+                                 value + program.dt * residual, at=state.next.point)
+        program.commit(state.next, accepted)
     # Rung zero is the finest-level authored rung. The native route derives rung one on L0 from the
     # exact 2:1 clock relation, so both levels execute one identical Forward-Euler batch per window.
     program.cell_local_time(tick_denominator=2000, rung=0)

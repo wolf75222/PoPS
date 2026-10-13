@@ -173,7 +173,10 @@ def test_native_diagnostic_capacity_faults_and_joined_restore(
         capacity_per_rank=True if rank(world) == 0 else capacity), "exact positive int")
     same_images(world, accepted, snapshot(world, runtime, amr))
     refused["capacity-overflow"] = require_failures(world, lambda: runtime.configure_checkpoint_diagnostics(
-        capacity_per_rank=sys.maxsize), "capacity")
+        capacity_per_rank=sys.maxsize), "native addressable range")
+    with collective_check(world):
+        expected_type = "OverflowError" if world is None else "RuntimeError"
+        assert all(failure[0] == expected_type for failure in refused["capacity-overflow"]), refused["capacity-overflow"]
     if size(world) > 1:
         refused["proposal-mismatch"] = require_failures(world, lambda: runtime.configure_checkpoint_diagnostics(
             capacity_per_rank=capacity + rank(world)), "proposal differs across ranks")

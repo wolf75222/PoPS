@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 
 class _ArithmeticEmitter:
@@ -127,7 +128,7 @@ class _ArithmeticEmitter:
         return result
 
 
-def emit_moment_path_kernel(plan: dict, name: str) -> list[str]:
+def emit_moment_path_kernel(plan: dict[str, Any], name: str) -> list[str]:
     """Compile the complete authored arithmetic graph, with exact support checks."""
     if type(plan) is not dict or set(plan) != {"schema_version", "order", "polynomial_degree", "indices", "nodes", "flux", "integrands", "factors", "speed", "integral_mode", "integral"}:
         raise ValueError("normalized polynomial path requires complete contract @1")
@@ -160,9 +161,12 @@ def emit_moment_path_kernel(plan: dict, name: str) -> list[str]:
     capacity = plan["polynomial_degree"]
     if type(capacity) is not int or not 0 <= capacity < 2**31 - 1:
         raise ValueError("polynomial capacity must fit the native coefficient index type")
-    if any(type(node) is not dict or type(node.get("degree")) is not int
-           or node["degree"] < 0 or type(node.get("polynomial")) is not bool for node in plan["nodes"]):
-        raise ValueError("malformed polynomial degree metadata")
+    for node in plan["nodes"]:
+        if type(node) is not dict:
+            raise ValueError("malformed polynomial degree metadata")
+        degree = node.get("degree")
+        if type(degree) is not int or degree < 0 or type(node.get("polynomial")) is not bool:
+            raise ValueError("malformed polynomial degree metadata")
     if capacity != max((node["degree"] for node in plan["nodes"] if node["polynomial"]), default=0):
         raise ValueError("polynomial capacity must equal the degree inferred from the complete graph")
     endpoint = _ArithmeticEmitter(order, indices, plan["nodes"], capacity)
@@ -209,10 +213,14 @@ def emit_moment_path_kernel(plan: dict, name: str) -> list[str]:
         lines += [f"    integrands[{slot}] = {value if poly else f'Poly({value})'};", f"    factors[{slot}] = Real({factor!r});"]
     lines += ["  }", "  template<class State>", f"  POPS_HD pops::PathIntegralResult<{n}> path_integral(const State& left, const State& right, const Direction& g) const {{"]
     if mode == "density_weighted_polynomial":
-        lines += [f"    return pops::moments::integrate_normalized_moment_path<{order}{", " + str(capacity) if capacity != order else ""}>(left, right, g, *this);"]
+        degree_argument = ", " + str(capacity) if capacity != order else ""
+        lines += [f"    return pops::moments::integrate_normalized_moment_path<{order}{degree_argument}>(left, right, g, *this);"]
     else:
         analytic = _ArithmeticEmitter(order, indices, plan["nodes"], capacity, endpoint_integral=True)
-        values = [analytic.emit(value) for value in plan["integral"]]
+        integral = plan["integral"]
+        if type(integral) is not tuple:
+            raise ValueError("integral realization requires its exact authored support")
+        values = [analytic.emit(value) for value in integral]
         used_nodes.update(analytic.memo)
         if any(value[1] for value in values):
             raise ValueError("analytic endpoint integral must be scalar")

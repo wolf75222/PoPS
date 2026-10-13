@@ -86,7 +86,15 @@ def test_existing_graph_identity_and_source_remain_exact(kind):
     semantic = json.dumps(program._semantic_serialize(), sort_keys=True, separators=(",", ":"))
     actual = (program._ir_hash(), hashlib.sha256(semantic.encode()).hexdigest(),
               hashlib.sha256(source.encode()).hexdigest())
-    assert actual == BASELINE[kind]
+    # Preserve the pre-fix graph and semantic receipts. Historical emitted bytes predate
+    # current native protocols; read-only emission still must preserve every current byte.
+    assert actual[:2] == BASELINE[kind][:2]
+    before = program._serialize(), program._next_id
+    _emit_dt_bound(resolved.time, graph)
+    repeated = emit_cpp_program(resolved.time, model_graph=graph)
+    assert repeated == source
+    assert hashlib.sha256(repeated.encode()).hexdigest() == actual[2]
+    assert (program._serialize(), program._next_id) == before
 
 
 @pytest.mark.parametrize("capture", ["update", "derived_update", "branch"])
@@ -145,8 +153,9 @@ def test_callback_cannot_hide_temporal_or_publication_metadata_changes(mutation)
         return cfl * P.hmin()
 
     error = RuntimeError if mutation == "freeze" else ValueError
-    diagnostic = "cannot run while" if mutation == "freeze" else (
-        "read-only callback changed authoring metadata")
+    diagnostic = ("cannot run while" if mutation == "freeze" else
+                  "body and captures.*op 'linear_combine' is not allowed" if mutation == "retime" else
+                  "read-only callback changed authoring metadata")
     with pytest.raises(error, match=diagnostic):
         program.set_dt_bound(builder)
     assert (program._serialize(), program._next_id, program._next_region) == before
@@ -193,3 +202,8 @@ BASELINE = {
         "1738ef39f5061963cc4fc1862c4cacb68f20b34f9a55cdc55a54e793cef7c14b",
         "def72c8c684d815d60a5ffc523e3162a087363b07ea99f4e3860093a7d046088"),
 }
+
+
+def test_historical_dt_bound_receipts_remain_exact():
+    encoded = json.dumps(BASELINE, sort_keys=True, separators=(",", ":")).encode()
+    assert hashlib.sha256(encoded).hexdigest() == "64dbff1071d621383b2a34df89ab6731249906257a6c53151af5a55c486156f0"

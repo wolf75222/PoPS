@@ -512,6 +512,38 @@ void fill_boundary(field_type& field, const ExecutionLane& lane) const {
     Kokkos::fence();
 }
 
+/// Admit the installed field's physical faces against the independent scalar tensor provider.
+/// A field region constrains its own equation and does not select this full-domain stencil.
+void require_condensed_field_boundary(int program_block, std::string_view field_slot) const {
+  const int owner = sys_block(program_block);
+  const auto conditions = facade_->prepared_amr_field_boundary_conditions(owner,active_level_,field_slot);
+  const auto point = boundary_evaluation_point(0);
+  prepare_spatial_collectively([&] {
+    require_current_boundary_point_exact_(point,"AMR condensed field physical boundary");
+    if (!hierarchy_tensor_selection_ || !hierarchy_tensor_solver_ ||
+        hierarchy_tensor_selection_->program_block != program_block ||
+        hierarchy_tensor_selection_->components != 1 ||
+        hierarchy_tensor_topology_epoch_ != runtime_->topology_epoch() ||
+        hierarchy_tensor_materialization_generation_ != runtime_->materialization_generation() ||
+        hierarchy_tensor_boundaries_.size() != static_cast<std::size_t>(nlev()) ||
+        active_level_ < 0 || active_level_ >= nlev())
+      throw std::logic_error("AMR condensed field boundary lost its scalar tensor authority");
+    const auto& boundary = hierarchy_tensor_boundaries_[static_cast<std::size_t>(active_level_)];
+    if (boundary.geometry != geometry())
+      throw std::logic_error("AMR condensed field boundary geometry is stale");
+    for (int axis = 0; axis < Dim; ++axis)
+      for (const auto side : {BoundarySide::lower,BoundarySide::upper}) {
+        const Face<Dim> face{axis,side};
+        const auto field_law = conditions.at(face);
+        const auto tensor_law = boundary.conditions.at(face);
+        if (conditions.topology().is_periodic(face) != boundary.conditions.topology().is_periodic(face) ||
+            field_law.kind != tensor_law.kind || field_law.value != tensor_law.value ||
+            field_law.alpha != tensor_law.alpha || field_law.beta != tensor_law.beta)
+          throw std::invalid_argument("AMR condensed tensor physical faces differ from the installed scalar field");
+      }
+  });
+}
+
 /// Source assembly is allowed on one exact active level of the prepared hierarchy. This is
 /// distinct from an independent sparse-level Krylov solve: parent ghosts have already been
 /// supplied by prepare_condensed_prior or the provider's composite solution.
@@ -626,7 +658,11 @@ void prepare_condensed_prior(int program_block, field_type& field) const {
   const field_type* parent = nullptr;
   std::string family_identity;
   prepare_spatial_collectively([&] {
-    if (!synchronized_field_gather_)
+    const bool continuation_gather = mapping_continuation_ && mapping_continuation_->executing &&
+        mapping_continuation_->internal_sequence != 0 && !active_attempt_states_.empty() &&
+        multiblock_subcycling_ && multiblock_subcycling_->has_synchronized_groups() &&
+        active_subcycling_attempt_ == multiblock_subcycling_->synchronized_attempt();
+    if (!synchronized_field_gather_ && !continuation_gather)
       throw std::logic_error(
           "AMR prior-field parent sampling requires the synchronous pre-publication gather");
     const int owner = sys_block(program_block);
@@ -634,6 +670,10 @@ void prepare_condensed_prior(int program_block, field_type& field) const {
     if (identity.family == Family::Direct || identity.direct_level != active_level_)
       throw std::invalid_argument(
           "AMR prior-field sampling lacks an exact state, scratch SSA, or history ancestor");
+    if (!synchronized_field_gather_ &&
+        (identity.family != Family::Scratch ||
+         identity.scratch_kind != static_cast<std::uint8_t>(ScratchKind::Scalar)))
+      throw std::invalid_argument("AMR continuation prior sampling requires its exact scalar scratch family");
     ExactContractBuilder proof;
     proof.text("pops.program.synchronous-prior-scalar");
     if (identity.family == Family::History) {
@@ -667,25 +707,7 @@ void prepare_condensed_prior(int program_block, field_type& field) const {
 void laplacian(field_type& output, field_type& input) const {
   require_scalar_stencil_(output, input, 1, "AMR Program Laplacian");
   fill_boundary(input);
-  const Geometry<Dim> geom = geometry();
-  for (std::size_t local = 0; local < output.local_size(); ++local) {
-    const FieldView<Real, Dim> result = output.fab(local).view();
-    const FieldView<const Real, Dim> value = std::as_const(input).fab(local).view();
-    for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-      Real image = Real(0);
-      for (int axis = 0; axis < Dim; ++axis) {
-        Index<Dim> lower = cell;
-        Index<Dim> upper = cell;
-        --lower[axis];
-        ++upper[axis];
-        const Real spacing = geom.spacing(axis);
-        image +=
-            (value(upper, 0) - Real(2) * value(cell, 0) + value(lower, 0)) / (spacing * spacing);
-      }
-      result(cell, 0) = image;
-    });
-  }
-  count_kernel_();
+  laplacian_without_fill_(output, input, geometry());
 }
 
 void laplacian(field_type& output, field_type& input,
@@ -703,21 +725,7 @@ void laplacian(field_type& output, field_type& input, const scalar_boundary_sess
 void gradient(field_type& output, field_type& input) const {
   require_scalar_stencil_(output, input, Dim, "AMR Program gradient");
   fill_boundary(input);
-  const Geometry<Dim> geom = geometry();
-  for (std::size_t local = 0; local < output.local_size(); ++local) {
-    const FieldView<Real, Dim> result = output.fab(local).view();
-    const FieldView<const Real, Dim> value = std::as_const(input).fab(local).view();
-    for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-      for (int axis = 0; axis < Dim; ++axis) {
-        Index<Dim> lower = cell;
-        Index<Dim> upper = cell;
-        --lower[axis];
-        ++upper[axis];
-        result(cell, axis) = (value(upper, 0) - value(lower, 0)) / (Real(2) * geom.spacing(axis));
-      }
-    });
-  }
-  count_kernel_();
+  gradient_without_fill_(output, input, geometry());
 }
 
 void gradient(field_type& output, field_type& input,

@@ -847,6 +847,14 @@ struct System<Dim>::Impl {
   }
 
   Species& find(const std::string& name) { return blocks_.find(name); }
+  bool has_pending_field_warm_start() const noexcept {
+    if (default_field_ && default_field_->warm_start_pending()) return true;
+    for (const auto& [slot, field] : named_fields_) {
+      (void)slot;
+      if (field && field->warm_start_pending()) return true;
+    }
+    return false;
+  }
   const Species& find(const std::string& name) const { return blocks_.find(name); }
   int index(const std::string& name) const { return blocks_.index(name); }
 

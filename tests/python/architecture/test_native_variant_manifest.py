@@ -24,6 +24,7 @@ PROVER = ROOT / "scripts" / "prove_installed_wheel.py"
 PYTHON_CMAKE = ROOT / "python" / "CMakeLists.txt"
 TEST_MANIFEST = ROOT / "tests" / "test_manifest.toml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+MPI_PYTHON_RUNNER = ROOT / "scripts" / "ci_python_mpi.py"
 PYTEST_CONFTEST = ROOT / "tests" / "python" / "conftest.py"
 SERIAL_PARENT_MPI_SMOKE = ROOT / "tests" / "cmake" / "run_serial_parent_mpi_target.cmake"
 HDF5_WITHOUT_MPI_SMOKE = ROOT / "tests" / "cmake" / "expect_hdf5_without_mpi_rejected.cmake"
@@ -43,10 +44,17 @@ def test_mpi_script_bootstraps_preserve_direct_script_imports_and_arguments(
         monkeypatch.setattr(runner.shutil, "which", lambda _: "/usr/bin/mpiexec")
         bootstrap = runner._mpi_python_command("mpiexec", 2, "probe.py")[5]
     elif launcher == "ci":
-        source = CI_WORKFLOW.read_text(encoding="utf-8")
-        match = re.search(r'^\s*native_script_bootstrap="(.*)"$', source, re.MULTILINE)
-        assert match is not None
-        bootstrap = match.group(1)
+        tree = ast.parse(MPI_PYTHON_RUNNER.read_text(encoding="utf-8"))
+        functions = [node for node in tree.body
+                     if isinstance(node, ast.FunctionDef) and node.name == "run_launches"]
+        assert len(functions) == 1
+        assignments = [node for node in functions[0].body
+                       if isinstance(node, ast.Assign) and len(node.targets) == 1
+                       and isinstance(node.targets[0], ast.Name)
+                       and node.targets[0].id == "bootstrap"]
+        assert len(assignments) == 1
+        bootstrap = ast.literal_eval(assignments[0].value)
+        assert isinstance(bootstrap, str)
     else:
         source = PYTHON_CMAKE.read_text(encoding="utf-8")
         match = re.search(r'set\(_pops_py_mpi_bootstrap\s+("(?:\\.|[^"\\])*")\)', source)
@@ -381,19 +389,69 @@ def test_ci_consumes_only_authenticated_explicit_native_variants():
         "--exclude='_native/***'",
         "scripts/verify_installed_native.py",
         '--expect-dim "$POPS_NATIVE_DIM" --expect-serial',
-        "build-mpi/python/pops/_native/variants.json",
-        "build-mpi/python-package/pops/_native/variants.json",
-        "build-mpi/python-package/pops/_native/dim2/",
-        '--expect-dim "$POPS_NATIVE_DIM" --expect-mpi --expect-parallel-hdf5',
-        "_pops = select_native_dimension(2)",
-        "select_native_dimension(2); import os, runpy, sys",
     ):
         assert required_contract in workflow
+
+    producer = workflow.split("\n  mpi:\n", 1)[1].split("\n  mpi-python:\n", 1)[0]
+    assembly = producer.split("- name: Assemble and authenticate the unique MPI Dim2 wheel", 1)[1]
+    assembly = assembly.split("- name: Publish authenticated MPI Python wheel", 1)[0]
+    for contract in (
+        'wheel_directory="$RUNNER_TEMP/pops-mpi-python-wheel"',
+        "scripts/ci_assemble_installed_wheel.py",
+        '--package build-mpi/python --output-dir "$wheel_directory"',
+        "--dimension 2 --backend mpi",
+        "scripts/ci_python_mpi.py authenticate",
+        '--wheel-directory "$wheel_directory"',
+        '--install-root "$RUNNER_TEMP/pops-mpi-producer-installed"',
+    ):
+        assert contract in assembly
+    publish = producer.split("- name: Publish authenticated MPI Python wheel", 1)[1]
+    publish = publish.split("- name: M4 complete native runtime", 1)[0]
+    assert "name: gate-mpi-python-wheel" in publish
+    assert "path: ${{ runner.temp }}/pops-mpi-python-wheel/" in publish
+    assert "if-no-files-found: error" in publish
+    worker = workflow.split("\n  mpi-python:\n", 1)[1].split("\n  gate-openmp-prewarm:\n", 1)[0]
+    download = worker.split("- name: Download the unique authenticated MPI Dim2 wheel", 1)[1]
+    download = download.split("- name: Authenticate fresh MPI wheel installation", 1)[0]
+    assert "name: gate-mpi-python-wheel" in download
+    assert "path: ${{ runner.temp }}/pops-mpi-python-wheel" in download
+    authenticate, execute = worker.split("- name: Authenticate fresh MPI wheel installation", 1)[1].split(
+        "- name: Execute every mandatory contract in the bounded MPI group", 1)
+    execute = execute.split("- name: Publish MPI group installation", 1)[0]
+    assert "scripts/ci_python_mpi.py authenticate" in authenticate
+    assert "scripts/ci_python_mpi.py run" in execute
+    for step in (authenticate, execute):
+        assert '--wheel-directory "$RUNNER_TEMP/pops-mpi-python-wheel"' in step
+        assert '--install-root "$RUNNER_TEMP/pops-mpi-python-installed"' in step
+
+    runner = MPI_PYTHON_RUNNER.read_text(encoding="utf-8")
+    for contract in (
+        "wheel_directory.is_relative_to(ROOT) or prefix.is_relative_to(ROOT)",
+        "len(wheels) != 1 or wheels[0].is_symlink()",
+        "type(assembly.get('dimension')) is not int or assembly['dimension'] != 2",
+        "assembly.get('backend') != 'mpi'",
+        "hashlib.sha256(wheel.read_bytes()).hexdigest() != assembly.get('wheel_sha256')",
+        "str(python), '-I', str(ROOT / 'scripts/prove_installed_wheel.py')",
+        "'--wheel', str(wheel), '--expect-dim', '2'",
+        "str(python), '-I', str(ROOT / 'scripts/verify_installed_native.py')",
+        "'--expect-dim', '2', '--expect-mpi', '--expect-parallel-hdf5', '--json'",
+        "signature==abi.module_header_signature()==sys.argv[1]",
+        "selection is not None",
+        "str(python), '-I', '-c', sdk_bootstrap, assembly['SDK']",
+        "native['sha256'] != assembly['native_sha256']",
+        "native['has_mpi'] is not True",
+        "native['has_parallel_hdf5'] is not True",
+        "existing=args.command == 'run'",
+        "return run_launches(groups[0], python, environment, args.receipt_dir)",
+        "str(python),\n                     '-u', '-c', bootstrap, launch['path']",
+    ):
+        assert contract in runner
 
     native_jobs = (
         ("gate-python-compile-cache", "gate-mpi-prewarm"),
         ("gate-mpi-prewarm", "gate"),
-        ("mpi", "gate-openmp-prewarm"),
+        ("mpi", "mpi-python"),
+        ("mpi-python", "gate-openmp-prewarm"),
         ("gate-openmp-prewarm", "kokkos-openmp"),
         ("kokkos-openmp", None),
     )
@@ -462,7 +520,7 @@ def test_ctest_python_mpi_projection_matches_the_manifest_and_dim2_contract():
         block = source.split(f"set({variable}", 1)[1].split(")", 1)[0]
         return tuple(
             re.findall(
-                r"^\s*(tests/python/integration/(?:io|mpi)/test_[^\s]+\.py)\s*$",
+                r"^\s*(tests/python/integration/(?:io|mpi|runtime)/test_[^\s]+\.py)\s*$",
                 block,
                 flags=re.MULTILINE,
             )
@@ -471,22 +529,51 @@ def test_ctest_python_mpi_projection_matches_the_manifest_and_dim2_contract():
     manifest_projection = (
         *manifest_entrypoints("pops_python_integration_io"),
         *manifest_entrypoints("pops_python_integration_mpi"),
+        *manifest_entrypoints("pops_python_integration_runtime"),
     )
     cmake_projection = (
         *cmake_entrypoints("_pops_py_io_mpi_entrypoints"),
         *cmake_entrypoints("_pops_py_mpi_entrypoints"),
+        *cmake_entrypoints("_pops_py_runtime_mpi_entrypoints"),
     )
-    assert len(manifest_projection) == 9
+    assert len(manifest_projection) == 10
     assert all(nproc == 2 for _, nproc in manifest_projection)
     assert cmake_projection == tuple(path for path, _ in manifest_projection)
 
-    orchestrator = re.search(
-        r"set\(_pops_py_rank_change_orchestrator\s+([^\s)]+)\)", source
+    manifest_orchestrators = tuple(re.findall(
+        r'\{ path = "([^"]+)"(?: \}|, partitions = \[)', manifest_suite("pops_python_integration_mpi")
+    ))
+    assert manifest_orchestrators == (
+        "tests/python/integration/mpi/test_amr_rank_change_restart.py",
+        "tests/python/integration/mpi/test_initial_field_ghost_mpi.py",
+        "tests/python/integration/mpi/test_public_accepted_halo_mpi1.py",
+        "tests/python/integration/mpi/test_public_accepted_halo_mpi2.py",
+        "tests/python/integration/mpi/test_public_amr12_carrier_mpi1.py",
+        "tests/python/integration/mpi/test_public_amr12_carrier_mpi2.py",
+        "tests/python/integration/mpi/test_public_amr_original_field_mpi1.py",
+        "tests/python/integration/mpi/test_public_amr_original_field_mpi2.py",
+        "tests/python/integration/mpi/test_public_amr_profile_mpi1.py",
+        "tests/python/integration/mpi/test_public_amr_profile_mpi2.py",
+        "tests/python/integration/mpi/test_public_captured_diffusion_mpi1.py",
+        "tests/python/integration/mpi/test_public_captured_diffusion_mpi2.py",
+        "tests/python/integration/mpi/test_public_completed_original_interaction_mpi1.py",
+        "tests/python/integration/mpi/test_public_completed_original_interaction_mpi2.py",
+        "tests/python/integration/mpi/test_public_evolved_original_stage_mpi1.py",
+        "tests/python/integration/mpi/test_public_evolved_original_stage_mpi2.py",
+        "tests/python/integration/mpi/test_public_imex_checkpoint_mpi1.py",
+        "tests/python/integration/mpi/test_public_imex_checkpoint_mpi2.py",
+        "tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi1.py",
+        "tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi2.py",
+        "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi1.py",
+        "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi2.py",
+        "tests/python/integration/mpi/test_public_scalar_bound_capture_mpi1.py",
+        "tests/python/integration/mpi/test_public_scalar_bound_capture_mpi2.py",
+        "tests/python/integration/mpi/test_public_spatial_interaction_mpi1.py",
+        "tests/python/integration/mpi/test_public_spatial_interaction_mpi2.py",
+        "tests/python/integration/mpi/test_public_typed_newton_mpi1.py",
+        "tests/python/integration/mpi/test_public_typed_newton_mpi2.py",
     )
-    assert orchestrator is not None
-    assert orchestrator.group(1) == (
-        "tests/python/integration/mpi/test_amr_rank_change_restart.py"
-    )
+    assert cmake_entrypoints("_pops_py_mpi_orchestrators") == manifest_orchestrators
     assert (
         "if(POPS_NATIVE_DIM STREQUAL \"2\")" in source
         and source.count("if(POPS_NATIVE_DIM STREQUAL \"2\")") == 1
@@ -531,17 +618,35 @@ def test_ctest_python_mpi_projection_matches_the_manifest_and_dim2_contract():
 
     assert "${_pops_py_io_ignore_args}" in source
     assert "${_pops_py_mpi_ignore_args}" in source
-    assert source.count('"--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_mpi_entrypoint}"') == 2
-    assert '"--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_rank_change_orchestrator}"' in source
-    assert source.count("pops_python_mpi_test_amr_rank_change_restart_orchestrator") == 2
-    assert "NAME pops_python_mpi_test_amr_rank_change_restart_orchestrator" in source
+    assert source.count('"--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_mpi_entrypoint}"') == 3
+    assert '"--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_mpi_orchestrator}"' in source
+    assert source.count(
+        "foreach(_pops_py_mpi_orchestrator IN LISTS _pops_py_mpi_orchestrators)"
+    ) == 2
     orchestrator_properties = source.split(
-        "set_tests_properties(pops_python_mpi_test_amr_rank_change_restart_orchestrator", 1
-    )[1].split("endif()", 1)[0]
+        'function(pops_add_mpi_pytest_orchestrator path parent_node partition)', 1
+    )[1].split("endfunction()", 1)[0]
+    assert 'set(_pops_py_mpi_selector "${CMAKE_SOURCE_DIR}/${path}")' in orchestrator_properties
+    assert 'string(APPEND _pops_py_mpi_selector "::${parent_node}")' in orchestrator_properties
+    assert 'string(APPEND _pops_py_mpi_name "_${partition}")' in orchestrator_properties
+    assert 'COMMAND ${Python_EXECUTABLE} -m pytest "${_pops_py_mpi_selector}" -q' in orchestrator_properties
     assert "PROCESSORS 2" in orchestrator_properties
-    assert "${MPIEXEC_EXECUTABLE}" not in source.split(
-        "NAME pops_python_mpi_test_amr_rank_change_restart_orchestrator", 1
-    )[1].split("endif()", 1)[0]
+    assert 'LABELS "integration;python;mpi;orchestrator"' in orchestrator_properties
+    assert "TIMEOUT 900" in orchestrator_properties
+    assert "${MPIEXEC_EXECUTABLE}" not in orchestrator_properties
+    import tomllib
+    manifest_data = tomllib.loads(manifest)
+    rows = next(row for row in manifest_data["python"]["suite"]
+                if row["name"] == "pops_python_integration_mpi")["mpi_orchestrators"]
+    expected_nodes = [(row["path"], partition["id"], partition["parent_node"])
+                      for row in rows for partition in row.get("partitions", [])]
+    partition_block = source.split("set(_pops_py_mpi_partition_nodes", 1)[1].split(")", 1)[0]
+    projected_nodes = re.findall(r'"([^"|]+)\|([^"|]+)\|([^"|]+)"', partition_block)
+    assert len(expected_nodes) == len(set(expected_nodes)) == 30
+    assert projected_nodes == expected_nodes
+    assert 'if(NOT _pops_py_mpi_orchestrator IN_LIST _pops_py_mpi_partitioned_orchestrators)' in source
+    assert source.count('pops_add_mpi_pytest_orchestrator("${_pops_py_mpi_orchestrator}" "" "")') == 1
+    assert 'foreach(_pops_py_mpi_partition IN LISTS _pops_py_mpi_partition_nodes)' in source
 
 
 def test_wheel_proof_accepts_an_explicit_fat_set_and_rejects_a_hidden_subset(tmp_path):

@@ -12,6 +12,8 @@ per-node timing in a run is exercised on a built .so (ROMEO). It uses the REAL e
 it self-skips only if pops.time is unavailable, never faking it.
 """
 from pops.codegen.program_codegen import emit_cpp_program
+from collections import Counter
+import json
 import re
 
 import pytest
@@ -38,7 +40,7 @@ def _forward_euler():
 
 
 def _ssprk3():
-    """A multi-stage Program (three rhs / two intermediate lincomb / one commit)."""
+    """A multi-stage Program with issued rate aliases and affine stage updates."""
     state, rate = _authoring("pernode_ssprk3")
     return lt.SSPRK3(state, rate=rate)
 
@@ -49,7 +51,8 @@ def test_per_node_scope_named_by_node():
     # The RAII-style marker the codegen emits for every wrapped node (issue: "ProfileScope" + "node:").
     assert "ProfileScope" in src, "generated source missing the per-node ProfileScope marker"
     assert "ctx.profile_record(" in src, "generated source missing the per-node profile_record call"
-    # The two work nodes of forward Euler are the exact rate evaluation and final update.
+    # The named stage-rate value and final update each retain their own scope;
+    # the underlying residual evaluation also has its own issued SSA record.
     for node in (
         "node:forward_euler_k_0",
         "node:forward_euler_step",
@@ -66,20 +69,30 @@ def test_per_node_scope_named_by_node():
 
 
 def test_pure_reference_nodes_not_wrapped():
-    """The state node binds a MultiFab& and does no work, so it is not wrapped (no node:gas noise)."""
-    src = emit_cpp_program(_forward_euler())
-    assert "node:gas" not in src, "the pure state-binding node should not be profiled"
+    """The actual State binding does no numerical work and is not profiled."""
+    program = _forward_euler()
+    src = emit_cpp_program(program)
+    for value in program._values:
+        if value.op == "state":
+            assert json.dumps("node:" + value.name) not in src
     # The state binding itself is still emitted (it is the base every op clones / commits into).
     assert "ctx.state(0)" in src, "generated source missing the block-0 state binding"
 
 
 def test_multistage_wraps_every_work_node():
-    """SSPRK3 lowers three rates plus three affine updates; each gets one scope."""
-    src = emit_cpp_program(_ssprk3())
-    closes = src.count("ctx.profile_record(")
-    assert closes == 6, "SSPRK3 should wrap 6 work nodes, got %d" % closes
-    for node in ("node:ssprk3_k", "node:ssprk3_step"):
-        assert node in src, "generated source missing per-node scope prefix %r" % node
+    """Every actual work SSA gets exactly one matched timer and named record."""
+    program = _ssprk3()
+    src = emit_cpp_program(program)
+    assert {value.op for value in program._values} == {"state", "rhs", "linear_combine"}
+    expected = Counter(("node:" + value.name, "_pt%d" % value.id)
+                       for value in program._values if value.op != "state")
+    quoted = r'("(?:[^"\\]|\\.)*")'
+    closes = re.findall(r'ctx.profile_record\(' + quoted + r', (_pt\d+)\);', src)
+    opens = re.findall(r'const auto (_pt\d+) = std::chrono::steady_clock::now\(\);'
+                       r'  // ProfileScope ' + quoted, src)
+    assert Counter((json.loads(name), timer) for name, timer in closes) == expected
+    assert Counter((json.loads(name), timer) for timer, name in opens) == expected
+    assert src.count("ctx.profile_record(") == sum(expected.values())
 
 
 def test_no_profiling_intent_still_valid_cpp():

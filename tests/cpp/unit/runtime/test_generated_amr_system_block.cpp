@@ -244,6 +244,51 @@ struct AmrProgramHistoryRemapCollectiveTestAccess {
 
 namespace {
 
+template <class Exception, class Function>
+void expect_exception_diagnostic(Function&& function, std::string_view diagnostic) {
+  bool caught = false;
+  try {
+    std::forward<Function>(function)();
+  } catch (const Exception& error) {
+    caught = true;
+    if (!diagnostic.empty())
+      EXPECT_NE(std::string(error.what()).find(diagnostic), std::string::npos);
+  }
+  EXPECT_TRUE(caught) << "the invalid request must be refused before publication";
+}
+
+template <class SerialException, class Function>
+void expect_collective_exception(const pops::ExecutionLane& lane, Function&& function,
+                                 std::string_view mpi_diagnostic,
+                                 std::string_view serial_diagnostic = {}) {
+  if (lane.size() == 1)
+    expect_exception_diagnostic<SerialException>(std::forward<Function>(function),
+                                                  serial_diagnostic);
+  else
+    expect_exception_diagnostic<std::runtime_error>(std::forward<Function>(function),
+                                                    mpi_diagnostic);
+}
+
+// Retain the very lane installed in these constructor-time bootstrap fixtures. The runtime
+// is still assembling, so creating an execution provider just to inspect its size is too early.
+template <int Dim>
+std::shared_ptr<pops::ExecutionLane> install_amr_authority_with_lane(
+    pops::AmrSystem<Dim>& system, std::string_view identity) {
+  auto lane = std::make_shared<pops::ExecutionLane>(
+      pops::ExecutionLane::duplicate_world_collectively(identity));
+  const PopsExecutionContextV1 raw = pops::component::test_support::host_execution_context();
+  const pops::component::PreparedExecutionContextV1 parent(
+      raw.execution_identity, raw.context_version, raw.memory_space, raw.backend_identity,
+      raw.device_identity, raw.scalar_type, raw.storage_precision, raw.compute_precision,
+      raw.accumulation_precision, raw.reduction_precision, raw.stream_handle, raw.stream_identity,
+      raw.communicator_f_handle, raw.communicator_datatype_f_handle, raw.communicator_identity,
+      raw.communicator_datatype_identity);
+  auto execution = std::make_shared<const pops::component::PreparedExecutionContextV1>(
+      parent.for_lane(*lane));
+  system.install_prepared_boundary_execution_context(lane, std::move(execution));
+  return lane;
+}
+
 template <int Dim>
 struct AdvectionModel {
   using Law = pops::nd::ScalarAdvection<Dim>;
@@ -1334,7 +1379,8 @@ TEST(GeneratedAmrSystemBlock, ScalarParentPreparationRefreshesSparsePeriodicGhos
               EXPECT_EQ(reason,
                         pops::n_ranks() == 1
                             ? "AMR prior-field history parent has a different publication sample"
-                            : "composite spatial preparation failed collectively");
+                            : "composite spatial preparation failed collectively; rank 0: "
+                              "AMR prior-field history parent has a different publication sample");
             });
           });
         },
@@ -1686,6 +1732,21 @@ TEST(GeneratedAmrSystemBlock, ProgramContextOwnsOneExactHierarchyTensorAuthority
       context->solve_hierarchy_tensor(0, 1, pops::Real(1.0e-8), pops::Real(0), 8);
   ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
   EXPECT_TRUE(outcome.consume(pops::SolveConsumption::kAccept).solved());
+
+  // A consumed tensor result is owned by its exact selected block at each active level.
+  // Endpoint algebra may allocate a registered scalar from that provider allocation.
+  context->for_each_program_resource_level([&](int level) {
+    auto& solution = context->hierarchy_solution();
+    auto& endpoint = context->scalar_scratch(36, 0, solution, 1, 1);
+    EXPECT_NO_THROW(context->require_scalar_sampling_layout(0, solution, endpoint, 0));
+    EXPECT_EQ(endpoint.layout(), solution.layout());
+    EXPECT_EQ(endpoint.distribution(), solution.distribution());
+    EXPECT_EQ(endpoint.local_rank(), solution.local_rank());
+    pops::MultiFab<Dim> detached(solution);
+    EXPECT_THROW((void)context->scalar_scratch(37, 0, detached, 1, 1), std::invalid_argument);
+    if (level != 0)
+      EXPECT_THROW((void)context->scalar_scratch(38, 0, *first_solution, 1, 1), std::invalid_argument);
+  });
 }
 
 TEST(GeneratedAmrSystemBlock, ProgramContextEvaluatesExactStageStateWithoutPublishingIt) {
@@ -2084,15 +2145,12 @@ TEST(GeneratedAmrSystemBlock, ExplicitFieldTopologyIsIndependentOfPeriodicTransp
       pops::MultiFab<Dim> stage = context->scratch_state_like(context->state(0));
       stage.set_val(pops::Real(3));
       if (one_sided_periodic) {
-        try {
+        expect_collective_exception<std::invalid_argument>(
+            context->prepared_execution_lane(), [&] {
           auto outcome =
               context->solve_fields_from_state_at(point<Dim>(0), "field/tracer", 0, stage);
           (void)outcome.consume(pops::SolveConsumption::kFailRun);
-          FAIL() << "one-sided periodic field boundary was accepted";
-        } catch (const std::invalid_argument& error) {
-          EXPECT_NE(std::string(error.what()).find("periodic boundaries must be paired"),
-                    std::string::npos);
-        }
+        }, "periodic boundaries must be paired", "periodic boundaries must be paired");
       } else {
         auto outcome = context->solve_fields_from_state_at(point<Dim>(0), "field/tracer", 0, stage);
         ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
@@ -2414,8 +2472,11 @@ TEST(GeneratedAmrSystemBlock, SpatialHierarchyTraversalRequiresReleasedLevelEnve
   EXPECT_EQ(solves, 1);
   EXPECT_EQ(visits, (std::array<int, 2>{2, 2}));
   EXPECT_THROW(context->with_program_attempt_level(0, [] {}), std::logic_error);
-  EXPECT_EQ(pops::reduce_max_local(system.engine()->hierarchy().state(0)), pops::Real(1));
-  EXPECT_EQ(pops::reduce_max_local(system.engine()->hierarchy().state(1)), pops::Real(1));
+  const auto& lane = context->prepared_execution_lane();
+  EXPECT_EQ(pops::all_reduce_max(pops::reduce_max_local(system.engine()->hierarchy().state(0)), lane),
+            pops::Real(1));
+  EXPECT_EQ(pops::all_reduce_max(pops::reduce_max_local(system.engine()->hierarchy().state(1)), lane),
+            pops::Real(1));
 }
 
 TEST(GeneratedAmrSystemBlock, ProgramContextRetainsAndInterpolatesExactLevelHistory) {
@@ -3134,16 +3195,16 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
       }
     EXPECT_THROW(pops::runtime::program::serialize_amr_program_accepted_state(unearned_lag),
                  std::invalid_argument);
-    // Cursor-walk the authenticated AND9 layout to its pending section. The history key also
+    // Cursor-walk the authenticated ANDA layout to its pending section. The history key also
     // occurs in earlier slot payloads, so raw searching could mutate the wrong record.
     const std::string& pending_key = pending_after_regrid.pending_history_remaps.front().key;
-    constexpr std::array<std::uint8_t, 8> expected_magic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '9'};
+    constexpr std::array<std::uint8_t, 8> expected_magic{'P', 'O', 'P', 'S', 'A', 'N', 'D', 'A'};
     ASSERT_GE(pending_bytes.size(), expected_magic.size());
     ASSERT_TRUE(std::equal(expected_magic.begin(), expected_magic.end(), pending_bytes.begin()));
     const auto advance = [&](std::size_t& position, std::uint64_t count, std::size_t width = 1) {
       if (position > pending_bytes.size() || width == 0 ||
           count > (pending_bytes.size() - position) / width)
-        throw std::out_of_range("AND9 test cursor exceeds the checkpoint payload");
+        throw std::out_of_range("ANDA test cursor exceeds the checkpoint payload");
       position += static_cast<std::size_t>(count) * width;
     };
     const auto read_word = [&](std::size_t& position) {
@@ -3162,7 +3223,7 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
       const auto count = read_word(position);
       if (minimum_record_bytes == 0 ||
           count > (pending_bytes.size() - position) / minimum_record_bytes)
-        throw std::out_of_range("AND9 test record count exceeds the checkpoint payload");
+        throw std::out_of_range("ANDA test record count exceeds the checkpoint payload");
       return count;
     };
     std::size_t cursor = expected_magic.size();
@@ -3175,12 +3236,12 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
       skip_string(cursor);
       advance(cursor, 8);
     }
-    for (auto count = read_count(cursor, 64); count > 0; --count) {
+    for (auto count = read_count(cursor, 72); count > 0; --count) {
       skip_string(cursor);
       advance(cursor, 8);
       for (int identity = 0; identity < 4; ++identity)
         skip_string(cursor);
-      advance(cursor, 16);
+      advance(cursor, 24);  // depth, components and ghost depth are three encoded uint64 words
     }
     for (auto count = read_count(cursor, 80); count > 0; --count) {
       skip_string(cursor);
@@ -3815,8 +3876,8 @@ TEST(GeneratedAmrSystemBlock, CellIntegralBootstrapReprojectionPreservesConstant
     config.periodicity[axis] = true;
   }
   pops::AmrSystem<Dim> system(config);
-  pops::test::install_amr_runtime_authority(system,
-                                            "tests.generated-amr/exact-cell-integral-runtime");
+  const auto lane = install_amr_authority_with_lane(
+      system, "tests.generated-amr/exact-cell-integral-runtime");
   system.install_block_state_route("tracer", route);
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   pops::test::install_prepared_threshold_union(
@@ -3825,14 +3886,16 @@ TEST(GeneratedAmrSystemBlock, CellIntegralBootstrapReprojectionPreservesConstant
   system.bind_bootstrap_subject(route, "tracer", "analytic_expression");
   const pops::analytic::AnalyticOpcodeRows opcodes{{"constant", "input", "mul"}};
   const pops::analytic::AnalyticLiteralRows literals{{1.0, double(2 * Dim), 0.0}};
-  EXPECT_THROW(system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
-                                                     "exact_cell_integral", {{"input"}}, {{64.0}}),
-               std::invalid_argument);
+  expect_collective_exception<std::invalid_argument>(*lane, [&] {
+    system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
+                                          "exact_cell_integral", {{"input"}}, {{64.0}});
+  }, "rank-local analytic validation failed collectively");
   system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell", "exact_cell_integral",
                                         opcodes, literals);
-  EXPECT_THROW(system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
-                                                     "exact_cell_integral", opcodes, literals),
-               std::invalid_argument);
+  expect_collective_exception<std::invalid_argument>(*lane, [&] {
+    system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
+                                          "exact_cell_integral", opcodes, literals);
+  }, "rank-local analytic validation failed collectively");
   system.begin_bootstrap_plan();
   system.set_program_block_map({0});
   for (int level = 0; level < 2; ++level) {
@@ -3967,7 +4030,8 @@ TEST(GeneratedAmrSystemBlock, GaussianBootstrapReprojectionPreservesExactNeutral
     config.periodicity[axis] = true;
   }
   pops::AmrSystem<Dim> system(config);
-  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/exact-gaussian-runtime");
+  const auto lane = install_amr_authority_with_lane(
+      system, "tests.generated-amr/exact-gaussian-runtime");
   system.install_block_state_route("tracer", route);
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   pops::test::install_prepared_threshold_union(
@@ -3987,18 +4051,20 @@ TEST(GeneratedAmrSystemBlock, GaussianBootstrapReprojectionPreservesExactNeutral
   profile.background = Real(1) - integral;
   auto invalid = profile;
   invalid.inverse_width = Real(0);
-  EXPECT_THROW(system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
-                                                     "conservative_cell_average", invalid),
-               std::invalid_argument);
-  EXPECT_THROW(
-      system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
-                                            "conservative_cell_average", {{"constant"}}, {{1.0}}),
-      std::invalid_argument);
+  expect_collective_exception<std::invalid_argument>(*lane, [&] {
+    system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
+                                          "conservative_cell_average", invalid);
+  }, "rank-local analytic validation failed collectively");
+  expect_collective_exception<std::invalid_argument>(*lane, [&] {
+    system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
+                                          "conservative_cell_average", {{"constant"}}, {{1.0}});
+  }, "rank-local analytic validation failed collectively");
   system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
                                         "conservative_cell_average", profile);
-  EXPECT_THROW(system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
-                                                     "conservative_cell_average", profile),
-               std::invalid_argument);
+  expect_collective_exception<std::invalid_argument>(*lane, [&] {
+    system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
+                                          "conservative_cell_average", profile);
+  }, "rank-local analytic validation failed collectively");
   system.begin_bootstrap_plan();
   system.set_program_block_map({0});
   for (int level = 0; level < 2; ++level) {

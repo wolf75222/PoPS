@@ -115,6 +115,8 @@ class ProgramExpression(ImmutableSymbolic):
 
     def _binary(self, other, operation, reverse=False):
         right = as_expression(other, template=self.template)
+        if right is None:
+            raise TypeError("pointwise expressions require a complete component Space")
         if len(right.components) != len(self.components):
             raise ValueError("pointwise expression component counts differ")
         pairs = zip(self.components, right.components, strict=True)
@@ -156,6 +158,8 @@ def as_expression(value, *, template=None):
         for item, coefficient in value.terms:
             term = as_expression(item) * coefficient
             result = term if result is None else result + term
+        if result is None:
+            raise TypeError("an empty affine expression has no component Space")
         return result
     if template is None:
         raise TypeError("a literal pointwise expression needs a template")

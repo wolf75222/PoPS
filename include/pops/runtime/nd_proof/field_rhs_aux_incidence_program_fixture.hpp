@@ -6,7 +6,7 @@ namespace pops::test::aux_incidence_value_program {
 
 // A real source-built Program installation for bounded ownership/SSA unit witnesses. Its DSO
 // exposes the actual installer-created context; tests never manufacture a Context identity or Value.
-inline constexpr const char* identity = "tests.aux-incidence-value-program/two-fields-v1";
+inline constexpr const char* identity = "tests.aux-incidence-value-program/two-fields-v3";
 
 inline std::string source() {
   return R"CPP(
@@ -14,16 +14,20 @@ inline std::string source() {
 #include <pops/runtime/program/amr_program_context.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/config/route_ids.hpp>
+#include <array>
 #include <cstdint>
+#include <exception>
 #include <map>
 #include <memory>
+#include <optional>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 constexpr int D = pops::kNativeDimension;
 using UniformContext = pops::runtime::program::ProgramContext<D>;
 using AmrContext = pops::runtime::program::AmrProgramContext<D>;
-constexpr const char* identity = "tests.aux-incidence-value-program/two-fields-v1";
+constexpr const char* identity = "tests.aux-incidence-value-program/two-fields-v3";
 std::map<void*, std::weak_ptr<UniformContext>> uniform_contexts;
 std::map<void*, std::weak_ptr<AmrContext>> amr_contexts;
 
@@ -91,6 +95,7 @@ extern "C" const char* pops_program_checkpoint_history_clock_identity(int) { ret
 extern "C" const char* pops_program_checkpoint_history_interpolation_identity(int) { return ""; }
 extern "C" int pops_program_checkpoint_history_depth(int) { return 0; }
 extern "C" int pops_program_checkpoint_history_components(int) { return 0; }
+extern "C" int pops_program_checkpoint_history_ghost_depth(int) { return -1; }
 extern "C" const char* pops_program_checkpoint_clock_manifest_contract() {
   return "pops.program.owned-clock-manifest@1";
 }
@@ -139,6 +144,81 @@ extern "C" void* pops_test_aux_incidence_uniform_context(pops::System<D>* system
 extern "C" void* pops_test_aux_incidence_amr_context(pops::AmrSystem<D>* system) {
   return amr_contexts.at(system).lock().get();
 }
+// Test-only real hierarchy entry: preserve the original mixed coarse/fine forcing while
+// issuing a successful source write on every level. No accepted image is called a stage SSA.
+extern "C" std::array<pops::SolveReport, 2> pops_test_aux_incidence_scaled_fields(
+    pops::AmrSystem<D>* system, std::int64_t numerator, std::int64_t denominator,
+    double dt, int phi_evaluation, int psi_evaluation,
+    std::array<std::optional<pops::SolveReport>, 2>* observed_reports) {
+  auto context = amr_contexts.at(system).lock();
+  if (!context) throw std::logic_error("incidence hierarchy lost its actual Context owner");
+  std::array<pops::SolveReport, 2> reports;
+  std::vector<AmrContext::program_value_type> retained;
+  const auto require_retired = [&] {
+    for (const auto& value : retained) {
+      bool expired = false;
+      try { value.validate(); }
+      catch (const std::logic_error&) { expired = true; }
+      if (!expired)
+        throw std::logic_error("incidence Program SSA proof survived its finished hierarchy attempt");
+    }
+  };
+  const std::string dependencies = "tests.aux-incidence/full-level-scaled-state@1:" +
+      std::to_string(numerator) + "/" + std::to_string(denominator) + ":" +
+      std::to_string(phi_evaluation) + ":" + std::to_string(psi_evaluation);
+  try {
+  context->advance_mapping_hierarchy(dt,
+      [context, numerator, denominator, phi_evaluation, psi_evaluation, dependencies, &reports,
+       &retained, observed_reports](double) {
+    context->set_stage_time(numerator, denominator);
+    auto root = context->capture_program_value(0, 0, context->state(0));
+    retained.push_back(root);
+    auto& stage = context->scratch_state(1, 0, context->state(0));
+    auto write = context->begin_program_value_write(1, 0, stage, {root});
+    context->lincomb(stage, context->level() == 0 ? pops::Real(2) : pops::Real(1),
+                    context->state(0), pops::Real(0), context->state(0));
+    retained.push_back(context->complete_program_value_write(std::move(write)));
+    context->stage_program_field_values_at(context->boundary_evaluation_point(phi_evaluation),
+        10, "test.amr-aux.phi-slot", {{0, &stage, 1}});
+    context->suspend_hierarchy_barrier(AmrContext::HierarchyBarrierKind::named_field_solve,
+        10, identity, dependencies + ":phi", numerator, denominator,
+        [context, phi_evaluation, &reports, observed_reports] {
+          auto outcome = context->solve_fields_from_program_values_at(
+              context->boundary_evaluation_point(phi_evaluation), 10, "test.amr-aux.phi-slot", {});
+          reports[0] = outcome.consume(outcome.report().solved_value_available()
+              ? pops::SolveConsumption::kAccept : pops::SolveConsumption::kFailRun);
+          if (observed_reports) (*observed_reports)[0] = reports[0];
+          if (!reports[0].solved_value_available())
+            throw std::runtime_error("incidence phi solve failed: " + reports[0].reason);
+        },
+        [context, numerator, denominator, psi_evaluation, dependencies, stage = &stage, &reports,
+         &retained, observed_reports] {
+          for (const auto& value : retained) value.validate();
+          context->set_stage_time(numerator, denominator);
+          context->stage_program_field_values_at(context->boundary_evaluation_point(psi_evaluation),
+              13, "test.amr-aux.psi-slot", {{0, stage, 1}});
+          context->suspend_hierarchy_barrier(AmrContext::HierarchyBarrierKind::named_field_solve,
+              13, identity, dependencies + ":psi", numerator, denominator,
+              [context, psi_evaluation, &reports, observed_reports] {
+                auto outcome = context->solve_fields_from_program_values_at(
+                    context->boundary_evaluation_point(psi_evaluation), 13, "test.amr-aux.psi-slot", {});
+                reports[1] = outcome.consume(outcome.report().solved_value_available()
+                    ? pops::SolveConsumption::kAccept : pops::SolveConsumption::kFailRun);
+                if (observed_reports) (*observed_reports)[1] = reports[1];
+                if (!reports[1].solved_value_available())
+                  throw std::runtime_error("incidence psi solve failed: " + reports[1].reason);
+              }, [] {});
+        });
+  }, context, [] {});
+  } catch (...) {
+    const auto error = std::current_exception();
+    require_retired();
+    std::rethrow_exception(error);
+  }
+  require_retired();
+  return reports;
+}
+
 )CPP";
 }
 } // namespace pops::test::aux_incidence_value_program

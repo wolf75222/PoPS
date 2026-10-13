@@ -142,4 +142,8 @@ template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::m
 POPS_EXPORT std::shared_ptr<const ExactAmrFieldSolverProvider<Dim, MemorySpace>>
 make_builtin_exact_amr_field_solver_provider();
 
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
+POPS_EXPORT std::shared_ptr<const ExactAmrFieldSolverProvider<Dim, MemorySpace>>
+make_red_black_exact_amr_field_solver_provider();
+
 }  // namespace pops::runtime::amr

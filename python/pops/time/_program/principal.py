@@ -44,10 +44,16 @@ def call_with_bindings(handle, target, bindings, **kwargs):
         if not isinstance(quantity, Handle) or quantity.kind != "state":
             raise TypeError("rate bindings keys must be typed state quantities")
         physical = quantity.declaration_ref or quantity
+        from pops.model.handles import StateHandle
+        from pops.physics.board_handles import StateHandle as PhysicalStateHandle
+        from pops.problem.handles import BlockHandle
+        if not isinstance(physical, (StateHandle, PhysicalStateHandle)):
+            raise TypeError("rate bindings keys must be typed state quantities")
         model.declaration_index().authenticate(physical)
         if not isinstance(value, ProgramValue) or value.vtype != "state" or value.space != physical.space:
             raise ValueError("rate binding value does not carry its exact physical StateSpace")
-        if quantity.is_instance and quantity.block_ref._resolved() != value.block._resolved():
+        if quantity.is_instance and (not isinstance(quantity.block_ref, BlockHandle)
+                or quantity.block_ref._resolved() != value.block._resolved()):
             raise ValueError("rate binding value belongs to another block instance")
         if physical.space in supplied:
             raise ValueError("rate bindings repeat a physical StateSpace")

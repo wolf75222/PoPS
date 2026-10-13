@@ -11,9 +11,11 @@
 #include <pops/runtime/system/derived_aux_provider.hpp>
 #include <pops/runtime/system/exact_field_solver_backend.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <exception>
 #include <functional>
+#include <type_traits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -35,6 +37,8 @@ class ExactNamedField final {
   struct AcceptedState {
     field_type potential;
     field_type outputs;
+    bool warm_start_pending = false;
+    std::optional<SolveReport> solve_report{};
   };
 
   struct PreparedRhs {
@@ -101,10 +105,14 @@ class ExactNamedField final {
       throw std::logic_error("named elliptic field has no prepared output candidate");
     return candidate_outputs_;
   }
-  const field_type& dependency_potential() const noexcept {
+  const field_type& dependency_potential() const {
+    if (warm_start_pending_ && !(active_ && candidate_ready_))
+      throw std::logic_error("named field dependency cannot consume an unresolved warm start");
     return active_ && candidate_ready_ ? solver_->candidate() : accepted_;
   }
-  AcceptedState accepted_state() const { return {accepted_, accepted_outputs_}; }
+  bool warm_start_pending() const noexcept { return warm_start_pending_; }
+  const std::optional<SolveReport>& last_accepted_solve_report() const noexcept { return accepted_solve_report_; }
+  AcceptedState accepted_state() const { return {accepted_, accepted_outputs_, warm_start_pending_, accepted_solve_report_}; }
   void restore_accepted_state(const AcceptedState& state) {
     if (active_)
       throw std::logic_error("cannot restore a named field while a solve is active");
@@ -112,8 +120,58 @@ class ExactNamedField final {
     authenticate_output_layout_(state.outputs, "restored outputs");
     accepted_ = state.potential;
     accepted_outputs_ = state.outputs;
+    warm_start_pending_ = state.warm_start_pending;
+    accepted_solve_report_ = state.solve_report;
   }
-  field_type& accepted_potential_for_restore() { return accepted_; }
+  field_type& accepted_potential_for_restore() {
+    // The checkpoint wire carries potential values but no solve evidence. Never attach a
+    // pre-restart bootstrap report to a different restored potential.
+    accepted_solve_report_.reset();
+    return accepted_;
+  }
+
+  /// Replace only the next solve's initial guess. This never materializes solved outputs.
+  /// The already allocated solver candidate makes admission and publication independent;
+  /// nonfinite data or a foreign layout cannot modify the accepted potential.
+  void publish_warm_start(const field_type& source, const ExecutionLane& lane) {
+    std::exception_ptr error;
+    try {
+      if (&lane != lane_ || active_ || candidate_ready_)
+        throw std::logic_error("named field warm start requires its idle prepared execution lane");
+      authenticate_layout_(source, "warm start");
+      if (source.ncomp() != 1 || source.local_size() != accepted_.local_size())
+        throw std::invalid_argument("named field warm start requires exactly one scalar component");
+      authenticate_layout_(solver_->candidate(), "warm start candidate");
+    } catch (...) { error = std::current_exception(); }
+    collective_rethrow_(error, "named field warm-start admission failed collectively", *lane_);
+    Real invalid = Real(0);
+    error = nullptr;
+    try {
+      for (std::size_t local = 0; local < source.local_size(); ++local) {
+        const auto values = source.fab(local).view();
+        invalid = std::max(invalid, for_each_cell_reduce_max(source.box(local),
+            [=] POPS_HD(const Index<Dim>& cell) {
+              return Kokkos::isfinite(values(cell, 0)) ? Real(0) : Real(1);
+            }));
+      }
+      Kokkos::fence();
+    } catch (...) { error = std::current_exception(); }
+    collective_rethrow_(error, "named field warm-start evaluation failed collectively", *lane_);
+    if (all_reduce_max(invalid, *lane_) != Real(0))
+      throw std::invalid_argument("named field warm start contains nonfinite valid cells");
+    error = nullptr;
+    try {
+      elliptic::nd::detail::copy_component(source, 0, solver_->candidate(), 0);
+      Kokkos::fence();
+    } catch (...) { error = std::current_exception(); }
+    collective_rethrow_(error, "named field warm-start staging failed collectively", *lane_);
+    // Like accept_candidate(), this is allocation-free publication after collective admission.
+    try {
+      elliptic::nd::detail::copy_component(solver_->candidate(), 0, accepted_, 0);
+      Kokkos::fence();
+      warm_start_pending_ = true;
+    } catch (...) { std::terminate(); }
+  }
   int maximum_iterations() const noexcept { return solver_->maximum_iterations(); }
   bool materialized() const noexcept { return solver_->materialized(); }
   std::string_view solver_provider_identity() const noexcept {
@@ -278,6 +336,7 @@ class ExactNamedField final {
       runtime::field::publish_named_field(solver_->candidate(), candidate_outputs_, geometry_,
                                           output_);
       candidate_topology_report_ = solver_->topology_report();
+      candidate_solve_report_ = report;
       candidate_ready_ = true;
       return report;
     } catch (...) {
@@ -299,7 +358,10 @@ class ExactNamedField final {
       copy_all_cells_(solver_->candidate(), accepted_);
       copy_all_cells_(candidate_outputs_, accepted_outputs_);
       accepted_topology_report_ = std::move(candidate_topology_report_);
+      static_assert(std::is_nothrow_move_assignable_v<std::optional<SolveReport>>);
+      accepted_solve_report_ = std::move(candidate_solve_report_);
       Kokkos::fence();
+      warm_start_pending_ = false;
       clear_candidate_();
     } catch (...) {
       std::terminate();
@@ -371,6 +433,7 @@ class ExactNamedField final {
     active_ = false;
     candidate_ready_ = false;
     candidate_topology_report_.clear();
+    candidate_solve_report_.reset();
   }
 
   const ExecutionLane* lane_ = nullptr;
@@ -393,6 +456,9 @@ class ExactNamedField final {
   std::vector<runtime::field::FieldTopologyReportRow> candidate_topology_report_;
   bool active_ = false;
   bool candidate_ready_ = false;
+  bool warm_start_pending_ = false;
+  std::optional<SolveReport> accepted_solve_report_{};
+  std::optional<SolveReport> candidate_solve_report_{};
 };
 
 }  // namespace pops::runtime::system

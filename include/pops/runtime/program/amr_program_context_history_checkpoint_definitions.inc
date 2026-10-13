@@ -61,6 +61,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
   }
 
   void publish_restore() noexcept override {
+    owner_->revoke_interaction_history_snapshots_();
     owner_->runtime_state().invalidate_resources();
     owner_->cancel_mapping_hierarchy_();
     owner_->staged_field_publications_.clear();

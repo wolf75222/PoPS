@@ -714,7 +714,7 @@ TEST(PreparedFieldRhsInputs, ResetOfSameOwnedSlotAndNewAttemptExpireProducedValu
   EXPECT_FALSE(observed.copied.has_value());
 }
 
-TEST(PreparedFieldRhsInputs, ActualMultilevelAmrIssuesOneInputForEachLiveLevel) {
+TEST(PreparedFieldRhsInputs, ActualMultilevelAmrRefusesMissingSuccessfulStageValues) {
   ready();
   AmrSystemConfig<D> config;
   config.level_count = 2; config.regrid_every = 0; config.explicit_bootstrap = true;
@@ -775,14 +775,22 @@ TEST(PreparedFieldRhsInputs, ActualMultilevelAmrIssuesOneInputForEachLiveLevel) 
   context.configure_primary_clock("test.field-rhs-v2.clock"); context.begin_step(.25);
   context.set_stage_time(1, 2);
   auto& stage = produce_stage(context);
-  auto result = context.solve_fields_from_program_values_at(context.boundary_evaluation_point(13),
-    10, "test.field-rhs-v2.slot", {{0, &stage, 1}});
-  ASSERT_TRUE(result.report().solved_value_available()) << result.report().reason;
-  (void)result.consume(SolveConsumption::kAccept);
+  // Discard observations from the real bootstrap solves before testing stage admission.
+  observed.copied.reset(); observed.levels.clear(); observed.cells = 0;
+  // A coarse successful-write ticket does not authorize substituting accepted fine
+  // data for the same authored SSA stage. Refuse before either level's RHS executes.
+  const auto incomplete = [&] {
+    (void)context.solve_fields_from_program_values_at(context.boundary_evaluation_point(13),
+      10, "test.field-rhs-v2.slot", {{0, &stage, 1}});
+  };
+  if (context.prepared_execution_lane().size() == 1) {
+    EXPECT_THROW(incomplete(), std::invalid_argument);
+  } else {
+    EXPECT_THROW(incomplete(), std::runtime_error);
+  }
   EXPECT_EQ(system.field_provider_levels("test.field-rhs-v2.slot"), 2);
-  EXPECT_EQ(observed.levels, (std::set<int>{0, 1}));
-  ASSERT_TRUE(observed.copied.has_value());
-  EXPECT_THROW((void)observed.copied->frame(), std::logic_error);
+  EXPECT_TRUE(observed.levels.empty());
+  EXPECT_FALSE(observed.copied.has_value());
 }
 
 // A separate real two-slot composition, leaving the thirteen original witnesses intact.
@@ -974,7 +982,7 @@ runtime::program::AmrProgramContext<D>& incidence_context(AmrSystem<D>& system) 
 }
 
 enum class IncidenceRestoreWitness {
-  original, repeated_publication, rank_local_refusal, accepted_state_consumer
+  original, repeated_publication, rank_local_refusal, accepted_state_consumer, scaled_phi_failure
 };
 
 void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
@@ -1002,7 +1010,8 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
     "material", IncidenceStorageModel{}, "state_storage", "unavailable", "conservative", "imex",
     1.4, 1, 1, 0.0, double(kWenoEpsilon), false, "test.amr-aux.incidence-state-model"));
   }
-  system.set_temporal_relations({2}, {1}, {"integral_only"});
+  // The real scaled-source barrier below is a common-time composite field request.
+  system.set_temporal_relations({1}, {1}, {"integral_only"});
   const AuxiliaryComponentContract contract{"cell-average", "cell", "unitless", "field", "scalar"};
   AuxiliaryStorageShape<D> shape;
   for (int axis = 0; axis < D; ++axis) shape.halo[axis] = 1;
@@ -1013,10 +1022,17 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
     "pops.field-hierarchy.composite", 1, {"pops.field-hierarchy.options.empty@1", {}}};
   const auto install_plan = [&](const std::string& slot, const std::string& field,
                                const std::string& binding, const AuxiliaryComponentKey& output) {
+    CompositeFacOptions fac_options;
+    if (extra == IncidenceRestoreWitness::scaled_phi_failure && field == "phi") {
+      fac_options.max_iters = 1;
+      fac_options.fine_sweeps = 1;
+      fac_options.rel_tol = std::numeric_limits<Real>::epsilon();
+      fac_options.abs_tol = Real(0);
+    }
     system.set_field_solver_plan(slot, slot + "/plan", slot + "/provider", kIncidenceOwner,
       "material", field, {output}, 1, {binding}, {"material"}, {field}, {1.0},
       "geometric_mg", hierarchy,
-      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{}));
+      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, fac_options));
     system.set_field_reaction(slot, 1.0); // Screened equations have no periodic mean constraint.
   };
   install_plan("test.amr-aux.phi-slot", "phi", "test.amr-aux.phi-binding", phi);
@@ -1061,7 +1077,13 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
   const auto psi_rhs = make_poisson_rhs_v2(IncidencePsiRhs{});
   system.set_block_elliptic_field_v2("material", "phi", "test.amr-aux.phi-rhs",
     "test.amr-aux.phi-binding", "test.amr-aux.phi-consumer", 0,
-    [&observed, phi_rhs](const Inputs& inputs, Field& rhs) {
+    [&observed, phi_rhs, extra](const Inputs& inputs, Field& rhs) {
+      // Only the iteration-limit witness starts from an exact zero bootstrap solve.
+      // The produced positive-dt request still evaluates the actual state RHS.
+      if (extra == IncidenceRestoreWitness::scaled_phi_failure && inputs.boundary_point().dt == 0) {
+        rhs.set_val(Real(0));
+        return;
+      }
       phi_rhs(inputs, rhs);
       if (inputs.boundary_point().dt > 0)
         observed.phi_points.at(static_cast<std::size_t>(inputs.level())) = inputs.boundary_point();
@@ -1117,9 +1139,55 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
   ASSERT_LT(actual_fine_cells, full_fine_cells) << "the real refined layout must be sparse";
   context.begin_step(.25); context.set_stage_time(1, 2);
   ASSERT_EQ(system.step_transaction_depth(), 0U);
-  auto& baseline_stage = produce_stage(context);
-  auto baseline = context.solve_fields_from_program_values_at(context.boundary_evaluation_point(13),
-    13, "test.amr-aux.psi-slot", {{0, &baseline_stage, 1}});
+  if (extra == IncidenceRestoreWitness::scaled_phi_failure) {
+    // The mixed coarse2/fine1 forcing must fail the real one-cycle composite solve.
+    // Its failed Outcome must stop before psi and leave the accepted hierarchy exact.
+    const auto before_time = system.time();
+    const auto before_step = system.macro_step();
+    const auto before_auxiliary = system.capture_auxiliary_checkpoint_accepted_state();
+    std::array<std::vector<double>, 2> before_states;
+    for (int level = 0; level < 2; ++level)
+      before_states[level] = system.block_level_state_global("material", level);
+    observed.capture = true;
+    observed.snapshots.clear();
+    const auto library = dynlib::open(POPS_TEST_FIELD_RHS_AUX_INCIDENCE_PROGRAM_SO);
+    ASSERT_TRUE(dynlib::valid(library));
+    using HierarchySolve = std::array<SolveReport, 2> (*)(AmrSystem<D>*, std::int64_t,
+                                                       std::int64_t, double, int, int,
+                                                       std::array<std::optional<SolveReport>, 2>*);
+    const auto hierarchy_solve = reinterpret_cast<HierarchySolve>(
+        dynlib::sym(library, "pops_test_aux_incidence_scaled_fields"));
+    ASSERT_NE(hierarchy_solve, nullptr);
+    std::array<std::optional<SolveReport>, 2> actual_reports;
+    bool failed = false;
+    try { (void)hierarchy_solve(&system, 7, 8, .25, 16, 17, &actual_reports); }
+    catch (const std::exception& error) {
+      failed = true;
+      if (context.prepared_execution_lane().size() == 1)
+        EXPECT_NE(std::string(error.what()).find("incidence phi solve failed:"), std::string::npos);
+    }
+    dynlib::close(library);
+    EXPECT_TRUE(failed);
+    ASSERT_TRUE(actual_reports[0].has_value()) << "the real failed phi Outcome must be consumed";
+    EXPECT_FALSE(actual_reports[0]->solved_value_available());
+    EXPECT_EQ(actual_reports[0]->status, SolveStatus::kIterationLimit);
+    EXPECT_EQ(actual_reports[0]->action, SolveAction::kFailRun);
+    EXPECT_GT(actual_reports[0]->iters, 0);
+    EXPECT_FALSE(actual_reports[1].has_value()) << "phi failure must precede psi consumption";
+    for (int level = 0; level < 2; ++level) {
+      ASSERT_TRUE(observed.phi_points[level].has_value());
+      EXPECT_EQ(observed.phi_points[level]->stage, 16);
+      EXPECT_EQ(system.block_level_state_global("material", level), before_states[level]);
+    }
+    EXPECT_TRUE(observed.snapshots.empty()) << "failed phi must not evaluate the psi RHS";
+    EXPECT_EQ(system.capture_auxiliary_checkpoint_accepted_state(), before_auxiliary);
+    EXPECT_EQ(system.time(), before_time);
+    EXPECT_EQ(system.macro_step(), before_step);
+    EXPECT_EQ(system.step_transaction_depth(), 0U);
+    return;
+  }
+  auto baseline = context.solve_fields_from_blocks_at(context.boundary_evaluation_point(13),
+    13, "test.amr-aux.psi-slot", {{0, nullptr}});
   ASSERT_TRUE(baseline.report().solved_value_available()) << baseline.report().reason;
   (void)baseline.consume(SolveConsumption::kAccept);
   const auto baseline_image = system.capture_auxiliary_checkpoint_accepted_state();
@@ -1130,9 +1198,8 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
   }
 
   context.set_stage_time(3, 4);
-  auto& stage = produce_stage(context);
-  auto phi_solve = context.solve_fields_from_program_values_at(context.boundary_evaluation_point(14),
-    10, "test.amr-aux.phi-slot", {{0, &stage, 1}});
+  auto phi_solve = context.solve_fields_from_blocks_at(context.boundary_evaluation_point(14),
+    10, "test.amr-aux.phi-slot", {{0, nullptr}});
   ASSERT_TRUE(phi_solve.report().solved_value_available()) << phi_solve.report().reason;
   (void)phi_solve.consume(SolveConsumption::kAccept);
   const auto dirty_after_phi = system.capture_auxiliary_checkpoint_accepted_state();
@@ -1163,8 +1230,8 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
   }
   observed.capture = true; observed.fail_fine_Q = true; observed.snapshots.clear();
   observed.Q_launches.clear(); observed.fine_Q_fault_point.reset();
-  EXPECT_THROW((void)context.solve_fields_from_program_values_at(context.boundary_evaluation_point(15),
-    13, "test.amr-aux.psi-slot", {{0, &stage, 1}}), std::exception);
+  EXPECT_THROW((void)context.solve_fields_from_blocks_at(context.boundary_evaluation_point(15),
+    13, "test.amr-aux.psi-slot", {{0, nullptr}}), std::exception);
   ASSERT_TRUE(observed.fine_Q_fault_point.has_value());
   EXPECT_EQ(observed.fine_Q_fault_point->level, 1);
   EXPECT_EQ(observed.fine_Q_fault_point->event, AuxiliaryEvaluationEvent::before_field_solve);
@@ -1259,8 +1326,8 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
   EXPECT_TRUE(incidence_invalidated(reopened[0], kIncidenceQProvider));
   EXPECT_TRUE(incidence_invalidated(reopened[1], kIncidenceQProvider));
   observed.fail_fine_Q = false; observed.snapshots.clear();
-  auto complete = context.solve_fields_from_program_values_at(context.boundary_evaluation_point(15),
-    13, "test.amr-aux.psi-slot", {{0, &stage, 1}});
+  auto complete = context.solve_fields_from_blocks_at(context.boundary_evaluation_point(15),
+    13, "test.amr-aux.psi-slot", {{0, nullptr}});
   ASSERT_TRUE(complete.report().solved_value_available()) << complete.report().reason;
   (void)complete.consume(SolveConsumption::kAccept);
   ASSERT_EQ(observed.snapshots.size(), 2U);
@@ -1388,17 +1455,20 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
 
     // An actually produced scaled SSA state yields a different real accepted forcing.
     context.set_stage_time(7, 8);
-    auto& doubled_stage = produce_stage(context, 1, Real(2));
-    auto doubled_phi = context.solve_fields_from_program_values_at(context.boundary_evaluation_point(16),
-      10, "test.amr-aux.phi-slot", {{0, &doubled_stage, 1}});
-    ASSERT_TRUE(doubled_phi.report().solved_value_available()) << doubled_phi.report().reason;
-    (void)doubled_phi.consume(SolveConsumption::kAccept);
-    auto doubled_psi = context.solve_fields_from_program_values_at(context.boundary_evaluation_point(17),
-      13, "test.amr-aux.psi-slot", {{0, &doubled_stage, 1}});
-    ASSERT_TRUE(doubled_psi.report().solved_value_available()) << doubled_psi.report().reason;
-    (void)doubled_psi.consume(SolveConsumption::kAccept);
-    // The override scales only the active level. Other levels use actual accepted
-    // STATE; the composite high forcing is not claimed to be constant Q=12.
+    const auto library = dynlib::open(POPS_TEST_FIELD_RHS_AUX_INCIDENCE_PROGRAM_SO);
+    ASSERT_TRUE(dynlib::valid(library));
+    using HierarchySolve = std::array<SolveReport, 2> (*)(AmrSystem<D>*, std::int64_t,
+                                                       std::int64_t, double, int, int,
+                                                       std::array<std::optional<SolveReport>, 2>*);
+    const auto hierarchy_solve = reinterpret_cast<HierarchySolve>(
+        dynlib::sym(library, "pops_test_aux_incidence_scaled_fields"));
+    ASSERT_NE(hierarchy_solve, nullptr);
+    const auto doubled = hierarchy_solve(&system, 7, 8, .25, 16, 17, nullptr);
+    dynlib::close(library); // The installed Program retains the real DSO and Context.
+    ASSERT_TRUE(doubled[0].solved_value_available()) << doubled[0].reason;
+    ASSERT_TRUE(doubled[1].solved_value_available()) << doubled[1].reason;
+    // Both levels issued real SSA writes: coarse scale2, fine scale1. This preserves
+    // the original mixed forcing without substituting an accepted image for a stage.
     // MultiFab copies vector<Fab>; each Fab copy allocates and deep-copies its data.
     for (int level = 0; level < 2; ++level) {
       const auto* groups = system.prepared_amr_provider_storage_groups(level);
@@ -1453,5 +1523,9 @@ TEST(PreparedFieldRhsInputs, OneRankAuxiliaryRestoreRefusalLeavesAcceptedInciden
 
 TEST(PreparedFieldRhsInputs, AcceptedProviderStateSourceSurvivesRestoreAndRegistryRollback) {
   actual_field_incidence_lifecycle(IncidenceRestoreWitness::accepted_state_consumer);
+}
+
+TEST(PreparedFieldRhsInputs, FailedScaledPhiStopsPsiAndPreservesAcceptedHierarchy) {
+  actual_field_incidence_lifecycle(IncidenceRestoreWitness::scaled_phi_failure);
 }
 } // namespace

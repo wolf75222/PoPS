@@ -3,7 +3,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 
 from pops.time.expressions import ProgramExpression, component_names, encode_expressions
-from pops.time.values import _resolve_handle
+from pops.time.values import ProgramValue, _resolve_handle
 from .value_validation import require_top_level
 
 
@@ -45,7 +45,13 @@ def build_local_product(program, problem, prepared, *, name=None):
     sub = []
     program._recording.append(sub)
     try:
-        placeholders = [None] * len(values)
+        placeholders: list[ProgramValue | None] = [None] * len(values)
+
+        def require_placeholder(index: int) -> ProgramValue:
+            value = placeholders[index]
+            if not isinstance(value, ProgramValue):
+                raise ValueError("LocalResidual product requires every issued Program placeholder")
+            return value
         frozen_placeholders = {}
         for i, value in enumerate(values):
             if value.vtype == "state":
@@ -61,7 +67,7 @@ def build_local_product(program, problem, prepared, *, name=None):
         # A frozen field remains attached to its exact frozen State occurrence.
         # It is not a solve at a Newton candidate, even when that candidate's seed
         # happens to be the same outer value.
-        captured_states = {value.id: placeholders[i].id
+        captured_states = {value.id: require_placeholder(i).id
                            for i, value in enumerate(values) if i >= len(seeds)
                            and value.vtype == "state"}
         for i, value in enumerate(values):
@@ -71,8 +77,9 @@ def build_local_product(program, problem, prepared, *, name=None):
                 placeholders[i] = program._new(
                     "fields", "input_fields", (), dict(value.attrs), "product_argument_%d" % i,
                     value.block, space=value.space, point=value.point, field_context=context)
-        unknowns = MappingProxyType(dict(zip(seeds, placeholders[:len(seeds)], strict=True)))
-        frozen = dict(zip(captures, placeholders[len(seeds):], strict=True))
+        complete_placeholders = tuple(require_placeholder(index) for index in range(len(values)))
+        unknowns = MappingProxyType(dict(zip(seeds, complete_placeholders[:len(seeds)], strict=True)))
+        frozen = dict(zip(captures, complete_placeholders[len(seeds):], strict=True))
         result = problem.residual(program, unknowns, **frozen)
         if not isinstance(result, Mapping) or set(result) != set(seeds):
             raise ValueError("LocalResidual product residual keys must exactly match unknown keys")
@@ -94,16 +101,16 @@ def build_local_product(program, problem, prepared, *, name=None):
         allowed = {"source", "apply", "linear_source", "linear_combine", "pointwise_expression"}
         seen = set()
         for node in sub:
-            if not any(node is item for item in placeholders) and node.op not in allowed:
+            if not any(node is item for item in complete_placeholders) and node.op not in allowed:
                 raise ValueError("LocalResidual product operation %r is not a supported LOCAL operator" % node.op)
             if any(item.id not in seen for item in node.inputs):
                 raise ValueError("LocalResidual product body reads an undeclared capture")
             seen.add(node.id)
-        argument_ids = {item.id for item in placeholders}
+        argument_ids = {item.id for item in complete_placeholders}
         extended = (any(node.id not in argument_ids for node in sub)
-                    or len(argument_ids) != len(placeholders)
+                    or len(argument_ids) != len(complete_placeholders)
                     or any(v.vtype == "fields" for v in values))
-        by_id = {value.id: i for i, value in enumerate(sub if extended else placeholders)}
+        by_id = {value.id: i for i, value in enumerate(sub if extended else complete_placeholders)}
         if any(value.id not in by_id for value in reads):
             raise ValueError("LocalResidual product body reads an undeclared capture")
         roles = tuple(by_id[value.id] for value in reads)
@@ -114,7 +121,7 @@ def build_local_product(program, problem, prepared, *, name=None):
     # Internal remapped field contexts are witnesses for residual evaluation,
     # while public outputs retain the external capture authority.
     if any(v.vtype == "fields" for v in values):
-        external = {placeholder.id: value.id for placeholder, value in zip(placeholders, values)}
+        external = {placeholder.id: value.id for placeholder, value in zip(complete_placeholders, values)}
         provenance = remap_field_provenance(provenance, lambda source: external.get(source, source))
     token_name = name or "local_product"
     token = program._new(
@@ -128,7 +135,7 @@ def build_local_product(program, problem, prepared, *, name=None):
          "output_count": len(seeds), **controls,
          **({"residual_block": sub, "residual_region": program._region_for_block(sub),
              "product_argument_positions": tuple(
-                 next(i for i, node in enumerate(sub) if node is item) for item in placeholders)}
+                 next(i for i, node in enumerate(sub) if node is item) for item in complete_placeholders)}
             if extended else {})}, token_name, blocks[0], point=values[0].point,
         field_context=provenance)
 

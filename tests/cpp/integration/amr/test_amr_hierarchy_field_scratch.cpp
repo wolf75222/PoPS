@@ -121,6 +121,9 @@ std::string rollback_program_source() {
     extern "C" int pops_program_checkpoint_history_components(int) {
       return 0;
     }
+    extern "C" int pops_program_checkpoint_history_ghost_depth(int) {
+      return -1;
+    }
     extern "C" int pops_program_checkpoint_logical_clock_count() {
       return 1;
     }

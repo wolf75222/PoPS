@@ -23,8 +23,8 @@ from pops.physics._facade import Model
 # Golden hashes for canonical Module-lowered model-hash schema 9, including qualified expression
 # graphs and the exact auxiliary ProviderPack. Named-source declarations must still preserve
 # equality between source() and source_term("default", ...) and inequality when formulas differ.
-GOLDEN_WITH_SOURCE = "108b3b99056c619e43d714276541246bafcd44c5f4f204487ac24e67073cae4b"
-GOLDEN_NO_SOURCE = "fe836a8be7c76789b859792fa826f59b6e2d2c5bc9fad6fd7afd035a44c82fbe"
+GOLDEN_WITH_SOURCE = "44c4bf99f52c4a5a39366742d5bb37ca35e21e3b7ff5e8f2d7badda746c6af6f"
+GOLDEN_NO_SOURCE = "29e4f443c2522f13fd2c0c6f83a7b98f13645f074e96602d2ea0af4cbfdf24a3"
 
 
 def canonical_hash(model):
@@ -45,7 +45,7 @@ def build(with_source=True):
     gx = m.aux("grad_x")
     gy = m.aux("grad_y")
     m.flux(x=[mx, mx * mx / rho, mx * my / rho], y=[my, mx * my / rho, my * my / rho])
-    m.wave_speeds(x=(0.0 * rho, 0.0 * rho), y=(0.0 * rho, 0.0 * rho))
+    m.wave_speeds(x=(mx / rho, mx / rho), y=(my / rho, my / rho))
     if with_source:
         m.source([0.0 * rho, -rho * gx, -rho * gy])
     return m
@@ -61,7 +61,7 @@ def base_model():
     gy = m.aux("grad_y")
     bz = m.aux("B_z")
     m.flux(x=[mx, mx * mx / rho, mx * my / rho], y=[my, mx * my / rho, my * my / rho])
-    m.wave_speeds(x=(0.0 * rho, 0.0 * rho), y=(0.0 * rho, 0.0 * rho))
+    m.wave_speeds(x=(u, u), y=(v, v))
     return m, dict(rho=rho, mx=mx, my=my, u=u, v=v, gx=gx, gy=gy, bz=bz)
 
 

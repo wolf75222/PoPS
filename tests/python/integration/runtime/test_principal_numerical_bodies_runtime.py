@@ -5,6 +5,7 @@ Only compile/MPI/gather plumbing is shared with the standalone User receipt.
 """
 import numpy as np
 import pops
+from pops._ir.expr import Const
 import pytest
 
 from pops.domain import Rectangle
@@ -76,11 +77,14 @@ def _case(permutation, *, dt=DT, weight=1., diagnostic=False):
         flux = model.flux("F%d" % i, state=state, frame=frame,
             components={axis: tuple(sum(float(matrix[k, j]) * symbols[j] for j in range(5))
                                     for k in range(part.start, part.stop))
-                        for axis, matrix in zip(frame.axes, matrices, strict=True)},
-            waves=({axis: (speed,) * WIDTHS[0]
-                    for axis, speed in zip(frame.axes, speeds, strict=True)} if i == 0 else None))
+                        for axis, matrix in zip(frame.axes, matrices, strict=True)})
         fluxes.append(flux)
         rates.append(model.rate("R%d" % i, equation=ddt(state) == -div(flux)))
+    # Both rows belong to the same five-component principal Jacobian.  Its
+    # maximum absolute row sum bounds the full spectrum on each axis; declare
+    # that common authority rather than borrowing the first row's wave law.
+    model.module.eigenvalues(**{axis.name: (Const(speed),) * sum(WIDTHS)
+                               for axis, speed in zip(frame.axes, speeds, strict=True)})
     order = (0, 1) if permutation == tuple(range(5)) else (1, 0)
     case = pops.Case("mixed_principal_receipt")
     blocks = {i: case.block("block%d" % i, model, states=(states[i],)) for i in order}

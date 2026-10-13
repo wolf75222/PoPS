@@ -59,7 +59,7 @@ def immutable_data(value, *, active=None):
         if (
             is_dataclass(value)
             and not isinstance(value, type)
-            and type(value).__dataclass_params__.frozen
+            and getattr(type(value), "__dataclass_params__").frozen
         ):
             if callable(value):
                 marker = getattr(type(value), "__pops_snapshot_immutable_data__", None)
@@ -94,7 +94,7 @@ def immutable_data(value, *, active=None):
                 },
             }
             if callable(value):
-                receipt = declared_data(value.snapshot_data())
+                receipt = declared_data(getattr(value, "snapshot_data")())
                 after = {
                     "type": type_name(value),
                     "implementation": record_code(type(value), active=active),
@@ -124,7 +124,7 @@ def snapshot_projection(value):
         return None
     if type(marker) is not int or marker != 1:
         raise TypeError("unknown immutable-data snapshot contract")
-    if not is_dataclass(value) or not type(value).__dataclass_params__.frozen:
+    if not is_dataclass(value) or not getattr(type(value), "__dataclass_params__").frozen:
         raise TypeError("immutable-data snapshot requires a frozen dataclass root")
     before = immutable_data(value)
     projection = getattr(value, "snapshot_data", None)
@@ -178,7 +178,7 @@ def record_code(cls, *, active):
                 }
             finally:
                 active.remove(key)
-        if value is dataclasses.MISSING or value is dataclasses._HAS_DEFAULT_FACTORY:
+        if value is dataclasses.MISSING or value is getattr(dataclasses, "_HAS_DEFAULT_FACTORY"):
             return {
                 "singleton": "MISSING" if value is dataclasses.MISSING else "_HAS_DEFAULT_FACTORY",
                 "implementation": module_implementation_fingerprint("dataclasses", path=path),

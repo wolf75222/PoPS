@@ -12,9 +12,11 @@ import pops
 import pytest
 
 from pops.output._consumer_contracts import ConsumerGraph, ConsumerKind, Retry
+from tests.python.support.checkpoint_staging import require_no_checkpoint_staging
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.evolved_stage_v_capture import pin, retain_v_provenance, save_json
 from tests.python.support.integral_state_receipts import collective_directory
+from tests.python.support.public_native_profile import native_profile, rank_and_size
 from tests.python.integration.runtime.test_imex_checkpoint_publication_rollback import _save_science
 
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
@@ -50,12 +52,12 @@ def _retry_target(example, *, output_mode):
 def test_original_imex_checkpoint_retry_replays_one_completed_seal(
         tmp_path, monkeypatch, record_property, isolated_native_cache, native_cxx, kokkos_root):
     del isolated_native_cache, native_cxx, kokkos_root
-    from pops._native_selector import select_native_dimension
     from pops.output._restart_provider import _RestartSnapshot
     from pops.runtime._runtime_instance import RuntimeInstance
-    native = select_native_dimension(2)
-    world = native.mpi_world()
-    rank = int(world.rank)
+    native, world = native_profile(scope="public IMEX checkpoint sealed retry")
+    rank, _size = rank_and_size(world)
+    record_property("native_abi_version", native.__abi_version__)
+    record_property("native_profile", "MPI" if world is not None else "Serial")
     native.native_execution_resource()
     directory = collective_directory(world, tmp_path/'imex-sealed-retry')
     collective_call(world, lambda: save_json(directory/('context-rank%d.json'%rank),
@@ -140,7 +142,10 @@ def test_original_imex_checkpoint_retry_replays_one_completed_seal(
             assert publications[0]['sealed_sha256'] == publications[1]['sealed_sha256']
             assert publications[0]['source_inode'] == publications[1]['source_inode']
             assert Path(publications[0]['retained']['path']).read_bytes() == Path(publications[1]['retained']['path']).read_bytes()
-            assert not list(output_root.rglob('.pops-restart-*'))
+            tombstones = require_no_checkpoint_staging(output_root)
+            save_json(directory/'cleanup-proof.json', dict(
+                schema='pops.checkpoint.empty-cleanup-tombstones@1',
+                tombstones=tombstones, surviving_staging_entries=False))
 
     # Share the actual published path through the existing collective checkpoint operation.
     from pops.output._checkpoint_collective import checkpoint_topology, root_value

@@ -167,10 +167,15 @@ def _attempt_error_record(error: BaseException) -> dict[str, Any]:
             return default
 
     message = text(error, "<unprintable rank-local exception>")
-    try:
-        phase = _phase(error)
-    except BaseException:
-        phase = "solve"
+    # Preserve precise exception metadata; report vocabulary is normalized separately.
+    phase = attribute("phase", _MISSING) if rejected else _MISSING
+    if phase is _MISSING:
+        try:
+            phase = _phase(error)
+        except BaseException:
+            phase = "solve"
+    elif type(phase) is not str or not phase:
+        phase = None
     try:
         reason_code = int(attribute("reason_code", 0)) if rejected else None
     except (TypeError, ValueError, OverflowError):
@@ -219,6 +224,9 @@ def _collective_attempt_error(
         if not isinstance(error, Mapping) or set(error) != expected_error_keys:
             return RuntimeError(
                 "collective step attempt returned an invalid error envelope on rank %d" % rank)
+        if error["kind"] == "reject" and (type(error["phase"]) is not str or not error["phase"]):
+            return RuntimeError(
+                "collective step attempt returned an invalid rejection phase on rank %d" % rank)
         failures.append((rank, error))
     if not failures:
         return None
@@ -263,7 +271,7 @@ def _collective_attempt_error(
         "collective step attempt rejected during %s: %s" % (phase, diagnostics))
     rejection.status = cast(_SolveStatus, status)
     rejection.phase = phase
-    rejection.detail = diagnostics
+    rejection.detail = selected["detail"]
     rejection.disposition = cast(_StepDisposition, disposition)
     rejection.reason_code = int(selected["reason_code"])
     rejection.failed_rank = selected_rank
@@ -732,6 +740,8 @@ class ComputedDtController(StepController[ComputedDt]):
             if not callable(getter):
                 raise TypeError("ComputedDt lacks its native Program frontier result")
             diagnostics = getter()
+            if not isinstance(diagnostics, Mapping):
+                raise TypeError("ComputedDt native Program frontier result must be a Mapping")
             if "pops.frontier.duration" not in diagnostics:
                 raise RuntimeError("ComputedDt Program did not return its effective duration")
             duration = float(diagnostics["pops.frontier.duration"])

@@ -314,6 +314,30 @@ def _assert_same_accepted_image(runtime, expected):
             np.testing.assert_array_equal(current, recorded)
 
 
+def _expected_regrid_continuation(source_run, restored_run, authority):
+    """Reconstruct the checkpoint owner epoch separately from the restored run."""
+    from pops.identity import Identity, make_identity
+    assert type(source_run) is Identity and source_run.domain == "run"
+    assert type(restored_run) is Identity and restored_run.domain == "run"
+    owners = []
+    for row in authority["owners"]:
+        owner = {"owner_path": tuple(row["owner_path"])}
+        for name in ("previous_owner_run", "previous_owner_lineage"):
+            token = row[name]
+            owner[name] = None if token is None else Identity.from_token(token).to_data()
+        owners.append(owner)
+    epoch = make_identity("run", {
+        "continuation": "checkpoint_restart_epoch@1",
+        "source_run_identity": source_run.to_data(),
+        "owner_authorities": owners,
+    })
+    return make_identity("run", {
+        "continuation": "checkpoint_regrid_epoch@1",
+        "owner_epoch": epoch.to_data(),
+        "source_run_identity": restored_run.to_data(),
+    })
+
+
 def _accepted_tagging_hysteresis(payload):
     """Extract the canonical persistent-tagging image from accepted Program state."""
     encoded = bytes(payload)
@@ -333,12 +357,12 @@ def _accepted_tagging_hysteresis(payload):
         assert cursor <= len(encoded), "accepted-state string is truncated"
 
     version = encoded[:8]
-    assert version in (b"POPSAND4", b"POPSAND5", b"POPSAND6", b"POPSAND7", b"POPSAND8", b"POPSAND9")
+    assert version in (b"POPSAND4", b"POPSAND5", b"POPSAND6", b"POPSAND7", b"POPSAND9", b"POPSANDA")
     cursor = 8
     cursor += 8  # native dimension
     skip_string()  # exact spatial contract
     cursor += 2 * 8  # topology epoch, materialization generation
-    if version in (b"POPSAND8", b"POPSAND9"):
+    if version in (b"POPSAND9", b"POPSANDA"):
         read_size()  # committed attempt; legacy inspection does not synthesize authority
     level_count = read_size()
     cursor += level_count * 40
@@ -355,17 +379,19 @@ def _accepted_tagging_hysteresis(payload):
         for _identity in range(4):
             skip_string()
         cursor += 2 * 8  # depth, component count
+        if version == b"POPSANDA":
+            cursor += 8  # exact declared history halo
     history_slot_count = read_size()
     for _ in range(history_slot_count):
         skip_string()
         cursor += 5 * 8  # level, slot, outgoing dt, initialized, fill count
-        if version in (b"POPSAND7", b"POPSAND8", b"POPSAND9"):
+        if version in (b"POPSAND7", b"POPSAND9", b"POPSANDA"):
             cursor += 4 * 8  # exact typed publication identity
     pending_count = read_size()
     for _ in range(pending_count):
         skip_string()
         cursor += 12 * 8  # two encoded i32, four u64, three i64, two real, consumed
-        if version == b"POPSAND9":
+        if version in (b"POPSAND9", b"POPSANDA"):
             cursor += 6 * 8  # qualification and source sample
             skip_string()
     assert cursor <= len(encoded), "accepted-state pending history remaps are truncated"
@@ -517,6 +543,10 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     restarted = _bind(artifact)
     rollback_image = _accepted_image(restarted)
     rollback_hysteresis = _runtime_tagging_hysteresis(restarted)
+    from tests.python.integration.runtime.test_public_evolved_original_stage import (
+        checkpoint_restart_authority,
+    )
+    rollback_authority = checkpoint_restart_authority(restarted)
     from pops.runtime import _amr_checkpoint_v3 as checkpoint_codec
 
     original_conservation_check = checkpoint_codec._require_restart_conservation
@@ -547,6 +577,7 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     assert transformed_hysteresis[0] != source_hysteresis
     _assert_same_accepted_image(restarted, rollback_image)
     assert _runtime_tagging_hysteresis(restarted) == rollback_hysteresis
+    assert checkpoint_restart_authority(restarted) == rollback_authority
     assert restarted._executor.last_restart_regrid_receipt() is None
 
     monkeypatch.setattr(
@@ -596,7 +627,14 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
         atol=2.0e-13,
     )
 
-    continuation_identity = restarted.last_run_identity
+    restored_source_run = restarted.last_run_identity
+    continuation_identity = _expected_regrid_continuation(
+        source_run_identity, restored_source_run, rollback_authority)
+    restored_authority = checkpoint_restart_authority(restarted)
+    assert [row["owner_path"] for row in restored_authority["owners"]] == [
+        row["owner_path"] for row in rollback_authority["owners"]]
+    assert all(row["previous_owner_lineage"] == continuation_identity.token
+               for row in restored_authority["owners"])
     continued = pops.run(
         restarted,
         t_end=source_time + DT,
@@ -607,6 +645,7 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     assert float(restarted.time()) == pytest.approx(source_time + DT)
     assert restarted._executor.last_run_manifest.continuation_identity == continuation_identity
     assert continued.run_identity != source_run_identity
+    assert continued.run_identity != restored_source_run
     assert _runtime_tagging_hysteresis(restarted) == transformed_hysteresis[0]
     assert all(
         np.all(np.isfinite(np.asarray(restarted.history_global(name, level, slot))))

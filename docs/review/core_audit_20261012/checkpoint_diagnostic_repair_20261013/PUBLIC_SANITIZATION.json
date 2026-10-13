@@ -1,0 +1,89 @@
+{
+  "scope": "Small XML/log copies for the scoped CPP and source receptions. Consolidated public receipts cite original JSON digests. Text private paths are replaced by portable environment/repository/evidence/build-home aliases; recorded runtime/source hashes remain unchanged.",
+  "files": [
+    {
+      "public_path": "xml/test_mpi_amr_spatial_norm.serial.xml",
+      "origin_ref": "external-evidence:ci/901fc5d1-collective-spatial-diagnostic/test_mpi_amr_spatial_norm.serial.xml",
+      "origin_sha256": "6145c3b235bcfb330a654925a579b53aaaef868f7b65812126776f96bee1e9a2",
+      "public_sha256": "c943c95b18b2d1f0a18cda8fbf6f7e75761ee36068352ace9128addf1881ec7b",
+      "sanitized": true
+    },
+    {
+      "public_path": "logs/test_mpi_amr_spatial_norm.serial.log",
+      "origin_ref": "external-evidence:ci/901fc5d1-collective-spatial-diagnostic/test_mpi_amr_spatial_norm.serial.log",
+      "origin_sha256": "8cd59730841e2a7aa769e535dbf460eec51b55c376a9b3452a8e9b469fc261f4",
+      "public_sha256": "8cd59730841e2a7aa769e535dbf460eec51b55c376a9b3452a8e9b469fc261f4",
+      "sanitized": false
+    },
+    {
+      "public_path": "xml/test_mpi_amr_spatial_norm.np2.rank0.xml",
+      "origin_ref": "external-evidence:ci/901fc5d1-collective-spatial-diagnostic/test_mpi_amr_spatial_norm.np2.rank0.xml",
+      "origin_sha256": "faacb734dcc18a4f2a0002b9098ab1ea58e035468025ec0821529d3871cc8210",
+      "public_sha256": "2d5cd022c3640d7a22d1eb93640eef59eb8cad054bd71722beeb74649ebb7da8",
+      "sanitized": true
+    },
+    {
+      "public_path": "xml/test_mpi_amr_spatial_norm.np2.rank1.xml",
+      "origin_ref": "external-evidence:ci/901fc5d1-collective-spatial-diagnostic/test_mpi_amr_spatial_norm.np2.rank1.xml",
+      "origin_sha256": "5530ac9b2b19a6654dec8981acbbb3ac8ab77821637be5eea246f2332876ac51",
+      "public_sha256": "591fc47bf96ba1bd90eb3b6563f7ec4a57a8c71744a270bb258cb5a6580faf83",
+      "sanitized": true
+    },
+    {
+      "public_path": "logs/test_mpi_amr_spatial_norm.np2.log",
+      "origin_ref": "external-evidence:ci/901fc5d1-collective-spatial-diagnostic/test_mpi_amr_spatial_norm.np2.log",
+      "origin_sha256": "54929887940c31708e662a06cee62c8c01f493c4756a015511f1c8a29b800a51",
+      "public_sha256": "54929887940c31708e662a06cee62c8c01f493c4756a015511f1c8a29b800a51",
+      "sanitized": false
+    },
+    {
+      "public_path": "xml/test_generated_amr_system_block.serial.xml",
+      "origin_ref": "external-evidence:ci/901fc5d1-collective-spatial-diagnostic/test_generated_amr_system_block.serial.xml",
+      "origin_sha256": "5767de83574d71965a9aed7c01f35f12e0bc53154560e35b5e61039a40669004",
+      "public_sha256": "071cd3c687da16335a8804bca8d387874592a9a7a1886dbe4b0b221928812027",
+      "sanitized": true
+    },
+    {
+      "public_path": "logs/test_generated_amr_system_block.serial.log",
+      "origin_ref": "external-evidence:ci/901fc5d1-collective-spatial-diagnostic/test_generated_amr_system_block.serial.log",
+      "origin_sha256": "b0da90f0a6077603ca59566f73947c0714cf9df34d8c58e10cf62e5906273a9f",
+      "public_sha256": "b0da90f0a6077603ca59566f73947c0714cf9df34d8c58e10cf62e5906273a9f",
+      "sanitized": false
+    },
+    {
+      "public_path": "xml/test_generated_amr_system_block.np2.rank0.xml",
+      "origin_ref": "external-evidence:ci/901fc5d1-collective-spatial-diagnostic/test_generated_amr_system_block.np2.rank0.xml",
+      "origin_sha256": "8d328b1032bc696e44d33d06b6e77b635982d0dee6cdcd36219a142bb77fe835",
+      "public_sha256": "ee46d0b5b6bdbd3a08a97993706ca1099fb4443ad0168401bef46f5a877a19e9",
+      "sanitized": true
+    },
+    {
+      "public_path": "xml/test_generated_amr_system_block.np2.rank1.xml",
+      "origin_ref": "external-evidence:ci/901fc5d1-collective-spatial-diagnostic/test_generated_amr_system_block.np2.rank1.xml",
+      "origin_sha256": "b4216679d32600722fe20de39a40067b3a3bca0ced72b84deaac3cd18e31084f",
+      "public_sha256": "3612d65a5a266597fe93ae6fe98a2a4a240e3a3bbd00c67f28162a83e17c12dd",
+      "sanitized": true
+    },
+    {
+      "public_path": "logs/test_generated_amr_system_block.np2.log",
+      "origin_ref": "external-evidence:ci/901fc5d1-collective-spatial-diagnostic/test_generated_amr_system_block.np2.log",
+      "origin_sha256": "aeac36e46f58183d8dd1e022da66ba76fe365a30d8e34d60303889b64cbce357",
+      "public_sha256": "aeac36e46f58183d8dd1e022da66ba76fe365a30d8e34d60303889b64cbce357",
+      "sanitized": false
+    },
+    {
+      "public_path": "source-checks.xml",
+      "origin_ref": "external-evidence:ci/f94-mpi-restart-repair-source.xml",
+      "origin_sha256": "9d8d42fa2e45c41209ab134c413c1c0ec50ccfd22339b8c06619d0733d26cabf",
+      "public_sha256": "9d8d42fa2e45c41209ab134c413c1c0ec50ccfd22339b8c06619d0733d26cabf",
+      "sanitized": false
+    },
+    {
+      "public_path": "source-pyright.log",
+      "origin_ref": "external-evidence:ci/f94-mpi-restart-repair-pyright.log",
+      "origin_sha256": "f552d237ad0bd249c05f97eb62dbc65d2d0e4a5fe2346608e10fb7838dba9ed1",
+      "public_sha256": "f552d237ad0bd249c05f97eb62dbc65d2d0e4a5fe2346608e10fb7838dba9ed1",
+      "sanitized": false
+    }
+  ]
+}

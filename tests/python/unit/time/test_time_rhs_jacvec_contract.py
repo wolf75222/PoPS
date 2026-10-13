@@ -73,8 +73,10 @@ def test_rhs_jacvec_rejects_an_rhs_computed_from_another_iterate():
 def test_rhs_jacvec_rejects_r0_at_another_temporal_point():
     program, iterate, operator, _named_flux = _program()
     r0 = program.rhs(name="r0", state=iterate, terms=[Flux(), DefaultSource()])
-    misplaced = program.value(
-        "misplaced_r0", r0, at=TimePoint(program.clock, Fraction(3, 4)))
+    # Retain an issued RHS with the exact frozen iterate.  A Program.value alias
+    # would fail the earlier RHS-kind obligation and never test the point check.
+    misplaced = program._replace_value(r0, point=TimePoint(program.clock, Fraction(3, 4)))
+    assert misplaced.op == "rhs" and misplaced.inputs[0] is iterate
     with pytest.raises(ValueError, match="exact block and temporal point"):
         _record(program, operator, iterate, misplaced)
 

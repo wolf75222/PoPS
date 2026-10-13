@@ -1,0 +1,34 @@
+........                                                                     [100%]                                                                     [100%]
+
+=============================== warnings summary ============================================================== warnings summary ===============================
+tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_saved_history_and_exact_replay[scalar-cutcell]
+tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_saved_history_and_exact_replay[signed-vector-permuted]
+  tests/python/integration/runtime/test_public_spatial_interaction.py:108: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.compiler
+tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_saved_history_and_exact_replay[scalar-cutcell]
+tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_saved_history_and_exact_replay[signed-vector-permuted]
+  tests/python/integration/runtime/test_public_spatial_interaction.py:108: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.compiler
+
+tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_refuses_without_publication[nonfinite]
+
+tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_refuses_without_publication[nonfinite]
+  tests/python/integration/runtime/test_public_spatial_interaction.py:173: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.compiler
+
+tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_ignores_inactive_source_pole
+
+  tests/python/integration/runtime/test_public_spatial_interaction.py:173: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.compiler
+
+tests/python/integration/runtime/test_public_spatial_interaction.py::test_public_spatial_interaction_ignores_inactive_source_pole
+  tests/python/integration/runtime/test_public_spatial_interaction.py:212: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.compiler
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html  tests/python/integration/runtime/test_public_spatial_interaction.py:212: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+    @pytest.mark.compiler
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+
+4 passed, 4 warnings in 161.23s (0:02:41)
+4 passed, 4 warnings in 161.23s (0:02:41)

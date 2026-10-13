@@ -1,0 +1,47 @@
+{
+  "scope": "Small final native MPI2 rank XML/identity, launch command and log copies. Consolidated summary/compact receipt cite their original JSON digests. Text paths use portable aliases; numerical claims are the original live oracle results. No raw scientific array or compiled module is claimed or copied.",
+  "files": [
+    {
+      "public_path": "rank0.xml",
+      "origin_ref": "external-evidence:ci/999-mpi-restart-shared/rank0.xml",
+      "origin_sha256": "3d05451341cb8adeb7a5a409d96f71738f4d469ced455e2ac57dc0ec1243b007",
+      "public_sha256": "3d05451341cb8adeb7a5a409d96f71738f4d469ced455e2ac57dc0ec1243b007",
+      "sanitized": false
+    },
+    {
+      "public_path": "rank0-identity.json",
+      "origin_ref": "external-evidence:ci/999-mpi-restart-shared/rank0-identity.json",
+      "origin_sha256": "26e6ee0a4f582b12df1eb255335f1f5206c44c413c0c5908df85fe39e8887b15",
+      "public_sha256": "bd14f4afc5faaa590757a615cca7697faac102a51f1b42e411b46fe1b05d8556",
+      "sanitized": true
+    },
+    {
+      "public_path": "rank1.xml",
+      "origin_ref": "external-evidence:ci/999-mpi-restart-shared/rank1.xml",
+      "origin_sha256": "6ae5d5e2824a5ff8e1ce9bab852a5eab427e049a327f00862e6b95494f33e561",
+      "public_sha256": "6ae5d5e2824a5ff8e1ce9bab852a5eab427e049a327f00862e6b95494f33e561",
+      "sanitized": false
+    },
+    {
+      "public_path": "rank1-identity.json",
+      "origin_ref": "external-evidence:ci/999-mpi-restart-shared/rank1-identity.json",
+      "origin_sha256": "d9f2080bb5aadd4e99c6df7dbae289cd23b387a07c7a5421f7b9abfc86b6677c",
+      "public_sha256": "c5785146ad24ab0f9eaf853355ae9043660c78900b203bc68c2d51e45e363d1f",
+      "sanitized": true
+    },
+    {
+      "public_path": "launch.json",
+      "origin_ref": "external-evidence:ci/999-mpi-restart-shared/launch.json",
+      "origin_sha256": "ec535e89da0be978969b1ec4787201cc00f1702253e1408bfbda5832143977ab",
+      "public_sha256": "88fc977c9ac34ffa53a3a6bb884ee7f26481535da25c140019336e776c472ab7",
+      "sanitized": true
+    },
+    {
+      "public_path": "launch.log",
+      "origin_ref": "external-evidence:ci/999-mpi-restart-shared.log",
+      "origin_sha256": "eff31d0acf120adf82f1861e1ce8ed5a752e44a68627b2e32fd56c7e699d6b3d",
+      "public_sha256": "eff31d0acf120adf82f1861e1ce8ed5a752e44a68627b2e32fd56c7e699d6b3d",
+      "sanitized": false
+    }
+  ]
+}

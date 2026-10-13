@@ -298,7 +298,7 @@ def _emit_cpp_program_impl(
     provider_plans = ProgramProviderPlans(target=target, provider_halos=provider_halos,
                                          instance_contracts=graph_instance_contracts(authority))
     from pops.codegen.program_value_authority import prepare_program_value_authority
-    value_authority = prepare_program_value_authority(program, authority, field_plans or {})
+    value_authority = prepare_program_value_authority(program, authority, field_plans or {}, target=target)
     prelude, body, post_synchronization, operator_authorities = _emit_body(
         program,
         authority,
@@ -645,6 +645,10 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
         else model
     )
     _validate_matrix_free_contract(v, node_model)
+    if v.op == "field_warm_start":
+        from pops.codegen.program_field_observations import validate_resolved_warm_start
+        validate_resolved_warm_start(v, model_graph=model, field_plans=field_plans)
+        return
     if v.op == "spatial_interaction":
         from pops.time._program.spatial_interaction import interaction_contract
         interaction_contract(v)

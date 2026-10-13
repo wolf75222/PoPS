@@ -665,12 +665,15 @@ void validate_accepted_history_remap_metadata_() const {
   require_exact_metadata_keys(manager.space_identity);
   require_exact_metadata_keys(manager.clock_identity);
   require_exact_metadata_keys(manager.interpolation_identity);
+  require_exact_metadata_keys(manager.ghost_depth);
   require_exact_metadata_keys(manager.slot_dt);
   require_exact_metadata_keys(manager.slot_sample);
 
   const std::size_t live_levels = runtime_->hierarchy().num_levels();
   if (live_levels == 0)
     throw std::runtime_error("AMR Program accepted history remap has no live hierarchy level");
+  std::map<std::string, std::tuple<int, int, int, int, std::string, std::string,
+                                  std::string, std::string, Extent<Dim>>> declarations;
   for (const auto& [key, ring] : manager.histories) {
     const auto decoded = decode_history_key_(key);
     if (!decoded || decoded->first < 0 || static_cast<std::size_t>(decoded->first) >= live_levels ||
@@ -682,7 +685,7 @@ void validate_accepted_history_remap_metadata_() const {
     const int fill_count = manager.fill_count.at(key);
     const auto& slot_dt = manager.slot_dt.at(key);
     (void)manager.validated_samples(key);
-    if (depth < 1 || ring.size() != static_cast<std::size_t>(depth) || fill_count < 0 ||
+    if (depth < 2 || ring.size() != static_cast<std::size_t>(depth) || fill_count < 0 ||
         fill_count > depth || initialized != (fill_count > 0) ||
         slot_dt.size() != static_cast<std::size_t>(depth))
       throw std::runtime_error("AMR Program accepted history remap has invalid ring metadata");
@@ -694,27 +697,40 @@ void validate_accepted_history_remap_metadata_() const {
     }
     if (owner < 0 || owner >= n_blocks() || manager.state_identity.at(key).empty() ||
         manager.space_identity.at(key).empty() || manager.clock_identity.at(key).empty() ||
-        manager.interpolation_identity.at(key).empty())
+        manager.interpolation_identity.at(key).empty() || manager.ghost_depth.at(key) < -1)
       throw std::runtime_error("AMR Program accepted history remap has an invalid descriptor");
+    const int declared_depth = manager.ghost_depth.at(key);
+    const auto ghosts = ring.front().ghosts();
+    for (const auto& slot : ring) {
+      if (slot.ghosts() != ghosts || slot.ncomp() != ring.front().ncomp() ||
+          slot.layout() != ring.front().layout() ||
+          slot.distribution() != ring.front().distribution() ||
+          slot.local_rank() != ring.front().local_rank())
+        throw std::runtime_error("AMR history slots disagree with their declared local contract");
+      if (declared_depth >= 0)
+        for (int axis = 0; axis < Dim; ++axis)
+          if (slot.ghosts()[axis] != declared_depth)
+            throw std::runtime_error("AMR history slot differs from its explicit halo declaration");
+    }
+    const auto declaration = std::make_tuple(owner, depth, ring.front().ncomp(), declared_depth,
+        manager.state_identity.at(key), manager.space_identity.at(key),
+        manager.clock_identity.at(key), manager.interpolation_identity.at(key), ghosts);
+    const auto [retained, inserted] = declarations.emplace(decoded->second, declaration);
+    if (!inserted && retained->second != declaration)
+      throw std::runtime_error("AMR history declared storage differs between levels");
   }
 }
 
 void validate_accepted_history_remap_() const {
   const auto& manager = runtime_state().hist_;
   std::set<std::string> prior_names;
-  for (const auto& [key, level] : history_levels_) {
-    const auto decoded = decode_history_key_(key);
-    if (!decoded || decoded->first != level)
-      throw std::runtime_error("AMR Program retained history registry is malformed before remap");
-    prior_names.insert(decoded->second);
-  }
-
   const std::size_t live_levels = runtime_->hierarchy().num_levels();
   std::set<std::string> remapped_names;
   struct Descriptor {
     int owner = -1;
     int depth = 0;
     int components = 0;
+    int ghost_depth = -1;
     std::string state;
     std::string space;
     std::string clock;
@@ -724,22 +740,67 @@ void validate_accepted_history_remap_() const {
   };
   std::map<std::string, Descriptor> descriptors;
   std::map<std::string, std::set<int>> levels_by_name;
+  std::vector<const field_type*> live_fields;
+  std::string request_contract;
+  std::exception_ptr request_error;
+  try {
+    for (const auto& [key, level] : history_levels_) {
+      const auto decoded = decode_history_key_(key);
+      if (!decoded || decoded->first != level)
+        throw std::runtime_error("AMR Program retained history registry is malformed before remap");
+      prior_names.insert(decoded->second);
+    }
+    live_fields.reserve(manager.histories.size());
+    ExactContractBuilder request;
+    request.text("pops.amr.history-ranked-contract.v1").scalar(manager.histories.size());
+    for (const auto& [key, ring] : manager.histories) {
+      const auto decoded = decode_history_key_(key);
+      request.text(key).scalar(decoded->first).scalar(manager.owner.at(key))
+          .scalar(manager.depth.at(key)).scalar(ring.front().ncomp())
+          .scalar(manager.ghost_depth.at(key))
+          .text(manager.state_identity.at(key)).text(manager.space_identity.at(key))
+          .text(manager.clock_identity.at(key)).text(manager.interpolation_identity.at(key));
+      for (int axis = 0; axis < Dim; ++axis)
+        request.scalar(ring.front().ghosts()[axis]);
+    }
+    request_contract = std::move(request).release();
+  } catch (...) {
+    request_error = std::current_exception();
+  }
+  const auto& lane = prepared_execution_lane();
+  collectively_rethrow_exception(request_error, lane,
+                                 "AMR history ranked requests failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"history-ranked-contract", request_contract}}, lane))
+    throw std::runtime_error("AMR history declared ranked requests differ between peers");
+  // Native façade access may be collective. Obtain every reference first, before any
+  // rank-local storage mismatch can stop one peer from reaching a later-level getter.
+  for (const auto& [key, ring] : manager.histories) {
+    (void)ring;
+    const auto decoded = decode_history_key_(key);
+    live_fields.push_back(&facade_->prepared_amr_block_state(manager.owner.at(key), decoded->first));
+  }
+  std::size_t live_index = 0;
   for (const auto& [key, ring] : manager.histories) {
     const auto decoded = decode_history_key_(key);
     const int level = decoded->first;
     const std::string& name = decoded->second;
     const int depth = manager.depth.at(key);
     const int owner = manager.owner.at(key);
-    const field_type& live = facade_->prepared_amr_block_state(owner, level);
+    const field_type& live = *live_fields[live_index++];
+    const int ghost_depth = manager.ghost_depth.at(key);
+    Extent<Dim> declared_ghosts = live.ghosts();
+    if (ghost_depth >= 0)
+      declared_ghosts = uniform_ghosts_(ghost_depth);
     for (const field_type& slot : ring)
       if (slot.layout() != live.layout() || slot.distribution() != live.distribution() ||
           slot.local_rank() != live.local_rank() || slot.local_size() != live.local_size() ||
-          slot.ghosts() != live.ghosts() || slot.ncomp() < 1)
+          slot.ghosts() != declared_ghosts || slot.ncomp() < 1)
         throw std::runtime_error(
             "AMR Program accepted history remap ring disagrees with the live hierarchy");
     const Descriptor descriptor{owner,
                                 depth,
                                 ring.front().ncomp(),
+                                ghost_depth,
                                 manager.state_identity.at(key),
                                 manager.space_identity.at(key),
                                 manager.clock_identity.at(key),
@@ -851,7 +912,8 @@ void refresh_resources_after_accepted_history_remap_(
             runtime_state().require_frozen_output_history_projection(
                 decoded->second, manager.owner.at(key), manager.state_identity.at(key),
                 manager.space_identity.at(key), manager.clock_identity.at(key),
-                manager.interpolation_identity.at(key), manager.depth.at(key), ring.front().ncomp());
+                manager.interpolation_identity.at(key), manager.depth.at(key), ring.front().ncomp(),
+                -1, manager.ghost_depth.at(key));
             if (manager.slot_sample.at(key).size() != ring.size())
               throw std::runtime_error("AMR output history projection lacks exact sample metadata");
             for (std::size_t slot = 0; slot < ring.size(); ++slot) {
@@ -935,6 +997,7 @@ void refresh_resources_after_accepted_history_remap_(
                     manager.space_identity.at(parent_key) != manager.space_identity.at(key) ||
                     manager.state_identity.at(parent_key) != manager.state_identity.at(key) ||
                     manager.owner.at(parent_key) != manager.owner.at(key) ||
+                    manager.ghost_depth.at(parent_key) != manager.ghost_depth.at(key) ||
                     manager.clock_identity.at(parent_key) != manager.clock_identity.at(key) ||
                     manager.interpolation_identity.at(parent_key) !=
                         manager.interpolation_identity.at(key) ||

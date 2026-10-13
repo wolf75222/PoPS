@@ -120,7 +120,8 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
     def condensed_rhs(self, out: Any = None, phi_n: Any = None, state: Any = None,
                       linear_operator: Any = None, subset: Any = None, th_dt: Any = None,
                       g: Any = None, *, gradient_map: Any = None,
-                      base_tensor: Any = None, charge_component: Any = None) -> Any:
+                      base_tensor: Any = None, charge_component: Any = None,
+                      boundary: Any = None) -> Any:
         """Record the fused RHS ``out = -Lap(phi_n) - g*div(M^{-1} momentum)`` (F = M^{-1} applied to the
         momentum @p subset) -- the generic counterpart of ``P.schur_rhs``. @p out is a 1-component
         scalar_field, @p phi_n the warm-start potential (its ghosts are filled for the Laplacian), @p
@@ -144,6 +145,13 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         sub = self._condensed_subset(subset, "condensed_rhs")
         th_d = self._coeff_dict(th_dt, "th_dt", "condensed_rhs")
         g_d = self._coeff_dict(g, "g", "condensed_rhs")
+        from pops.time.field_boundaries import field_boundary_contract
+        from pops.time.field_sampling import scalar_co_location
+        scalar_co_location(out, phi_n, "condensed_rhs")
+        scalar_attrs = {key: out.attrs[key] for key in
+                        ("scalar_storage", "scalar_owner", "scalar_sampling_contract", "scalar_storage_component")
+                        if key in out.attrs}
+        boundary_attrs = field_boundary_contract(self, boundary, state)
         return self._new("scalar_field", "condensed_rhs", (out, phi_n, state),
                          {"linear_operator": opname, "subset": sub,
                           "spatial_dimension": len(sub), "th_dt": th_d, "g": g_d,
@@ -152,13 +160,16 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
                           "base_tensor": None if base_tensor is None else
                           self._condensed_operator_name(base_tensor, state),
                           "charge_component": None if charge_component is None else
-                          self._comp_index(charge_component, "charge_component", "condensed_rhs")},
-                         out.name, state.block)
+                          self._comp_index(charge_component, "charge_component", "condensed_rhs"),
+                          **scalar_attrs, **boundary_attrs},
+                         out.name, state.block, space=out.space if scalar_attrs else None,
+                         point=out.point if scalar_attrs else None,
+                         inherit_state_ref=not bool(scalar_attrs))
 
     def condensed_reconstruct(self, name: Any = None, state: Any = None, phi: Any = None,
                               linear_operator: Any = None, subset: Any = None, th_dt: Any = None,
                               c_rho: Any = 0, *, gradient_map: Any = None,
-                              gradient_scale: Any = 1) -> Any:
+                              gradient_scale: Any = 1, boundary: Any = None) -> Any:
         """Record the velocity reconstruction ``v^{n+theta} = M^{-1}(v^n - th_dt*grad phi)`` IN PLACE on
         @p state (rho frozen; mom = rho*v written back over the @p subset) -- the generic counterpart of
         ``P.schur_reconstruct``. @p phi is the solved potential (a scalar_field or 1-component State),
@@ -178,6 +189,8 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         opname = self._condensed_operator_name(linear_operator, state)
         sub = self._condensed_subset(subset, "condensed_reconstruct")
         th_d = self._coeff_dict(th_dt, "th_dt", "condensed_reconstruct")
+        from pops.time.field_boundaries import field_boundary_contract
+        boundary_attrs = field_boundary_contract(self, boundary, state)
         return self._new("state", "condensed_reconstruct", (state, phi),
                          {"linear_operator": opname, "subset": sub,
                           "spatial_dimension": len(sub), "th_dt": th_d,
@@ -185,7 +198,8 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
                           "gradient_map": None if gradient_map is None else
                           self._condensed_operator_name(gradient_map, state),
                           "gradient_scale": self._coeff_dict(
-                              gradient_scale, "gradient_scale", "condensed_reconstruct")}, name,
+                              gradient_scale, "gradient_scale", "condensed_reconstruct"),
+                          **boundary_attrs}, name,
                          state.block, space=state.space)
 
     def condensed_energy(self, name: Any = None, state: Any = None, state_old: Any = None,

@@ -58,6 +58,30 @@ def test_extra_evaluation_effect_or_asserted_order_never_supplies_affine_proof(e
     assert isinstance(certify_program_graph(changed).properties.order, UnknownOrder)
 
 
+@pytest.mark.parametrize("fault", ["neighbour", "boolean_depth", "wrong_schema",
+                                   "missing_schema", "extra_contract_attr"])
+def test_affine_stencil_contract_requires_exact_canonical_pointwise_access(fault):
+    from pops.time.stencil import StencilAccess
+    graph = _base()
+    alias = next(node for node in graph.nodes if node.kind == "program_value")
+    access = StencilAccess.pointwise().to_data()
+    if fault == "neighbour":
+        access = StencilAccess.nearest_neighbour().to_data()
+    elif fault == "boolean_depth":
+        access["required_ghost_depth"] = False
+    elif fault == "wrong_schema":
+        access["schema_version"] = 2
+    elif fault == "missing_schema":
+        del access["schema_version"]
+    else:
+        access["writes_state"] = True
+    attrs = deepcopy(alias.attrs.to_data())
+    attrs["attrs"]["stencil_access"] = access
+    changed = _replace_value(graph, alias.node_id, attrs=attrs)
+    order = certify_program_graph(changed).properties.order
+    assert isinstance(order, UnknownOrder) and "stencil" in order.reason
+
+
 @pytest.mark.parametrize("power", [Fraction(1, 2), -1, 1, 2])
 def test_rate_alias_with_nonconstant_or_invalid_dt_power_is_not_certified(power):
     graph = _base()
@@ -121,7 +145,7 @@ def test_equivalent_step_plus_offset_encoding_preserves_exact_stage_coordinate()
     assert certify_program_graph(encoded).properties.order == 2
 
 
-@pytest.mark.parametrize("kind", ["primitive", "affine-effect", "opaque-coefficient",
+@pytest.mark.parametrize("kind", ["primitive", "affine-effect", "affine-stencil", "opaque-coefficient",
                                    "bad-arity", "unknown-representation"])
 def test_disconnected_unknown_effect_is_not_hidden_by_endpoint_dependency_trace(kind):
     graph = _base()
@@ -131,6 +155,9 @@ def test_disconnected_unknown_effect_is_not_hidden_by_endpoint_dependency_trace(
         op, attrs = "opaque_effect", {"writes_state": True}
     elif kind == "affine-effect":
         attrs["attrs"]["writes_state"] = True
+    elif kind == "affine-stencil":
+        from pops.time.stencil import StencilAccess
+        attrs["attrs"]["stencil_access"] = StencilAccess.nearest_neighbour().to_data()
     elif kind == "opaque-coefficient":
         attrs["attrs"]["coeffs"] = [[(scalar_data(0), {"kind": "algebraic", "value": "opaque"})]]
     elif kind == "bad-arity":

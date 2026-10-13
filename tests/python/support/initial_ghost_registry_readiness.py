@@ -34,7 +34,7 @@ def capture_registry_disposition(world, native_owner, phase):
     from pops._native_collectives import allgather_value
     slots=collective_call(world,native_owner.field_provider_slots)
     size=world.size if world is not None else 1
-    gathered=allgather_value(world,slots)
+    gathered=[slots] if world is None else allgather_value(world,slots)
     def require_slots():
         if type(gathered) not in (list,tuple) or len(gathered)!=size:raise ValueError('Field slot consensus missing rank')
         if any(type(row) is not list or row!=slots for row in gathered):raise ValueError('Field slot authority differs between ranks')

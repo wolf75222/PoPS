@@ -4,12 +4,12 @@ import json
 import math
 import numpy as np
 from pathlib import Path
-import sys
 import pops
 import pytest
 from tests.python.support.initial_field_ghost_native_case import build
 from tests.python.support.initial_ghost_failure_component import InitialFailureBoundary,load_component
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.initial_field_ghost_profile import native_profile,rank_and_size
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 from tests.python.support.collective_checks import collective_call,collective_attempt,collective_check
 from tests.python.support.integral_state_receipts import collective_directory
@@ -18,24 +18,31 @@ from tests.python.support.integral_state_receipts import collective_directory
 @pytest.mark.native_loader
 def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_native_cache,tmp_path,record_property,monkeypatch):
     del isolated_native_cache
-    from pops._native_selector import select_native_dimension
-    native=select_native_dimension(2);world=native.mpi_world()
-    with collective_check(world):
-        assert native.__abi_version__==8
-        for file in (pops.__file__,native.__file__):assert Path(file).resolve().is_relative_to(Path(sys.prefix).resolve())
+    native,world=native_profile()
+    rank,size=rank_and_size(world)
+    # Prepared Ghost callbacks carry no collective authority. Supply only their
+    # diagnostic rank labels from this exact already-authenticated Native world.
+    monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_RANK',str(rank))
+    monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_SIZE',str(size))
+    record_property('native_abi_version',native.__abi_version__)
+    record_property('native_profile','MPI' if world is not None else 'Serial')
     directory=collective_directory(world,tmp_path/'initial-ghost-failure')
     record_property('initial_ghost_failure_receipt',str(directory))
     # Source package is shared; every rank materializes the same authenticated component.
     component_dir=directory/'component'
-    collective_call(world,lambda:load_component(component_dir) if world.rank==0 else None)
+    collective_call(world,lambda:load_component(component_dir) if rank==0 else None)
     from pops.external import load
     from pops import interfaces
     component=collective_call(world,lambda:load(component_dir/'initial-failure.pops.json').require('ghost',interface=interfaces.GhostBoundary)())
     # All ranks must enter component loading collectives consistently.
     case,layout=collective_call(world,lambda:build(boundary_composer=lambda base:InitialFailureBoundary(base,component)))
     plan=collective_call(world,lambda:pops.resolve(pops.validate(case),layout=layout,components=(component,)))
-    artifact=compile_resolved_plan_once(world,plan,route='initial-ghost-failure-bootstrap-abort-capture@6',compile_artifact=pops.compile)
+    artifact=(pops.compile(plan) if world is None else compile_resolved_plan_once(
+        world,plan,route='initial-ghost-failure-bootstrap-abort-capture@6',compile_artifact=pops.compile))
     context=collective_call(world,lambda:artifact_execution_context(artifact))
+    from pops.runtime._component_execution_context import component_execution_data
+    execution_identity=collective_call(world,lambda:component_execution_data(context)['execution_identity'])
+    monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_EXECUTION_ID',execution_identity)
     monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_LOG',str(directory/'callback'))
     from pops.runtime._amr_bootstrap_execution import NativeAMRBootstrapConsumer
     original=NativeAMRBootstrapConsumer.consume_bootstrap_action
@@ -61,8 +68,8 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
         from tests.python.support.initial_ghost_failure_selection import select_xmin_owner,require_selection_agreement
         from pops._native_collectives import allgather_value
         # Local parsing failures vote before any next collective Native phase.
-        selected=collective_call(world,lambda:select_xmin_owner(before['blob'],world.size))
-        rows=allgather_value(world,selected)
+        selected=collective_call(world,lambda:select_xmin_owner(before['blob'],size))
+        rows=[selected] if world is None else allgather_value(world,selected)
         agreed=collective_call(world,lambda:require_selection_agreement(rows,selected))
         targets.append(agreed)
         old_target=__import__('os').environ.get('POPS_TEST_INITIAL_GHOST_TARGET_RANK')
@@ -107,36 +114,39 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
     # This receipt claims no snapshot/rollback proof and cannot satisfy the assertions below.
     from tests.python.support.initial_ghost_failure_receipt import save_early_bind_receipt
     with collective_check(world):
-        save_early_bind_receipt(directory,rank=world.rank,world_size=world.size,
+        save_early_bind_receipt(directory,rank=rank,world_size=size,
             failures=failures,owner_count=len(owners),image_count=len(images),target_count=len(targets),
             native={'path':native.__file__,'sha256':hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()},
             artifact_identity=artifact.artifact_identity.token,component_manifest=component.component_manifest.to_data())
     with collective_check(world):
-        assert len(images)==1 and len(owners)==1, 'actual initial owner/failure boundary not observed'
+        assert len(images)==1 and len(owners)==1, (
+            'actual initial owner/failure boundary not observed',
+            dict(owners=len(owners), images=len(images), targets=len(targets),
+                 failures=failures, diagnostic_errors=diagnostic_errors))
         before,after=images[0]
         assert before['levels']==after['levels']==1, 'fault scope must remain the real parent before first fine creation'
-        (directory/f'before-rank{world.rank}.bin').write_bytes(before['blob'])
-        (directory/f'after-rank{world.rank}.bin').write_bytes(after['blob'])
+        (directory/f'before-rank{rank}.bin').write_bytes(before['blob'])
+        (directory/f'after-rank{rank}.bin').write_bytes(after['blob'])
         metadata={phase:{k:v for k,v in value.items() if k!='blob'} for phase,value in [('before',before),('after',after)]}
-        proof={'schema':'sol61.initial-ghost-failure-bootstrap-abort-capture@6','rank':world.rank,'world_size':world.size,'scope':'actual outer bootstrap abort; not successful construction or nested parent rollback','observed_actions':observed_actions,'diagnostic_errors':diagnostic_errors,'transition_diagnostic':[{phase:{k:v for k,v in value.items() if k!='blob'} for phase,value in [('before',pair[0]),('after',pair[1])]} for pair in transition_images],'target_selection':targets,'failures':failures,'metadata':metadata,'native':{'path':native.__file__,'sha256':hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()},'component_manifest':component.component_manifest.to_data(),'artifact_identity':artifact.artifact_identity.token,'observer_only':True,'registry_contents_unmaterialized_not_received':True,'actual_outer_bootstrap_abort_observed':True,'nested_parent_rollback_not_certified':True}
+        proof={'schema':'sol61.initial-ghost-failure-bootstrap-abort-capture@6','rank':rank,'world_size':size,'scope':'actual outer bootstrap abort; not successful construction or nested parent rollback','observed_actions':observed_actions,'diagnostic_errors':diagnostic_errors,'transition_diagnostic':[{phase:{k:v for k,v in value.items() if k!='blob'} for phase,value in [('before',pair[0]),('after',pair[1])]} for pair in transition_images],'target_selection':targets,'failures':failures,'metadata':metadata,'native':{'path':native.__file__,'sha256':hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()},'component_manifest':component.component_manifest.to_data(),'artifact_identity':artifact.artifact_identity.token,'observer_only':True,'registry_contents_unmaterialized_not_received':True,'actual_outer_bootstrap_abort_observed':True,'nested_parent_rollback_not_certified':True}
         for index,(parent_before,parent_after) in enumerate(transition_images):
-            (directory/f'parent-before-rank{world.rank}-{index}.bin').write_bytes(parent_before['blob'])
+            (directory/f'parent-before-rank{rank}-{index}.bin').write_bytes(parent_before['blob'])
             if 'blob' in parent_after:
-                (directory/f'parent-after-rank{world.rank}-{index}.bin').write_bytes(parent_after['blob'])
-        (directory/f'proof-rank{world.rank}.json').write_text(json.dumps(proof,indent=2,allow_nan=False)+'\n')
+                (directory/f'parent-after-rank{rank}-{index}.bin').write_bytes(parent_after['blob'])
+        (directory/f'proof-rank{rank}.json').write_text(json.dumps(proof,indent=2,allow_nan=False)+'\n')
         assert not diagnostic_errors, 'foreign intermediate diagnostic refusal is not received'
-        assert all(failures) and len(failures)==world.size
+        assert all(failures) and len(failures)==size
         assert all('independent initial Ghost rank-local failure' in failure[1] for failure in failures)
         assert before==after, 'actual outer bootstrap abort changed its same-owner baseline'
-        log=directory/f'callback-rank{world.rank}.log'
+        log=directory/f'callback-rank{rank}.log'
         events=log.read_text() if log.exists() else ''
         reads=[line for line in events.splitlines() if line.startswith('field-before-write ')]
-        if world.rank==targets[0]['agreed']['target']:assert reads and 'tentative-write' in events
+        if rank==targets[0]['agreed']['target']:assert reads and 'tentative-write' in events
         from tests.python.support.initial_field_ghost_native_oracle import FIELD_BOUND
         for line in reads:
             row=dict(item.split('=',1) for item in line.split()[1:])
             value=float.fromhex(row['field']);time=float.fromhex(row['time'])
             assert math.isfinite(value) and abs(value-2.)<=FIELD_BOUND
             assert time==0.
-            assert int(row['rank'])==world.rank and int(row['size'])==world.size
-        assert ('injected-failure' in events)==(world.rank==targets[0]['agreed']['target'])
+            assert int(row['rank'])==rank and int(row['size'])==size
+        assert ('injected-failure' in events)==(rank==targets[0]['agreed']['target'])

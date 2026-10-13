@@ -76,12 +76,16 @@ inline void validate_controls(const TensorFacControls& controls) {
   const auto preconditioner =
       controls.coarse_preconditioner.value_or(tensor_fac::CoarsePreconditionerKind::diagonal);
   if (preconditioner != tensor_fac::CoarsePreconditionerKind::diagonal &&
-      preconditioner != tensor_fac::CoarsePreconditionerKind::polar_poisson)
+      preconditioner != tensor_fac::CoarsePreconditionerKind::polar_poisson &&
+      preconditioner != tensor_fac::CoarsePreconditionerKind::tensor_diagonal_mg)
     throw std::invalid_argument("tensor FAC coarse preconditioner is unsupported");
   if (preconditioner == tensor_fac::CoarsePreconditionerKind::polar_poisson &&
       (coarse_method != tensor_fac::CoarseCorrectionMethod::gmres ||
        !controls.stencil_options.arithmetic_diagonal))
     throw std::invalid_argument("tensor FAC polar Poisson requires GMRES and arithmetic diagonals");
+  if (preconditioner == tensor_fac::CoarsePreconditionerKind::tensor_diagonal_mg &&
+      coarse_method != tensor_fac::CoarseCorrectionMethod::gmres)
+    throw std::invalid_argument("tensor FAC tensor diagonal MG requires GMRES");
   const auto coupling =
       controls.interface_coupling.value_or(tensor_fac::InterfaceCoupling::level_stencil);
   if (coupling != tensor_fac::InterfaceCoupling::level_stencil &&
@@ -128,8 +132,10 @@ inline TensorFacControls decode_controls(const PreparedProviderOptions& options)
         controls.coarse_preconditioner = tensor_fac::CoarsePreconditionerKind::diagonal;
       else if (name == "polar_poisson")
         controls.coarse_preconditioner = tensor_fac::CoarsePreconditionerKind::polar_poisson;
+      else if (name == "tensor_diagonal_mg")
+        controls.coarse_preconditioner = tensor_fac::CoarsePreconditionerKind::tensor_diagonal_mg;
       else
-        throw std::invalid_argument("tensor FAC coarse preconditioner must be diagonal or polar_poisson");
+        throw std::invalid_argument("tensor FAC coarse preconditioner must be diagonal, polar_poisson or tensor_diagonal_mg");
     } else if (key == "fac.interface_coupling") {
       if (!std::holds_alternative<std::string>(value))
         throw std::invalid_argument("tensor FAC interface coupling has the wrong wire type");

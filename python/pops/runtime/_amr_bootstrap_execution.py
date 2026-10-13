@@ -154,9 +154,8 @@ class NativeAMRBootstrapConsumer:
             if action.subject_id not in self._initial:
                 raise ValueError("native bootstrap is missing an authenticated level-zero value")
             _, _, _, _, method, source = self._initial[action.subject_id]
-            expected_source = (
-                source.get("native_route") if method == "analytic" else "bound_level_zero"
-            )
+            expected_source = source.get("native_route") if method in ("analytic", "initial_program") \
+                else "bound_level_zero"
             if not isinstance(expected_source, str) or not expected_source:
                 raise ValueError("native analytic level-zero materialization has no provider route")
             if self._route(action) != expected_source:
@@ -258,6 +257,54 @@ class NativeAMRBootstrapConsumer:
                 level=action.level,
                 materialized_values=materialized,
             )
+        elif operation == "seed_initial_program":
+            if action.subject_id not in self._initial or self._route(action) != "bootstrap_program":
+                raise ValueError("fine native program seed has no authenticated initial source")
+            materialized = self._engine._s._materialize_bootstrap_action(
+                action.subject_id, operation, "bootstrap_program", action.level)
+            return self._receipt(action, operation=operation, level=action.level,
+                                 materialized_values=materialized)
+        elif operation == "execute_initial_program":
+            if action.subject_id not in self._initial or self._route(action) != "bootstrap_program":
+                raise ValueError("native initial program has no authenticated source")
+            _block, _value, _space, _centering, method, source = self._initial[action.subject_id]
+            if method != "initial_program" or len(self._field_routes) != 1:
+                raise ValueError("native initial program requires one exact resolved composite field")
+            slot = next(iter(self._field_routes.values()))
+            from pops.runtime._analytic_expression_lowering import lower_analytic_components
+            parameters = self._engine._bootstrap_parameter_bindings
+            events = []
+            reports = []
+            solve_ordinal = 0
+            for stage in source["stages"]:
+                if stage["operation"] == "solve_fields":
+                    solve_ordinal += 1
+                    count, native_report = self._engine._s._solve_bootstrap_initial_field(
+                        action.subject_id, slot, solve_ordinal)
+                    from pops.runtime._initial_program_execution import initial_solve_report_data
+                    report = initial_solve_report_data(native_report, provider_slot=slot,
+                                                       ordinal=solve_ordinal)
+                    reports.append(report)
+                    events.append({"operation": "solve_fields", "ordinal": solve_ordinal,
+                                   "materialized_cells": count, "provider_slot": slot,
+                                   "solve_report": report})
+                else:
+                    lowered = lower_analytic_components(stage["components"],
+                            frame_id=source["frame_id"], bindings=parameters)
+                    inputs = [{key: value for key, value in row.items() if key != "value_id"}
+                              for row in sorted(stage["inputs"], key=lambda row: row["value_id"])]
+                    count = self._engine._s._map_bootstrap_state_hierarchy(action.subject_id,
+                        [list(opcodes) for opcodes, _ in lowered],
+                        [list(literals) for _, literals in lowered], inputs,
+                        stage["consumer_qid"], slot)
+                    for level in range(self._engine.n_levels()-1, 0, -1):
+                        self._engine._s._synchronize_bootstrap_state(action.subject_id, level)
+                    events.append({"operation": "map_state", "materialized_values": count})
+            if not hasattr(self._engine, "_initial_program_reports"):
+                self._engine._initial_program_reports = {}
+            self._engine._initial_program_reports[_block] = tuple(reports)
+            return self._receipt(action, operation=operation, level=0,
+                                 hierarchy_levels=self._engine.n_levels(), stages=events)
         elif operation == "recompute":
             if self._route(action) != "elliptic_solve":
                 raise ValueError("native field recompute requires elliptic_solve")

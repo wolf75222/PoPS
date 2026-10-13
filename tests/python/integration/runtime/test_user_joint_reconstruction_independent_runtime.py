@@ -5,6 +5,7 @@ import pops
 import pytest
 
 from pops.domain import Rectangle
+from pops._ir.expr import Const
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import Uniform
@@ -66,11 +67,12 @@ def _case(permutation, *, guarded=False, primitive=False, mixed=False):
         flux = model.flux("F%d" % row, state=state, frame=frame,
             components={axis: tuple(sum(float(matrix[k, j]) * q[j] for j in range(5))
                                     for k in span)
-                        for axis, matrix in zip(frame.axes, matrices, strict=True)},
-            waves=({axis: (speed,) * 2 for axis, speed in zip(frame.axes, speeds, strict=True)}
-                   if row == 0 else None))
+                        for axis, matrix in zip(frame.axes, matrices, strict=True)})
         fluxes.append(flux)
         rates.append(model.rate("R%d" % row, equation=ddt(state) == -div(flux)))
+    # The independent oracle uses this matrix bound for the full five-component group.
+    model.module.eigenvalues(**{axis.name: (Const(speed),) * 5
+                               for axis, speed in zip(frame.axes, speeds, strict=True)})
 
     def first(sample):
         calls.append("first")

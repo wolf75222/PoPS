@@ -9,6 +9,7 @@ from pops.codegen.program_history_identity import (
     SCALAR_OUTPUT_HISTORY_SPACE,
     OUTPUT_HISTORY_PROJECTION_SPACE,
     history_space_identity,
+    history_ghost_depth,
 )
 from test_mapped_condensed import _mapped_program
 
@@ -34,9 +35,43 @@ def test_registration_and_checkpoint_share_exact_output_identity(named):
     # Every site must match the frozen checkpoint descriptor before the first step.
     assert len(registrations) >= 2
     assert all('"scalar-output-field-v1"' in line for line in registrations)
+    assert all(line.endswith(", 1);") for line in registrations)
+    assert history_ghost_depth(program, "disk.potential") == 1
     checkpoint = source.split("pops_program_checkpoint_history_space_identity", 1)[1]
     assert 'case 0: return "scalar-output-field-v1";' in checkpoint
+    halo_metadata = source.split("pops_program_checkpoint_history_ghost_depth", 1)[1]
+    assert "case 0: return 1;" in halo_metadata
     assert 'ctx.history("disk.potential"' not in source
+
+
+def test_full_state_scalar_component_width_keeps_its_owner_halo():
+    # Width alone cannot classify a one-component State as scratch field storage.
+    program = SimpleNamespace(_history_spaces={"state": object()},
+        _history_state_refs={},_histories_ncomp={"state":1,"scratch":1})
+    assert history_ghost_depth(program,"state") == -1
+    assert history_ghost_depth(program,"scratch") == 1
+    assert history_ghost_depth(program,"legacy_full_state") == -1
+
+
+def test_zero_history_module_exports_declared_halo_metadata():
+    program, model = _mapped_program()
+    assert not program._histories
+    source = emit_cpp_program(program, model=model, target="amr_system")
+    assert 'pops_program_checkpoint_history_count() { return 0; }' in source
+    assert 'extern "C" int pops_program_checkpoint_history_ghost_depth(int index)' in source
+
+
+def test_full_state_registration_and_checkpoint_retain_owner_halo():
+    program, model = _mapped_program()
+    current = next(value for value in program._values if value.op == "state")
+    program.store_history("disk.state", current)
+    source = emit_cpp_program(program, model=model, target="amr_system")
+    registrations = [line for line in source.splitlines()
+                     if 'ctx.register_history("disk.state"' in line]
+    assert len(registrations) >= 2
+    assert all(line.endswith(", -1);") for line in registrations)
+    halo_metadata = source.split("pops_program_checkpoint_history_ghost_depth", 1)[1]
+    assert "case 0: return -1;" in halo_metadata
 
 
 @pytest.mark.parametrize("consumer", ("direct", "named_expression", "apply", "nested_branch"))

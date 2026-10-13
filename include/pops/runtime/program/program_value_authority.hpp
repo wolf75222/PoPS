@@ -3,6 +3,7 @@
 
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/core/foundation/kokkos_env.hpp>
+#include <pops/core/identity/prepared_provider.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/program/prepared_resource_lifetime.hpp>
 
@@ -51,6 +52,26 @@ struct ProgramValuePlan {
   std::vector<ProgramValueProducer> producers;
   std::vector<ProgramValueFieldEdge> fields;
   friend bool operator==(const ProgramValuePlan&, const ProgramValuePlan&) = default;
+  [[nodiscard]] std::string exact_contract() const {
+    ExactContractBuilder proof;
+    proof.text("pops.ProgramValuePlan@1").text(program_identity);
+    proof.scalar(producers.size());
+    for (const auto& producer : producers) {
+      proof.scalar(producer.ssa).scalar(producer.program_block).scalar(producer.storage)
+          .scalar(producer.storage_id).scalar(producer.subslot).text(producer.history)
+          .scalar(producer.lag).scalar(producer.inputs.size());
+      for (auto input : producer.inputs) proof.scalar(input);
+      proof.scalar(producer.input_branches.size());
+      for (const auto& branch : producer.input_branches) {
+        proof.scalar(branch.size());
+        for (auto input : branch) proof.scalar(input);
+      }
+    }
+    proof.scalar(fields.size());
+    for (const auto& edge : fields)
+      proof.scalar(edge.field_node).scalar(edge.program_block).scalar(edge.source).scalar(edge.accepted_only);
+    return std::move(proof).release();
+  }
 };
 
 /// @1. Only a context may admit owned storage or publish a successful producer.
@@ -398,8 +419,13 @@ class ProgramValueAuthority {
     (void)producer_(ssa,block);
     const auto found = state_->values.find({ssa,level});
     if (found == state_->values.end() || found->second->buffer != &field ||
-        !found->second->attempt.same_attempt(attempt))
-      throw std::invalid_argument("Field source has no successful exact SSA producer");
+        !found->second->attempt.same_attempt(attempt)) {
+      const auto cause = found == state_->values.end() ? "missing record" :
+          found->second->buffer != &field ? "different native buffer" : "different attempt";
+      throw std::invalid_argument("Field source has no successful exact SSA producer (ssa=" +
+          std::to_string(ssa) + ", block=" + std::to_string(block) + ", level=" +
+          std::to_string(level) + ", " + cause + ")");
+    }
     Value value(state_,found->second);
     value.validate();
     return value;
@@ -413,6 +439,12 @@ class ProgramValueAuthority {
         !record.attempt.same_attempt(attempt))
       throw std::invalid_argument("Field solve does not consume its planned native SSA source");
     return [value] { value.validate(); };
+  }
+  void require_accepted_edge_(std::int64_t node, int block, const char* message) const {
+    const auto planned = std::find_if(state_->plan.fields.begin(),state_->plan.fields.end(),
+        [&](const auto& edge) { return edge.field_node == node && edge.program_block == block; });
+    if (planned == state_->plan.fields.end() || !planned->accepted_only)
+      throw std::invalid_argument(message);
   }
   AcceptedValue accepted_(std::int64_t node, int block, const Slot& slot,
       const field_type& field, const PreparedResourceAttempt& attempt, Point birth) const {

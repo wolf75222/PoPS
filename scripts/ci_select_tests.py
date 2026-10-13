@@ -51,6 +51,8 @@ CPP_BROAD_FILES = {
     "CMakePresets.json",
     "scripts/ci_include_graph.py",
     "scripts/ci_python_module_objects.py",
+    "scripts/ci_python_mpi.py",
+    "scripts/ci_python_hardware.py",
     "scripts/ci_route_mode.py",
     "scripts/ci_plan.py",
     "scripts/ci_components.toml",
@@ -79,6 +81,8 @@ PYTHON_BROAD_FILES = {
     "scripts/ci_import_closure.py",
     "scripts/ci_pytest_timings.py",
     "scripts/ci_python_dimensions.py",
+    "scripts/ci_python_mpi.py",
+    "scripts/ci_python_hardware.py",
     "tests/python/native_dimensions.json",
     "scripts/ci_python_module_objects.py",
     "scripts/ci_route_mode.py",
@@ -500,6 +504,11 @@ def manifest_python_mpi_entrypoints(manifest: dict) -> list[dict]:
                 )
             path = normalize(str(raw.get("path", "")))
             nproc = raw.get("nproc")
+            dimension = raw.get("native_dimension", 2)
+            if set(raw) - {"path", "nproc", "native_dimension"}:
+                raise SystemExit("Python MPI entrypoint contains unknown contract fields")
+            if type(dimension) is not int or dimension not in (1, 2, 3):
+                raise SystemExit("Python MPI entrypoint needs an exact native_dimension 1, 2 or 3")
             candidate = Path(path)
             if (
                 not path
@@ -525,8 +534,33 @@ def manifest_python_mpi_entrypoints(manifest: dict) -> list[dict]:
             if path in seen_paths:
                 raise SystemExit(f"duplicate Python MPI entrypoint: {path}")
             seen_paths.add(path)
-            entries.append({"suite": name, "path": path, "nproc": nproc})
+            entry = {"suite": name, "path": path, "nproc": nproc}
+            if "native_dimension" in raw:
+                entry["native_dimension"] = dimension
+            entries.append(entry)
     return sorted(entries, key=lambda item: (item["path"], item["nproc"]))
+
+
+MPI_ORCHESTRATOR_PARTITION_CONTRACTS = {
+    "tests/python/integration/mpi/test_public_amr_profile_mpi%d.py" % world:
+        ("test_public_amr_fixtures_on_authenticated_mpi%d_world" % world,
+         ("tag_selection", "stationary_regrids", "evolving_halo", "evolved_spatial", "evolved_spatial_v4"))
+    for world in (1, 2)
+}
+MPI_ORCHESTRATOR_PARTITION_CONTRACTS.update({
+    "tests/python/integration/mpi/test_public_amr_original_field_mpi%d.py" % world:
+        ("test_public_amr_original_on_authenticated_mpi%d_world" % world,
+         ("saved_restart", "parent_rollback_retry"))
+    for world in (1, 2)
+})
+
+MPI_ORCHESTRATOR_PARTITION_CONTRACTS.update({
+    "tests/python/integration/mpi/test_public_typed_newton_mpi%d.py" % world:
+        ("test_public_typed_newton_on_authenticated_mpi%d_world" % world,
+         ("relative_uniform", "relative_amr", "floor_uniform", "floor_amr",
+          "absolute_uniform", "absolute_amr", "overflow_uniform", "overflow_amr"))
+    for world in (1, 2)
+})
 
 
 def manifest_python_mpi_orchestrators(manifest: dict) -> list[dict]:
@@ -557,10 +591,10 @@ def manifest_python_mpi_orchestrators(manifest: dict) -> list[dict]:
                 "without an mpi label"
             )
         for raw in raw_orchestrators:
-            if not isinstance(raw, dict) or set(raw) != {"path"}:
+            if not isinstance(raw, dict) or set(raw) not in ({"path"}, {"path", "partitions"}):
                 raise SystemExit(
                     f"Python suite {name or '<unnamed>'} has an invalid mpi_orchestrator; "
-                    "expected exactly one path field"
+                    "expected path and optional exact partitions"
                 )
             path = normalize(str(raw["path"]))
             candidate = Path(path)
@@ -587,8 +621,82 @@ def manifest_python_mpi_orchestrators(manifest: dict) -> list[dict]:
             if path in seen_paths or path in entrypoint_paths:
                 raise SystemExit(f"duplicate Python MPI contract: {path}")
             seen_paths.add(path)
-            orchestrators.append({"suite": name, "path": path})
+            row = {"suite": name, "path": path}
+            contract = MPI_ORCHESTRATOR_PARTITION_CONTRACTS.get(path)
+            if ("partitions" in raw) != (contract is not None):
+                raise SystemExit("MPI partition authority differs from its closed wrapper contract: " + path)
+            if "partitions" in raw:
+                partitions = raw["partitions"]
+                if not isinstance(partitions, list) or not partitions:
+                    raise SystemExit("MPI orchestrator partitions must be a nonempty array: " + path)
+                ids, nodes = set(), set()
+                source = (ROOT / path).read_text(encoding="utf-8")
+                normalized = []
+                for partition in partitions:
+                    if not isinstance(partition, dict) or set(partition) != {"id", "parent_node"}:
+                        raise SystemExit("MPI partition requires exactly id and parent_node: " + path)
+                    identity, node = partition["id"], partition["parent_node"]
+                    if (not isinstance(identity, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", identity)
+                            or not isinstance(node, str)
+                            or not re.fullmatch(r"test_[A-Za-z0-9_]+\[" + re.escape(identity) + r"\]", node)):
+                        raise SystemExit("MPI partition has an invalid exact parent node: " + path)
+                    function = node.split("[", 1)[0]
+                    if not re.search(r"^def " + re.escape(function) + r"\(", source, re.MULTILINE):
+                        raise SystemExit("MPI partition names an unowned parent function: " + path)
+                    if identity in ids or node in nodes:
+                        raise SystemExit("MPI orchestrator partitions have duplicate identities: " + path)
+                    ids.add(identity); nodes.add(node)
+                    normalized.append({"id": identity, "parent_node": node})
+                row["partitions"] = normalized
+                function, required_ids = contract
+                expected = [{"id": identity, "parent_node": function + "[" + identity + "]"}
+                            for identity in required_ids]
+                if normalized != expected:
+                    raise SystemExit("MPI partition inventory differs from its complete wrapper contract: " + path)
+            orchestrators.append(row)
     return sorted(orchestrators, key=lambda item: item["path"])
+
+
+def manifest_python_hardware_entrypoints(manifest: dict) -> list[dict]:
+    """Keep tests requiring real device storage outside CPU plans, with exact coverage."""
+    entries: list[dict] = []
+    seen = {row['path'] for row in manifest_python_mpi_entrypoints(manifest)}
+    seen.update(row['path'] for row in manifest_python_mpi_orchestrators(manifest))
+    for suite in manifest.get('python', {}).get('suite', []):
+        name = str(suite.get('name', ''))
+        owner = normalize(str(suite.get('path', ''))).rstrip('/')
+        raw_entries = suite.get('hardware_entrypoints', [])
+        if not isinstance(raw_entries, list):
+            raise SystemExit('Python hardware_entrypoints requires a TOML array')
+        for raw in raw_entries:
+            if not isinstance(raw, dict) or set(raw) != {'path', 'hardware', 'native_dimension', 'expected_cases'}:
+                raise SystemExit('Python hardware entrypoint has an incomplete or unknown contract')
+            path = normalize(str(raw['path']))
+            candidate = Path(path)
+            if (not path or candidate.is_absolute() or '..' in candidate.parts
+                    or '\t' in path or '\n' in path or candidate.suffix != '.py'
+                    or not candidate.name.startswith('test_')):
+                raise SystemExit('Python hardware entrypoint has an invalid path')
+            if not name or not owner or not path.startswith(owner + '/'):
+                raise SystemExit('Python hardware entrypoint is outside its owning suite')
+            if not (ROOT / path).is_file():
+                raise SystemExit('Python hardware entrypoint does not exist: ' + path)
+            if raw['hardware'] != 'gpu':
+                raise SystemExit('Python hardware entrypoint requires a declared gpu profile')
+            dimension = raw['native_dimension']
+            if type(dimension) is not int or dimension not in (1, 2, 3):
+                raise SystemExit('Python hardware entrypoint requires an exact native dimension')
+            cases = raw['expected_cases']
+            if (not isinstance(cases, dict) or not cases
+                    or any(not isinstance(key, str) or not key.startswith('test_')
+                           or type(count) is not int or count <= 0 for key, count in cases.items())):
+                raise SystemExit('Python hardware entrypoint requires exact positive case counts')
+            if path in seen:
+                raise SystemExit('duplicate Python hardware contract: ' + path)
+            seen.add(path)
+            entries.append({'suite': name, 'path': path, 'hardware': raw['hardware'],
+                            'native_dimension': dimension, 'expected_cases': cases})
+    return sorted(entries, key=lambda row: row['path'])
 
 
 def manifest_python_suites(manifest: dict) -> list[dict]:
@@ -613,6 +721,9 @@ def manifest_python_suites(manifest: dict) -> list[dict]:
         orchestrator["path"]
         for orchestrator in manifest_python_mpi_orchestrators(manifest)
     )
+    dedicated_hardware_paths = {
+        row['path'] for row in manifest_python_hardware_entrypoints(manifest)
+    }
     suites: list[dict] = []
     for suite in manifest.get("python", {}).get("suite", []):
         name = str(suite.get("name", ""))
@@ -631,6 +742,7 @@ def manifest_python_suites(manifest: dict) -> list[dict]:
             for p in suite_path.rglob("test_*.py")
             if (tracked is None or str(p.relative_to(ROOT)) in tracked)
             and str(p.relative_to(ROOT)) not in dedicated_mpi_paths
+            and str(p.relative_to(ROOT)) not in dedicated_hardware_paths
         )
         if not files:
             raise SystemExit(f"Python suite {name} has no test_*.py files under {path}")
@@ -1651,8 +1763,14 @@ def plan_cpp_label(args: argparse.Namespace) -> int:
 def plan_python_mpi(args: argparse.Namespace) -> int:
     """Write the manifest-owned real-MPI Python launch plan for the dedicated CI job."""
     manifest = load_manifest()
-    entries = manifest_python_mpi_entrypoints(manifest)
-    orchestrators = manifest_python_mpi_orchestrators(manifest)
+    dimension = getattr(args, "native_dimension", 2)
+    if type(dimension) is not int or dimension not in (1, 2, 3):
+        raise SystemExit("Python MPI plan requires an exact native dimension 1, 2 or 3")
+    entries = [entry for entry in manifest_python_mpi_entrypoints(manifest)
+               if entry.get("native_dimension", 2) == dimension]
+    # Existing orchestrators explicitly select their Dim2 runtime. Other dimensions
+    # use ranked entrypoints; never launch a Dim2 driver against another installed leaf.
+    orchestrators = manifest_python_mpi_orchestrators(manifest) if dimension == 2 else []
     if not entries and not orchestrators:
         raise SystemExit("no Python MPI contracts declared in tests/test_manifest.toml")
     plan_path = Path(args.plan_file)
@@ -1691,6 +1809,7 @@ def plan_python_mpi(args: argparse.Namespace) -> int:
         getattr(args, "explain_file", None),
         {
             "kind": "python-mpi",
+            "native_dimension": dimension,
             "selected_count": len(entries) + len(orchestrators),
             "entrypoints": entries,
             "orchestrators": orchestrators,
@@ -1970,6 +2089,7 @@ def plan_python(args: argparse.Namespace) -> int:
             "full_reasons": full_reasons,
             "selected_count": len(selected_tests),
             "total_count": len(all_tests),
+            "hardware_exclusions": manifest_python_hardware_entrypoints(load_manifest()),
             "shard_index": args.shard_index,
             "shard_total": args.shard_total,
             "sharded_count": len(sharded),
@@ -2058,6 +2178,7 @@ def main() -> int:
     py_mpi = sub.add_parser("python-mpi")
     py_mpi.add_argument("--plan-file", required=True)
     py_mpi.add_argument("--orchestrator-plan-file", required=True)
+    py_mpi.add_argument("--native-dimension", type=int, choices=(1, 2, 3), default=2)
     py_mpi.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
     py_mpi.add_argument("--explain-file")
     py_mpi.set_defaults(func=plan_python_mpi)

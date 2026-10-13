@@ -112,7 +112,7 @@ def compile_equations(problem: Any, states: tuple, *, per_candidate: bool = Fals
             if type(term) in (Laplacian, DivCoeffGrad):
                 coefficient = 1 if type(term) is Laplacian else constant_reaction_scalar(term.coeff)
                 slot = row * width + column
-                if coefficient is NotImplemented:
+                if type(term) is DivCoeffGrad and coefficient is NotImplemented:
                     # Unknown reads are authorized only by the explicit @3 realization.
                     value = -term.scale * term.coeff
                     captured_diffusion[slot] = value if slot not in captured_diffusion else captured_diffusion[slot] + value

@@ -8,7 +8,7 @@ from pops.solvers import DenseLU
 from pops.time import LocalLinear
 
 from ._factory import (
-    call_at, call_field_at, field_handle, instance_state, operator_handle,
+    _call_field_at, call_at, field_handle, instance_state, operator_handle,
     program_factory, resolve_solve_action,
 )
 from ._helpers import _stage_point
@@ -29,9 +29,11 @@ def _build_predictor_corrector(
     initial = temporal.n
     predictor = _stage_point(
         program, "predictor", partitions={"explicit": 0, "implicit": 1})
-    fields_initial = call_field_at(
+    field_call_initial = _call_field_at(
         program, fields, initial, name="fields_n", point=predictor,
         solve_action=solve_action)
+    initial = field_call_initial.states[0]
+    fields_initial = field_call_initial.fields
     rate_initial = call_at(
         program, explicit, initial, fields_initial, name="rate_n", point=predictor)
     linear_initial = call_at(
@@ -48,9 +50,13 @@ def _build_predictor_corrector(
 
     corrector = _stage_point(
         program, "corrector", partitions={"explicit": 1, "implicit": 1})
-    fields_predicted = call_field_at(
+    field_call_predicted = _call_field_at(
         program, fields, predicted, name="fields_predicted", point=corrector,
         solve_action=solve_action)
+    # The field solve may align this numerical image to the corrector's TimePoint.
+    # Every consumer must read that exact source, including the implicit application.
+    predicted = field_call_predicted.states[0]
+    fields_predicted = field_call_predicted.fields
     rate_predicted = call_at(
         program, explicit, predicted, fields_predicted,
         name="rate_predicted", point=corrector,

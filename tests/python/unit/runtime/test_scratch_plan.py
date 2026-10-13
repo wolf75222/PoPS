@@ -200,7 +200,7 @@ def _model(*, n_vars=3, n_aux=1, provider_components=("magnetic",)):
     cons = ["rho", "mx", "my", "E"][:n_vars]
     roles = ["Density", "MomentumX", "MomentumY", "Energy"][:n_vars]
     return CompiledModel(
-        so_path="/nonexistent/problem.so", backend="production",
+        so_path=os.path.join(tempfile.gettempdir(), "pops-scratch-metadata", "problem.so"), backend="production",
         cons_names=cons, cons_roles=roles, prim_names=cons, n_vars=n_vars, gamma=1.4,
         n_aux=n_aux, params={}, caps={"cpu": True, "mpi": True},
         abi_key="SIG|c++|c++23", model_hash="modelhash", cxx="c++", std="c++23",

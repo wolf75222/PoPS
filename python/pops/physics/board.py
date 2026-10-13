@@ -85,6 +85,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         # Keep positional Field declarations on the authoritative legacy registry owner.
         # None means dependency inference; an explicit tuple (including ()) is a contract.
         self._dsl._m._declared_linear_operator_inputs = {}
+        self._dsl._m._declared_field_spaces = {}
         self.name = self._dsl.name
         self._frame = frame
         self._states = {}
@@ -628,26 +629,46 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         self._invalidate_authoring_views()
         return Var(name, "aux")
 
-    def field(self, name: Any, *, components: Any = None) -> Any:
+    def field(self, name: Any, *, components: Any = None, space: Any = None) -> Any:
         """Declare a solved scalar or a multi-component field space.
 
         Multi-species models use ``components=`` for the potential and its materialized derivatives;
         the returned handle is still the one owner-qualified field declaration consumed by Case.
         """
         name = require_name(name, "field name")
+        from pops.model import FieldSpace
+
+        if space is not None:
+            if type(space) is not FieldSpace or space.name != name:
+                raise TypeError("field space must be an exact same-name FieldSpace")
+            if self._frame is not None and space.frame != self._frame.canonical_id:
+                raise ValueError("field space frame differs from its Model frame")
+            if components is not None and normalize_components(components, "field " + name) \
+                    != space.components:
+                raise ValueError("field components disagree with its declared FieldSpace")
         if name in self._fields:
             raise ValueError("field %r is already declared" % name)
         if components is not None:
             if self._multi_module is None:
                 raise ValueError("field components require a multi-species Model")
             values = normalize_components(components, "field %s" % name)
-            descriptor = self._multi_module.field_space(name, values)
+            descriptor = self._multi_module.field_space(name, values) if space is None else \
+                self._multi_module.field_space(name, values, layout=space.layout,
+                    representation=space.representation, centering=space.centering,
+                    units=space.units, frame=space.frame, clock=space.clock,
+                    support=space.support, sampling=space.sampling,
+                    value_shape=space.value_shape, domain=space.domain)
             h = self._multi_module.field_handle(descriptor)
             self._fields[h.name] = h
             self._invalidate_authoring_views()
             return h
         h = FieldHandle(name, owner=self.owner_path)
         self._fields[h.name] = h
+        if space is not None:
+            self._dsl._m._declared_field_spaces[name] = space
+            self._dsl._m._operator_registry_cache = None
+            self._dsl._module_cache = None
+            self._invalidate_authoring_views()
         return h
 
     def field_spaces(self) -> Any:
@@ -701,8 +722,13 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                     raise ValueError(
                         "field %r outputs must define unique storage components" % name)
                 components = tuple(values)
-            result[name] = FieldSpace(
-                name=name, components=components, layout="cell")
+            declared = self._dsl._m._declared_field_spaces.get(name)
+            if declared is not None:
+                if operators and declared.components != components:
+                    raise ValueError("field %r outputs differ from its declared FieldSpace" % name)
+                result[name] = declared
+            else:
+                result[name] = FieldSpace(name=name, components=components, layout="cell")
         return result
 
     def vector(self, name: Any, *, frame: Any, components: Any) -> Any:

@@ -413,6 +413,82 @@ def test_structured_rejection_phase_precedes_legacy_message_parsing():
     assert _phase(error) == "guard"
 
 
+def _two_rank_rejection(monkeypatch, error, peer_change=None):
+    from pops import _native_collectives
+    from pops.runtime import _step_strategy
+
+    world = SimpleNamespace(rank=0, size=2)
+    monkeypatch.setattr(_step_strategy, "_attempt_world", lambda engine: world)
+
+    def gathered(selected, row):
+        assert selected is world and row["rank"] == 0
+        peer = deepcopy(row)
+        peer["rank"] = 1
+        if peer_change is not None:
+            peer_change(peer)
+        return row, peer
+
+    monkeypatch.setattr(_native_collectives, "allgather_value", gathered)
+    engine = _Engine(FixedDt(.1))
+    return engine, _step_strategy._collective_attempt_error(engine, error)
+
+
+def _native_evaluation_rejection():
+    error = StepAttemptRejected("step attempt rejected during native_evaluation: face CFL")
+    error.status = "invalid_evaluation"
+    error.phase = "native_evaluation"
+    error.detail = "user_face_numerical_stability block=0 evaluation=4 reason_code=503"
+    error.disposition = "retry"
+    error.reason_code = 503
+    return error
+
+
+def test_two_rank_rejection_preserves_native_phase_and_detail_while_report_uses_stage(monkeypatch):
+    from pops.runtime._step_strategy import _record_failure
+
+    original = _native_evaluation_rejection()
+    engine, error = _two_rank_rejection(monkeypatch, original)
+    assert isinstance(error, StepAttemptRejected)
+    for name in ("status", "phase", "detail", "disposition", "reason_code"):
+        assert getattr(error, name) == getattr(original, name)
+    assert error.failed_rank == 0
+    assert "rank 0 StepAttemptRejected:" in str(error)
+    assert "rank 1 StepAttemptRejected:" in str(error)
+    _record_failure(engine, error, 1)
+    report = engine._last_step_transaction_report
+    assert report.status == "rejected" and report.phase == "stage"
+    assert report.action == "reject_attempt" and report.attempts == 1
+    assert report.diagnostics == (str(error),)
+
+
+def test_two_rank_rejection_keeps_legacy_phase_fallback_only_when_absent(monkeypatch):
+    original = _native_evaluation_rejection()
+    del original.phase
+    original.args = ("step attempt rejected during guard: legacy control",)
+    _, error = _two_rank_rejection(monkeypatch, original)
+    assert isinstance(error, StepAttemptRejected) and error.phase == "guard"
+    assert error.detail == original.detail and error.reason_code == 503
+
+
+@pytest.mark.parametrize("phase", (None, "", 17, []))
+def test_two_rank_rejection_refuses_malformed_explicit_phase(monkeypatch, phase):
+    original = _native_evaluation_rejection()
+    original.phase = phase
+    _, error = _two_rank_rejection(monkeypatch, original)
+    assert type(error) is RuntimeError
+    assert "invalid rejection phase on rank 0" in str(error)
+
+
+@pytest.mark.parametrize("change,diagnostic", (
+    (lambda peer: peer["error"].update(phase="stage"), "failed during native_evaluation"),
+    (lambda peer: peer.update(rank=0), "invalid rank envelope"),
+    (lambda peer: peer.update(error=None), "failed during native_evaluation"),
+))
+def test_two_rank_rejection_retains_exact_phase_consensus_and_rank_guards(monkeypatch, change, diagnostic):
+    _, error = _two_rank_rejection(monkeypatch, _native_evaluation_rejection(), change)
+    assert type(error) is RuntimeError and diagnostic in str(error)
+
+
 @pytest.mark.parametrize("disposition", ["retry", "reject"])
 def test_error_controller_preserves_both_dispositions_without_changing_retry_policy(disposition):
     class RejectingNative(_Native):
@@ -1155,8 +1231,14 @@ def test_composite_checkpoint_preflight_authenticates_uniform_and_amr_temporal_e
     leaves = [TemporalRestartState.from_json(
         state.checkpoint_json(time=0.01, macro_step=1), time=0.01, macro_step=1,
         program_schedule=state.program_schedule) for state in temporal.states]
-    children = (_PreparedUniformRestart(None, None, leaves[0], None, b"", b""),
-                _PreparedAMRSystemRestart(None, SimpleNamespace(temporal_state=leaves[1])))
+    children = (
+        _PreparedUniformRestart(
+            payload=None, restart_identity=None, temporal_state=leaves[0], cadence_state=None,
+            auxiliary_checkpoint=b"", exchange_checkpoint=b"",
+            program_diagnostic_checkpoint=b"", state_carriers=None,
+        ),
+        _PreparedAMRSystemRestart(None, SimpleNamespace(temporal_state=leaves[1])),
+    )
     candidate = executor._prepared_temporal_state(children)
     assert candidate.layout_ids == temporal.layout_ids
     snapshot = deepcopy(candidate)

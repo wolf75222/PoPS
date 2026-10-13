@@ -7,6 +7,10 @@ or heat-conduction qualification. All numerical criteria precede native runs.
 """
 from __future__ import annotations
 
+from _native_example_profile import (
+    rank_and_size, gather_bytes, broadcast_bytes, execution_context,
+)
+
 import hashlib
 import json
 import math
@@ -84,7 +88,7 @@ def _collective_call(world, label, operation):
         result = operation()
     except Exception as exception:
         failure = (label+": "+type(exception).__name__+": "+str(exception)).encode()
-    failures = world.allgather_bytes(failure)
+    failures = gather_bytes(world, failure)
     if any(failures):
         raise RuntimeError("; ".join(row.decode() for row in failures if row))
     return result
@@ -210,7 +214,11 @@ def run_and_archive(destination: Path) -> list[dict]:
     from pops._native_selector import select_native_dimension
 
     native = select_native_dimension(1)
-    bootstrap_world = native.mpi_world()
+    from pops.codegen._native_mpi import native_mpi_communicator
+    route = native_mpi_communicator(native)
+    if route not in ("serial", "MPI_COMM_WORLD"):
+        raise RuntimeError("M05 has no authenticated native communicator route")
+    bootstrap_world = native.mpi_world() if route == "MPI_COMM_WORLD" else None
 
     def authenticate_installation():
         package = Path(pops.__file__).resolve()
@@ -224,7 +232,7 @@ def run_and_archive(destination: Path) -> list[dict]:
     from pops.codegen._native_mpi import native_mpi_communicator
     mpi_route = _collective_call(
         bootstrap_world, "MPI route", lambda: native_mpi_communicator(native))
-    routes = bootstrap_world.allgather_bytes(mpi_route.encode())
+    routes = gather_bytes(bootstrap_world, mpi_route.encode())
     if len(set(routes)) != 1:
         raise RuntimeError("M05 MPI route differs across ranks")
     compile_once = None
@@ -259,12 +267,12 @@ def run_and_archive(destination: Path) -> list[dict]:
         _collective_call(bootstrap_world, "Dim1 artifact", require_dim1_artifact)
         execution = _collective_call(
             bootstrap_world, "execution context",
-            lambda artifact=artifact: pops.ExecutionContext.mpi_world(artifact))
+            lambda artifact=artifact: execution_context(artifact))
         world = _collective_call(
             bootstrap_world, "execution communicator",
             lambda execution=execution: execution.communicator.handle)
-        mismatch = world.rank != bootstrap_world.rank or world.size != bootstrap_world.size
-        if any(row == b"different" for row in bootstrap_world.allgather_bytes(
+        mismatch = rank_and_size(world)[0] != rank_and_size(bootstrap_world)[0] or rank_and_size(world)[1] != rank_and_size(bootstrap_world)[1]
+        if any(row == b"different" for row in gather_bytes(bootstrap_world,
                 b"different" if mismatch else b"same")):
             raise RuntimeError("M05 bound execution world differs from its preflight world")
         simulation = _collective_call(world, "bind", lambda artifact=artifact,
@@ -297,17 +305,17 @@ def run_and_archive(destination: Path) -> list[dict]:
         local_wire = _collective_call(
             world, "ledger serialization", lambda local_rows=local_rows:
             receipt_json(local_rows).encode())
-        gathered_rows = world.allgather_bytes(local_wire)
+        gathered_rows = gather_bytes(world, local_wire)
         status = _collective_call(
             world, "status", lambda simulation=simulation,
             first_report=first_report, last_report=last_report, last_dt=last_dt: json.dumps((
                 first_report.accepted_steps, first_report.rejected_steps,
                 last_report.accepted_steps, last_report.rejected_steps,
                 simulation.macro_step(), simulation.time(), last_dt)).encode())
-        if len(set(world.allgather_bytes(status))) != 1:
+        if len(set(gather_bytes(world, status))) != 1:
             raise RuntimeError("M05 time/step status differs across ranks")
         failure = b""
-        if world.rank == 0:
+        if rank_and_size(world)[0] == 0:
             try:
                 destination.mkdir(parents=True, exist_ok=True)
                 saved = destination / f"state_{cells}.npz"
@@ -325,7 +333,7 @@ def run_and_archive(destination: Path) -> list[dict]:
                     saved, rows, cells, first_report, last_report)
                 metrics.update({
                     "explicit_frequency_fraction": fraction,
-                    "mpi_ranks": world.size,
+                    "mpi_ranks": rank_and_size(world)[1],
                     "artifact_identity": artifact.artifact_identity.token,
                     "artifact_abi_key": artifact.abi_key,
                     "execution_context": execution.to_data(),
@@ -339,19 +347,19 @@ def run_and_archive(destination: Path) -> list[dict]:
                 records.append(metrics)
             except Exception as exception:
                 failure = (type(exception).__name__+": "+str(exception)).encode()
-        failure = world.broadcast_bytes(failure, root=0)
+        failure = broadcast_bytes(world, failure)
         if failure:
             raise RuntimeError(failure.decode())
     payload = b""
     failure = b""
-    if world.rank == 0:
+    if rank_and_size(world)[0] == 0:
         try:
             payload = (receipt_json({
                 "schema_version": 1, "case": "M05_periodic_linear_viscous_shear",
                 "scope": "genuine Dim1 periodic scalar shear reduction, not full Navier-Stokes",
                 "status": "passed", "criteria": CRITERIA, "records": records,
                 "native_sha256": hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest(),
-                "mpi_ranks": world.size,
+                "mpi_ranks": rank_and_size(world)[1],
                 "threads_requested": int(os.environ.get("POPS_THREADS", "1")),
                 "example_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                 "oracle_sha256": hashlib.sha256(
@@ -360,10 +368,10 @@ def run_and_archive(destination: Path) -> list[dict]:
             (destination / "receipt.json").write_bytes(payload)
         except Exception as exception:
             failure = (type(exception).__name__+": "+str(exception)).encode()
-    failure = world.broadcast_bytes(failure, root=0)
+    failure = broadcast_bytes(world, failure)
     if failure:
         raise RuntimeError(failure.decode())
-    payload = world.broadcast_bytes(payload, root=0)
+    payload = broadcast_bytes(world, payload)
     return json.loads(payload)["records"]
 
 

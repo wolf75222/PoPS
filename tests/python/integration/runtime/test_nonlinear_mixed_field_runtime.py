@@ -9,7 +9,6 @@ from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
-import sys
 
 import numpy as np
 import pops
@@ -35,6 +34,7 @@ from tests.python.support.collective_checks import (
     collective_attempt, collective_call, collective_check, state_snapshots,
 )
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.public_native_profile import native_profile, rank_and_size
 
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
 CELLS, LENGTHS, DT = (5, 4), (1.0, 1.5), .01
@@ -132,8 +132,8 @@ def prepared_case(order, *, failure=None, solver=None):
 
 def bind_native(world, native, order, failure=None, *, solver=None):
     resolved, forcing, parameter = collective_call(world, lambda: prepared_case(order, failure=failure, solver=solver))
-    artifact = compile_resolved_plan_once(world, resolved, route="original nonlinear spatial field",
-                                        compile_artifact=pops.compile)
+    artifact = (pops.compile(resolved) if world is None else compile_resolved_plan_once(
+        world, resolved, route="original nonlinear spatial field", compile_artifact=pops.compile))
     context = collective_call(world, lambda: artifact_execution_context(artifact))
     target, coefficients = target_means(len(order)), parameter_means()
     loads = original_lhs(target, coefficients)
@@ -147,11 +147,11 @@ def bind_native(world, native, order, failure=None, *, solver=None):
 def test_original_nonlinear_product_from_saved_native_observations(
         isolated_native_cache, tmp_path, record_property, order):
     del isolated_native_cache
-    from pops._native_selector import select_native_dimension
+    native, world = native_profile(scope="public original nonlinear spatial product")
+    rank, size = rank_and_size(world)
+    record_property("native_abi_version", native.__abi_version__)
+    record_property("native_profile", "MPI" if world is not None else "Serial")
     package = Path(pops.__file__).resolve()
-    assert package.is_relative_to(Path(sys.prefix).resolve()), package
-    native = select_native_dimension(2)
-    world = native.mpi_world()
     runtime, artifact, target, loads, coefficients = bind_native(world, native, order)
     report = collective_call(world, lambda: pops.run(runtime, t_end=DT, max_steps=1, console=False))
     results = []
@@ -166,7 +166,7 @@ def test_original_nonlinear_product_from_saved_native_observations(
     with collective_check(world):
         assert native_time == DT and native_step == 1
         assert report.accepted_steps == 1 and report.rejected_steps == 0
-        if world.rank == 0:
+        if rank == 0:
             solved = np.asarray(results).reshape(2, len(order), *reversed(CELLS))
             # These are actual runtime outputs; the target is checked independently.
             errors = [float(np.max(np.abs(row - target))) for row in solved]
@@ -179,7 +179,7 @@ def test_original_nonlinear_product_from_saved_native_observations(
             np.savez_compressed(saved, solved=solved, forcing=state[0].reshape(loads.shape),
                                 parameter=state[1].reshape(coefficients.shape))
             receipt = {"contract": "pops.spatial-field-residual@1", "native_dimension": 2,
-                "mpi_size": world.size, "native_time": native_time, "native_macro_step": native_step,
+                "mpi_size": size, "native_time": native_time, "native_macro_step": native_step,
                 "native_path": str(Path(native.__file__).resolve()), "package_path": str(package),
                 "native_sha256": hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest(),
                 "native_abi": str(native.abi_key()), "artifact_identity": artifact.artifact_identity.token,
@@ -193,16 +193,14 @@ def test_original_nonlinear_product_from_saved_native_observations(
     record_property("spatial_field_residual_receipts", str(directory))
     record_property("artifact_identity", artifact.artifact_identity.token)
     record_property("native_dimension", 2)
-    record_property("mpi_rank", world.rank)
-    record_property("mpi_size", world.size)
+    record_property("mpi_rank", rank)
+    record_property("mpi_size", size)
 
 
 @pytest.mark.parametrize("failure", ("iterations", "nonfinite"))
 def test_original_nonlinear_failure_has_no_accepted_publication(isolated_native_cache, failure):
     del isolated_native_cache
-    from pops._native_selector import select_native_dimension
-    native = select_native_dimension(2)
-    world = native.mpi_world()
+    native, world = native_profile(scope="public original nonlinear failure")
     runtime, _, _, _, _ = bind_native(world, native, (0, 1), failure=failure)
     before = state_snapshots(runtime, world, ("forcing", "parameter"))
     prior = collective_call(world, runtime.program_report)

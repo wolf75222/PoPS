@@ -109,6 +109,8 @@ void System<Dim>::step(double dt) {
     p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, dt, "System", communicator);
     if (solve_outcome_authority_->pending.load(std::memory_order_acquire) != 0)
       throw std::logic_error("System Program step left a native solve result unconsumed");
+    if (p_->has_pending_field_warm_start())
+      throw std::logic_error("System Program step left an unresolved field warm start");
   }, [&] {
     ++solve_outcome_authority_->attempt;
     rollback_field_publication_transaction();
@@ -599,7 +601,8 @@ void System<Dim>::commit_step_transaction() {
   runtime::program::require_step_transaction_control(
       prepared_boundary_execution_lane(), 2, static_cast<long>(step_transaction_depth()),
       p_->external_step_transaction_ && !p_->external_step_transaction_committed_ &&
-          solve_outcome_authority_->pending.load(std::memory_order_acquire) == 0,
+          solve_outcome_authority_->pending.load(std::memory_order_acquire) == 0 &&
+          !p_->has_pending_field_warm_start(),
       "System::commit_step_transaction");
   Kokkos::fence();
   p_->external_step_transaction_committed_ = true;

@@ -179,6 +179,16 @@ def test_final_authoring_derives_field_storage_and_complete_generic_program() ->
     implicit_rate = next(value for value in target.program._values if value.op == "apply")
     assert implicit_rate.attrs["evaluation_partition"] == "implicit"
     assert evaluation_stage_fraction(implicit_rate) == 1
+    explicit_rate = next(value for value in target.program._values if value.op == "rhs")
+    assert explicit_rate.attrs["evaluation_partition"] == "explicit"
+    assert evaluation_stage_fraction(explicit_rate) == 0
+    field_state = next(
+        value for value in target.program._values
+        if value.name == "imex-euler_field_state_0"
+    )
+    assert explicit_rate.inputs[0].id == field_state.id
+    assert explicit_rate.field_context.stage_sources == ((field_state.block, field_state.id),)
+    assert evaluation_stage_fraction(field_state) == 1
     assert target.program.transaction_plan() is not None
     assert target.program.transaction_plan().stores == ALL_PROVISIONAL_STORES
     guards = target.program.transaction_plan().guards

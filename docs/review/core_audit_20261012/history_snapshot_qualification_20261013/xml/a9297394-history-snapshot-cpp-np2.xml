@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)"
+	tests="1"
+	failures="0"
+	disabled="0"
+	skipped="0"
+	hostname=""
+	time="0"
+	timestamp="2026-10-13T02:33:48"
+	>
+	<testcase name="test_amr_interaction_history_snapshot_np2" classname="test_amr_interaction_history_snapshot_np2" time="0.77729" status="run">
+		<properties>
+			<property name="cmake_labels" value="backend;cpp-target:test_amr_interaction_history_snapshot;medium;mpi"/>
+		</properties>
+		<system-out>[==========] Running 14 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 14 tests from AmrInteractionHistorySnapshot
+[ RUN      ] AmrInteractionHistorySnapshot.ColdAndWarmCoarseRotationPreservesFineOracleAndEvolution
+[==========] Running 14 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 14 tests from AmrInteractionHistorySnapshot
+[ RUN      ] AmrInteractionHistorySnapshot.ColdAndWarmCoarseRotationPreservesFineOracleAndEvolution
+[       OK ] AmrInteractionHistorySnapshot.ColdAndWarmCoarseRotationPreservesFineOracleAndEvolution (150 ms)
+[ RUN      ] AmrInteractionHistorySnapshot.FullRingsAndDeclaredGhostsAreDeepCopiedAndDeduplicated
+[       OK ] AmrInteractionHistorySnapshot.ColdAndWarmCoarseRotationPreservesFineOracleAndEvolution (150 ms)
+[ RUN      ] AmrInteractionHistorySnapshot.FullRingsAndDeclaredGhostsAreDeepCopiedAndDeduplicated
+[       OK ] AmrInteractionHistorySnapshot.FullRingsAndDeclaredGhostsAreDeepCopiedAndDeduplicated (17 ms)
+[ ...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+</testsuite>

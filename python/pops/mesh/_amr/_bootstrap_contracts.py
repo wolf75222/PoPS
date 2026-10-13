@@ -60,15 +60,23 @@ class ProlongFromParent:
 
 
 @dataclass(frozen=True, slots=True)
+class NativeProgramSeed:
+    """Sample the analytic seed per level, then execute native field/map stages."""
+
+    def to_data(self) -> dict[str, Any]:
+        return {"method": "native_program_seed"}
+
+
+@dataclass(frozen=True, slots=True)
 class BootstrapSelection:
     subject: Any
-    method: AnalyticReprojection | ProlongFromParent
+    method: AnalyticReprojection | ProlongFromParent | NativeProgramSeed
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
         _handle(self.subject, where="BootstrapSelection.subject")
-        if type(self.method) not in (AnalyticReprojection, ProlongFromParent):
-            raise TypeError("bootstrap method must be AnalyticReprojection or ProlongFromParent")
+        if type(self.method) not in (AnalyticReprojection, ProlongFromParent, NativeProgramSeed):
+            raise TypeError("bootstrap method must be an exact supported initial source method")
 
     def to_data(self) -> dict[str, Any]:
         return {"subject": self.subject.canonical_identity(), **self.method.to_data()}

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="14" failures="0" disabled="0" errors="0" time="0.672" timestamp="2026-10-13T02:33:48.247" name="AllTests">
+  <properties>
+    <property name="pops_mpi_rank" value="1"/>
+    <property name="pops_mpi_expected_size" value="2"/>
+    <property name="pops_mpi_rank_source" value="PMI"/>
+  </properties>
+  <testsuite name="AmrInteractionHistorySnapshot" tests="14" failures="0" disabled="0" skipped="0" errors="0" time="0.672" timestamp="2026-10-13T02:33:48.247">
+    <testcase name="ColdAndWarmCoarseRotationPreservesFineOracleAndEvolution" file="$REPO/tests/cpp/unit/runtime/test_amr_interaction_history_snapshot.cpp" line="12" status="run" result="completed" time="0.15" timestamp="2026-10-13T02:33:48.247" classname="AmrInteractionHistorySnapshot" />
+    <testcase name="FullRingsAndDeclaredGhostsAreDeepCopiedAndDeduplicated" file="$REPO/tests/cpp/unit/runtime/test_amr_interaction_history_snapshot.cpp" line="56" status="run" result="completed" time="0.017" timestamp="2026-10-13T02:33:48.397" classname="AmrInteractionHistorySnapshot" />
+    <testcase name="ColdAcceptedSeedIsAlsoDeepCopied" file="$REPO/tests/cpp/unit/runtime/test_amr_interaction_history_snapshot.cpp" line="92" status="run" result="completed" time="0.009" timestamp="2026-10-13T02:33:48.414" classname="AmrInteractionHistorySnapshot" />
+    <testcase name="ExactDeclarationsAreIdempotentAndRegistrySeals" file="$REPO/tests/cpp/unit/runtime/test_amr_interaction_history_snapshot.cpp" line="103" status="run" result="completed" time="0.009" timestamp="2026-10-13T02:33:48.424" classname="AmrInteractionHistorySnapshot" />
+    <testcase name="RankLocalMetadataCorruptionsRefuseCaptureCollectively" file="$REPO/tests/cpp/unit/runtime/test_amr_interaction_history_snapshot.cpp" line="126" status="run" result="completed" time="0.217" timestamp="2026-10-13T02:33:48.433" classname="AmrInteractionHistorySnapshot" />
+    <testcase name="AttemptAndExactMacroTagsRefuseStaleImages" file="$REPO/tests/cpp/unit/runtime/test_amr_interaction_history_snapshot.cpp" line="162" status="run" result="completed" time="0.012" timestamp="2026-10-13T02:33:48.651" classname="AmrInteractionHistorySnapshot" />
+    <testcase name="ColdAndWarmRatioTwoRefuseWithoutAcceptedPublication" file="$REPO/tests/cpp/unit/runtime/test_amr_interaction_history_snapshot.cpp" line="189" status="run" result="completed" time="0.045" timestamp="2026-10-13T02:33:48.663" classname="AmrInteractionHistorySnapshot" />
+    <testcase name="SourceAndWorkspaceBudgetsFailBeforePublication" file="$REPO/tests/cpp/unit/runtime/test_amr_interaction_history_snapshot.cpp" line="215" status="run" result="completed" time="0.038" timestamp="2026-10-13T02:33:48.709" classname="AmrInteractionHistorySnapshot" />
+    <testcase name="AllocationVoteAndOverflowConvergeAndEmptyRegistryStaysEmpty" file="$REPO/tests/cpp/unit/runtime/test_amr_interaction_history_snapshot.cpp" line="246" status="run" result="completed" time="0.009" timestamp="2026-10-13T02:33:48.747" classname="AmrInteractionHistorySnapshot" />
+    <testcase name="SuccessfulAndCancelledMappingRevokeImages" file="$REPO/tests/cpp/unit/runtime/test_amr_interaction_history_snapshot.cpp" line="262" status="run" result="completed" time="0.013" timestamp="2026-10-13T02:33:48.757" classname="AmrInteractionHistorySnapshot" />
+    <testcase name="ContextRollbackRevokesAndNextAttemptRecaptures" file="$REPO/tests/cpp/unit/runtime/test_amr_interaction_history_snapshot.cpp" line="279" status="run" result="completed" time="0.01" timestamp="2026-10-13T02:33:48.770" classname="AmrInteractionHistorySnapshot" />
+    <testcase name="PublicCheckpointRestoreRejectsOldAttemptAtSameMacroTime" file="$REPO/tests/cpp/unit/runtime/test_amr_interaction_history_snapshot.cpp" line="294" status="run" result="completed" time="0.018" timestamp="2026-10-13T02:33:48.780" classname="AmrInteractionHistorySnapshot" />
+    <testcase name="PublicRuntimeRebuildRevokesColdSourceBeforeRebind" file="$REPO/tests/cpp/unit/runtime/test_amr_interaction_history_snapshot.cpp" line="318" status="run" result="completed" time="0.013" timestamp="2026-10-13T02:33:48.799" classname="AmrInteractionHistorySnapshot" />
+    <testcase name="OuterTransactionAndExplicitContextRollbackReplayMacroImages" file="$REPO/tests/cpp/unit/runtime/test_amr_interaction_history_snapshot.cpp" line="336" status="run" result="completed" time="0.106" timestamp="2026-10-13T02:33:48.813" classname="AmrInteractionHistorySnapshot" />
+  </testsuite>
+</testsuites>

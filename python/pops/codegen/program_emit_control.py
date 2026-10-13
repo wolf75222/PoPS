@@ -277,7 +277,7 @@ def _stage_fraction(value: Any) -> Fraction:
 
 
 def _emit_contiguous_rhs_group(
-        values: Sequence[Any], block_idx: Mapping[Any, int], var: dict[Any, str],
+        values: Sequence[Any], block_idx: Mapping[Any, int], var: dict[Any, Any],
         lines: list[str], group_identity: int, target: Any = "system", model: Any = None) -> None:
     """Emit one complete same-StagePoint residual group before any result is consumable."""
     from pops.codegen.program_emit_ops import _required_block_index, _rhs_flux_temporal_family
@@ -397,7 +397,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     var = {}
     from .program_value_authority import prepare_program_value_authority
     if value_authority is None:
-        value_authority = prepare_program_value_authority(program, model, field_plans or {})
+        value_authority = prepare_program_value_authority(program, model, field_plans or {}, target=target)
     var[("program_value_authority",)] = value_authority
     from .program_emit_moving import deferred_moving_rates
     var[("moving_deferred_rates",)] = deferred_moving_rates(program)
@@ -450,16 +450,19 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                 raise ValueError("AMR global field history storage @1 requires the primary logical clock; "
                                  "child-clock storage realization is not implemented")
             state_identity = storage_descriptor
-        from pops.codegen.program_history_identity import history_space_identity
+        from pops.codegen.program_history_identity import history_space_identity, history_ghost_depth
         space_identity = history_space_identity(program, name)
         row = history_manifest[name]
         interpolation = json.dumps(
             row["interpolation"], sort_keys=True, separators=(",", ":"))
-        prelude.append("ctx.register_history(%s, %d, %d, %d, %s, %s, %s, %s);"
+        prelude.append("ctx.register_history(%s, %d, %d, %d, %s, %s, %s, %s, %d);"
                        % (json.dumps(name), int(lag), -1 if ncomp is None else int(ncomp),
                           -1 if owner_index is None else int(owner_index),
                           json.dumps(state_identity), json.dumps(space_identity),
-                          json.dumps(row["clock"]), json.dumps(interpolation)))
+                          json.dumps(row["clock"]), json.dumps(interpolation),
+                          history_ghost_depth(program, name)))
+    from pops.codegen.program_emit_spatial_interaction import emit_history_source_declarations
+    prelude.extend(emit_history_source_declarations(program, block_idx, target=target))
     from pops.codegen.program_balance_due import (
         emit_balance_due_guards,
         prepare_balance_due_lowering,
@@ -475,13 +478,15 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     values = list(program._values)
     from pops.codegen.program_emit_hierarchy_regions import (
         hierarchy_region_solves, hierarchy_path_rhs, hierarchy_field_publications,
+        hierarchy_named_field_barriers,
         open_hierarchy_continuation,
     )
     hierarchy_solves = (hierarchy_region_solves(program) if target == "amr_system" else ())
     hierarchy_solve_ids = {value.id for value in hierarchy_solves}
     path_ids = {value.id for value in hierarchy_path_rhs(program)} if target == "amr_system" else set()
+    named_field_ids = {value.id for value in hierarchy_named_field_barriers(program)} if target == "amr_system" else set()
     hierarchy_enabled = target == "amr_system" and bool(
-        hierarchy_solves or path_ids or hierarchy_field_publications(program))
+        hierarchy_solves or path_ids or hierarchy_field_publications(program) or named_field_ids)
     legacy_path_prefix = bool(path_ids and any(
         "hierarchy_field_identity" not in value.attrs for value in hierarchy_solves))
     if legacy_path_prefix:
@@ -519,7 +524,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
             # Levels enter the same qualified barrier in order. Reset before its first gather,
             # including a retry after a prior attempt failed between two level callbacks.
             lines.append("if (ctx.level() == 0) ctx.begin_staged_field_publications();")
-        emitted = [] if hierarchy_solve else lines
+        named_field_solve = v.id in named_field_ids and v.op != "field_warm_start"
+        emitted = [] if hierarchy_solve or named_field_solve else lines
         _emit_op(program, v, base, committed_ids, var, model, emitted, prelude, block_idx,
                  target=target, field_plans=field_plans,
                  has_shared_interface_implicit_jacvec=(
@@ -536,6 +542,25 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                              else "ctx.stage_linear_initial_guess();")
             open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
                                         emitted, kind="linear_solve")
+            mapping_continuations += 1
+        elif named_field_solve:
+            from .program_value_authority import field_value_overrides_cpp
+            from .program_emit_field_routes import resolved_field_route, field_point_cpp
+            from pops.time._evaluation_point import evaluation_stage_fraction
+            field, _ = resolved_field_route(v.attrs["field"], field_plans)
+            point = evaluation_stage_fraction(v)
+            lines += ["{", "auto named_field_stage_%d = ctx.stage_evaluation_scope(%d, %d);" %
+                      (v.id, point.numerator, point.denominator)]
+            lines += field_point_cpp(program, v, field)
+            lines += ["ctx.stage_program_field_values_at(field_boundary_point_%d, %d, %s, {%s});" %
+                      (v.id, v.id, json.dumps(field), field_value_overrides_cpp(v, var, block_idx)), "}"]
+            open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
+                                        emitted, kind="named_field_solve")
+            mapping_continuations += 1
+        elif v.id in named_field_ids and v.op == "field_warm_start":
+            open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
+                                        ["ctx.publish_staged_field_warm_start(%d);" % v.id],
+                                        kind="field_warm_start")
             mapping_continuations += 1
         elif v.id in path_ids:
             open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
@@ -565,7 +590,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     from pops.codegen.program_transport_quadrature import emit_accepted_transport_exchanges
     lines.extend(emit_accepted_transport_exchanges(program, var, block_idx, model, target=target))
     from .program_integral_transfers import emit_integral_transfers
-    integral_transfers = emit_integral_transfers(program, var)
+    integral_transfers = emit_integral_transfers(program, var, model_authority=model)
     if target == "system":
         lines.extend(integral_transfers)
     # All outputs stay provisional until the one atomic publication group.
@@ -791,16 +816,16 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
             storage_descriptor = descriptor(program, name)
             if storage_descriptor is not None:
                 state_identity = storage_descriptor
-            from pops.codegen.program_history_identity import history_space_identity
+            from pops.codegen.program_history_identity import history_space_identity, history_ghost_depth
             space_identity = history_space_identity(program, name)
             row = manifests[name]
             interpolation = json.dumps(
                 row["interpolation"], sort_keys=True, separators=(",", ":"))
-            lines.append("ctx.register_history(%s, %d, %d, %d, %s, %s, %s, %s);"
+            lines.append("ctx.register_history(%s, %d, %d, %d, %s, %s, %s, %s, %d);"
                          % (json.dumps(name), int(lag), -1 if ncomp is None else int(ncomp),
                             int(block_idx[owner]), json.dumps(state_identity),
                             json.dumps(space_identity), json.dumps(row["clock"]),
-                            json.dumps(interpolation)))
+                            json.dumps(interpolation), history_ghost_depth(program, name)))
         return lines
 
     def emit_phase(phase: str) -> str:
@@ -998,7 +1023,7 @@ def _emit_subcycle(program: Any, v: Any, base: Any, var: Any, model: Any, lines:
     from .program_transport_quadrature import emit_accepted_transport_exchanges
     from .program_integral_transfers import emit_integral_transfers
     body_lines.extend(emit_accepted_transport_exchanges(program, sub, block_idx, model, region=v.id, target=target))
-    body_lines.extend(emit_integral_transfers(program, sub, region=v.id))
+    body_lines.extend(emit_integral_transfers(program, sub, region=v.id, model_authority=model))
     body_lines.append(
         "ctx.lincomb(%s, static_cast<pops::Real>(0), %s, "
         "static_cast<pops::Real>(1), %s);" % (x, x, sub[v.attrs["body"].id]))

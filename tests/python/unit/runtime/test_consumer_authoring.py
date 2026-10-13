@@ -680,5 +680,9 @@ def test_diagnostic_role_axes_preserve_identity_and_duplicate_guard(same_axis):
     output, = resolved.nodes
     first, second = output.diagnostic_quantities
     assert first.identity != second.identity
-    assert tuple(q.execution["role"] for q in (first, second)) == ("momentum:0", "momentum:1")
-    assert tuple(d.options()["role"] for d in diagnostics) == ("momentum:0", "momentum:1")
+    authored_roles = tuple(d.options()["role"] for d in diagnostics)
+    assert set(authored_roles) == {"momentum:0", "momentum:1"}
+    assert {q.execution["role"] for q in (first, second)} == set(authored_roles)
+    # The immutable output contract canonicalizes quantities by identity, rather than input order.
+    assert (first.identity.token, second.identity.token) == tuple(sorted(
+        (first.identity.token, second.identity.token)))

@@ -26,6 +26,7 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/amr_program_context_value_authority.inc",
         "pops/runtime/program/amr_program_context_principal.inc",
         "pops/runtime/program/amr_program_context_spatial_interaction.inc",
+        "pops/runtime/program/amr_program_context_spatial_history_snapshot.inc",
         "pops/runtime/program/amr_program_context_spatial.inc",
         "pops/runtime/program/amr_program_context_rhs_input_trace.inc",
         "pops/runtime/program/amr_program_context_path_rhs.inc",
@@ -73,6 +74,9 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
     }),
     "spatial_interaction": frozenset({
         "pops/runtime/program/amr_program_context_spatial_interaction.inc",
+    }),
+    "spatial_history_snapshot": frozenset({
+        "pops/runtime/program/amr_program_context_spatial_history_snapshot.inc",
     }),
     "rhs_input_trace": frozenset(
         {"pops/runtime/program/amr_program_context_rhs_input_trace.inc"}
@@ -161,6 +165,7 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     "value_authority": 320,
     "principal_publication": 80,
     "spatial_interaction": 640,
+    "spatial_history_snapshot": 240,
     # Immutable same-SSA parent inputs and synchronized conservative/NCP face publication
     # are new, separate responsibilities; both remain in the counted semantic closure.
     "rhs_input_trace": 150,
@@ -224,7 +229,8 @@ PROGRAM_CONTRACT_EXTENSIONS = {
 }
 PROGRAM_NEW_CONTRACT_BUDGET = (
     sum(PROGRAM_RESPONSIBILITY_BUDGETS[name] for name in (
-        "value_authority", "principal_publication", "spatial_interaction"))
+        "value_authority", "principal_publication", "spatial_interaction",
+        "spatial_history_snapshot"))
     + sum(budget for budget, _ in PROGRAM_CONTRACT_EXTENSIONS.values())
 )
 # Intentional Phase 0 policy envelopes: fragment and scaffolding growth remain
@@ -255,13 +261,17 @@ TENSOR_INPUT_HISTORY_PORT_BUDGET = 16 + 80 + 64 + 24
 # history references: 104 net lines across six counted fragments, with a bounded allowance.
 # Existing per-file, responsibility and scaffolding caps remain unchanged.
 SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET = 112
+# Canonical temporal producer comparison adds 27 lines in its existing family
+# owner and seven in its runtime caller. Count all 34 in both aggregate closures;
+# retain every responsibility, scaffolding and resource allowance unchanged.
+TEMPORAL_FAMILY_COMPARISON_FRAGMENT_BUDGET = 34
 PROGRAM_FRAGMENT_BUDGET = (
     7_730 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
     + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
     + HIERARCHY_BARRIER_FRAGMENT_BUDGET + FIELD_SCRATCH_FRAGMENT_BUDGET
     + PATH_INPUT_FRAGMENT_BUDGET + TENSOR_INPUT_HISTORY_PORT_BUDGET
     + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET + RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET
-    + PROGRAM_NEW_CONTRACT_BUDGET
+    + PROGRAM_NEW_CONTRACT_BUDGET + TEMPORAL_FAMILY_COMPARISON_FRAGMENT_BUDGET
 )
 # Context-owned cache acquisition and independent field-resource handles extend the
 # existing scaffolding; numerical solve and publication bodies remain counted above.
@@ -271,6 +281,11 @@ CONTEXT_RESOURCE_SCAFFOLDING_BUDGET = 32
 SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET = 200
 # Typed hierarchy tensor selection, retained boundaries and generation identities.
 HIERARCHY_TENSOR_SCAFFOLDING_BUDGET = 64
+# Macro-attempt keeper snapshots add typed declaration/image structs and a registry.
+# Their 24 root lines and the separately owned 240-line body remain fully counted.
+# The prior responsibility/resource caps remain unchanged; fragment/semantic aggregate
+# limits gain only the explicit 240-line snapshot foundation, with no excluded region.
+SPATIAL_HISTORY_SNAPSHOT_SCAFFOLDING_BUDGET = 24
 # Typed integral captures, retained composite sources, stage scopes and resource
 # leases add 134 net lines to the ranked root since b849289. Numerical bodies
 # remain in their independently counted fragments/upstream contracts.
@@ -279,6 +294,7 @@ PROGRAM_SCAFFOLDING_BUDGET = (
     1_850 + CONTEXT_RESOURCE_SCAFFOLDING_BUDGET
     + SYNCHRONIZED_CONTINUATION_SCAFFOLDING_BUDGET
     + HIERARCHY_TENSOR_SCAFFOLDING_BUDGET
+    + SPATIAL_HISTORY_SNAPSHOT_SCAFFOLDING_BUDGET
 )
 PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
     9_580 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
@@ -288,14 +304,21 @@ PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
     + PATH_INPUT_FRAGMENT_BUDGET + TENSOR_INPUT_HISTORY_PORT_BUDGET
     + HIERARCHY_TENSOR_SCAFFOLDING_BUDGET
     + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET + RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET
-    + PROGRAM_NEW_CONTRACT_BUDGET
+    + PROGRAM_NEW_CONTRACT_BUDGET + TEMPORAL_FAMILY_COMPARISON_FRAGMENT_BUDGET
 )
+PROGRAM_SEMANTIC_HELPER_PATHS = frozenset({
+    "pops/runtime/program/prepared_program_field_stages.hpp",
+    "pops/runtime/program/prepared_hierarchy_barrier.hpp",
+})
 SEMANTIC_AUTHORITIES = frozenset(
     {
         "pops/numerics/time/amr/reflux/amr_flux_execution.hpp",
         "pops/numerics/time/amr/reflux/amr_flux_preparation.hpp",
         "pops/numerics/time/amr/levels/amr_subcycling_plan.hpp",
         "pops/numerics/time/amr/levels/amr_subcycling_engine.hpp",
+        # Hierarchy Field staging is a real upstream owner: traverse and count
+        # its body in the unchanged semantic closure instead of hiding a fragment.
+        *PROGRAM_SEMANTIC_HELPER_PATHS,
         *CONTEXT_FRAGMENT_PATHS,
     }
 )
@@ -305,6 +328,7 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/amr/transfer/temporal_interpolation_provider.hpp",
         "pops/amr/transfer/transfer_provider.hpp",
         "pops/core/foundation/types.hpp",
+        "pops/core/foundation/kokkos_env.hpp",
         "pops/core/identity/prepared_provider.hpp",
         "pops/core/identity/sha256.hpp",
         "pops/mesh/execution/for_each.hpp",
@@ -338,6 +362,9 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/program/prepared_amr_spatial_residual.hpp",
         "pops/runtime/program/prepared_amr_field_residual.hpp",
         "pops/runtime/program/prepared_integral_capture.hpp",
+        "pops/runtime/program/prepared_program_field_stages.hpp",
+        "pops/runtime/program/prepared_hierarchy_barrier.hpp",
+        "pops/runtime/program/prepared_resource_lifetime.hpp",
         "pops/runtime/program/program_value_authority.hpp",
         "pops/runtime/program/spatial_direct_interaction.hpp",
         "pops/runtime/program/spatial_interaction_history_source.hpp",
@@ -348,6 +375,7 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/program/step_transaction.hpp",
         "pops/runtime/program/collective_step_rejection.hpp",
         "pops/runtime/system/provider_storage_binding.hpp",
+        "pops/runtime/system/prepared_field_rhs_inputs.hpp",
     }
 )
 INCLUDE_RE = re.compile(r'^\s*#include\s*(?:<(pops/[^>]+)>|"(pops/[^"]+)")', re.MULTILINE)
@@ -425,7 +453,8 @@ def _resource_authority_scaffolding_lines() -> int:
         (root, "  class StageEvaluationScope", "  class LogicalEvaluationScope"),
         (root, "  template <class Resource, class Matches, class... Args>\n  PreparedResourceLease<Resource>",
          "  // Class-scope responsibility fragments"),
-        (root, "  void reached_duration(", "  template <int TestDim>"),
+        (root, "  void reached_duration(",
+         "  template <int TestDim>\n  friend struct detail::AmrProgramHistoryRemapCollectiveTestAccess;"),
     ))
     source = (INCLUDE / root).read_text(encoding="utf-8")
     declarations = (
@@ -507,10 +536,12 @@ def test_amr_consumer_closures_are_explicit_bounded_and_acyclic() -> None:
     # Persistent synchronized continuations add retained state and rollback to this closure.
     assert len(_source(closures["subcycling"]).splitlines()) <= 1_650
     program_fragments = tuple(
-        path for path in closures["program"] if path in CONTEXT_FRAGMENT_PATHS
+        path for path in closures["program"]
+        if path in CONTEXT_FRAGMENT_PATHS | PROGRAM_SEMANTIC_HELPER_PATHS
     )
     program_scaffolding = tuple(
-        path for path in closures["program"] if path not in CONTEXT_FRAGMENT_PATHS
+        path for path in closures["program"]
+        if path not in CONTEXT_FRAGMENT_PATHS | PROGRAM_SEMANTIC_HELPER_PATHS
     )
     assert len(_source(program_fragments).splitlines()) <= PROGRAM_FRAGMENT_BUDGET
     resource_lines = _resource_authority_scaffolding_lines()
@@ -549,6 +580,10 @@ def test_new_program_upstream_contracts_have_exact_ranked_owners_and_bounds() ->
             (128, "class PreparedIntegralCapture"),
         "pops/runtime/program/program_value_authority.hpp":
             (480, "class ProgramValueAuthority"),
+        "pops/runtime/program/prepared_program_field_stages.hpp":
+            (240, "class PreparedProgramFieldStages"),
+        "pops/runtime/program/prepared_hierarchy_barrier.hpp":
+            (128, "class PreparedHierarchyBarrier"),
         "pops/runtime/program/spatial_direct_interaction.hpp":
             (384, "direct_spatial_interaction"),
         "pops/runtime/program/spatial_interaction_history_source.hpp":

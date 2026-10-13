@@ -222,6 +222,7 @@ struct ProgramCheckpointHistoryMetadata {
   std::string interpolation_identity;
   int depth = 0;
   int components = -1;
+  int ghost_depth = -1;
 
   friend bool operator==(const ProgramCheckpointHistoryMetadata&,
                          const ProgramCheckpointHistoryMetadata&) = default;
@@ -338,6 +339,8 @@ inline ProgramCheckpointMetadata read_program_checkpoint_metadata(pops::dynlib::
       detail::require_module_symbol<IntegerFn>(dl_handle, "pops_program_checkpoint_history_depth");
   const IntegerFn history_components = detail::require_module_symbol<IntegerFn>(
       dl_handle, "pops_program_checkpoint_history_components");
+  const IntegerFn history_ghost_depth = detail::require_module_symbol<IntegerFn>(
+      dl_handle, "pops_program_checkpoint_history_ghost_depth");
 
   ProgramCheckpointMetadata metadata;
   metadata.histories.reserve(static_cast<std::size_t>(history_count));
@@ -357,9 +360,11 @@ inline ProgramCheckpointMetadata read_program_checkpoint_metadata(pops::dynlib::
         history_interpolation, "pops_program_checkpoint_history_interpolation_identity", index);
     row.depth = history_depth(index);
     row.components = history_components(index);
-    if (row.program_owner < 0 || row.depth < 2 || row.components == 0 || row.components < -1)
+    row.ghost_depth = history_ghost_depth(index);
+    if (row.program_owner < 0 || row.depth < 2 || row.components == 0 || row.components < -1 ||
+        row.ghost_depth < -1)
       throw std::runtime_error(
-          "compiled Program checkpoint history metadata has an invalid owner/depth/components");
+          "compiled Program checkpoint history metadata has an invalid owner/depth/components/halo");
     if (!history_names.insert(row.name).second)
       throw std::runtime_error(
           "compiled Program checkpoint metadata contains a duplicate history identity");

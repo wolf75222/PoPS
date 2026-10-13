@@ -63,7 +63,7 @@ def test_ghost_depth_by_block_is_serializable_plain_values():
 
 # --- 3: build_arguments populates the per-block map keyed by committed block --------------------
 
-def _compiled(blocks, *, ghost_depth=2):
+def _compiled(blocks, artifact_directory, *, ghost_depth=2):
     """Build the exact compiled artifact around a real typed Program, without a shared object."""
     module = Module("ghost-depth-model")
     state = module.state_space("U", ("rho", "mx", "my"))
@@ -108,7 +108,7 @@ def _compiled(blocks, *, ghost_depth=2):
     )
 
     class _CompiledProgram:
-        so_path = "/nonexistent/ghost-depth-problem.so"
+        so_path = str(artifact_directory / "ghost-depth-problem.so")
         target = "system"
         backend = "production"
         abi_key = "SIG|c++|c++23"
@@ -142,7 +142,7 @@ def _compiled(blocks, *, ghost_depth=2):
     models = []
     for resolved in plan.blocks:
         model = CompiledModel(
-            so_path="/nonexistent/ghost-depth.so", backend="production",
+            so_path=str(artifact_directory / "ghost-depth.so"), backend="production",
             cons_names=("rho", "mx", "my"),
             cons_roles=("Density", "MomentumX", "MomentumY"),
             prim_names=("rho", "mx", "my"), n_vars=3, gamma=1.4, n_aux=0,
@@ -167,9 +167,9 @@ def _compiled(blocks, *, ghost_depth=2):
     return artifact
 
 
-def test_build_arguments_keys_ghost_depth_by_block():
+def test_build_arguments_keys_ghost_depth_by_block(tmp_path):
     from pops.codegen.inspect_compiled import build_arguments
-    args = build_arguments(_compiled(("ions", "electrons")))
+    args = build_arguments(_compiled(("ions", "electrons"), tmp_path))
     lr = args.layout_runtime
     assert set(lr["ghost_depth_by_block"]) == {"ions", "electrons"}, "one entry per committed block"
     # Every block shares the scalar depth today (one physics model per Program).
@@ -178,14 +178,14 @@ def test_build_arguments_keys_ghost_depth_by_block():
         "per-block depth agrees with the scalar"
 
 
-def test_build_arguments_derives_weno_depth_and_refuses_missing_plan_depth():
+def test_build_arguments_derives_weno_depth_and_refuses_missing_plan_depth(tmp_path):
     from pops.codegen.inspect_compiled import build_arguments
 
-    args = build_arguments(_compiled(("ions",), ghost_depth=3))
+    args = build_arguments(_compiled(("ions",), tmp_path / "weno", ghost_depth=3))
     assert args.layout_runtime["ghost_depth"] == 3
     assert args.layout_runtime["ghost_depth_by_block"] == {"ions": 3}
     with pytest.raises(ValueError, match="no exact ghost depth"):
-        build_arguments(_compiled(("ions",), ghost_depth=None))
+        build_arguments(_compiled(("ions",), tmp_path / "missing", ghost_depth=None))
 
 
 def test_compiled_ghost_depth_is_maximum_of_spatial_and_field_plans():
@@ -216,9 +216,9 @@ def test_compiled_ghost_depth_is_maximum_of_spatial_and_field_plans():
 
 # --- 4: build_compiled_manifest threads the per-block map ---------------------------------------
 
-def test_build_compiled_manifest_threads_per_block_ghost_depth():
+def test_build_compiled_manifest_threads_per_block_ghost_depth(tmp_path):
     from pops.external.artifact_manifest import build_compiled_manifest
-    manifest = build_compiled_manifest(_compiled(("ions",)))
+    manifest = build_compiled_manifest(_compiled(("ions",), tmp_path))
     assert manifest.ghost_depth_by_block == {"ions": manifest.ghost_depth}, \
         "the manifest carries per-block ghost depth from arguments()"
 

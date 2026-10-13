@@ -25,7 +25,7 @@ def _frontier_values(program):
             if isinstance(ref, _ProgramValueBase):
                 pending.append(ref)
             elif isinstance(ref, _AffineExpressionBase):
-                pending.extend(term for term, _ in ref.terms)
+                pending.extend(term for term, _ in getattr(ref, "terms"))
     return values
 
 

@@ -3,10 +3,12 @@
 #include <pops/numerics/elliptic/nd/cartesian_poisson.hpp>
 #include <pops/runtime/system/exact_named_field.hpp>
 #include <pops/runtime/system/exact_field_marshaling.hpp>
+#include <pops/parallel/solve_report_consensus.hpp>
 
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -24,6 +26,20 @@ Extent<Dim> uniform_extent(std::int64_t value) {
   for (int axis = 0; axis < Dim; ++axis)
     result[axis] = value;
   return result;
+}
+
+template <int Dim>
+Extent<Dim> world_rank_extent() {
+  auto extent = uniform_extent<Dim>(1);
+  extent[0] = pops::n_ranks();
+  return extent;
+}
+
+template <int Dim>
+Index<Dim> world_rank_coordinate() {
+  Index<Dim> coordinate{};
+  coordinate[0] = pops::my_rank();
+  return coordinate;
 }
 
 template <int Dim>
@@ -138,7 +154,7 @@ void expect_manufactured_mode(CartesianBoundaryKind boundary) {
   const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(
       domain, uniform_coordinate<Dim>(Real{0}), uniform_coordinate<Dim>(Real{1}));
   const BoxArray<Dim> layout = BoxArray<Dim>::from_domain(domain, uniform_extent<Dim>(cells));
-  const RankSpace<Dim> ranks{Index<Dim>{}, uniform_extent<Dim>(1)};
+  const RankSpace<Dim> ranks{Index<Dim>{}, world_rank_extent<Dim>()};
   const auto distribution = Distribution<Dim>::replicated(layout, ranks);
   std::array<bool, Dim> periodic{};
   periodic.fill(boundary == CartesianBoundaryKind::periodic);
@@ -148,10 +164,10 @@ void expect_manufactured_mode(CartesianBoundaryKind boundary) {
       boundary == CartesianBoundaryKind::periodic ? CartesianBoundaryKind::dirichlet : boundary);
   options.relative_tolerance = Real{1e-12};
   options.maximum_iterations = 32;
-  CartesianPoissonSolver<Dim> solver(geometry, layout, distribution, Index<Dim>{}, topology,
+  CartesianPoissonSolver<Dim> solver(geometry, layout, distribution, world_rank_coordinate<Dim>(), topology,
                                      options, lane);
   install_mode_nullspace(solver, geometry, boundary);
-  MultiFab<Dim> warm_start(layout, distribution, Index<Dim>{}, 1, uniform_extent<Dim>(1));
+  MultiFab<Dim> warm_start(layout, distribution, world_rank_coordinate<Dim>(), 1, uniform_extent<Dim>(1));
   warm_start.set_val(Real{0});
 
   const Real pi = std::acos(Real{-1});
@@ -186,9 +202,9 @@ void expect_exact_marshaling_round_trip() {
   }
   const Box<Dim> domain{Index<Dim>{}, upper};
   const BoxArray<Dim> layout = BoxArray<Dim>::from_domain(domain, patch);
-  const RankSpace<Dim> ranks{Index<Dim>{}, uniform_extent<Dim>(1)};
+  const RankSpace<Dim> ranks{Index<Dim>{}, world_rank_extent<Dim>()};
   const auto distribution = Distribution<Dim>::replicated(layout, ranks);
-  MultiFab<Dim> field(layout, distribution, Index<Dim>{}, 2, uniform_extent<Dim>(1));
+  MultiFab<Dim> field(layout, distribution, world_rank_coordinate<Dim>(), 2, uniform_extent<Dim>(1));
   field.set_val(Real{-9});
 
   const std::size_t cells = runtime::system::marshaling::checked_cell_count(domain);
@@ -236,17 +252,22 @@ void expect_exact_ranked_newton() {
   for (int axis = 0; axis < Dim; ++axis)
     upper[axis] = 3;
   const Box<Dim> domain{Index<Dim>{}, upper};
-  const BoxArray<Dim> layout = BoxArray<Dim>::from_domain(domain, uniform_extent<Dim>(4));
-  const RankSpace<Dim> ranks{Index<Dim>{}, uniform_extent<Dim>(1)};
-  const auto distribution = Distribution<Dim>::replicated(layout, ranks);
+  auto patch_extent = uniform_extent<Dim>(4);
+  patch_extent[0] = std::max<std::int64_t>(1, 4 / lane.size());
+  const BoxArray<Dim> layout = BoxArray<Dim>::from_domain(domain, patch_extent);
+  const RankSpace<Dim> ranks{Index<Dim>{}, world_rank_extent<Dim>()};
+  std::vector<Index<Dim>> owners(layout.size());
+  for (std::size_t patch = 0; patch < owners.size(); ++patch)
+    owners[patch][0] = static_cast<int>(patch % lane.size());
+  const auto distribution = Distribution<Dim>::partitioned(layout, ranks, std::move(owners));
   FieldNewtonOptions options;
   options.tolerance = Real(1e-12);
   options.max_iterations = 12;
   options.linear_tolerance = Real(1e-12);
   options.linear_max_iterations = 8;
   options.restart = 4;
-  FieldNewtonKrylovWorkspace<Dim> workspace(layout, distribution, Index<Dim>{}, options);
-  MultiFab<Dim> iterate(layout, distribution, Index<Dim>{}, 1, Extent<Dim>{});
+  FieldNewtonKrylovWorkspace<Dim> workspace(layout, distribution, world_rank_coordinate<Dim>(), options);
+  MultiFab<Dim> iterate(layout, distribution, world_rank_coordinate<Dim>(), 1, Extent<Dim>{});
   iterate.set_val(Real(1));
 
   const SolveReport report = workspace.solve(
@@ -296,14 +317,14 @@ TEST(test_cartesian_poisson_nd, named_provider_publishes_only_after_candidate_ac
   const Geometry<2> geometry =
       Geometry<2>::from_bounds(domain, RealVector<2>{0, 0}, RealVector<2>{1, 1});
   const BoxArray<2> layout = BoxArray<2>::from_domain(domain, Extent<2>{cells, cells});
-  const RankSpace<2> ranks{Index<2>{}, Extent<2>{1, 1}};
+  const RankSpace<2> ranks{Index<2>{}, world_rank_extent<2>()};
   const auto distribution = Distribution<2>::replicated(layout, ranks);
   const BoundaryTopology<2> topology = BoundaryTopology<2>::axis_periodic({true, true});
   auto options = CartesianPoissonOptions<2>::from_topology(topology);
   options.relative_tolerance = Real{1e-12};
   runtime::field::NamedFieldOutput<2> output(3, 1);
   runtime::system::ExactNamedField<2> provider("electric", "plasma", output, geometry, layout,
-                                               distribution, Index<2>{}, topology, options, 1,
+                                               distribution, world_rank_coordinate<2>(), topology, options, 1,
                                                lane);
   PreparedFieldNullspace<2> prepared_nullspace;
   prepared_nullspace.provider_identity = "tests.constant-nullspace";
@@ -314,7 +335,7 @@ TEST(test_cartesian_poisson_nd, named_provider_publishes_only_after_candidate_ac
   provider.install_nullspace(std::move(prepared_nullspace),
                              PreparedVectorDistribution<2>::replicated());
 
-  MultiFab<2> state(layout, distribution, Index<2>{}, 1, Extent<2>{});
+  MultiFab<2> state(layout, distribution, world_rank_coordinate<2>(), 1, Extent<2>{});
   const Real pi = std::acos(Real{-1});
   const Real inverse_spacing = Real{1} / geometry.spacing(0);
   const Real eigenvalue = Real{2} * Real{4} * std::sin(pi / Real{cells}) *
@@ -329,10 +350,10 @@ TEST(test_cartesian_poisson_nd, named_provider_publishes_only_after_candidate_ac
   const std::vector<const MultiFab<2>*> states{&state};
   SolveReport report = provider.solve_candidate(states, nullptr, lane);
   ASSERT_TRUE(report.solved_value_available()) << report.reason;
-  EXPECT_DOUBLE_EQ(reduce_max(provider.accepted_outputs(), 0), Real{0});
+  EXPECT_DOUBLE_EQ(reduce_max_local(provider.accepted_outputs(), 0), Real{0});
   provider.validate_candidate();
   provider.reject_candidate();
-  EXPECT_DOUBLE_EQ(reduce_max(provider.accepted_potential(), 0), Real{0});
+  EXPECT_DOUBLE_EQ(reduce_max_local(provider.accepted_potential(), 0), Real{0});
 
   report = provider.solve_candidate(states, nullptr, lane);
   ASSERT_TRUE(report.solved_value_available()) << report.reason;
@@ -340,8 +361,115 @@ TEST(test_cartesian_poisson_nd, named_provider_publishes_only_after_candidate_ac
   provider.accept_candidate();
   EXPECT_LT(maximum_error(provider.accepted_outputs(), geometry, CartesianBoundaryKind::periodic),
             Real{5e-11});
-  EXPECT_GT(reduce_max(provider.accepted_outputs(), 1), Real{0});
-  EXPECT_GT(reduce_max(provider.accepted_outputs(), 2), Real{0});
+  EXPECT_GT(reduce_max_local(provider.accepted_outputs(), 1), Real{0});
+  EXPECT_GT(reduce_max_local(provider.accepted_outputs(), 2), Real{0});
+}
+
+TEST(test_cartesian_poisson_nd, warm_start_is_separate_from_outputs_and_refuses_nonfinite_collectively) {
+  const ExecutionLane lane = ExecutionLane::world("tests.cartesian-poisson.warm-start");
+  const Box<2> domain{Index<2>{0, 0}, Index<2>{7, 7}};
+  const auto geometry = Geometry<2>::from_bounds(domain, RealVector<2>{0, 0}, RealVector<2>{1, 1});
+  const auto layout = BoxArray<2>::from_domain(domain, Extent<2>{8, 8});
+  const RankSpace<2> ranks{Index<2>{}, Extent<2>{lane.size(), 1}};
+  const Index<2> local_rank{lane.rank(), 0};
+  const auto distribution = Distribution<2>::replicated(layout, ranks);
+  const auto topology = BoundaryTopology<2>::axis_periodic({true, true});
+  const auto options = CartesianPoissonOptions<2>::from_topology(topology);
+  runtime::field::NamedFieldOutput<2> output(3, 1);
+  runtime::system::ExactNamedField<2> field("warm", "plasma", output, geometry, layout,
+      distribution, local_rank, topology, options, 1, lane);
+  const auto before = field.accepted_state();
+  EXPECT_FALSE(field.last_accepted_solve_report().has_value());
+  MultiFab<2> seed(layout, distribution, local_rank, 1, Extent<2>{});
+  seed.set_val(Real(7));
+  field.publish_warm_start(seed, lane);
+  EXPECT_FALSE(field.last_accepted_solve_report().has_value());
+  EXPECT_DOUBLE_EQ(reduce_max_local(field.accepted_potential(), 0), Real(7));
+  EXPECT_DOUBLE_EQ(reduce_max_local(field.accepted_outputs(), 0), Real(0));
+  EXPECT_TRUE(field.warm_start_pending());
+  EXPECT_THROW(field.dependency_potential(), std::logic_error);
+  if (lane.rank() == 0)
+    seed.set_val(std::numeric_limits<Real>::quiet_NaN());
+  EXPECT_THROW(field.publish_warm_start(seed, lane), std::invalid_argument);
+  EXPECT_DOUBLE_EQ(reduce_max_local(field.accepted_potential(), 0), Real(7));
+  MultiFab<2> wrong(layout, distribution, local_rank, lane.rank() == 0 ? 2 : 1, Extent<2>{});
+  EXPECT_ANY_THROW(field.publish_warm_start(wrong, lane));
+  EXPECT_DOUBLE_EQ(reduce_max_local(field.accepted_potential(), 0), Real(7));
+  const auto pending = field.accepted_state();
+  field.restore_accepted_state(before);
+  EXPECT_FALSE(field.warm_start_pending());
+  EXPECT_NO_THROW(field.dependency_potential());
+  field.restore_accepted_state(pending);
+  EXPECT_TRUE(field.warm_start_pending());
+  EXPECT_THROW(field.dependency_potential(), std::logic_error);
+
+  PreparedFieldNullspace<2> nullspace;
+  nullspace.provider_identity = "tests.warm-start.constant-nullspace";
+  nullspace.provider_version = 1;
+  nullspace.exact_prepared_contract = "tests.warm-start.constant-nullspace@1";
+  nullspace.plan = constant_mean_zero_nullspace<2>(
+      "warm-constant-mode", "unit-test", geometry.spacing(0) * geometry.spacing(1));
+  field.install_nullspace(std::move(nullspace), PreparedVectorDistribution<2>::replicated());
+  field.add_rhs(0, [](const MultiFab<2>& source, MultiFab<2>& rhs) {
+    elliptic::nd::detail::copy_component(source, 0, rhs, 0);
+  }, Real(1));
+  seed.set_val(Real(0));
+  const std::vector<const MultiFab<2>*> states{&seed};
+  auto solved = field.solve_candidate(states, nullptr, lane);
+  ASSERT_TRUE(solved.solved_value_available()) << solved.reason;
+  EXPECT_NO_THROW(field.dependency_potential());
+  field.reject_candidate();
+  EXPECT_FALSE(field.last_accepted_solve_report().has_value());
+  EXPECT_THROW(field.dependency_potential(), std::logic_error);
+  solved = field.solve_candidate(states, nullptr, lane);
+  ASSERT_TRUE(solved.solved_value_available()) << solved.reason;
+  field.accept_candidate();
+  ASSERT_TRUE(field.last_accepted_solve_report().has_value());
+  EXPECT_TRUE(field.last_accepted_solve_report()->solved());
+  EXPECT_FALSE(field.warm_start_pending());
+  EXPECT_NO_THROW(field.dependency_potential());
+  EXPECT_DOUBLE_EQ(reduce_max_local(field.accepted_potential(), 0), Real(0));
+  const auto accepted_with_report = field.accepted_state();
+  seed.set_val(Real(7));
+  field.publish_warm_start(seed, lane);
+  EXPECT_TRUE(field.last_accepted_solve_report()->solved());
+  EXPECT_EQ(field.last_accepted_solve_report()->residual_norm, Real(0));
+  seed.set_val(std::numeric_limits<Real>::quiet_NaN());
+  const auto failed = field.solve_candidate(states, nullptr, lane);
+  EXPECT_FALSE(failed.solved());
+  EXPECT_EQ(field.last_accepted_solve_report()->residual_norm, Real(0));
+  field.reject_candidate();
+  field.restore_accepted_state(accepted_with_report);
+  EXPECT_FALSE(field.warm_start_pending());
+  EXPECT_EQ(field.last_accepted_solve_report()->residual_norm, Real(0));
+  (void)field.accepted_potential_for_restore();
+  EXPECT_FALSE(field.last_accepted_solve_report().has_value());
+}
+
+TEST(test_cartesian_poisson_nd, exact_report_consensus_authenticates_roundoff_evidence) {
+  const ExecutionLane lane = ExecutionLane::world("tests.solve-report.roundoff-consensus");
+  SolveReport report;
+  report.residual_evaluation = ResidualEvaluationEvidence{
+      Real(1), Real(2), Real(3), Real(4), Real(5), Real(6), false, Real(7)};
+  report.mark_solved("roundoff-consensus-test");
+  ExactSolveReportConsensusScratch scratch;
+  EXPECT_TRUE(scratch.agrees(report, lane));
+  if (lane.size() == 1) return;
+  const std::array<Real ResidualEvaluationEvidence::*, 6> quantities{
+      &ResidualEvaluationEvidence::initial_residual_norm, &ResidualEvaluationEvidence::rhs_norm,
+      &ResidualEvaluationEvidence::initial_evaluation_bound, &ResidualEvaluationEvidence::evaluation_bound,
+      &ResidualEvaluationEvidence::requested_threshold, &ResidualEvaluationEvidence::applied_threshold};
+  for (int difference = 0; difference < 10; ++difference) {
+    auto changed = report;
+    if (lane.rank() == 0) {
+      if (difference == 0) changed.residual_evaluation.reset();
+      else if (difference == 1) changed.residual_evaluation->roundoff_limited = true;
+      else if (difference == 2) changed.residual_evaluation->relative_to_rhs_upper.reset();
+      else if (difference == 3) changed.residual_evaluation->relative_to_rhs_upper = Real(8);
+      else (*changed.residual_evaluation).*quantities[static_cast<std::size_t>(difference-4)] += Real(1);
+    }
+    EXPECT_FALSE(scratch.agrees(changed, lane)) << "evidence field " << difference;
+  }
 }
 
 TEST(test_cartesian_poisson_nd, remote_halo_requirement_fails_before_candidate_mutation) {
@@ -354,11 +482,15 @@ TEST(test_cartesian_poisson_nd, remote_halo_requirement_fails_before_candidate_m
       Distribution<1>::partitioned(layout, ranks, std::vector<Index<1>>{Index<1>{0}, Index<1>{1}});
   const BoundaryTopology<1> topology = BoundaryTopology<1>::axis_periodic({false});
   auto options = CartesianPoissonOptions<1>::from_topology(topology);
-  MultiFab<1> warm_start(layout, distribution, Index<1>{0}, 1, Extent<1>{1});
+  const Index<1> local_rank{lane.size() == 1 ? 0 : lane.rank()};
+  MultiFab<1> warm_start(layout, distribution, local_rank, 1, Extent<1>{1});
   warm_start.set_val(Real{5});
-  EXPECT_THROW((void)CartesianPoissonSolver<1>(geometry, layout, distribution, Index<1>{0},
-                                               topology, options, lane),
-               std::logic_error);
+  if (lane.size() == 1)
+    EXPECT_THROW((void)CartesianPoissonSolver<1>(geometry, layout, distribution, local_rank,
+                                                topology, options, lane), std::logic_error);
+  else
+    EXPECT_THROW((void)CartesianPoissonSolver<1>(geometry, layout, distribution, local_rank,
+                                                topology, options, lane), std::runtime_error);
   for (std::size_t local = 0; local < warm_start.local_size(); ++local) {
     const auto& fab = static_cast<const MultiFab<1>&>(warm_start).fab(local);
     auto host = fab.create_host_mirror();

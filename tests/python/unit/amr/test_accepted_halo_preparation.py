@@ -1,10 +1,10 @@
 """SOURCE_ONLY exact authoring/identity refusals; no Native readiness claim."""
-import sys
 import pytest
 import pops
 from pops.amr import AMRExecution, AcceptedHaloPreparation
 from pops.identity import make_identity
 from tests.python.support.tag_selection_case import build
+from tests.python.support.python_source_authority import native_module_bindings
 
 
 def test_default_execution_retains_exact_legacy_identity_shape():
@@ -33,14 +33,16 @@ def test_opted_effect_and_ranked_extent_enter_execution_identity(mode):
 @pytest.mark.parametrize("buffer", [0, 1])
 @pytest.mark.parametrize("transfer", ["linear", "injection"])
 def test_actual_public_stationary_case_resolves_with_explicit_numerical_effect(shape, buffer, transfer):
+    native_before = native_module_bindings()
     case, layout = build(shape, buffer, transfer)
     resolved = pops.resolve(pops.validate(case), layout=layout)
     assert resolved is not None
     assert layout.runtime_layout_data()["execution"]["accepted_halo"]["effect"] == "prepare_accepted_halo"
-    assert not any(name == "_pops" or name.endswith("._pops") for name in sys.modules)
+    assert native_module_bindings() == native_before
 
 
 def test_actual_program_exports_its_typed_primary_clock_for_topology_relay():
+    native_before = native_module_bindings()
     import json
     from pops.codegen.program_emit_amr import _emit_checkpoint_shape_metadata
     case, _ = build((8, 12), 1, "injection")
@@ -51,4 +53,4 @@ def test_actual_program_exports_its_typed_primary_clock_for_topology_relay():
                 '  return %s;\n}\n' % json.dumps(manifest["primary_clock"]))
     assert expected in source
     assert manifest["primary_clock"] == program.clock.qualified_id
-    assert not any(name == "_pops" or name.endswith("._pops") for name in sys.modules)
+    assert native_module_bindings() == native_before

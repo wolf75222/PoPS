@@ -1,0 +1,61 @@
+{
+  "schema": "pops.c78-mpi-checkpoint-followup-installed-identity@1",
+  "source_commit": "c78c49f3621e0e2fc4ef1b5d074dcf68ab0efac9",
+  "cpp_source_commit": "c78c49f3621e0e2fc4ef1b5d074dcf68ab0efac9",
+  "header_signature": "d1a442e561deb4884c04ccf3ce6bac5bb267e0358ed6a3ac998dfc553eb2856f",
+  "abi_version": 13,
+  "native_variants": [
+    {
+      "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.3.34.2);std=202002L;headers=d1a442e561deb4884c04ccf3ce6bac5bb267e0358ed6a3ac998dfc553eb2856f;kokkos=1;stdlib=libc++_220106;mpi=1;mpi_abi=40d6e65d7f79f247f867711ee0854b6220e3b9c1950da10f38add6e0977b9e89;dim=1",
+      "dimension": 1,
+      "has_kokkos": true,
+      "has_mpi": true,
+      "path": "dim1/_pops.cpython-312-darwin.so",
+      "sha256": "1718bbbb2d86f162c21c5a55469db6f13fb2dd045f2a83a8ae58c00d00633f43",
+      "version": "1.1.0"
+    },
+    {
+      "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.3.34.2);std=202002L;headers=d1a442e561deb4884c04ccf3ce6bac5bb267e0358ed6a3ac998dfc553eb2856f;kokkos=1;stdlib=libc++_220106;mpi=1;mpi_abi=40d6e65d7f79f247f867711ee0854b6220e3b9c1950da10f38add6e0977b9e89;dim=2",
+      "dimension": 2,
+      "has_kokkos": true,
+      "has_mpi": true,
+      "path": "dim2/_pops.cpython-312-darwin.so",
+      "sha256": "f80c77ee029f8ef8508187eec98d7e741ae1893573500c1b0cbdf4a7986ac859",
+      "version": "1.1.0"
+    }
+  ],
+  "source_receipt_origins": [
+    {
+      "ref": "external-evidence:ci/c78c49f-installed-dim1-identity.json",
+      "sha256": "27d4407c2b5b8a9a4b2006e263c7bdd3005170dbed2dfad7c558ee0e4f8b46e3"
+    },
+    {
+      "ref": "external-evidence:ci/c78c49f-installed-dim2-identity.json",
+      "sha256": "9f81252cb873662228816bb6a097244c2f761aacaa477b406d9a3a43991b48f4"
+    }
+  ],
+  "installed_python_source_parity": {
+    "files": 801,
+    "recorded_source_and_installed_bytes_equal": true,
+    "both_dimension_receipts_same_tree": true,
+    "manifest_digest": "8f5dd9a6e985408dcd21d92d65eab48cea5892817f843d5e8a0832f5c056ec57",
+    "manifest_digest_encoding": "SHA256 of UTF-8 json.dumps(python_tree, sort_keys=True, separators=(\",\", \":\"))"
+  },
+  "selected_dimensions": [
+    {
+      "dimension": 1,
+      "native_sha256": "1718bbbb2d86f162c21c5a55469db6f13fb2dd045f2a83a8ae58c00d00633f43",
+      "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.3.34.2);std=202002L;headers=d1a442e561deb4884c04ccf3ce6bac5bb267e0358ed6a3ac998dfc553eb2856f;kokkos=1;stdlib=libc++_220106;mpi=1;mpi_abi=40d6e65d7f79f247f867711ee0854b6220e3b9c1950da10f38add6e0977b9e89;dim=1",
+      "has_mpi": true,
+      "pythonpath_absent": true
+    },
+    {
+      "dimension": 2,
+      "native_sha256": "f80c77ee029f8ef8508187eec98d7e741ae1893573500c1b0cbdf4a7986ac859",
+      "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.3.34.2);std=202002L;headers=d1a442e561deb4884c04ccf3ce6bac5bb267e0358ed6a3ac998dfc553eb2856f;kokkos=1;stdlib=libc++_220106;mpi=1;mpi_abi=40d6e65d7f79f247f867711ee0854b6220e3b9c1950da10f38add6e0977b9e89;dim=2",
+      "has_mpi": true,
+      "pythonpath_absent": true
+    }
+  ],
+  "scientific_execution_scope": "Only the separately indexed c78 initial fault and lineage receipts qualify these native variants. The completed rank-change receipt remains attributed to 901. Later temporal-family header changes are unqualified by this identity."
+}

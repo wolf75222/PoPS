@@ -1,10 +1,11 @@
 """Bind physical global leaves to authorized PODs before the source cell kernel."""
 from collections.abc import Mapping
+from typing import Any
 from pops._ir.expr import Expr, Var
 from pops.model.global_quantity import GlobalQuantityRef, global_references
 
 
-def bind_source_globals(expressions, evaluation, variables, *, source_module=None):
+def bind_source_globals(expressions: Any, evaluation: Any, variables: Any, *, source_module: Any = None) -> tuple[Any, list[str]]:
     import json
     from pops.time._program.integrals import integral_identity, integral_units_bytes
     references = global_references(expressions)

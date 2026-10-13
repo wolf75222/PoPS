@@ -2,7 +2,6 @@
 import hashlib
 import json
 from pathlib import Path
-import sys
 import numpy as np
 import pops
 import pytest
@@ -11,6 +10,7 @@ from tests.python.support.initial_field_ghost_native_oracle import check_observe
 from tests.python.integration.amr.test_public_evolving_accepted_halo import observe,publish,same
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.initial_field_ghost_profile import native_profile,rank_and_size
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.collective_checks import collective_call,collective_check
 
@@ -18,19 +18,18 @@ from tests.python.support.collective_checks import collective_call,collective_ch
 @pytest.mark.native_loader
 def test_public_initial_field_fresh_before_ghost_and_positive_point(isolated_native_cache,tmp_path,record_property,monkeypatch):
     del isolated_native_cache
-    from pops._native_selector import select_native_dimension
-    native=select_native_dimension(2);world=native.mpi_world()
-    with collective_check(world):
-        assert native.__abi_version__==8
-        for file in (pops.__file__,native.__file__):
-            assert Path(file).resolve().is_relative_to(Path(sys.prefix).resolve())
+    native,world=native_profile()
+    rank,size=rank_and_size(world)
+    record_property('native_abi_version',native.__abi_version__)
+    record_property('native_profile','MPI' if world is not None else 'Serial')
     case,layout=collective_call(world,build)
     plan=collective_call(world,lambda:pops.resolve(pops.validate(case),layout=layout))
     with collective_check(world):
         component,=plan.component_inputs
         evidence=component.component_manifest.signature['inferred_boundary_expression']
         assert {i['name'] for i in evidence['interfaces']}=={'ghost_boundary','accepted_initial_ghost'}
-    artifact=compile_resolved_plan_once(world,plan,route=CONTRACT,compile_artifact=pops.compile)
+    artifact=(pops.compile(plan) if world is None else compile_resolved_plan_once(
+        world,plan,route=CONTRACT,compile_artifact=pops.compile))
     context=collective_call(world,lambda:artifact_execution_context(artifact))
     # The real constructor opens the bootstrap transaction; enable before that constructor.
     # This wrapper neither solves nor replaces preparation; old binaries fail capability lookup.
@@ -53,7 +52,7 @@ def test_public_initial_field_fresh_before_ghost_and_positive_point(isolated_nat
             # Freeze the actual full producer image before every potential getter observation.
             witness=collective_call(world,runtime._executor._s._field_candidate_observations)
             from tests.python.support.field_candidate_observation import save_rank_observations
-            collective_call(world,lambda:save_rank_observations(directory,phase,world.rank,witness))
+            collective_call(world,lambda:save_rank_observations(directory,phase,rank,witness))
 
         # Observe the const native manifest before the potential accessor can materialize a Field.
         before_manifest=collective_call(world,runtime._executor._s.field_provider_checkpoint_manifest)
@@ -65,7 +64,7 @@ def test_public_initial_field_fresh_before_ghost_and_positive_point(isolated_nat
             fields.append((np.asarray(values).reshape(image[1][level][1].shape).copy(),image[1][level][1].copy()))
         inspection=collective_call(world,lambda:runtime.inspect().to_dict())
         with collective_check(world):
-            if world.rank==0:
+            if rank==0:
                 np.savez(directory/(phase+'-fields.npz'),**{f'{level}-{part}':a for level,row in enumerate(fields) for part,a in enumerate(row)})
                 (directory/(phase+'-pre-field-manifest.json')).write_text(json.dumps(before_manifest,indent=2)+'\n')
                 (directory/(phase+'-inspect.json')).write_text(json.dumps(inspection,indent=2,default=str)+'\n')
@@ -76,7 +75,7 @@ def test_public_initial_field_fresh_before_ghost_and_positive_point(isolated_nat
     checkpoint=collective_call(world,lambda:runtime.checkpoint(directory/'accepted-checkpoint'))
     # Capture all raw evidence before numerical assertions, including failed oracles.
     with collective_check(world):
-        if world.rank==0:
+        if rank==0:
             with np.load(checkpoint,allow_pickle=False) as archive:
                 accepted=json.loads(str(archive['amr_accepted_contract']))
                 assert int(archive['pops_amr_checkpoint_version'])==12 and accepted['schema_version']==9
@@ -87,14 +86,14 @@ def test_public_initial_field_fresh_before_ghost_and_positive_point(isolated_nat
         assert report.accepted_steps==1 and report.rejected_steps==0
         assert images['initial'][2][-1][:2]==(0.,0)
         assert images['accepted'][2][-1][:2]==(DT,1)
-        proofs={phase:check_observed(images[phase][0],[row[1] for row in images[phase][1]],load_observed(directory,phase,world.size),steps,expected_clock=checkpoint_primary_clock(checkpoint)) for phase,steps in (('initial',0),('accepted',1))}
-        if world.rank==0:(directory/'math-proof.json').write_text(json.dumps(proofs,indent=2)+'\n')
+        proofs={phase:check_observed(images[phase][0],[row[1] for row in images[phase][1]],load_observed(directory,phase,size),steps,expected_clock=checkpoint_primary_clock(checkpoint)) for phase,steps in (('initial',0),('accepted',1))}
+        if rank==0:(directory/'math-proof.json').write_text(json.dumps(proofs,indent=2)+'\n')
     restarted=collective_call(world,bind)
     collective_call(world,lambda:restarted.restart(checkpoint))
     runtime=restarted;capture('reloaded')
     reload_witness=collective_call(world,runtime._executor._s._field_candidate_observations)
     with collective_check(world):
-        if world.rank==0:(directory/'reloaded-field-candidate-absence.json').write_text(json.dumps({'schema':'pops.amr.field-candidate-observation@1','observations':reload_witness})+'\n')
+        if rank==0:(directory/'reloaded-field-candidate-absence.json').write_text(json.dumps({'schema':'pops.amr.field-candidate-observation@1','observations':reload_witness})+'\n')
         assert reload_witness==[], 'restart must not recreate or inherit a producer witness'
         same(images['accepted'],images['reloaded'])
         for old,new in zip(field_images['accepted'],field_images['reloaded'],strict=True):

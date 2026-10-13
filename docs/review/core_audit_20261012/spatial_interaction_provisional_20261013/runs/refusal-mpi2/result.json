@@ -1,0 +1,9 @@
+{
+  "returncode": 0,
+  "ranks": 2,
+  "seconds": 49.52657708399056,
+  "unchanged_identity": true,
+  "parent_native_imported": false,
+  "launcher": "$AUDIT_ENV/bin/mpiexec",
+  "status": "passed"
+}

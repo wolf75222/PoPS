@@ -34,7 +34,9 @@ def validate_instance_contract(contract, module=None, *, owner_qid=None):
 
 
 def require_instance_contract(plan, module=None, *, owner_qid=None):
-    contract = None if plan is None else plan.provider_evidence.get(EVIDENCE)
+    if plan is None:
+        return None
+    contract = plan.provider_evidence.get(EVIDENCE)
     if contract is None:
         return None
     validate_instance_contract(contract, module, owner_qid=owner_qid)

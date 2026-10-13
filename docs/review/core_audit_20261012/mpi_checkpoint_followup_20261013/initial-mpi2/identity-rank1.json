@@ -1,0 +1,18 @@
+{
+  "before": {
+    "native_sha256": "f80c77ee029f8ef8508187eec98d7e741ae1893573500c1b0cbdf4a7986ac859",
+    "package": "$AUDIT_ENV/lib/python3.12/site-packages/pops/__init__.py",
+    "header_signature": "d1a442e561deb4884c04ccf3ce6bac5bb267e0358ed6a3ac998dfc553eb2856f",
+    "rank": 1,
+    "ranks": 2
+  },
+  "after": {
+    "native_sha256": "f80c77ee029f8ef8508187eec98d7e741ae1893573500c1b0cbdf4a7986ac859",
+    "package": "$AUDIT_ENV/lib/python3.12/site-packages/pops/__init__.py",
+    "header_signature": "d1a442e561deb4884c04ccf3ce6bac5bb267e0358ed6a3ac998dfc553eb2856f",
+    "rank": 1,
+    "ranks": 2
+  },
+  "status": 0,
+  "seconds": 53.162697624997236
+}

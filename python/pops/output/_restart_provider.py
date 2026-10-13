@@ -5,13 +5,14 @@ from __future__ import annotations
 import os
 import stat
 import hashlib
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ._checkpoint_collective import (
-    canonical_checkpoint_path,
     checkpoint_topology,
+    collective_checkpoint_path,
     consensus,
     root_value,
 )
@@ -38,6 +39,13 @@ def _validate_owner(value: Any, *, where: str) -> tuple[int, int]:
     return int(value[0]), int(value[1])
 
 
+def _checkpoint_entry_name(value: Any) -> str:
+    if not isinstance(value, str) or not value or value in {".", ".."} \
+            or "/" in value or "\x00" in value:
+        raise ValueError("checkpoint entry authority requires one local name")
+    return value
+
+
 def _raise_cleanup_failures(message: str, failures: list[BaseException]) -> None:
     if failures:
         raise RuntimeError(
@@ -58,9 +66,7 @@ class _CheckpointEntryAuthority:
     __slots__ = ("name", "owner", "_descriptor")
 
     def __init__(self, name: str, owner: tuple[int, int], descriptor: int | None) -> None:
-        if not isinstance(name, str) or not name or "/" in name or "\x00" in name:
-            raise ValueError("checkpoint entry authority requires one local name")
-        self.name = name
+        self.name = _checkpoint_entry_name(name)
         self.owner = _validate_owner(owner, where="checkpoint entry owner")
         self._descriptor = descriptor
         if descriptor is not None:
@@ -95,7 +101,19 @@ class _CheckpointEntryAuthority:
 
 
 class _CheckpointTransactionReceipt:
-    """Private mkdirat/openat namespace retained from capture through publication."""
+    """Exclusive rank-zero mkdirat/openat namespace from capture through publication.
+
+    The retained descriptor, inode, owner UID and mode authenticate a private namespace whose
+    mutations are serialized by this receipt.  Native capture borrows an entry descriptor only
+    for its synchronous write.  Unrelated processes must not mutate entries inside this private
+    namespace; public checkpoint paths have no such assumption and retain strict no-clobber
+    publication/quarantine.  This distinction permits ordinary private-entry cleanup on POSIX
+    filesystems, including GPFS implementations without RENAME_NOREPLACE.
+
+    Empty cleanup containers remain mode 0700 in the parent after completion.  Removing their
+    public names portably would reintroduce a directory-substitution race; no scientific data
+    remains in those containers after successful cleanup.
+    """
 
     __slots__ = (
         "parent",
@@ -104,6 +122,8 @@ class _CheckpointTransactionReceipt:
         "_directory_fd",
         "_parent_fd",
         "_native_entry",
+        "_mutation_lock",
+        "_owner_uid",
     )
 
     _NATIVE_NAME = "native.npz"
@@ -131,6 +151,8 @@ class _CheckpointTransactionReceipt:
         self._directory_fd = directory_fd
         self._parent_fd = parent_fd
         self._native_entry = native_entry
+        self._mutation_lock = threading.RLock()
+        self._owner_uid = os.geteuid()
         if directory_fd is not None:
             self.authenticate_directory_at()
 
@@ -261,6 +283,8 @@ class _CheckpointTransactionReceipt:
         if (
             not stat.S_ISDIR(retained.st_mode)
             or stat.S_IMODE(retained.st_mode) & 0o077
+            or int(retained.st_uid) != self._owner_uid
+            or os.geteuid() != self._owner_uid
             or _owner(retained) != self.owner
             or _owner(named) != self.owner
             or int(retained.st_dev) != int(parent.st_dev)
@@ -268,14 +292,16 @@ class _CheckpointTransactionReceipt:
             raise RuntimeError("checkpoint private transaction directory authority changed")
 
     def created_at(self, name: str) -> _CheckpointEntryAuthority:
-        self.authenticate_directory_at()
-        flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(name, flags, 0o600, dir_fd=self.directory_fileno())
-        try:
-            return _CheckpointEntryAuthority(name, _owner(os.fstat(descriptor)), descriptor)
-        except BaseException:
-            os.close(descriptor)
-            raise
+        with self._mutation_lock:
+            name = _checkpoint_entry_name(name)
+            self.authenticate_directory_at()
+            flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(name, flags, 0o600, dir_fd=self.directory_fileno())
+            try:
+                return _CheckpointEntryAuthority(name, _owner(os.fstat(descriptor)), descriptor)
+            except BaseException:
+                os.close(descriptor)
+                raise
 
     def create_unique_at(self, *, suffix: str) -> _CheckpointEntryAuthority:
         for _attempt in range(32):
@@ -287,6 +313,7 @@ class _CheckpointTransactionReceipt:
         raise RuntimeError("checkpoint could not allocate a unique transaction staging entry")
 
     def open_candidate_at(self, name: str) -> _CheckpointEntryAuthority:
+        name = _checkpoint_entry_name(name)
         self.authenticate_directory_at()
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(name, flags, dir_fd=self.directory_fileno())
@@ -313,20 +340,25 @@ class _CheckpointTransactionReceipt:
     def rename_no_replace_at(
         self, source: _CheckpointEntryAuthority, destination_name: str
     ) -> _CheckpointEntryAuthority:
-        self.authenticate_entry_at(source)
-        from ._writers.common import _rename_no_replace
-
-        _rename_no_replace(
-            source.name,
-            destination_name,
-            src_dir_fd=self.directory_fileno(),
-            dst_dir_fd=self.directory_fileno(),
-        )
-        # Keep the same object/fd in the caller's cleanup ledger until post-rename
-        # authentication succeeds.  If that check fails, cleanup still knows the new entry name.
-        source.name = destination_name
-        self.authenticate_entry_at(source)
-        return source
+        with self._mutation_lock:
+            destination_name = _checkpoint_entry_name(destination_name)
+            self.authenticate_entry_at(source)
+            # linkat is an atomic no-clobber publication even on GPFS: an existing entry,
+            # including another link to the same inode, never grants ownership of its name.
+            os.link(
+                source.name,
+                destination_name,
+                src_dir_fd=self.directory_fileno(),
+                dst_dir_fd=self.directory_fileno(),
+                follow_symlinks=False,
+            )
+            old_name = source.name
+            # Keep the new name in the caller's cleanup ledger if authentication fails.
+            source.name = destination_name
+            self.authenticate_entry_at(source)
+            old_entry = _CheckpointEntryAuthority(old_name, source.owner, source.duplicate())
+            self.quarantine_entry_at(old_entry, phase="private entry reseal cleanup")
+            return source
 
     def quarantine_entry_at(
         self,
@@ -335,18 +367,20 @@ class _CheckpointTransactionReceipt:
         phase: str,
         close_entry: bool = True,
     ) -> None:
-        from ._writers.common import _StagedOutputFile
-
         try:
-            _StagedOutputFile._quarantine_owned_path(
-                self.directory / entry.name,
-                entry.owner,
-                replaced_message=(
-                    "checkpoint %s refuses to delete replaced transaction entry %s"
-                    % (phase, entry.name)
-                ),
-                directory_fd=self.directory_fileno(),
-            )
+            with self._mutation_lock:
+                # Private entries are never public output paths.  Check the retained inode and
+                # the descriptor-anchored name before removing it; a detected substitution stays
+                # in the transaction directory and prevents its subsequent removal.
+                try:
+                    self.authenticate_entry_at(entry)
+                except BaseException as error:
+                    raise RuntimeError(
+                        "checkpoint %s refuses to delete replaced transaction entry %s; "
+                        "private recovery namespace retained at %s"
+                        % (phase, entry.name, self.directory)
+                    ) from error
+                os.unlink(entry.name, dir_fd=self.directory_fileno())
         finally:
             if close_entry:
                 entry.close()
@@ -357,11 +391,16 @@ class _CheckpointTransactionReceipt:
         return entry
 
     def cleanup_empty(self) -> None:
+        with self._mutation_lock:
+            self._cleanup_empty_locked()
+
+    def _cleanup_empty_locked(self) -> None:
         directory_fd = self._directory_fd
         parent_fd = self._parent_fd
         if directory_fd is None:
             return
-        cleanup_name = ".pops-restart-cleanup-%s" % os.urandom(16).hex()
+        cleanup_name = ""
+        cleanup_fd = None
         moved = False
         primary = None
         try:
@@ -373,43 +412,68 @@ class _CheckpointTransactionReceipt:
                 )
             if parent_fd is None:
                 raise RuntimeError("checkpoint transaction parent descriptor is unavailable")
-            from ._writers.common import _rename_no_replace
-
-            _rename_no_replace(
+            # Allocate a fresh private destination namespace rather than rename to a free name
+            # in the public parent.  Only this receipt mutates it.  A public replacement of the
+            # source directory is captured and authenticated before any rmdir, never deleted.
+            for _attempt in range(32):
+                candidate = ".pops-restart-cleanup-%s" % os.urandom(16).hex()
+                try:
+                    os.mkdir(candidate, 0o700, dir_fd=parent_fd)
+                except FileExistsError:
+                    continue
+                cleanup_name = candidate
+                break
+            if not cleanup_name:
+                raise RuntimeError("checkpoint could not allocate a private cleanup namespace")
+            cleanup_fd = os.open(cleanup_name, self._directory_flags(), dir_fd=parent_fd)
+            retained = os.fstat(cleanup_fd)
+            named = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+            if (
+                not stat.S_ISDIR(retained.st_mode)
+                or stat.S_IMODE(retained.st_mode) & 0o077
+                or int(retained.st_uid) != self._owner_uid
+                or _owner(retained) != _owner(named)
+                or int(retained.st_dev) != int(os.fstat(parent_fd).st_dev)
+                or os.listdir(cleanup_fd)
+            ):
+                raise RuntimeError("checkpoint private cleanup namespace authority changed")
+            os.rename(
                 self.directory_name,
-                cleanup_name,
+                "transaction",
                 src_dir_fd=parent_fd,
-                dst_dir_fd=parent_fd,
+                dst_dir_fd=cleanup_fd,
             )
             moved = True
-            detached = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+            detached = os.stat("transaction", dir_fd=cleanup_fd, follow_symlinks=False)
             if _owner(detached) != self.owner:
-                try:
-                    _rename_no_replace(
-                        cleanup_name,
-                        self.directory_name,
-                        src_dir_fd=parent_fd,
-                        dst_dir_fd=parent_fd,
-                    )
-                except BaseException as restore_error:
-                    raise RuntimeError(
-                        "checkpoint transaction directory was substituted; replacement "
-                        "retained as %s because restoration failed" % cleanup_name
-                    ) from restore_error
-                else:
-                    moved = False
-                raise RuntimeError("checkpoint transaction directory was substituted and restored")
-            os.rmdir(cleanup_name, dir_fd=parent_fd)
+                raise RuntimeError(
+                    "checkpoint transaction directory was substituted; replacement retained at %s"
+                    % (self.parent / cleanup_name / "transaction")
+                )
+            os.rmdir("transaction", dir_fd=cleanup_fd)
             moved = False
         except BaseException as error:
             primary = error
             if moved:
                 add_note = getattr(error, "add_note", None)
                 if callable(add_note):
-                    add_note("checkpoint transaction retained as %s" % cleanup_name)
+                    add_note(
+                        "checkpoint transaction retained at %s"
+                        % (self.parent / cleanup_name / "transaction")
+                    )
             raise
         finally:
+            namespace_failures = []
+            if cleanup_fd is not None:
+                try:
+                    os.close(cleanup_fd)
+                except BaseException as error:
+                    namespace_failures.append(error)
+            # Keep this empty private container.  Its name is in the public parent, where a
+            # stat/rmdir sequence could remove a substituted directory.  Cleanup never performs
+            # a public unlink/rmdir, and unsupported rename flags do not weaken that guarantee.
             failures = self.close_descriptors()
+            failures[:0] = namespace_failures
             if failures:
                 message = "checkpoint transaction descriptor cleanup also failed: " + "; ".join(
                     str(error) for error in failures
@@ -611,6 +675,8 @@ class _SealedCheckpointReplay:
                 error = _CheckpointTransportFailure(
                     "checkpoint transport failed during sealed replay retention: %s"
                     % attempt.transport_error)
+            if error is None:
+                raise RuntimeError("checkpoint replay retention lost its failure evidence")
             if self.topology.rank == 0:
                 try:
                     self._cleanup_root()
@@ -696,7 +762,10 @@ class _SealedCheckpointReplay:
 
         def stage_root() -> dict[str, Any]:
             self.authenticate_root(links=1)
-            result._proof = self._link(self.proof, self.proof.transaction.parent)
+            proof = self.proof
+            if proof is None:
+                raise RuntimeError("checkpoint replay lease is no longer live")
+            result._proof = self._link(proof, proof.transaction.parent)
             result._staging_owned = True
             self.authenticate_root(links=2)
             return dict(transaction=result._proof.transaction.to_data(), proof=result._proof.to_data())
@@ -707,6 +776,8 @@ class _SealedCheckpointReplay:
             if attempt.transport_error is not None:
                 self.transport_lost = True
                 error = _CheckpointTransportFailure("checkpoint transport failed during sealed replay staging")
+            if error is None:
+                raise RuntimeError("checkpoint replay staging lost its failure evidence")
             if self.topology.rank == 0:
                 try:
                     result._cleanup_root(include_published=True)
@@ -720,12 +791,15 @@ class _SealedCheckpointReplay:
                 transaction = _CheckpointTransactionReceipt.observed(attempt.value["transaction"])
                 result._proof = _CheckpointPayloadProof.observed(transaction, attempt.value["proof"])
                 result._staging_owned = True
-            elif attempt.value != dict(transaction=result._proof.transaction.to_data(),
-                                       proof=result._proof.to_data()):
+            proof = result._proof
+            if proof is None:
+                raise RuntimeError("checkpoint replay staging evidence changed")
+            if self.topology.rank == 0 and attempt.value != dict(transaction=proof.transaction.to_data(),
+                                                                proof=proof.to_data()):
                 raise RuntimeError("checkpoint replay staging evidence changed")
             if (previous._proof is None
-                    or result._proof.transaction.parent != previous._proof.transaction.parent
-                    or result._proof.owner != previous._proof.owner):
+                    or proof.transaction.parent != previous._proof.transaction.parent
+                    or proof.owner != previous._proof.owner):
                 raise RuntimeError("checkpoint replay staging differs from its original owner and parent")
         except BaseException as error:
             evidence_error = error
@@ -1041,16 +1115,9 @@ class _RestartSnapshot:
             raise RuntimeError("restart snapshot has no checkpoint payload proof")
         if self._prepared_capture is not None:
             self._runtime._validate_committed_checkpoint_candidate(self._prepared_capture)
-        local_target = canonical_checkpoint_path(target)
         target_error = None
         try:
-            rows = consensus(
-                self._topology,
-                "target agreement",
-                value=str(local_target),
-            )
-            if any(row["value"] != str(local_target) for row in rows):
-                raise ValueError("checkpoint target differs across ranks")
+            local_target = collective_checkpoint_path(self._topology, target)
             if self._published_target is not None and self._published_target != local_target:
                 raise ValueError("restart snapshot was already published to another target")
         except BaseException as error:
@@ -1355,16 +1422,9 @@ class RestartV3:
         from ._checkpoint_contract import require_checkpoint_resource_budget
 
         topology = checkpoint_topology(runtime)
-        local_target = canonical_checkpoint_path(path)
-        target = Path(root_value(topology, "restart target selection", lambda: str(local_target)))
-        target_error = (
-            None
-            if target == local_target
-            else ValueError(
-                "restart target differs across ranks: local %s, rank-0 %s" % (local_target, target)
-            )
+        target = collective_checkpoint_path(
+            topology, path, phase_prefix="restart"
         )
-        consensus(topology, "restart target agreement", error=target_error)
         root_payload = b""
         archive_budget = require_checkpoint_resource_budget(runtime).max_archive_bytes
 

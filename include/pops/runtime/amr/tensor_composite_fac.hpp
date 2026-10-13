@@ -518,8 +518,9 @@ inline void validate_controls(const Controls& controls) {
       (controls.coarse_method == CoarseCorrectionMethod::gauss_seidel &&
        controls.coarse_restart != 64) ||
       (controls.coarse_preconditioner != CoarsePreconditionerKind::diagonal &&
-       controls.coarse_preconditioner != CoarsePreconditionerKind::polar_poisson) ||
-      (controls.coarse_preconditioner == CoarsePreconditionerKind::polar_poisson &&
+       controls.coarse_preconditioner != CoarsePreconditionerKind::polar_poisson &&
+       controls.coarse_preconditioner != CoarsePreconditionerKind::tensor_diagonal_mg) ||
+      (controls.coarse_preconditioner != CoarsePreconditionerKind::diagonal &&
        controls.coarse_method != CoarseCorrectionMethod::gmres) ||
       !std::isfinite(static_cast<double>(controls.relative_tolerance)) ||
       controls.relative_tolerance <= Real(0) ||
@@ -1618,6 +1619,9 @@ class FullTensorCompositeFac {
           .scalar(coarse_method_).scalar(coarse_restart_);
     if (coarse_preconditioner_ != CoarsePreconditionerKind::diagonal)
       contract.text("pops.tensor-fac.coarse-preconditioner@1").scalar(coarse_preconditioner_);
+    if (coarse_preconditioner_ == CoarsePreconditionerKind::tensor_diagonal_mg)
+      contract.text("tensor-diagonal-mg-fixed-vcycle@1").scalar(2).scalar(2).scalar(2).scalar(50)
+          .text("red-black-gauss-seidel/harmonic-faces/constant-injection/nonsingular");
     if (interface_coupling_ != InterfaceCoupling::level_stencil)
       contract.text("pops.tensor-fac.interface-coupling@1").scalar(interface_coupling_);
     for (const auto& binding : bindings_) {

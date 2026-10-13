@@ -1,0 +1,278 @@
+{
+  "source_commit": "dae48c3b15505696a11f84782487ac321fbb6a71",
+  "native_cpp_commit": "6b50905b5e51770cbcb545d890d82945d616fd25",
+  "native_sha256": "f67ecd7e90e11842db84950da92edf93610f0076ca8dbb2228b66581d3c36403",
+  "header_signature": "e1b678510d7b4dc24a3286ad6fd8433f1c31412bc18582e8a2c9d0de2b40289c",
+  "abi_key": "compiler=Apple LLVM 21.0.0 (clang-2100.3.34.2);std=202002L;headers=e1b678510d7b4dc24a3286ad6fd8433f1c31412bc18582e8a2c9d0de2b40289c;kokkos=1;stdlib=libc++_220106;mpi=1;mpi_abi=40d6e65d7f79f247f867711ee0854b6220e3b9c1950da10f38add6e0977b9e89;dim=2",
+  "abi_version": 13,
+  "dimension": 2,
+  "has_mpi": true,
+  "has_parallel_hdf5": true,
+  "installed_source_files": [
+    {
+      "path": "python/pops/_ir/primitive_expansion.py",
+      "sha256": "43a0a59710bf862cdb7fc467e014e91e050733847d958a779147f04d3e7f7a8b"
+    },
+    {
+      "path": "python/pops/_ir/visitors.py",
+      "sha256": "cb7bb7b43ed726406289c402358299393e6ee27ac35eb93ea4c92fd9f080fd95"
+    },
+    {
+      "path": "python/pops/amr/_resolution.py",
+      "sha256": "08331399c4434a1a1a7e63dddde12eccda552e7c04c4f55a510e8b2e9bb483e3"
+    },
+    {
+      "path": "python/pops/boundary/transport.py",
+      "sha256": "03c3a0189b4d6e63627210dd564a2ce64565195a34cc2184d1a1c66f19d27bbb"
+    },
+    {
+      "path": "python/pops/codegen/cpp_symbols.py",
+      "sha256": "a3473916ce9bf86bfd65ece6d2a99a5d4049159ac19de21ebcb4610d1f299c66"
+    },
+    {
+      "path": "python/pops/codegen/inferred_boundary_expression.py",
+      "sha256": "1d54ec395558295cb72b47dff3330cb4a07bb732d1034562bc02def9bf994c22"
+    },
+    {
+      "path": "python/pops/codegen/module_lowering.py",
+      "sha256": "b69c82703ff23a3485dec181f9d4da0ebf4400a2587642884f4350d30df77124"
+    },
+    {
+      "path": "python/pops/codegen/moment_path_kernel.py",
+      "sha256": "4966009129f32bd306fead5fadd67ad7694887b6027c6e8383010073a69e5939"
+    },
+    {
+      "path": "python/pops/codegen/nonconservative_lowering.py",
+      "sha256": "bc6b4c412b8c123a1064cbd40921fbcd0dcfa3ba18866e1f123d1cb702452c18"
+    },
+    {
+      "path": "python/pops/codegen/principal_lowering.py",
+      "sha256": "355f0253cb1e3b21d1dbe2e6b100e714d664ea94a90db2b22d948cf97bf99889"
+    },
+    {
+      "path": "python/pops/codegen/program_accepted_ssp.py",
+      "sha256": "3bd59e17907751b0c221f6245b839a8c5d50ccbc95412a3609ffbcbe6fa980b1"
+    },
+    {
+      "path": "python/pops/codegen/program_computed_frontier.py",
+      "sha256": "2863a8d6625e41bdcccda5ec04578780a6a03268d467b4ebd04e6c68815a312c"
+    },
+    {
+      "path": "python/pops/codegen/program_emit_control.py",
+      "sha256": "9d8bcf000c0059afff95da5338ab97d85c957418a48bf7dd26cbf6062d9554d6"
+    },
+    {
+      "path": "python/pops/codegen/program_emit_expressions.py",
+      "sha256": "6c09595a82189078f0a3a3c93b5d7ae8a8c297cde149c7e7310c25cd6e21f35d"
+    },
+    {
+      "path": "python/pops/codegen/program_emit_moving.py",
+      "sha256": "32eb2064edf6b682e798db30a8e5be037a86f638a222bd19e6cfc6076c0ab019"
+    },
+    {
+      "path": "python/pops/codegen/program_emit_ops.py",
+      "sha256": "5eea3be2aa06a4f96bab36dc1d8db419b65665d6b3cdfefb3be65f5059929ff3"
+    },
+    {
+      "path": "python/pops/codegen/program_field_observations.py",
+      "sha256": "003bcd4b55d4b91bb2908d623d48c37e8627f0a89eb1bdf24cedfb493b96bc96"
+    },
+    {
+      "path": "python/pops/codegen/program_global_sources.py",
+      "sha256": "72af61103e825825ee9ab1838fda0e428f5dbb6f160c8ee6ae813f8e355ccbad"
+    },
+    {
+      "path": "python/pops/codegen/program_static_provider_proof.py",
+      "sha256": "fc22cfc79572469041133a4e29fd1ce1496473b75df86ec55a4d5f1df29517bf"
+    },
+    {
+      "path": "python/pops/codegen/program_value_authority.py",
+      "sha256": "2e95c86e4139aa36414350771e0c5baefa18bb5f59f317b3737792c2959b9054"
+    },
+    {
+      "path": "python/pops/codegen/provider_instances.py",
+      "sha256": "3c6319939a63ced2637ee9f65bd6168c4327d1e9ad9729e6d18bb6cbc5d9c5f9"
+    },
+    {
+      "path": "python/pops/codegen/state_storage_lowering.py",
+      "sha256": "571f036fc3cada95a772a485e654df341be6f718f7f0a85fd0136fe5d88ddc55"
+    },
+    {
+      "path": "python/pops/codegen/user_reconstruction_lowering.py",
+      "sha256": "0a5b975ad1dd57aa38891fbd1da5d11fd0c8a87943c9b8a6967e04197bf94250"
+    },
+    {
+      "path": "python/pops/codegen/user_riemann_lowering.py",
+      "sha256": "791667450e8db546321b229bcc08afbc53be4d64727c174490d893d6b21cea44"
+    },
+    {
+      "path": "python/pops/fields/_program_expression.py",
+      "sha256": "731a95ed1b22a5b816b6b0a477d10ba3833711f8850c7dca02365e1091273ec4"
+    },
+    {
+      "path": "python/pops/fields/_program_nonlinear_problem.py",
+      "sha256": "8335c8d4f41b5c88fb8ad5d2c11032a41e6cd4a9bc465cda7aa71c01e6ccb248"
+    },
+    {
+      "path": "python/pops/fields/mapping.py",
+      "sha256": "dea02435751a80d6336d6b0cb84a4e50c06506ad249403c12866079e1f214e74"
+    },
+    {
+      "path": "python/pops/interfaces.py",
+      "sha256": "37ef9e70e0ef60f493360d4613d6517ea302ea1ac4337fb3adf7d370e2771d8e"
+    },
+    {
+      "path": "python/pops/lib/initial/_bootstrap_program.py",
+      "sha256": "b93388077f6e1f72158b5febb5ffc909de1011c13c58620dafeecccbdce56901"
+    },
+    {
+      "path": "python/pops/linalg/finite.py",
+      "sha256": "338c4de8ed2fe8e3cfb77831607b62aec029d331790be6ca06e0346441c912d6"
+    },
+    {
+      "path": "python/pops/mesh/_layout_plan_contracts.py",
+      "sha256": "3ce50a29a2bdafade785eeb30bef1989a95a555faeedcd765c8dbf33a5a04713"
+    },
+    {
+      "path": "python/pops/mesh/boundaries/ghost_plan.py",
+      "sha256": "04777b610e30694d62fb93e7d7aee6398a04be15e6de7af6ba1c7c8c334c041a"
+    },
+    {
+      "path": "python/pops/model/_module_manifest.py",
+      "sha256": "11274e3960edf2e16e01bc27c79577cace7e64c697d182f4aba68a6ed92b0777"
+    },
+    {
+      "path": "python/pops/model/flux_waves.py",
+      "sha256": "6b3ec6d4ee0b28b8b58f375045609e65bbd77729c09bacd11a12d06051b0b0f5"
+    },
+    {
+      "path": "python/pops/model/primitive_coordinates.py",
+      "sha256": "4247aaf7aa0a7f2a9e0637ea0120b64c20364dc1dd4f0d5cacc470307eb2abd1"
+    },
+    {
+      "path": "python/pops/model/spaces.py",
+      "sha256": "8ec0558a9192b147515eb025a9ab6ecf58c6445ce025616e71ebf5cf7739179e"
+    },
+    {
+      "path": "python/pops/moments/affine.py",
+      "sha256": "5f40f4bc773b0c61bf25e89164a9479226d0481447d9d465ca9cf8841402ac5f"
+    },
+    {
+      "path": "python/pops/numerics/coordinated_face.py",
+      "sha256": "bcb5bbc51ca2e0173c44eafc4287d68f5f139e766be4d44c54068bb2eca0ec2e"
+    },
+    {
+      "path": "python/pops/numerics/nonconservative.py",
+      "sha256": "f7db3a311101ff95f702d9f82bc8d2f2ce0de6fbb4572c81d342f8f0e9416527"
+    },
+    {
+      "path": "python/pops/numerics/symbolic_path.py",
+      "sha256": "9f9cb8dffa6b8d4e1302516d6d64a0674238285a486fc1142ef0fd909cd684d5"
+    },
+    {
+      "path": "python/pops/output/_restart_provider.py",
+      "sha256": "a689cfc394fa7a31342cce7d4617147911b56add2582ffab3712355d10461c74"
+    },
+    {
+      "path": "python/pops/problem/_field_observations.py",
+      "sha256": "0e41f4f13623f6e8116e27860962acfd191e1e3c8c77bd68d2a4204c580861b8"
+    },
+    {
+      "path": "python/pops/problem/_snapshot_immutable_data.py",
+      "sha256": "e9b1e066a54689cb463cecd037d9604b324ccedefc28ab47a0cc547dd38a3643"
+    },
+    {
+      "path": "python/pops/runtime/_amr_system_io.py",
+      "sha256": "23d7bfe2dbbae285c6df1fdd28e83a5da0bad894ace5877a1d5ef6054bc12dcd"
+    },
+    {
+      "path": "python/pops/runtime/_checkpoint_state_carriers.py",
+      "sha256": "cfcddde949ca1e238bbd300a42ac2bd5f564b677a90cde32cab369e4a3a5ac41"
+    },
+    {
+      "path": "python/pops/runtime/_runtime_consumers.py",
+      "sha256": "97022ec4988b7e9b447a5cc99c47c6b6cd2044663665e847e5bf4690eca57f4c"
+    },
+    {
+      "path": "python/pops/runtime/_step_strategy.py",
+      "sha256": "8eaf9dde8aeb51b3f37c6b45bac62ae94d18097ebbe350edb3ea51f8dbd35e31"
+    },
+    {
+      "path": "python/pops/solvers/_prepared_preconditioner_registry.py",
+      "sha256": "56cfb86fb436fd57cb60b2efc3fa41f8bfcf669002e4bce12408113fd64689b2"
+    },
+    {
+      "path": "python/pops/solvers/preconditioners.py",
+      "sha256": "16e02915642072c901a7007d5c5d740b92edec62afcfeaa6df350027049f8c50"
+    },
+    {
+      "path": "python/pops/time/_program/calls.py",
+      "sha256": "3c1e3b0a5dbe55b6a958f495c110e42723fe5ead8a68d4fc8de47d0ec5338970"
+    },
+    {
+      "path": "python/pops/time/_program/contract.py",
+      "sha256": "877742d930f5da0e0751a0ca6c323cb6dc34190dceb1e6118d43e84ec79b1ddd"
+    },
+    {
+      "path": "python/pops/time/_program/expressions.py",
+      "sha256": "f96d13730d974be5b2e531bc6c5fa626d6fe50b2aa643fd57a50dcdb7aa98743"
+    },
+    {
+      "path": "python/pops/time/_program/geometry.py",
+      "sha256": "efc93f6f926eba003f1854779240be28ddefa21de4fd0b1d0710e2fe8674dcc7"
+    },
+    {
+      "path": "python/pops/time/_program/global_source_plan.py",
+      "sha256": "6d061aa152424bd069316d5bc27d268481e1d178f0b73693ce42cadb52163fdc"
+    },
+    {
+      "path": "python/pops/time/_program/global_sources.py",
+      "sha256": "0fcca45ca11f0228331f45e66f3ab8f54f3cd693d946e7c6897a76fec438fe89"
+    },
+    {
+      "path": "python/pops/time/_program/integrals.py",
+      "sha256": "fd572a88715339316e2d7429472de3255a3add65a4de99da810eb9197b4e3e25"
+    },
+    {
+      "path": "python/pops/time/_program/local_product.py",
+      "sha256": "61af6181b2484bb91ba6c9c0bb7200ec1779a15f360b007d3a934889bebe1e56"
+    },
+    {
+      "path": "python/pops/time/_program/operations.py",
+      "sha256": "9c9366c4c620e3e68e5c7aab3b2147968d2ba89639979e5f2f692aa6916b9ba1"
+    },
+    {
+      "path": "python/pops/time/_program/principal.py",
+      "sha256": "cadef6236758597b2403d7c6db994a100e45d3f97cd310ef35c7016ab7bd8ec0"
+    },
+    {
+      "path": "python/pops/time/_program/serialization.py",
+      "sha256": "f102e504b149d08225e507b7ab17979f2cc360de3fced55be20e02123588f225"
+    },
+    {
+      "path": "python/pops/time/_program/spatial_interaction.py",
+      "sha256": "1e12374357fab68aa1c828bda6bd740e347a3f428ad4f4ff294b63ca9d195d3d"
+    },
+    {
+      "path": "python/pops/time/_program/spatial_solve.py",
+      "sha256": "22db9f66346e658ee1ed14d83e374e667aff9e5f4dfcd3eb974bca8e0cdfc3eb"
+    },
+    {
+      "path": "python/pops/time/expressions.py",
+      "sha256": "c971615c08494e79e6251972be7ee2953be00d5d8a6378f3da19e8230ec2c3b2"
+    },
+    {
+      "path": "python/pops/time/field_sampling.py",
+      "sha256": "319d4ed394627d103ed7a3db793fdee24b383d7a144b077f568ad5df2597138d"
+    },
+    {
+      "path": "python/pops/time/value_support.py",
+      "sha256": "442c74b41ff6bb8f6ad9616f28ca72ab78b6609af66efaa755db079ab57fb3d2"
+    },
+    {
+      "path": "python/pops/time/values.py",
+      "sha256": "c59eaa2b833eb1baabf05fcdb016f6e53226ffc0c6174f05e20f3d63a342aa6f"
+    }
+  ],
+  "scope": "Incremental installed identity + doctor only; received prior native campaigns remain attributed to their own source tuples"
+}
