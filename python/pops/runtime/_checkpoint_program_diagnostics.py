@@ -119,13 +119,40 @@ def validate_checkpoint_program_diagnostic_arrays(payload, *, capacity=None, bou
     return True
 
 
-def prepare_checkpoint_program_diagnostics(owner, payload):
+def _empty_amr_rank_image(owner, payload, topology):
+    from pops.runtime._checkpoint_resource_budget import require_checkpoint_resource_budget
+
+    if require_checkpoint_resource_budget(owner).runtime_kind != "amr":
+        raise ValueError("empty diagnostic rank rematerialization requires an AMR runtime")
+    # The native codec supplies the new rank authority, without constructing a Python header.
+    image = _exact_native_image(owner._s._checkpoint_program_diagnostics(),
+                                rank=topology.rank, ranks=topology.size)
+    if len(image) != 40 or image[32:40] != bytes(8):
+        raise ValueError("diagnostic rank rematerialization requires an empty target image")
+    owner._s._validate_checkpoint_program_diagnostics(image)
+    raw, offsets = payload[_STATE], payload[_OFFSETS]
+    for lo, hi in zip(offsets[:-1], offsets[1:], strict=True):
+        if int(hi) - int(lo) != 40 or np.asarray(raw)[int(lo)+32:int(lo)+40].tobytes() != bytes(8):
+            raise ValueError("diagnostic rank rematerialization requires entirely empty source images")
+    for lo in offsets[:-1]:
+        if np.asarray(raw)[int(lo)+8:int(lo)+16].tobytes() != image[8:16]:
+            raise ValueError("Program diagnostic checkpoint native Real width changed")
+    return image
+
+
+def prepare_checkpoint_program_diagnostics(owner, payload, *, allow_empty_amr_rank_change=False,
+                                           expected_source_ranks=None):
     from pops.output._checkpoint_collective import checkpoint_topology
 
     from pops.runtime._checkpoint_resource_budget import _require_checkpoint_diagnostic_authority
 
     _require_checkpoint_diagnostic_authority(owner)
+    if type(allow_empty_amr_rank_change) is not bool:
+        raise TypeError("empty AMR diagnostic rank-change admission must be an exact bool")
     topology = checkpoint_topology(owner)
+    source_ranks = topology.size if expected_source_ranks is None else expected_source_ranks
+    if type(source_ranks) is not int or source_ranks <= 0:
+        raise TypeError("Program diagnostic source rank count must be an exact positive int")
     capacity = getattr(owner, "_checkpoint_program_diagnostic_capacity_per_rank", None)
     bound = getattr(owner, "_checkpoint_program_diagnostic_byte_capacity", None)
     if PROGRAM_DIAGNOSTIC_CHECKPOINT_KEYS.intersection(payload) and (
@@ -136,8 +163,13 @@ def prepare_checkpoint_program_diagnostics(owner, payload):
     image = b""
     if present:
         raw, index = payload[_STATE], payload[_OFFSETS]
+        if len(index) != source_ranks + 1:
+            raise ValueError("Program diagnostic checkpoint belongs to another authenticated source rank count")
         if len(index) != topology.size + 1:
-            raise ValueError("Program diagnostic checkpoint belongs to another rank count")
-        image = np.asarray(raw)[int(index[topology.rank]) : int(index[topology.rank + 1])].tobytes()
+            if not allow_empty_amr_rank_change:
+                raise ValueError("Program diagnostic checkpoint belongs to another rank count")
+            image = _empty_amr_rank_image(owner, payload, topology)
+        else:
+            image = np.asarray(raw)[int(index[topology.rank]) : int(index[topology.rank + 1])].tobytes()
     owner._s._validate_checkpoint_program_diagnostics(image)
     return image

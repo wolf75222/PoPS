@@ -1176,7 +1176,9 @@ def prepare_v3(
         auxiliary_checkpoint_payload=tuple(auxiliary_checkpoint_payload),
         history_flux_snapshot_shards=history_flux_snapshot_shards,
         exchange_checkpoint=prepare_checkpoint_continuation(owner, d),
-        program_diagnostic_checkpoint=prepare_checkpoint_program_diagnostics(owner, d),
+        program_diagnostic_checkpoint=prepare_checkpoint_program_diagnostics(
+            owner, d, allow_empty_amr_rank_change=(not bit_identical and checkpoint_ranks != current_ranks),
+            expected_source_ranks=checkpoint_ranks),
         potential_payload=tuple(phi_payload),
         field_payload=tuple((slot, tuple(levels)) for slot, levels in field_payload),
         hierarchy_mode=hierarchy_mode,
