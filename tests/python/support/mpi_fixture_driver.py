@@ -65,13 +65,28 @@ def run_fixture_world(*, ranks: int, directory: Path, tests: tuple[str, ...],
         "native=select_native_dimension(2); world=native.mpi_world(); "
         "import pathlib,sys,pytest; "
         "receipt=pathlib.Path(sys.argv[1])/('rank%d.xml'%world.rank); "
-        "raise SystemExit(pytest.main(['-q','-ra','--maxfail=1', "
+        "raise SystemExit(pytest.main(['-v','-ra','--maxfail=1', "
         "'--junitxml='+str(receipt), *sys.argv[2:]]))"
     )
     command = [*launcher, "-n", str(ranks), sys.executable, "-u", "-c", bootstrap,
                str(directory), *tests]
-    result = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True,
-                            text=True, check=False, timeout=timeout_seconds)
+    try:
+        result = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True,
+                                text=True, check=False, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as error:
+        def partial_bytes(value):
+            if value is None:
+                return b""
+            return value if isinstance(value, bytes) else value.encode("utf-8")
+
+        stdout, stderr = partial_bytes(error.stdout), partial_bytes(error.stderr)
+        (directory / "launcher.stdout.log").write_bytes(stdout)
+        (directory / "launcher.stderr.log").write_bytes(stderr)
+        (directory / "launcher.log").write_bytes(stdout + stderr)
+        print(purpose + " MPI%d child timed out after %d seconds; partial output follows"
+              % (ranks, timeout_seconds), flush=True)
+        print((stdout + stderr).decode("utf-8", errors="replace"), end="", flush=True)
+        raise
     output = result.stdout + result.stderr
     (directory / "launcher.log").write_text(output)
     assert result.returncode == 0, (

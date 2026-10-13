@@ -541,6 +541,20 @@ def manifest_python_mpi_entrypoints(manifest: dict) -> list[dict]:
     return sorted(entries, key=lambda item: (item["path"], item["nproc"]))
 
 
+MPI_ORCHESTRATOR_PARTITION_CONTRACTS = {
+    "tests/python/integration/mpi/test_public_amr_profile_mpi%d.py" % world:
+        ("test_public_amr_fixtures_on_authenticated_mpi%d_world" % world,
+         ("tag_selection", "stationary_regrids", "evolving_halo", "evolved_spatial", "evolved_spatial_v4"))
+    for world in (1, 2)
+}
+MPI_ORCHESTRATOR_PARTITION_CONTRACTS.update({
+    "tests/python/integration/mpi/test_public_amr_original_field_mpi%d.py" % world:
+        ("test_public_amr_original_on_authenticated_mpi%d_world" % world,
+         ("saved_restart", "parent_rollback_retry"))
+    for world in (1, 2)
+})
+
+
 def manifest_python_mpi_orchestrators(manifest: dict) -> list[dict]:
     """Return serial pytest drivers that create and tear down their own MPI worlds.
 
@@ -569,10 +583,10 @@ def manifest_python_mpi_orchestrators(manifest: dict) -> list[dict]:
                 "without an mpi label"
             )
         for raw in raw_orchestrators:
-            if not isinstance(raw, dict) or set(raw) != {"path"}:
+            if not isinstance(raw, dict) or set(raw) not in ({"path"}, {"path", "partitions"}):
                 raise SystemExit(
                     f"Python suite {name or '<unnamed>'} has an invalid mpi_orchestrator; "
-                    "expected exactly one path field"
+                    "expected path and optional exact partitions"
                 )
             path = normalize(str(raw["path"]))
             candidate = Path(path)
@@ -599,7 +613,39 @@ def manifest_python_mpi_orchestrators(manifest: dict) -> list[dict]:
             if path in seen_paths or path in entrypoint_paths:
                 raise SystemExit(f"duplicate Python MPI contract: {path}")
             seen_paths.add(path)
-            orchestrators.append({"suite": name, "path": path})
+            row = {"suite": name, "path": path}
+            contract = MPI_ORCHESTRATOR_PARTITION_CONTRACTS.get(path)
+            if ("partitions" in raw) != (contract is not None):
+                raise SystemExit("MPI partition authority differs from its closed wrapper contract: " + path)
+            if "partitions" in raw:
+                partitions = raw["partitions"]
+                if not isinstance(partitions, list) or not partitions:
+                    raise SystemExit("MPI orchestrator partitions must be a nonempty array: " + path)
+                ids, nodes = set(), set()
+                source = (ROOT / path).read_text(encoding="utf-8")
+                normalized = []
+                for partition in partitions:
+                    if not isinstance(partition, dict) or set(partition) != {"id", "parent_node"}:
+                        raise SystemExit("MPI partition requires exactly id and parent_node: " + path)
+                    identity, node = partition["id"], partition["parent_node"]
+                    if (not isinstance(identity, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", identity)
+                            or not isinstance(node, str)
+                            or not re.fullmatch(r"test_[A-Za-z0-9_]+\[" + re.escape(identity) + r"\]", node)):
+                        raise SystemExit("MPI partition has an invalid exact parent node: " + path)
+                    function = node.split("[", 1)[0]
+                    if not re.search(r"^def " + re.escape(function) + r"\(", source, re.MULTILINE):
+                        raise SystemExit("MPI partition names an unowned parent function: " + path)
+                    if identity in ids or node in nodes:
+                        raise SystemExit("MPI orchestrator partitions have duplicate identities: " + path)
+                    ids.add(identity); nodes.add(node)
+                    normalized.append({"id": identity, "parent_node": node})
+                row["partitions"] = normalized
+                function, required_ids = contract
+                expected = [{"id": identity, "parent_node": function + "[" + identity + "]"}
+                            for identity in required_ids]
+                if normalized != expected:
+                    raise SystemExit("MPI partition inventory differs from its complete wrapper contract: " + path)
+            orchestrators.append(row)
     return sorted(orchestrators, key=lambda item: item["path"])
 
 

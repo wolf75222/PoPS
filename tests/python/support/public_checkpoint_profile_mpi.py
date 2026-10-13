@@ -58,7 +58,9 @@ def run_public_checkpoint_profile_world(*, group, ranks, directory):
     if type(ranks) is not int or ranks not in (1, 2):
         raise ValueError("public checkpoint profile requires an explicit MPI1 or MPI2 world")
     tests, expected_cases = GROUPS[group]
-    run_fixture_world(ranks=ranks, directory=directory, tests=tests,
+    # pytest owns and has already created tmp_path; each group/world owns a new
+    # child namespace whose strict creation rejects reuse or stale receipts.
+    run_fixture_world(ranks=ranks, directory=directory / (group + "-mpi%d" % ranks), tests=tests,
                       expected_cases=expected_cases,
                       expected_rank_env="POPS_TEST_PUBLIC_NATIVE_EXPECT_RANKS",
                       purpose="public checkpoint " + group + " profile",

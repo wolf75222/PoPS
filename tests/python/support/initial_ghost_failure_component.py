@@ -51,15 +51,13 @@ def package_data():
       signature={'generic':True,'state_components':2,'native_interface':ordinary.signature_declaration(),'native_interface_extensions':{'schema_version':1,'interfaces':[initial.signature_declaration()]}},interfaces=ordinary.manifest_declarations(),
       target={'variants':[{'dimension':2,'scalar':'float64','device':'cpu','features':[]}]},entry_points={'interface_table':'pops_component_interface_v1'})
     source=r'''#include <pops/runtime/config/generated_component_abi.hpp>
-#ifdef POPS_HAS_MPI
-#include <mpi.h>
-#endif
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cstddef>
 #include <cerrno>
 #include <climits>
+#include <string>
 namespace {
 void event(const char* kind,int rank,int size,double value,double time){
  const char* base=std::getenv("POPS_TEST_INITIAL_GHOST_LOG");if(!base)return;
@@ -67,24 +65,72 @@ void event(const char* kind,int rank,int size,double value,double time){
  FILE* f=std::fopen(path,"a");if(f){std::fprintf(f,"%s rank=%d size=%d field=%a time=%a\n",kind,rank,size,value,time);std::fclose(f);}
 }
 struct State{int rank;int size;};
+int rejected(PopsComponentStatusV1* status,int code,const char* reason);
+bool diagnostic_rank(const char* text,int* value,bool positive){
+ if(!text||!*text||(text[0]=='0'&&text[1])||text[0]<'0'||text[0]>'9')return false;
+ for(const char* at=text;*at;++at)if(*at<'0'||*at>'9')return false;
+ errno=0;char* end=nullptr;const long parsed=std::strtol(text,&end,10);
+ if(errno==ERANGE||!end||*end||parsed<0||parsed>INT_MAX||(positive&&parsed==0))return false;
+ *value=static_cast<int>(parsed);return true;
+}
+bool canonical_epoch(const std::string& text){
+ if(text.empty()||(text[0]=='0'&&text.size()!=1))return false;
+ for(char value:text)if(value<'0'||value>'9')return false;
+ errno=0;char* end=nullptr;std::strtoull(text.c_str(),&end,10);
+ return errno!=ERANGE&&end&&!*end;
+}
+bool exact_world_package_descendant(const char* identity,const char* execution){
+ if(!identity||!execution||!*execution)return false;
+ const std::string root=std::string("MPI_COMM_WORLD/pops.amr.package-assembly/")+execution;
+ const std::string candidate(identity);
+ if(candidate==root)return true;
+ const std::string hierarchy=root+"/pops.amr-system.multiblock/pops.generated-amr-levels/";
+ if(candidate.compare(0,hierarchy.size(),hierarchy)!=0)return false;
+ const std::string suffix=candidate.substr(hierarchy.size());
+ const auto split=suffix.find('/');
+ return split!=std::string::npos&&suffix.find('/',split+1)==std::string::npos&&
+        canonical_epoch(suffix.substr(0,split))&&canonical_epoch(suffix.substr(split+1));
+}
 int prepare(const PopsComponentPrepareRequestV1* r,void** out,PopsComponentStatusV1* status){
- if(!r||!out||!status)return 51;
+ if(!status)return 51;
+ if(out)*out=nullptr;
+ if(!r||!out||r->struct_size<sizeof(PopsComponentPrepareRequestV1))
+  return rejected(status,51,"initial Ghost prepare requires a complete request/output");
  int rank=0,size=1;
- const char* identity=r->execution.communicator_identity;
- if(!identity)return 51;
- if(std::strcmp(identity,"serial")==0){
-  if(r->execution.communicator_f_handle||r->execution.communicator_datatype_f_handle)return 51;
- }else{
-#ifdef POPS_HAS_MPI
-  constexpr char lane_prefix[]="pops.amr.package-assembly/";
-  const bool package_lane=std::strncmp(identity,lane_prefix,sizeof lane_prefix-1)==0&&identity[sizeof lane_prefix-1];
-  if(std::strcmp(identity,"MPI_COMM_WORLD")!=0&&!package_lane)return 51;
-  MPI_Comm comm=MPI_Comm_f2c(static_cast<MPI_Fint>(r->execution.communicator_f_handle));
-  if(MPI_Comm_rank(comm,&rank)!=MPI_SUCCESS||MPI_Comm_size(comm,&size)!=MPI_SUCCESS)return 51;
-#else
-  return 51;
-#endif
- }
+ const auto& execution=r->execution;
+ // Logging and fault rank selection come from the authenticated Native profile,
+ // never from a process-global MPI communicator inside provider code.
+ if(!diagnostic_rank(std::getenv("POPS_TEST_INITIAL_GHOST_RANK"),&rank,false)||
+    !diagnostic_rank(std::getenv("POPS_TEST_INITIAL_GHOST_SIZE"),&size,true)||rank>=size)
+  return rejected(status,51,"initial Ghost prepare lacks canonical Native diagnostic rank authority");
+ const char* base=std::getenv("POPS_TEST_INITIAL_GHOST_LOG");
+ if(base){char path[4096];std::snprintf(path,sizeof path,"%s-rank%d.log",base,rank);
+  FILE* f=std::fopen(path,"a");if(f){
+   std::fprintf(f,"prepare-authority rank=%d size=%d context=%u identity=%s communicator=%s datatype=%s comm_handle=%lld datatype_handle=%lld backend=%s\n",
+    rank,size,execution.context_version,execution.execution_identity?execution.execution_identity:"null",
+    execution.communicator_identity?execution.communicator_identity:"null",
+    execution.communicator_datatype_identity?execution.communicator_datatype_identity:"null",
+    static_cast<long long>(execution.communicator_f_handle),static_cast<long long>(execution.communicator_datatype_f_handle),
+    execution.backend_identity?execution.backend_identity:"null");std::fclose(f);}}
+ if(!execution.communicator_identity||!execution.communicator_datatype_identity)
+  return rejected(status,51,"initial Ghost prepare lacks execution authority identities");
+ const char* declared=std::getenv("POPS_TEST_INITIAL_GHOST_EXECUTION_ID");
+ if(!declared||!execution.execution_identity||std::strcmp(declared,execution.execution_identity)!=0)
+  return rejected(status,51,"initial Ghost prepare belongs to another declared execution context");
+ const char* identity=execution.communicator_identity;
+ const bool serial=std::strcmp(identity,"serial")==0;
+ const bool local=std::strcmp(identity,POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1)==0;
+ const std::string package_identity=std::string("pops.amr.package-assembly/")+execution.execution_identity;
+ const bool package_lane=identity==package_identity;
+ if(serial||local){
+  if(execution.communicator_f_handle||execution.communicator_datatype_f_handle||
+     std::strcmp(execution.communicator_datatype_identity,"none")!=0)
+   return rejected(status,51,"initial Ghost local preparation cannot carry collective authority");
+ }else if((std::strcmp(identity,"MPI_COMM_WORLD")==0||package_lane||
+           exact_world_package_descendant(identity,execution.execution_identity))&&
+          std::strcmp(execution.communicator_datatype_identity,"MPI_DOUBLE")==0){
+  // PoPS already authenticated this exact owned lane; no MPI routine is called here.
+ }else return rejected(status,51,"initial Ghost prepare requires an exact Serial/World/package/local authority");
  *out=new State{rank,size};event("prepare",rank,size,0.,0.);
  *status={sizeof(PopsComponentStatusV1),0,POPS_COMPONENT_CONTINUE_V1,nullptr};return 0;
 }

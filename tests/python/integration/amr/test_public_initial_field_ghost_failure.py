@@ -20,6 +20,10 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
     del isolated_native_cache
     native,world=native_profile()
     rank,size=rank_and_size(world)
+    # Prepared Ghost callbacks carry no collective authority. Supply only their
+    # diagnostic rank labels from this exact already-authenticated Native world.
+    monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_RANK',str(rank))
+    monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_SIZE',str(size))
     record_property('native_abi_version',native.__abi_version__)
     record_property('native_profile','MPI' if world is not None else 'Serial')
     directory=collective_directory(world,tmp_path/'initial-ghost-failure')
@@ -36,6 +40,9 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
     artifact=(pops.compile(plan) if world is None else compile_resolved_plan_once(
         world,plan,route='initial-ghost-failure-bootstrap-abort-capture@6',compile_artifact=pops.compile))
     context=collective_call(world,lambda:artifact_execution_context(artifact))
+    from pops.runtime._component_execution_context import component_execution_data
+    execution_identity=collective_call(world,lambda:component_execution_data(context)['execution_identity'])
+    monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_EXECUTION_ID',execution_identity)
     monkeypatch.setenv('POPS_TEST_INITIAL_GHOST_LOG',str(directory/'callback'))
     from pops.runtime._amr_bootstrap_execution import NativeAMRBootstrapConsumer
     original=NativeAMRBootstrapConsumer.consume_bootstrap_action
@@ -112,7 +119,10 @@ def test_public_initial_ghost_rank_fault_keeps_prepublication_owner(isolated_nat
             native={'path':native.__file__,'sha256':hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest()},
             artifact_identity=artifact.artifact_identity.token,component_manifest=component.component_manifest.to_data())
     with collective_check(world):
-        assert len(images)==1 and len(owners)==1, 'actual initial owner/failure boundary not observed'
+        assert len(images)==1 and len(owners)==1, (
+            'actual initial owner/failure boundary not observed',
+            dict(owners=len(owners), images=len(images), targets=len(targets),
+                 failures=failures, diagnostic_errors=diagnostic_errors))
         before,after=images[0]
         assert before['levels']==after['levels']==1, 'fault scope must remain the real parent before first fine creation'
         (directory/f'before-rank{rank}.bin').write_bytes(before['blob'])

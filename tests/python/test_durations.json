@@ -583,7 +583,7 @@
       ]
     },
     "ci_20260914_field_provider_install": "Conservative 5-second scheduling estimate for mocked field-provider installation contracts; not a measured CI duration. Replace from a complete per-file timing receipt.",
-    "estimated_count": 830,
+    "estimated_count": 832,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -1237,6 +1237,7 @@
       "tests/python/unit/runtime/test_amr_accepted_state_inspector.py",
       "tests/python/unit/runtime/test_amr_bind_lowering.py",
       "tests/python/unit/runtime/test_amr_checkpoint_contract.py",
+      "tests/python/unit/runtime/test_amr_empty_diagnostic_rank_restart.py",
       "tests/python/unit/runtime/test_amr_execution_contract.py",
       "tests/python/unit/runtime/test_amr_local_box_bounds_contract.py",
       "tests/python/unit/runtime/test_amr_refinement_ratio_rank.py",
@@ -1363,6 +1364,7 @@
       "tests/python/unit/time/test_lib_time_exact_coefficients.py",
       "tests/python/unit/time/test_local_transform.py",
       "tests/python/unit/time/test_method_tableaux.py",
+      "tests/python/unit/time/test_mpi_restart_fixture_contracts.py",
       "tests/python/unit/time/test_multirate_history_contract.py",
       "tests/python/unit/time/test_operator_handle_resolution.py",
       "tests/python/unit/time/test_post_synchronization.py",
@@ -1514,7 +1516,7 @@
       "scope": "M0-M7 migration additions",
       "timing_limit": "The inherited scalar-advection pipeline estimate is not refreshed from the local OMP qualification, where a full run exceeded 4299 s. CI Serial hardware/cache behavior differs; no observed CI fit is claimed. Preserve the indivisible full scientific test and refresh its estimate from the next complete CI artifact."
     },
-    "total_files": 895,
+    "total_files": 897,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -4862,6 +4864,26 @@
       "local_source_phase_seconds": 6.25,
       "local_source_session_seconds": 6.51,
       "basis": "Conservative 15-second scheduling estimate for four source-only AMR/uniform keeper history declaration and detach/codegen authority cases. The complete local source session passed in 6.51 seconds with no native modules loaded before or after and no DSO compilation. This is an estimate, not a GitHub CI per-file timing measurement or native snapshot qualification. Existing codegen suite, 71 shards, native dimensions, MPI inventories and watchdogs remain unchanged; replace only from a complete CI per-file receipt."
+    },
+    "ci_20261013_mpi_restart_fixture_contracts": {
+      "files": {
+        "tests/python/unit/time/test_mpi_restart_fixture_contracts.py": {
+          "estimated_seconds": 5,
+          "source_sha256": "dd8c502eb54201a6ca977c5dd1617945906f7fa697f516d8f83cd18a4d523079",
+          "local_source_cases": 4,
+          "local_source_phase_seconds": 0.335,
+          "source_session_seconds": 0.60
+        },
+        "tests/python/unit/runtime/test_amr_empty_diagnostic_rank_restart.py": {
+          "estimated_seconds": 5,
+          "source_sha256": "75d710f2dd6ba7a9edaad00585966b7111a049fe2607d8e90f4d78081bd836b4",
+          "local_source_cases": 22,
+          "local_source_phase_seconds": 0.002
+        }
+      },
+      "local_source_session_cases": 128,
+      "local_source_session_seconds": 1.76,
+      "basis": "Conservative five-second source-only scheduling estimates for restart fixture namespace/portable lineage receipt admission and empty-rank AMR diagnostic/restart propagation. The final temporal file has four source cases totaling 0.335 seconds in its 0.60-second source session; the diagnostic file has twenty-two cases totaling 0.002 seconds in the earlier 128-case 1.76-second source session. No native loaded or DSO compilation. These are estimates, not GitHub CI per-file measurements or native MPI restart qualification. Existing suites, 71 shards, dimensions, MPI inventories and watchdogs remain unchanged; replace only from complete CI per-file receipts."
     }
   },
   "tests/python/integration/amr/test_accepted_halo_extent_binding.py": 600,
@@ -5186,5 +5208,7 @@
   "tests/python/unit/runtime/test_staircase_field_domain.py": 5,
   "tests/python/unit/time/test_solved_field_sampling.py": 5,
   "tests/python/unit/codegen/test_typed_product_seed_history.py": 60,
-  "tests/python/unit/codegen/test_spatial_history_snapshot_codegen.py": 15
+  "tests/python/unit/codegen/test_spatial_history_snapshot_codegen.py": 15,
+  "tests/python/unit/time/test_mpi_restart_fixture_contracts.py": 5,
+  "tests/python/unit/runtime/test_amr_empty_diagnostic_rank_restart.py": 5
 }

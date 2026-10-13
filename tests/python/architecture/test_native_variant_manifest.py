@@ -541,7 +541,7 @@ def test_ctest_python_mpi_projection_matches_the_manifest_and_dim2_contract():
     assert cmake_projection == tuple(path for path, _ in manifest_projection)
 
     manifest_orchestrators = tuple(re.findall(
-        r'\{ path = "([^"]+)" \}', manifest_suite("pops_python_integration_mpi")
+        r'\{ path = "([^"]+)"(?: \}|, partitions = \[)', manifest_suite("pops_python_integration_mpi")
     ))
     assert manifest_orchestrators == (
         "tests/python/integration/mpi/test_amr_rank_change_restart.py",
@@ -623,17 +623,30 @@ def test_ctest_python_mpi_projection_matches_the_manifest_and_dim2_contract():
     assert source.count(
         "foreach(_pops_py_mpi_orchestrator IN LISTS _pops_py_mpi_orchestrators)"
     ) == 2
-    assert source.count("pops_python_mpi_${_pops_py_mpi_stem}_orchestrator") == 2
-    assert 'NAME "pops_python_mpi_${_pops_py_mpi_stem}_orchestrator"' in source
     orchestrator_properties = source.split(
-        'set_tests_properties("pops_python_mpi_${_pops_py_mpi_stem}_orchestrator"', 1
-    )[1].split("endforeach()", 1)[0]
+        'function(pops_add_mpi_pytest_orchestrator path parent_node partition)', 1
+    )[1].split("endfunction()", 1)[0]
+    assert 'set(_pops_py_mpi_selector "${CMAKE_SOURCE_DIR}/${path}")' in orchestrator_properties
+    assert 'string(APPEND _pops_py_mpi_selector "::${parent_node}")' in orchestrator_properties
+    assert 'string(APPEND _pops_py_mpi_name "_${partition}")' in orchestrator_properties
+    assert 'COMMAND ${Python_EXECUTABLE} -m pytest "${_pops_py_mpi_selector}" -q' in orchestrator_properties
     assert "PROCESSORS 2" in orchestrator_properties
     assert 'LABELS "integration;python;mpi;orchestrator"' in orchestrator_properties
     assert "TIMEOUT 900" in orchestrator_properties
-    assert "${MPIEXEC_EXECUTABLE}" not in source.split(
-        'NAME "pops_python_mpi_${_pops_py_mpi_stem}_orchestrator"', 1
-    )[1].split("endforeach()", 1)[0]
+    assert "${MPIEXEC_EXECUTABLE}" not in orchestrator_properties
+    import tomllib
+    manifest_data = tomllib.loads(manifest)
+    rows = next(row for row in manifest_data["python"]["suite"]
+                if row["name"] == "pops_python_integration_mpi")["mpi_orchestrators"]
+    expected_nodes = [(row["path"], partition["id"], partition["parent_node"])
+                      for row in rows for partition in row.get("partitions", [])]
+    partition_block = source.split("set(_pops_py_mpi_partition_nodes", 1)[1].split(")", 1)[0]
+    projected_nodes = re.findall(r'"([^"|]+)\|([^"|]+)\|([^"|]+)"', partition_block)
+    assert len(expected_nodes) == len(set(expected_nodes)) == 14
+    assert projected_nodes == expected_nodes
+    assert 'if(NOT _pops_py_mpi_orchestrator IN_LIST _pops_py_mpi_partitioned_orchestrators)' in source
+    assert source.count('pops_add_mpi_pytest_orchestrator("${_pops_py_mpi_orchestrator}" "" "")') == 1
+    assert 'foreach(_pops_py_mpi_partition IN LISTS _pops_py_mpi_partition_nodes)' in source
 
 
 def test_wheel_proof_accepts_an_explicit_fat_set_and_rejects_a_hidden_subset(tmp_path):

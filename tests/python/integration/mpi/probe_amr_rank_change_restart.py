@@ -583,6 +583,26 @@ def _capture(checkpoint: Path, evidence: Path | None, *, bit_identical: bool) ->
         )
 
 
+def _configure_restart_diagnostic_capacity(runtime: Any, checkpoint: Path) -> None:
+    # A one-rank target must admit the complete two-rank source archive during preflight.
+    # Choose its exact encoded byte extent through the public collective resource API.
+    with np.load(checkpoint, allow_pickle=False) as payload:
+        diagnostics = np.asarray(payload["program_diagnostics_state"])
+        if diagnostics.dtype != np.dtype(np.uint8) or diagnostics.ndim != 1 or not diagnostics.size:
+            raise AssertionError("rank-change checkpoint has malformed diagnostic bytes")
+        offsets = np.asarray(payload["program_diagnostics_offsets"])
+        if (offsets.dtype != np.dtype(np.int64) or offsets.ndim != 1 or offsets.size < 2
+                or offsets[0] != 0 or offsets[-1] != diagnostics.size
+                or np.any(offsets[1:] <= offsets[:-1])):
+            raise AssertionError("rank-change checkpoint has malformed diagnostic offsets")
+        ranks = int(_COMM.size)
+        source_sizes = tuple(int(hi)-int(lo) for lo, hi in zip(offsets[:-1], offsets[1:], strict=True))
+        offset_surplus = max(0, int(offsets.nbytes) - 8*(ranks+1))
+        aggregate = int(diagnostics.nbytes) + offset_surplus
+        capacity = max(max(source_sizes), (aggregate+ranks-1)//ranks)
+    runtime.configure_checkpoint_diagnostics(capacity_per_rank=capacity)
+
+
 def _restart_relaxed(checkpoint: Path, evidence: Path, rematerialized: Path) -> None:
     if int(_COMM.size) != 1:
         require_mpi_or_skip(
@@ -598,6 +618,7 @@ def _restart_relaxed(checkpoint: Path, evidence: Path, rematerialized: Path) -> 
     ):
         raise AssertionError("rank-change evidence persistent-tagging digest is corrupt")
     runtime = _runtime(bit_identical=False)
+    _configure_restart_diagnostic_capacity(runtime, checkpoint)
     runtime.restart(checkpoint)
     _assert_snapshot(
         runtime,
@@ -675,6 +696,7 @@ def _restart_strict(checkpoint: Path) -> None:
             % int(_COMM.size)
         )
     runtime = _runtime(bit_identical=True)
+    _configure_restart_diagnostic_capacity(runtime, checkpoint)
     state_before = np.asarray(
         runtime.block_level_state_global("tracer", 0), dtype=np.float64
     ).copy()

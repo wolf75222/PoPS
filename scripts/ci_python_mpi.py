@@ -34,8 +34,14 @@ def make_plan(manifest=None):
         path = row['path']
         match = re.fullmatch(r'(test_public_.+)_mpi([12])\.py', Path(path).name)
         if match:
-            pairs.setdefault(match[1], {})[int(match[2])] = path
+            worlds = pairs.setdefault(match[1], {})
+            world = int(match[2])
+            if world in worlds:
+                raise ValueError('MPI profile duplicates a world driver: ' + path)
+            worlds[world] = row
         elif path in LEGACY_PARENT_CASES:
+            if 'partitions' in row:
+                raise ValueError('Legacy MPI driver has no partition authority: ' + path)
             groups.append({'group': 'driver-' + Path(path).stem, 'launches': [{
                 'kind': 'orchestrator', 'path': path, 'timeout_seconds': 1500,
                 'parent_cases': LEGACY_PARENT_CASES[path]}]})
@@ -44,17 +50,34 @@ def make_plan(manifest=None):
     for stem, worlds in sorted(pairs.items()):
         if set(worlds) != {1, 2}:
             raise ValueError('MPI profile requires both mandatory world drivers: ' + stem)
-        groups.append({'group': 'worlds-' + stem, 'launches': [
-            {'kind': 'orchestrator', 'path': worlds[world], 'timeout_seconds': 900,
-             'parent_cases': 1} for world in (1, 2)]})
+        partitions = [worlds[world].get('partitions') for world in (1, 2)]
+        if partitions == [None, None]:
+            groups.append({'group': 'worlds-' + stem, 'launches': [
+                {'kind': 'orchestrator', 'path': worlds[world]['path'], 'timeout_seconds': 900,
+                 'parent_cases': 1} for world in (1, 2)]})
+            continue
+        if (any(partition is None for partition in partitions)
+                or [row['id'] for row in partitions[0]] != [row['id'] for row in partitions[1]]):
+            raise ValueError('MPI profile partitions differ between mandatory worlds: ' + stem)
+        for index, partition in enumerate(partitions[0]):
+            groups.append({'group': 'worlds-' + stem + '-' + partition['id'], 'launches': [
+                {'kind': 'orchestrator', 'path': worlds[world]['path'], 'timeout_seconds': 900,
+                 'parent_cases': 1, 'partition_id': partition['id'],
+                 'parent_node': partitions[world - 1][index]['parent_node']}
+                for world in (1, 2)]})
     for row in entries:
         groups.append({'group': 'ranked-' + Path(row['path']).stem, 'launches': [{
             'kind': 'ranked', 'path': row['path'], 'nproc': row['nproc'],
             'timeout_seconds': 1200}]})
     groups.sort(key=lambda row: row['group'])
-    assigned = [launch['path'] for group in groups for launch in group['launches']]
-    declared = [row['path'] for row in entries + drivers]
-    if sorted(assigned) != sorted(declared) or len(assigned) != len(set(assigned)):
+    assigned = [(launch['path'], launch.get('parent_node', ''))
+                for group in groups for launch in group['launches']]
+    declared = [(row['path'], partition['parent_node'])
+                for row in drivers for partition in row.get('partitions', [])]
+    declared.extend((row['path'], '') for row in entries + drivers if 'partitions' not in row)
+    owners = {row['path'] for row in entries + drivers}
+    if (sorted(assigned) != sorted(declared) or len(assigned) != len(set(assigned))
+            or {path for path, _node in assigned} != owners):
         raise ValueError('MPI allocations are not an exact disjoint manifest cover')
     if not groups or len({row['group'] for row in groups}) != len(groups):
         raise ValueError('MPI allocations have empty or duplicate group names')
@@ -69,7 +92,7 @@ def make_plan(manifest=None):
             'manifest_sha256': hashlib.sha256(selection.MANIFEST.read_bytes()).hexdigest(),
             'native_dimension': 2, 'test_step_seconds': TEST_STEP_SECONDS,
             'entrypoint_count': len(entries), 'orchestrator_count': len(drivers),
-            'contract_count': len(declared), 'groups': groups}
+            'contract_count': len(owners), 'parent_launch_count': len(assigned), 'groups': groups}
 
 
 def validate_plan(path):
@@ -148,13 +171,17 @@ def authenticate_install(wheel_directory, install_root, receipt_directory, *, ex
     return python, environment
 
 
-def require_parent_receipt(path, expected):
+def require_parent_receipt(path, expected, *, launch=None):
     cases = list(ET.parse(path).getroot().iter('testcase'))
     identities = {(case.attrib.get('classname'), case.attrib['name']) for case in cases}
     if (len(cases) != expected or len(identities) != len(cases)
             or any(case.find(tag) is not None for case in cases
                    for tag in ('failure', 'error', 'skipped'))):
         raise RuntimeError('MPI driver did not receive every mandatory parent case')
+    if launch is not None and 'parent_node' in launch:
+        identity = (str(Path(launch['path']).with_suffix('')).replace('/', '.'), launch['parent_node'])
+        if expected != 1 or identities != {identity}:
+            raise RuntimeError('MPI driver receipt differs from its exact manifest parent node')
 
 
 def run_launches(group, python, environment, receipts):
@@ -185,8 +212,9 @@ def run_launches(group, python, environment, receipts):
             child = [launcher, *mpi_flags, '-n', str(launch['nproc']), str(python),
                      '-u', '-c', bootstrap, launch['path']]
         else:
+            selector = launch['path'] + ('::' + launch['parent_node'] if 'parent_node' in launch else '')
             child = [str(python), '-I', '-u', '-c', pytest_bootstrap, '-q', '-ra',
-                     '--maxfail=1', '-o', 'pythonpath=', '--junitxml=' + str(xml), launch['path']]
+                     '--maxfail=1', '-o', 'pythonpath=', '--junitxml=' + str(xml), selector]
         command = ['timeout', '--signal=TERM', '--kill-after=30s',
                    str(launch['timeout_seconds']) + 's', *child]
         print('MPI group %s: %s' % (group['group'], launch['path']), flush=True)
@@ -194,7 +222,7 @@ def run_launches(group, python, environment, receipts):
         code = result.returncode
         if code == 0 and launch['kind'] == 'orchestrator':
             try:
-                require_parent_receipt(xml, launch['parent_cases'])
+                require_parent_receipt(xml, launch['parent_cases'], launch=launch)
             except (OSError, ValueError, ET.ParseError, RuntimeError) as error:
                 print(str(error), file=sys.stderr)
                 code = 1

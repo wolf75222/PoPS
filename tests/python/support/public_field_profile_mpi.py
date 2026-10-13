@@ -44,13 +44,31 @@ GROUPS = {
     ),
 }
 
+AMR_ORIGINAL_PARTITIONS = {
+    "saved_restart": (
+        (GROUPS["amr_original"][0][0],),
+        {"test_public_original_amr_saved_reaction_and_exact_restart": 3},
+    ),
+    "parent_rollback_retry": (
+        (GROUPS["amr_original"][0][1],),
+        {"test_public_original_amr_published_fields_parent_rollback_and_retry": 1},
+    ),
+}
 
-def run_public_field_profile_world(*, group, ranks, directory):
+
+def run_public_field_profile_world(*, group, ranks, directory, partition=None):
     if type(ranks) is not int or ranks not in (1, 2):
         raise ValueError("public Field profile requires an explicit MPI1 or MPI2 world")
-    tests, expected_cases = GROUPS[group]
+    if group == "amr_original":
+        if type(partition) is not str or partition not in AMR_ORIGINAL_PARTITIONS:
+            raise ValueError("public original AMR Field profile requires an exact declared partition")
+        tests, expected_cases = AMR_ORIGINAL_PARTITIONS[partition]
+    else:
+        if partition is not None:
+            raise ValueError("only the original AMR Field profile declares partitions")
+        tests, expected_cases = GROUPS[group]
     run_fixture_world(ranks=ranks, directory=directory, tests=tests,
                       expected_cases=expected_cases,
                       expected_rank_env="POPS_TEST_PUBLIC_NATIVE_EXPECT_RANKS",
-                      purpose="public Field " + group + " profile",
+                      purpose="public Field " + group + (" " + partition if partition is not None else "") + " profile",
                       timeout_seconds=CHILD_TIMEOUT_SECONDS)

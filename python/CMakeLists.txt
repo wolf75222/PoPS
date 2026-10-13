@@ -280,6 +280,30 @@ if(POPS_NATIVE_DIM STREQUAL "2")
       tests/python/integration/mpi/test_public_typed_newton_mpi1.py
       tests/python/integration/mpi/test_public_typed_newton_mpi2.py)
 
+  # Exact compound parent selectors owned by the MPI manifest; each keeps 900 s.
+  set(_pops_py_mpi_partition_nodes
+      "tests/python/integration/mpi/test_public_amr_original_field_mpi1.py|saved_restart|test_public_amr_original_on_authenticated_mpi1_world[saved_restart]"
+      "tests/python/integration/mpi/test_public_amr_original_field_mpi1.py|parent_rollback_retry|test_public_amr_original_on_authenticated_mpi1_world[parent_rollback_retry]"
+      "tests/python/integration/mpi/test_public_amr_original_field_mpi2.py|saved_restart|test_public_amr_original_on_authenticated_mpi2_world[saved_restart]"
+      "tests/python/integration/mpi/test_public_amr_original_field_mpi2.py|parent_rollback_retry|test_public_amr_original_on_authenticated_mpi2_world[parent_rollback_retry]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi1.py|tag_selection|test_public_amr_fixtures_on_authenticated_mpi1_world[tag_selection]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi1.py|stationary_regrids|test_public_amr_fixtures_on_authenticated_mpi1_world[stationary_regrids]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi1.py|evolving_halo|test_public_amr_fixtures_on_authenticated_mpi1_world[evolving_halo]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi1.py|evolved_spatial|test_public_amr_fixtures_on_authenticated_mpi1_world[evolved_spatial]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi1.py|evolved_spatial_v4|test_public_amr_fixtures_on_authenticated_mpi1_world[evolved_spatial_v4]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi2.py|tag_selection|test_public_amr_fixtures_on_authenticated_mpi2_world[tag_selection]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi2.py|stationary_regrids|test_public_amr_fixtures_on_authenticated_mpi2_world[stationary_regrids]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi2.py|evolving_halo|test_public_amr_fixtures_on_authenticated_mpi2_world[evolving_halo]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi2.py|evolved_spatial|test_public_amr_fixtures_on_authenticated_mpi2_world[evolved_spatial]"
+      "tests/python/integration/mpi/test_public_amr_profile_mpi2.py|evolved_spatial_v4|test_public_amr_fixtures_on_authenticated_mpi2_world[evolved_spatial_v4]")
+  set(_pops_py_mpi_partitioned_orchestrators)
+  foreach(_pops_py_mpi_partition IN LISTS _pops_py_mpi_partition_nodes)
+    string(REPLACE "|" ";" _pops_py_mpi_partition_fields "${_pops_py_mpi_partition}")
+    list(GET _pops_py_mpi_partition_fields 0 _pops_py_mpi_partition_path)
+    list(APPEND _pops_py_mpi_partitioned_orchestrators "${_pops_py_mpi_partition_path}")
+  endforeach()
+  list(REMOVE_DUPLICATES _pops_py_mpi_partitioned_orchestrators)
+
   set(_pops_py_io_ignore_args)
   foreach(_pops_py_mpi_entrypoint IN LISTS _pops_py_io_mpi_entrypoints)
     list(APPEND _pops_py_io_ignore_args
@@ -354,17 +378,37 @@ if(POPS_NATIVE_DIM STREQUAL "2")
       pops_add_mpi_pytest_entrypoint("${_pops_py_mpi_entrypoint}")
     endforeach()
 
-    foreach(_pops_py_mpi_orchestrator IN LISTS _pops_py_mpi_orchestrators)
-      get_filename_component(_pops_py_mpi_stem "${_pops_py_mpi_orchestrator}" NAME_WE)
-      add_test(
-        NAME "pops_python_mpi_${_pops_py_mpi_stem}_orchestrator"
-        COMMAND ${Python_EXECUTABLE} -m pytest "${CMAKE_SOURCE_DIR}/${_pops_py_mpi_orchestrator}" -q)
-      set_tests_properties("pops_python_mpi_${_pops_py_mpi_stem}_orchestrator" PROPERTIES
+    function(pops_add_mpi_pytest_orchestrator path parent_node partition)
+      get_filename_component(_pops_py_mpi_stem "${path}" NAME_WE)
+      set(_pops_py_mpi_name "pops_python_mpi_${_pops_py_mpi_stem}")
+      set(_pops_py_mpi_selector "${CMAKE_SOURCE_DIR}/${path}")
+      if(NOT "${partition}" STREQUAL "")
+        string(APPEND _pops_py_mpi_name "_${partition}")
+        string(APPEND _pops_py_mpi_selector "::${parent_node}")
+      endif()
+      string(APPEND _pops_py_mpi_name "_orchestrator")
+      add_test(NAME "${_pops_py_mpi_name}"
+        COMMAND ${Python_EXECUTABLE} -m pytest "${_pops_py_mpi_selector}" -q)
+      set_tests_properties("${_pops_py_mpi_name}" PROPERTIES
         ENVIRONMENT "${_pops_py_test_env};POPS_REQUIRE_MPI_TESTS=1"
         LABELS "integration;python;mpi;orchestrator"
         PROCESSORS 2
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         TIMEOUT 900)
+    endfunction()
+
+    foreach(_pops_py_mpi_orchestrator IN LISTS _pops_py_mpi_orchestrators)
+      if(NOT _pops_py_mpi_orchestrator IN_LIST _pops_py_mpi_partitioned_orchestrators)
+        pops_add_mpi_pytest_orchestrator("${_pops_py_mpi_orchestrator}" "" "")
+      endif()
+    endforeach()
+    foreach(_pops_py_mpi_partition IN LISTS _pops_py_mpi_partition_nodes)
+      string(REPLACE "|" ";" _pops_py_mpi_partition_fields "${_pops_py_mpi_partition}")
+      list(GET _pops_py_mpi_partition_fields 0 _pops_py_mpi_partition_path)
+      list(GET _pops_py_mpi_partition_fields 1 _pops_py_mpi_partition_id)
+      list(GET _pops_py_mpi_partition_fields 2 _pops_py_mpi_partition_parent)
+      pops_add_mpi_pytest_orchestrator("${_pops_py_mpi_partition_path}"
+        "${_pops_py_mpi_partition_parent}" "${_pops_py_mpi_partition_id}")
     endforeach()
   endif()
 endif()

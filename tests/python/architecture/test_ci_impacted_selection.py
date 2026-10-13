@@ -876,7 +876,7 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
 def test_manifest_projects_serial_python_mpi_orchestrators():
     """Independent-world drivers use pytest outside MPI and launch their own worlds."""
     sel = _load("ci_select_tests")
-    assert sel.manifest_python_mpi_orchestrators(sel.load_manifest()) == [
+    expected = [
         {
             "suite": "pops_python_integration_mpi",
             "path": "tests/python/integration/mpi/test_amr_rank_change_restart.py",
@@ -990,6 +990,22 @@ def test_manifest_projects_serial_python_mpi_orchestrators():
             "path": "tests/python/integration/mpi/test_public_typed_newton_mpi2.py",
         },
     ]
+
+    for row in expected:
+        path = row["path"]
+        if "test_public_amr_profile_mpi" in path:
+            ids = ("tag_selection", "stationary_regrids", "evolving_halo", "evolved_spatial", "evolved_spatial_v4")
+            function = "test_public_amr_fixtures"
+        elif "test_public_amr_original_field_mpi" in path:
+            ids = ("saved_restart", "parent_rollback_retry")
+            function = "test_public_amr_original"
+        else:
+            continue
+        world = int(path[-4])
+        row["partitions"] = [{"id": identity, "parent_node": function +
+                              "_on_authenticated_mpi%d_world[%s]" % (world, identity)}
+                             for identity in ids]
+    assert sel.manifest_python_mpi_orchestrators(sel.load_manifest()) == expected
 
 
 def test_python_mpi_contracts_are_excluded_from_serial_pytest_suites():
