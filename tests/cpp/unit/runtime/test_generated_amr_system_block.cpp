@@ -1379,7 +1379,8 @@ TEST(GeneratedAmrSystemBlock, ScalarParentPreparationRefreshesSparsePeriodicGhos
               EXPECT_EQ(reason,
                         pops::n_ranks() == 1
                             ? "AMR prior-field history parent has a different publication sample"
-                            : "composite spatial preparation failed collectively");
+                            : "composite spatial preparation failed collectively; rank 0: "
+                              "AMR prior-field history parent has a different publication sample");
             });
           });
         },

@@ -261,13 +261,17 @@ TENSOR_INPUT_HISTORY_PORT_BUDGET = 16 + 80 + 64 + 24
 # history references: 104 net lines across six counted fragments, with a bounded allowance.
 # Existing per-file, responsibility and scaffolding caps remain unchanged.
 SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET = 112
+# Canonical temporal producer comparison adds 27 lines in its existing family
+# owner and seven in its runtime caller. Count all 34 in both aggregate closures;
+# retain every responsibility, scaffolding and resource allowance unchanged.
+TEMPORAL_FAMILY_COMPARISON_FRAGMENT_BUDGET = 34
 PROGRAM_FRAGMENT_BUDGET = (
     7_730 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
     + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
     + HIERARCHY_BARRIER_FRAGMENT_BUDGET + FIELD_SCRATCH_FRAGMENT_BUDGET
     + PATH_INPUT_FRAGMENT_BUDGET + TENSOR_INPUT_HISTORY_PORT_BUDGET
     + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET + RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET
-    + PROGRAM_NEW_CONTRACT_BUDGET
+    + PROGRAM_NEW_CONTRACT_BUDGET + TEMPORAL_FAMILY_COMPARISON_FRAGMENT_BUDGET
 )
 # Context-owned cache acquisition and independent field-resource handles extend the
 # existing scaffolding; numerical solve and publication bodies remain counted above.
@@ -300,7 +304,7 @@ PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
     + PATH_INPUT_FRAGMENT_BUDGET + TENSOR_INPUT_HISTORY_PORT_BUDGET
     + HIERARCHY_TENSOR_SCAFFOLDING_BUDGET
     + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET + RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET
-    + PROGRAM_NEW_CONTRACT_BUDGET
+    + PROGRAM_NEW_CONTRACT_BUDGET + TEMPORAL_FAMILY_COMPARISON_FRAGMENT_BUDGET
 )
 PROGRAM_SEMANTIC_HELPER_PATHS = frozenset({
     "pops/runtime/program/prepared_program_field_stages.hpp",

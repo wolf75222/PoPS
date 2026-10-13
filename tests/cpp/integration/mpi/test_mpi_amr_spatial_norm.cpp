@@ -186,6 +186,35 @@ namespace pops::runtime::program {
 struct AmrSpatialReconciliationTestAccess {
   using Context = AmrProgramContext<2>;
   using Ledger = Context::multiblock_flux_ledger_type;
+  using Basis = Context::FluxBasis;
+  using Provider = Context::FluxBasisProvider;
+  using Expression = Context::FluxExpression;
+  using Term = Context::FluxExpressionTerm;
+  static void erase_declared_producer(Context& ctx) {
+    ctx.declared_flux_temporal_families_.erase(
+        std::tuple{std::size_t{0}, 2, Provider::PreparedDefaultFlux});
+  }
+  static void prepare_temporal_expression(Context& ctx, MultiFab<2>& candidate, Ledger& incoming,
+                                          int substep, double duration, Expression expression) {
+    ctx.active_level_ = 1;
+    ctx.logical_substep_ = substep;
+    ctx.current_dt_ = duration;
+    ctx.current_interval_start_time_ = substep * .5;
+    ctx.current_interval_begin_phase_ = {substep, 2};
+    ctx.current_interval_end_phase_ = {substep + 1, 2};
+    ctx.active_subcycling_attempt_ = 7;
+    ctx.active_subcycling_window_ = {{1, 0, {substep, 2}, substep * .5},
+                                     {1, 0, {substep + 1, 2}, substep * .5 + duration}};
+    ctx.active_attempt_states_ = {&candidate};
+    ctx.active_incoming_flux_ = {&incoming};
+    ctx.active_outgoing_flux_ = {nullptr};
+    ctx.active_block_identities_ = {"tracer"};
+    ctx.prepared_rhs_basis_bounds_ = {2};
+    ctx.prepared_coefficient_term_bounds_ = {1};
+    ctx.spatial_consumed_flux_.clear();
+    ctx.active_flux_expressions_.clear();
+    ctx.active_flux_expressions_.emplace(&candidate, std::move(expression));
+  }
   static void verify_scratch_ownership(Context& ctx) {
     auto checkpoint = ctx.capture_accepted_context_snapshot_();
     const auto& accepted = ctx.state(0);
@@ -324,6 +353,8 @@ SpatialAccess::Ledger predictor_ledger(int parent, const std::string& state_iden
 }
 }  // namespace
 
+#include "amr_temporal_family_materialization_fixture.hpp"
+
 TEST(AmrSpatialMaterialization, PendingProofSurvivesPublicationAndRejectsRankLocalDamage) {
   using namespace pops;
   AmrSystemConfig<2> config;
@@ -402,7 +433,9 @@ TEST(AmrSpatialMaterialization, PendingProofSurvivesPublicationAndRejectsRankLoc
         EXPECT_EQ(refusal, n_ranks() == 1
                                ? "AMR Program coarse/fine flux operator identities differ before "
                                  "face-flux publication"
-                               : "composite spatial preparation failed collectively");
+                               : "composite spatial preparation failed collectively; rank 0: "
+                                 "AMR Program coarse/fine flux operator identities differ before "
+                                 "face-flux publication");
       }
       EXPECT_EQ(SpatialAccess::proofs(context), 0u);
       incoming.rollback();
@@ -415,6 +448,55 @@ TEST(AmrSpatialMaterialization, PendingProofSurvivesPublicationAndRejectsRankLoc
     EXPECT_DOUBLE_EQ(reduce_min_local(middle), 2);
     EXPECT_DOUBLE_EQ(reduce_min_local(fine), 3);
   }
+}
+
+
+TEST(AmrSpatialMaterialization, DeclaredFamilyPreservesMigratedQuadratureAndMetricClosure) {
+  TemporalFluxFixture fixture;
+  fixture.receive_positive();
+}
+
+TEST(AmrSpatialMaterialization, DeclaredFamilyRejectsMissingAndForeignFamilies) {
+  for (auto fault : {TemporalFluxFault::MissingBasisFamily, TemporalFluxFault::ForeignBasisFamily,
+                    TemporalFluxFault::MissingCoarseFamily, TemporalFluxFault::ForeignCoarseFamily,
+                    TemporalFluxFault::MissingDeclaredProducer}) {
+    SCOPED_TRACE(static_cast<int>(fault));
+    TemporalFluxFixture fixture(fault, true, false);
+    fixture.receive_refusal();
+  }
+}
+
+TEST(AmrSpatialMaterialization, DeclaredFamilyPreservesEveryOperatorOccurrenceDescriptor) {
+  for (auto fault : {TemporalFluxFault::ForeignRhs, TemporalFluxFault::ForeignProvider,
+                    TemporalFluxFault::ForeignBasis, TemporalFluxFault::ForeignStage}) {
+    SCOPED_TRACE(static_cast<int>(fault));
+    TemporalFluxFixture fixture(fault, true, false);
+    fixture.receive_refusal();
+  }
+}
+
+TEST(AmrSpatialMaterialization, DeclaredFamilyBindsStageWeightToMeasureAndRetainsPackSize) {
+  for (auto fault : {TemporalFluxFault::WeightMeasureMismatch, TemporalFluxFault::ExtraCoarseStage}) {
+    SCOPED_TRACE(static_cast<int>(fault));
+    TemporalFluxFixture fixture(fault, true, false);
+    fixture.receive_refusal();
+  }
+}
+
+TEST(AmrSpatialMaterialization, DeclaredFamilyRequiresCompletePhysicalTemporalCoverage) {
+  for (auto fault : {TemporalFluxFault::IncompleteWindow, TemporalFluxFault::IncompleteFineFaces,
+                    TemporalFluxFault::BadClockDuration, TemporalFluxFault::WeightsDoNotClose}) {
+    SCOPED_TRACE(static_cast<int>(fault));
+    TemporalFluxFixture fixture(fault);
+    fixture.receive_refusal(true);
+  }
+}
+
+TEST(AmrSpatialMaterialization, LegacyStillRequiresTheOriginalExactOperatorPack) {
+  TemporalFluxFixture unchanged(TemporalFluxFault::None, false, false);
+  unchanged.receive_positive();
+  TemporalFluxFixture migrated(TemporalFluxFault::None, false, true);
+  migrated.receive_refusal();
 }
 
 #endif  // POPS_NATIVE_DIM == 2
