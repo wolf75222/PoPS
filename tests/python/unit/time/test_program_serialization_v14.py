@@ -175,3 +175,163 @@ def test_nested_child_shell_and_nonregion_body_block_receive_protocol_projection
     child['attrs']['body_block'][0]['integer_hook'] = 'mutated'
     again = _ProgramSerialization._serialize_node(outer)
     assert again['attrs']['body_block'][0]['attrs']['body_block'][0]['attrs']['body_block'] == [{'integer_hook': '8'}]
+
+
+@pytest.mark.parametrize('kind', ('dict', 'list', 'tuple'))
+def test_exact_containers_repeat_leaf_protocols_and_keep_fresh_copies(kind):
+    calls = []
+
+    class Leaf:
+        def to_data(self):
+            calls.append('project')
+            return {'payload': [len(calls)]}
+
+    leaf = Leaf()
+    if kind == 'dict':
+        value = {'first': leaf, 'second': leaf}
+    elif kind == 'list':
+        value = [leaf, leaf]
+    else:
+        value = (leaf, leaf)
+
+    def rows(projected):
+        return list(projected.values()) if kind == 'dict' else projected
+
+    first = rows(_json_ready(value))
+    assert first == [{'payload': [1]}, {'payload': [2]}]
+    assert first[0] is not first[1]
+    assert first[0]['payload'] is not first[1]['payload']
+    first[0]['payload'][0] = 999
+    assert first[1] == {'payload': [2]}
+    assert rows(_json_ready(value)) == [{'payload': [3]}, {'payload': [4]}]
+    assert calls == ['project', 'project', 'project', 'project']
+
+
+@pytest.mark.parametrize('container_type', (dict, list, tuple))
+def test_container_subclasses_resolve_before_hook_instead_of_iterating(container_type):
+    calls = []
+
+    class Resolved:
+        def to_data(self):
+            calls.append('to_data')
+            return {'resolved': (1, -0.0)}
+
+    class Metadata(container_type):
+        def declaration_references(self):
+            calls.append('references')
+            return ('exact_declared_reference',)
+
+        def resolve_references(self, resolver):
+            assert callable(resolver)
+            calls.append('resolve')
+            return Resolved()
+
+        def to_data(self):
+            raise AssertionError('unresolved container hook must not run')
+
+        def __iter__(self):
+            raise AssertionError('raw container contents must not be traversed')
+
+    projected = _json_ready({'metadata': [Metadata()]})
+    assert _json(projected) == '{"metadata":[{"resolved":[1,-0.0]}]}'
+    assert calls == ['references', 'resolve', 'to_data']
+
+
+def test_exact_dict_keeps_insertion_order_and_mixed_key_sorting():
+    regular = {'z': (1, -0.0), 'a': [True, None]}
+    assert _json(_json_ready(regular)) == '{"z":[1,-0.0],"a":[true,null]}'
+    mixed = {'z': -0.0, '': 1, 2: (True, None), (1, 3): ['x']}
+    assert _json(_json_ready(mixed)) == (
+        '{"mapping_entries":[["",1],["z",-0.0],[2,[true,null]],[[1,3],["x"]]]}')
+
+
+def test_exact_containers_keep_real_handle_and_expr_authority_projection():
+    from pops.math import ValueExpr
+    from pops.model import Handle, OwnerPath
+    from pops.time.references import handle_data
+    from pops._ir.visitors import _dag_key_data
+
+    handle = Handle('u', kind='state', owner=OwnerPath.model('container_projection'))
+    expression = ValueExpr(handle) + 3
+    projected = _json_ready({'nested': [(handle, expression)]})
+    assert projected == {'nested': [[{'handle': handle_data(handle)},
+        json.loads(json.dumps(_dag_key_data((expression,))))]]}
+    assert projected['nested'][0][1]['protocol'] == 'pops.expr.dag.v1'
+
+
+@pytest.mark.parametrize('symbolic', (False, True))
+def test_exact_containers_do_not_hide_unresolved_authorities(symbolic):
+    from pops.math import ValueExpr
+    from pops.model import Handle, OwnerKind, OwnerPath, UnresolvedOwnershipError
+
+    handle = Handle('u', kind='state', owner=OwnerPath.fresh(
+        OwnerKind.MODEL_DEFINITION, 'unresolved_container_projection'))
+    leaf = ValueExpr(handle) + 3 if symbolic else handle
+    with pytest.raises(UnresolvedOwnershipError):
+        _json_ready({'nested': [(leaf,)]})
+
+
+def test_exact_containers_preserve_leaf_failure_before_later_hooks():
+    calls = []
+    failure = ValueError('exact metadata leaf failed')
+
+    class Broken:
+        def to_data(self):
+            calls.append('broken')
+            raise failure
+
+    class Later:
+        def to_data(self):
+            calls.append('later')
+            return 3
+
+    with pytest.raises(ValueError) as caught:
+        _json_ready({'nested': [(Broken(), Later())]})
+    assert caught.value is failure
+    assert calls == ['broken']
+
+
+@pytest.mark.parametrize('spoofed_builtin', (dict, int))
+def test_metaclass_equality_cannot_skip_metadata_to_data(spoofed_builtin):
+    calls = []
+
+    class SpoofedType(type):
+        __hash__ = type.__hash__
+
+        def __eq__(cls, other):
+            return other is spoofed_builtin
+
+    class Metadata(metaclass=SpoofedType):
+        def to_data(self):
+            calls.append('to_data')
+            return {'projected': (7, -0.0)}
+
+    value = Metadata()
+    assert type(value) is not spoofed_builtin
+    projected = _json_ready({'metadata': [value]})
+    assert _json(projected) == '{"metadata":[{"projected":[7,-0.0]}]}'
+    assert calls == ['to_data']
+
+
+@pytest.mark.parametrize('spoofed_builtin', (dict, int))
+def test_metaclass_equality_cannot_hide_handle_authority(spoofed_builtin):
+    from pops.model import Handle, OwnerKind, OwnerPath, UnresolvedOwnershipError
+
+    calls = []
+    handle = Handle('u', kind='state', owner=OwnerPath.fresh(
+        OwnerKind.MODEL_DEFINITION, 'metaclass_unresolved_authority'))
+
+    class SpoofedType(type):
+        __hash__ = type.__hash__
+
+        def __eq__(cls, other):
+            return other is spoofed_builtin
+
+    class Metadata(metaclass=SpoofedType):
+        def to_data(self):
+            calls.append('to_data')
+            return handle
+
+    with pytest.raises(UnresolvedOwnershipError):
+        _json_ready({'metadata': [(Metadata(),)]})
+    assert calls == ['to_data']

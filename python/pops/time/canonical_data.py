@@ -75,23 +75,28 @@ class CanonicalData:
 def _json_ready(value: Any) -> Any:
     # Exact builtins have neither descriptor hooks nor reference authority.  Keep
     # subclasses on the protocol path (an int/str subclass may define to_data).
-    if value is None or type(value) in (bool, int, float, str):
+    value_type = type(value)
+    if (value is None or value_type is bool or value_type is int
+            or value_type is float or value_type is str):
         return value
-    if isinstance(value, Handle):
-        return {"handle": handle_data(value)}
-    from pops._ir.expr import Expr
-    if isinstance(value, Expr):
-        from pops._ir.visitors import _dag_key_data
-        from pops.time.references import canonical_handle
-        return _json_ready(_dag_key_data((value.resolve_references(canonical_handle),)))
-    references = getattr(value, "declaration_references", None)
-    resolve = getattr(value, "resolve_references", None)
-    if callable(references) and references() and callable(resolve):
-        from pops.time.references import canonical_handle
-        value = resolve(canonical_handle)
-    hook = getattr(value, "to_data", None)
-    if callable(hook):
-        return _json_ready(hook())
+    # Exact containers cannot carry authoring protocols. Their contents still
+    # use the common recursive conversion below; subclasses keep every hook.
+    if value_type is not dict and value_type is not list and value_type is not tuple:
+        if isinstance(value, Handle):
+            return {"handle": handle_data(value)}
+        from pops._ir.expr import Expr
+        if isinstance(value, Expr):
+            from pops._ir.visitors import _dag_key_data
+            from pops.time.references import canonical_handle
+            return _json_ready(_dag_key_data((value.resolve_references(canonical_handle),)))
+        references = getattr(value, "declaration_references", None)
+        resolve = getattr(value, "resolve_references", None)
+        if callable(references) and references() and callable(resolve):
+            from pops.time.references import canonical_handle
+            value = resolve(canonical_handle)
+        hook = getattr(value, "to_data", None)
+        if callable(hook):
+            return _json_ready(hook())
     if isinstance(value, Mapping):
         if all(isinstance(key, str) and key for key in value):
             return {key: _json_ready(item) for key, item in value.items()}

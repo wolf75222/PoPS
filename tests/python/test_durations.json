@@ -5487,7 +5487,7 @@
         "tests/python/unit/time/test_program_serialization_v14.py": {
           "kind": "source_contract",
           "registration": "v14",
-          "declared_cases": 32,
+          "declared_cases": 47,
           "estimated_seconds": 10,
           "basis": "Provisional conservative 10-second scheduling estimate, not a measured GitHub CI duration. The local source-only 32-case gate passed in 0.96 seconds; it is separate evidence and does not qualify native execution. Canonical graph serialization, nested regions, provenance, detached copies and metadata hooks; no compilation/native runtime required."
         },
@@ -5684,7 +5684,7 @@
         "native_files": 28,
         "native_cases": 83,
         "source_files": 21,
-        "source_cases": 237,
+        "source_cases": 252,
         "mpi_only_receivers": 4,
         "mpi2_entrypoints": 28,
         "native_received": false,
