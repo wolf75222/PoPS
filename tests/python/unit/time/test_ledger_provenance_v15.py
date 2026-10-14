@@ -1,3 +1,8 @@
+from collections.abc import Mapping
+import gc
+import weakref
+from pops.ledger_provenance import _packet_reference_scanner, _refs
+
 import pytest
 import pops
 from pops.graph_functions import graph, GraphFunction
@@ -114,3 +119,105 @@ def test_packet_projection_reconstruction_keeps_mandatory_claim(mode):
     else:
         with pytest.raises(ValueError,match='ledger packet'):
             freeze(p,base,old,proposal,a,packet)
+
+
+class CountedMapping(Mapping):
+    def __init__(self, values):
+        self.data = dict(values)
+        self.reads = 0
+    def __iter__(self):
+        return iter(self.data)
+    def __len__(self):
+        return len(self.data)
+    def __getitem__(self, key):
+        return self.data[key]
+    def values(self):
+        self.reads += 1
+        return self.data.values()
+
+
+@pytest.mark.parametrize('present', (False, True))
+def test_shared_metadata_dag_is_scanned_once_without_excluding_any_key(present):
+    p = pops.Program('packet_reference_dag')
+    value = p.float64(1)
+    leaf = CountedMapping({'unexpected_key': value if present else 1})
+    nodes = [leaf]
+    metadata = leaf
+    for _ in range(32):
+        metadata = CountedMapping({'signature': metadata, 'opaque_future_metadata': metadata})
+        nodes.append(metadata)
+    scan = _packet_reference_scanner()
+    actual = scan(metadata)
+    assert tuple(id(item) for item in actual) == ((id(value),) if present else ())
+    assert all(node.reads == 1 for node in nodes)
+    assert scan(metadata) is actual
+    assert all(node.reads == 1 for node in nodes)
+
+
+def test_ordered_global_refs_keep_multiplicity_while_prefilter_keeps_first_occurrences():
+    p = pops.Program('packet_reference_order')
+    a, b = p.float64(1), p.float64(2)
+    shared = {'nested': [b, a, b]}
+    metadata = [a, shared, shared, b]
+    assert tuple(id(x) for x in _refs(metadata)) == tuple(map(id, (a,b,a,b,b,a,b,b)))
+    assert tuple(id(x) for x in _packet_reference_scanner()(metadata)) == (id(a), id(b))
+
+
+def test_scanner_retains_sources_only_until_local_query_is_released():
+    p = pops.Program('packet_reference_lifetime')
+    value = p.float64(1)
+    source = CountedMapping({'ref': value})
+    retained = weakref.ref(source)
+    scan = _packet_reference_scanner()
+    assert scan(source)[0] is value
+    del source
+    gc.collect()
+    assert retained() is not None
+    del scan
+    gc.collect()
+    assert retained() is None
+
+
+def test_new_query_rechecks_changed_public_metadata():
+    p = pops.Program('packet_reference_fresh_query')
+    a, b = p.float64(1), p.float64(2)
+    metadata = {'ref': a}
+    assert _packet_reference_scanner()(metadata)[0] is a
+    metadata['ref'] = b
+    assert _packet_reference_scanner()(metadata)[0] is b
+
+
+def test_cycles_fail_closed_and_failed_query_does_not_poison_later_scan():
+    metadata = []
+    metadata.append(metadata)
+    scan = _packet_reference_scanner()
+    with pytest.raises(ValueError, match='cyclic metadata'):
+        scan(metadata)
+    metadata.clear()
+    assert scan(metadata) == ()
+
+
+def test_arbitrary_shared_metadata_reference_still_reaches_delivery_guard(monkeypatch):
+    from pops.ledger_provenance import _validate_packet_delivery
+    import pops.codegen.realization_delivery as delivery
+    p, base, old, proposal = setup()
+    packet = ledger(p, old['q'], old['time'], 1).pack(p)
+    value = p.float64(0)
+    shared = {'future_metadata': (packet, packet)}
+    value = p._replace_value(value, attrs=dict(value.attrs, unfamiliar=(shared, shared)))
+    envelope = p.product(increment=value)
+    class ReachedExactDelivery(Exception):
+        pass
+    def reached(*args, **kwargs):
+        raise ReachedExactDelivery
+    monkeypatch.setattr(delivery, 'delivered_frontiers', reached)
+    with pytest.raises(ReachedExactDelivery):
+        _validate_packet_delivery(envelope, {})
+
+
+def test_same_ssa_id_in_different_programs_does_not_collapse_authorities():
+    first, second = pops.Program('first_owner'), pops.Program('second_owner')
+    a, b = first.float64(1), second.float64(1)
+    assert a.id == b.id and a.prog is not b.prog
+    actual = _packet_reference_scanner()({'refs': (a, b, a)})
+    assert len(actual) == 2 and actual[0] is a and actual[1] is b

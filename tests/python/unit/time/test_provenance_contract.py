@@ -136,3 +136,149 @@ def test_lowering_projection_appends_lower_without_mutating_program():
     assert lowered.phase == "lowering"
     assert lowered.parents == (original.id,)
     assert value.provenance is original
+
+
+@pytest.mark.parametrize('depth,expected_line', [(0, 2), (1, 4), (2, 6), (False, 2), (True, 4)])
+def test_source_span_preserves_exact_depth_filename_and_line(tmp_path, depth, expected_line):
+    from pops.provenance import source_span
+
+    filename = str(tmp_path / 'nested_capture.py')
+    code = ('def inner():\n'
+            '    return capture(skip_package=False, depth=depth)\n'
+            'def middle():\n'
+            '    return inner()\n'
+            'def outer():\n'
+            '    return middle()\n')
+    namespace = {'capture': source_span, 'depth': depth, '__name__': __name__}
+    exec(compile(code, filename, 'exec'), namespace)
+    span = namespace['outer']()
+    assert span.file == filename
+    assert span.line == expected_line
+    assert span.column == 0 and span.end_line is None and span.end_column is None
+
+
+@pytest.mark.parametrize('skip_package', [False, True])
+def test_source_span_skips_only_exact_package_descendants(skip_package):
+    import os
+    import pops.provenance as provenance
+
+    root = os.path.dirname(provenance.__file__)
+    inside = os.path.join(root, '_source_span_fixture.py')
+    # The sibling has the package prefix, but is not inside the package directory.
+    outside = os.path.join(root + '-external', 'caller.py')
+    inner = {'capture': provenance.source_span, 'skip': skip_package, '__name__': __name__}
+    exec(compile('def inner():\n    return capture(skip_package=skip, depth=0)\n',
+                 inside, 'exec'), inner)
+    outer = {'inner': inner['inner'], '__name__': __name__}
+    exec(compile('def outer():\n    return inner()\n', outside, 'exec'), outer)
+    span = outer['outer']()
+    assert span.file == os.path.abspath(outside if skip_package else inside)
+    assert span.line == 2
+
+
+@pytest.mark.parametrize('filename_kind', ['bytecode', 'pseudo'])
+def test_source_span_preserves_inspect_filename_resolution(tmp_path, filename_kind):
+    import os
+    from pops.provenance import source_span
+
+    code = 'def caller():\n    return capture(skip_package=False, depth=0)\n'
+    if filename_kind == 'bytecode':
+        source = tmp_path / 'authored.py'
+        source.write_text(code, encoding='utf-8')
+        filename, expected = str(source.with_suffix('.pyc')), str(source)
+    else:
+        filename = '<authored-source-span>'
+        expected = os.path.abspath(filename)
+    namespace = {'capture': source_span, '__name__': __name__}
+    exec(compile(code, filename, 'exec'), namespace)
+    span = namespace['caller']()
+    assert (span.file, span.line) == (expected, 2)
+
+
+def test_source_span_excessive_depth_returns_unknown():
+    from pops.provenance import source_span
+
+    assert source_span(skip_package=False, depth=10**6) == SourceSpan('<unknown>', 0)
+
+
+@pytest.mark.parametrize('depth', [-2, -3])
+def test_source_span_negative_depth_uses_outer_stack_slice(depth):
+    import inspect
+    import os
+    from pops.provenance import source_span
+
+    def caller():
+        # The extra source_span frame is at the beginning; these negative indices
+        # therefore select the same suspended outer frame in both stacks.
+        frames = inspect.stack(context=0)
+        try:
+            selected = frames[depth + 1]
+            expected = (os.path.abspath(selected.filename), selected.lineno)
+        finally:
+            del selected
+            del frames
+        actual = source_span(skip_package=False, depth=depth)
+        return actual, expected
+
+    actual, expected = caller()
+    assert (actual.file, actual.line) == expected
+
+
+@pytest.mark.parametrize('depth', [-1, -(10**6)])
+def test_source_span_slice_start_at_current_frame_stays_inside_source_function(depth):
+    import inspect
+    import os
+    import pops.provenance as provenance
+
+    lines, first = inspect.getsourcelines(provenance.source_span)
+    span = provenance.source_span(skip_package=False, depth=depth)
+    assert span.file == os.path.abspath(provenance.__file__)
+    assert first <= span.line < first + len(lines)
+
+
+def test_source_span_preserves_slice_index_protocol_and_rejects_float_depth(tmp_path):
+    from pops.provenance import source_span
+
+    class SliceIndex:
+        def __index__(self):
+            return 2
+
+    class Depth:
+        def __add__(self, other):
+            assert other == 1
+            return SliceIndex()
+
+    filename = str(tmp_path / 'index_depth.py')
+    namespace = {'capture': source_span, 'depth': Depth(), '__name__': __name__}
+    exec(compile('def inner():\n    return capture(skip_package=False, depth=depth)\n'
+                 'def outer():\n    return inner()\n', filename, 'exec'), namespace)
+    actual = namespace['outer']()
+    assert (actual.file, actual.line) == (filename, 4)
+    with pytest.raises(TypeError):
+        source_span(skip_package=False, depth=0.5)
+
+
+def test_source_span_does_not_retain_caller_frame_without_cycle_collection():
+    import gc
+    import weakref
+    from pops.provenance import source_span
+
+    class Payload:
+        pass
+
+    def caller():
+        payload = Payload()
+        reference = weakref.ref(payload)
+        span = source_span(skip_package=False, depth=0)
+        return span, reference
+
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        span, reference = caller()
+        assert isinstance(span, SourceSpan)
+        # No gc.collect(): a leaked frame would retain its local payload here.
+        assert reference() is None
+    finally:
+        if was_enabled:
+            gc.enable()

@@ -39,6 +39,49 @@ def _refs(value):
         for item in value:yield from _refs(item)
 
 
+def _packet_reference_scanner():
+    """Memoize metadata reachability for one read-only packet prefilter.
+
+    Shared structural metadata is a DAG. Only this boolean reachability query may
+    collapse repeated references; `_refs` retains its ordered multiplicity for
+    contract validation and positional comparisons. Strong source references keep
+    identity keys live, and nothing survives the enclosing delivery check.
+    """
+    cached = {}
+    active = set()
+
+    def references(value):
+        if isinstance(value, ProgramValue):
+            return (value,)
+        if not isinstance(value, (Mapping, tuple, list)):
+            return ()
+        marker = id(value)
+        previous = cached.get(marker)
+        if previous is not None:
+            assert previous[0] is value
+            return previous[1]
+        if marker in active:
+            raise ValueError('cyclic metadata in inventory packet reachability')
+        active.add(marker)
+        try:
+            result = []
+            seen = set()
+            items = value.values() if isinstance(value, Mapping) else value
+            for item in items:
+                for ref in references(item):
+                    identity = id(ref)
+                    if identity not in seen:
+                        seen.add(identity)
+                        result.append(ref)
+            found = tuple(result)
+            cached[marker] = (value, found)
+            return found
+        finally:
+            active.remove(marker)
+
+    return references
+
+
 def contract_json_data(value):
     if isinstance(value,ProgramValue):return {'program_value_id':value.id}
     if isinstance(value,Mapping):return {k:contract_json_data(v) for k,v in value.items()}
@@ -308,6 +351,7 @@ def _validate_packet_delivery(envelope, values):
     # metadata is not a numerical edge; consumed child packets are independent
     # authenticated frontiers. This prefilter never grants a certificate.
     reachable={}
+    metadata_refs = _packet_reference_scanner()
     def has_packet(node, active=None):
         if node.id in reachable:return reachable[node.id]
         if is_ledger(node):return True
@@ -319,7 +363,7 @@ def _validate_packet_delivery(envelope, values):
         if node.op!=OP:
             for name,attribute in node.attrs.items():
                 if not name.endswith('_block') and not name.startswith(('scientific_','realization_')):
-                    dependencies.extend(_refs(attribute))
+                    dependencies.extend(metadata_refs(attribute))
         found=any(has_packet(child,active) for child in dependencies)
         active.remove(node.id);reachable[node.id]=found
         return found
