@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -214,6 +215,19 @@ class TransactionalFaceFluxLedger {
       throw std::invalid_argument("ND face-flux ledger budgets must be strictly positive");
   }
 
+  TransactionalFaceFluxLedger(const TransactionalFaceFluxLedger&) = default;
+  TransactionalFaceFluxLedger(TransactionalFaceFluxLedger&&) noexcept = default;
+  TransactionalFaceFluxLedger& operator=(TransactionalFaceFluxLedger&&) noexcept = default;
+
+  TransactionalFaceFluxLedger& operator=(const TransactionalFaceFluxLedger& other) {
+    if (this != &other) {
+      // Copy payloads and their identity index before replacing either live image.
+      TransactionalFaceFluxLedger candidate(other);
+      *this = std::move(candidate);
+    }
+    return *this;
+  }
+
   void begin(std::uint64_t attempt) {
     const bool outer = !active_attempt_.has_value();
     if (!outer) {
@@ -250,25 +264,36 @@ class TransactionalFaceFluxLedger {
       throw std::length_error("ND face-flux publication exceeds its prepared budget");
 
     auto candidate = published_;
+    auto candidate_identities = published_identities_;
     for (int axis = 0; axis < Dim; ++axis) {
       auto& destination = candidate[static_cast<std::size_t>(axis)];
       const auto& source = pending_[static_cast<std::size_t>(axis)];
       destination.reserve(destination.size() + source.size());
       for (const Entry& entry : source)
         destination.push_back(entry);
+      candidate_identities[static_cast<std::size_t>(axis)].insert(
+          pending_identities_[static_cast<std::size_t>(axis)].begin(),
+          pending_identities_[static_cast<std::size_t>(axis)].end());
     }
     published_.swap(candidate);
+    published_identities_.swap(candidate_identities);
     for (auto& entries : pending_)
       entries.clear();
+    for (auto& identities : pending_identities_)
+      identities.clear();
     close_outer_transaction_();
   }
 
   void rollback() {
     require_transaction_("rollback");
     const Savepoint savepoint = savepoints_.back();
-    for (int axis = 0; axis < Dim; ++axis)
-      pending_[static_cast<std::size_t>(axis)].resize(
-          savepoint.pending_sizes[static_cast<std::size_t>(axis)]);
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::size_t index = static_cast<std::size_t>(axis);
+      auto& entries = pending_[index];
+      for (std::size_t entry = savepoint.pending_sizes[index]; entry < entries.size(); ++entry)
+        pending_identities_[index].erase(entries[entry].key);
+      entries.resize(savepoint.pending_sizes[index]);
+    }
     savepoints_.pop_back();
     if (savepoints_.empty()) {
       last_closed_attempt_ = active_attempt_;
@@ -283,6 +308,10 @@ class TransactionalFaceFluxLedger {
       entries.clear();
     for (auto& entries : published_)
       entries.clear();
+    for (auto& identities : pending_identities_)
+      identities.clear();
+    for (auto& identities : published_identities_)
+      identities.clear();
     last_closed_attempt_.reset();
   }
 
@@ -294,10 +323,16 @@ class TransactionalFaceFluxLedger {
     if (pending_size() >= budget_.max_pending_entries)
       throw std::length_error("ND face-flux pending entries exceed their prepared budget");
     const std::size_t axis = static_cast<std::size_t>(key.axis);
-    if (contains_identity_(pending_[axis], key) || contains_identity_(published_[axis], key))
+    if (pending_identities_[axis].contains(key) || published_identities_[axis].contains(key))
       throw std::runtime_error(
           "ND face-flux transaction contains a duplicate clock-stage face identity");
-    pending_[axis].push_back({std::move(key), measure, std::move(payload)});
+    const auto identity = pending_identities_[axis].insert(key).first;
+    try {
+      pending_[axis].push_back({std::move(key), measure, std::move(payload)});
+    } catch (...) {
+      pending_identities_[axis].erase(identity);
+      throw;
+    }
   }
 
   bool in_transaction() const noexcept { return !savepoints_.empty(); }
@@ -320,6 +355,7 @@ class TransactionalFaceFluxLedger {
       throw std::runtime_error(
           "cannot discard published ND face fluxes during an active transaction");
     std::array<std::vector<Entry>, Dim> candidate;
+    std::array<std::set<FaceFluxFragmentKey<Dim>>, Dim> candidate_identities;
     std::size_t removed = 0;
     for (int axis = 0; axis < Dim; ++axis) {
       const auto& source = published_[static_cast<std::size_t>(axis)];
@@ -328,11 +364,14 @@ class TransactionalFaceFluxLedger {
       for (const Entry& entry : source) {
         if (entry.key.attempt == attempt)
           ++removed;
-        else
+        else {
           destination.push_back(entry);
+          candidate_identities[static_cast<std::size_t>(axis)].insert(entry.key);
+        }
       }
     }
     published_.swap(candidate);
+    published_identities_.swap(candidate_identities);
     return removed;
   }
 
@@ -340,19 +379,6 @@ class TransactionalFaceFluxLedger {
   struct Savepoint {
     std::array<std::size_t, Dim> pending_sizes{};
   };
-
-  static bool same_identity_(const FaceFluxFragmentKey<Dim>& left,
-                             const FaceFluxFragmentKey<Dim>& right) {
-    return !(left < right) && !(right < left);
-  }
-
-  static bool contains_identity_(const std::vector<Entry>& entries,
-                                 const FaceFluxFragmentKey<Dim>& key) {
-    for (const Entry& entry : entries)
-      if (same_identity_(entry.key, key))
-        return true;
-    return false;
-  }
 
   static std::size_t total_size_(const std::array<std::vector<Entry>, Dim>& entries) noexcept {
     std::size_t result = 0;
@@ -375,6 +401,10 @@ class TransactionalFaceFluxLedger {
 
   std::array<std::vector<Entry>, Dim> pending_{};
   std::array<std::vector<Entry>, Dim> published_{};
+  // These bounded indexes use exactly the original ordering-equivalence identity. They never
+  // determine payload iteration, floating-point accumulation, or serialized fragment order.
+  std::array<std::set<FaceFluxFragmentKey<Dim>>, Dim> pending_identities_{};
+  std::array<std::set<FaceFluxFragmentKey<Dim>>, Dim> published_identities_{};
   std::vector<Savepoint> savepoints_;
   std::optional<std::uint64_t> active_attempt_;
   std::optional<std::uint64_t> last_closed_attempt_;
