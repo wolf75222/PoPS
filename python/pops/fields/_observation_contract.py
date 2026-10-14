@@ -12,7 +12,7 @@ def direct_native_field_operations(solve: Any) -> tuple[Any, ...]:
     # ancestors are dependencies, not producers of this observation. Traversing
     # the whole State graph would incorrectly merge their physical identities.
     try:
-        operator, load = solve.inputs[:2]
+        operator, load = solve.inputs[0], solve.inputs[1]
         body = tuple(operator.attrs["apply_block"])
         applies = tuple(node for node in body if node.op == "field_problem_apply")
         if (solve.op != "solve_linear" or operator.op != "matrix_free_operator"

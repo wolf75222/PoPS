@@ -326,7 +326,9 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
         from pops.time._program.finite_arrays import validate_finite_arrays
         validate_finite_arrays(self)
         if not self._commits:
-            from pops.time.finite_state import require_finite_state_program
+            if self._block_indices():
+                raise ValueError("a Program with native blocks requires at least one commit")
+            from pops.time._program.finite_state import require_finite_state_program
             require_finite_state_program(self)
         from pops.time._step.strategy import ComputedDt
         computed = [v for v in self._values if v.op == "reached_duration"]

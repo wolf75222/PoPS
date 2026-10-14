@@ -391,7 +391,7 @@ class Case:
         if len(self._block_registry):
             report = report.extend(self._block_registry.validate(context))
         else:
-            from pops.time.finite_state import require_finite_state_program
+            from pops.time._program.finite_state import require_finite_state_program
             try:
                 require_finite_state_program(self._time)
             except (TypeError, ValueError, NotImplementedError) as exc:

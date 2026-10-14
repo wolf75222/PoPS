@@ -27,16 +27,21 @@ def _graph():
     physical = registered.operator
     metadata = {"field_problem_identity": physical.identity.token, "field_dependencies": ()}
     load = SimpleNamespace(id=0, op="field_problem_load", attrs=dict(metadata), inputs=())
-    apply = SimpleNamespace(id=1, op="field_problem_apply", attrs=dict(metadata), inputs=())
+    coefficients = SimpleNamespace(id=1, op="field_problem_coefficients",
+                                   attrs=dict(metadata), inputs=())
+    out = SimpleNamespace(id=3, op="apply_out", attrs={"ncomp": 1}, inputs=())
+    value = SimpleNamespace(id=4, op="apply_in", attrs={"ncomp": 1}, inputs=())
+    apply = SimpleNamespace(id=5, op="field_problem_apply", attrs=dict(metadata),
+                            inputs=(out, value, coefficients))
     operator = SimpleNamespace(id=2, op="matrix_free_operator",
-                               attrs={"apply_block": (apply,)}, inputs=())
-    solve = SimpleNamespace(id=3, op="solve_linear", inputs=(operator, load), attrs={
+                               attrs={"apply_block": (out, value, apply)}, inputs=())
+    solve = SimpleNamespace(id=6, op="solve_linear", inputs=(operator, load), attrs={
         "solve_request": {"physical_problem": CanonicalData({
             "field_handle": case.resolve(field).canonical_identity(),
             "field_problem": physical.to_data(),
             "unknown_components": ("potential",),
         }).to_data()}})
-    program = SimpleNamespace(_values=(load, operator, solve))
+    program = SimpleNamespace(_values=(load, coefficients, operator, solve))
     layout = Handle("default", kind="layout", owner=case.owner_path.canonical())
     layout_plan = SimpleNamespace(layout_for=lambda _field: layout)
     return case, program, layout_plan, load, apply, solve
@@ -50,10 +55,10 @@ def _capture(case, program, layout):
 def test_program_field_plan_seals_independent_storage_and_actual_solve_nodes():
     case, program, layout, _load, _apply, _solve = _graph()
     plan = _capture(case, program, layout)
-    assert plan.solve_node_ids == (3,)
+    assert plan.solve_node_ids == (6,)
     assert plan.storage.unknowns == plan.operator.unknowns
     assert plan.storage.unknowns[0].block_ref is None
-    assert plan.coverage.rows[0].targets == ("program:solve_linear:3",)
+    assert plan.coverage.rows[0].targets == ("program:solve_linear:6",)
     assert not hasattr(plan, "native_options")
     assert not hasattr(plan, "rhs_providers")
     plan.validate_program(program)
@@ -62,7 +67,7 @@ def test_program_field_plan_seals_independent_storage_and_actual_solve_nodes():
 def test_unconnected_load_witness_cannot_admit_descriptor_only_field():
     case, program, layout, _load, _apply, solve = _graph()
     solve.inputs = (solve.inputs[0],)
-    with pytest.raises(ValueError, match="executable load and apply"):
+    with pytest.raises(ValueError, match="^field observation lost its direct native producer$"):
         _capture(case, program, layout)
 
 
@@ -95,3 +100,26 @@ def test_program_field_plan_revalidation_refuses_changed_identity():
     object.__setattr__(plan, "solve_node_ids", (9,))
     with pytest.raises(ValueError, match="identity changed"):
         plan.validate_program(program)
+
+
+@pytest.mark.parametrize("corruption,message", [
+    ("missing_coefficient", "direct native producer"),
+    ("non_coefficient_input", "direct coefficient producer"),
+    ("unconnected_apply", "direct native producer"),
+    ("duplicate_apply", "direct native producer"),
+])
+def test_program_field_plan_refuses_incomplete_direct_producers(corruption, message):
+    case, program, layout, _load, apply, solve = _graph()
+    operator = solve.inputs[0]
+    if corruption == "missing_coefficient":
+        # The coefficient still exists in the program, but is no longer consumed.
+        apply.inputs = apply.inputs[:2]
+    elif corruption == "non_coefficient_input":
+        apply.inputs = (*apply.inputs[:2], apply.inputs[1])
+    elif corruption == "unconnected_apply":
+        program._values += (apply,)
+        operator.attrs["apply_block"] = ()
+    else:
+        operator.attrs["apply_block"] += (apply,)
+    with pytest.raises(ValueError, match=message):
+        _capture(case, program, layout)

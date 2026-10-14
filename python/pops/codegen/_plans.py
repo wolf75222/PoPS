@@ -589,7 +589,7 @@ class ResolvedSimulationPlan:
         if any(type(block) is not ResolvedBlock for block in blocks):
             raise TypeError("ResolvedSimulationPlan blocks must contain exact ResolvedBlock values")
         if not blocks:
-            from pops.time.finite_state import require_finite_state_program
+            from pops.time._program.finite_state import require_finite_state_program
             require_finite_state_program(self.time)
             if self.target != "system":
                 raise ValueError("finite-state packets use the whole-System execution context")

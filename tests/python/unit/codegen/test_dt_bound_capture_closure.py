@@ -83,17 +83,39 @@ def test_existing_graph_identity_and_source_remain_exact(kind):
     resolved = pops.resolve(pops.validate(case), layout=layout)
     graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
     source = emit_cpp_program(resolved.time, model_graph=graph)
-    semantic = json.dumps(program._semantic_serialize(), sort_keys=True, separators=(",", ":"))
-    actual = (program._ir_hash(), hashlib.sha256(semantic.encode()).hexdigest(),
-              hashlib.sha256(source.encode()).hexdigest())
-    # Preserve the pre-fix graph and semantic receipts. Historical emitted bytes predate
-    # current native protocols; read-only emission still must preserve every current byte.
-    assert actual[:2] == BASELINE[kind][:2]
+    ir = program._serialize(include_provenance=False)
+    semantic = program._semantic_serialize()
+
+    def digest(data):
+        encoded = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    # IR v28 discriminates scalar-op nonfinite rejection. The legacy CFL product uses it;
+    # the unbounded identity has no scalar op and retains v5. Check this explicit
+    # transition before comparing every remaining byte with the historical v5
+    # receipts. Do not refresh the old hashes or normalize any node metadata.
+    version = 28 if kind == "legacy" else 5
+    assert ir["version"] == semantic["version"] == version
+    historical = (dict(ir, version=5), dict(semantic, version=5))
+    assert tuple(digest(data) for data in historical) == BASELINE[kind][:2]
+    assert program._ir_hash() == digest(ir)
+    from pops.codegen.program_source_map import source_map
+    mapping = source_map(source)
+    assert mapping["complete"]
+    assert {row["program_hash"] for row in mapping["inventories"]} == {program._ir_hash()}
+    source_hash = hashlib.sha256(source.encode()).hexdigest()
+    # Historical emitted bytes predate current native protocols; read-only
+    # emission still must preserve every current byte and the current IR version.
     before = program._serialize(), program._next_id
-    _emit_dt_bound(resolved.time, graph)
+    _, bound, _ = _emit_dt_bound(resolved.time, graph)
+    if kind == "legacy":
+        assert "!std::isfinite(" in bound
+        assert "nonfinite scalar arithmetic or invalid division" in bound
+    else:
+        assert "std::numeric_limits<pops::Real>::infinity()" in bound
     repeated = emit_cpp_program(resolved.time, model_graph=graph)
     assert repeated == source
-    assert hashlib.sha256(repeated.encode()).hexdigest() == actual[2]
+    assert hashlib.sha256(repeated.encode()).hexdigest() == source_hash
     assert (program._serialize(), program._next_id) == before
 
 

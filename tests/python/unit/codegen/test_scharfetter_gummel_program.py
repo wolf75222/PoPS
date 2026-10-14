@@ -80,6 +80,9 @@ def test_fitted_pair_rejects_foreign_drift_even_with_matching_names():
 
 @pytest.mark.parametrize("coverage",("repeated_diffusion","split_drift","split_diffusion"))
 def test_public_fitted_selection_refuses_duplicate_and_separate_imex_partitions(coverage):
-    message="together exactly once" if coverage=="repeated_diffusion" else "rate coverage mismatch"
+    # Repeated occurrences are refused by generic balance realization before
+    # the fitted method's own exact-pair validator is reached.
+    message=("^physical balance has no supported realization or exact disjoint registered partition$"
+             if coverage=="repeated_diffusion" else "rate coverage mismatch")
     with pytest.raises(ValueError,match=message):
         fitted_case(coverage=coverage)

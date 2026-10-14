@@ -11,7 +11,7 @@
       ]
     },
     "ci_20260914_field_provider_install": "Conservative 5-second scheduling estimate for mocked field-provider installation contracts; not a measured CI duration. Replace from a complete per-file timing receipt.",
-    "estimated_count": 957,
+    "estimated_count": 956,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -113,7 +113,6 @@
       "tests/python/integration/runtime/test_api_v02_ale_native.py",
       "tests/python/integration/runtime/test_api_v02_algebra_native.py",
       "tests/python/integration/runtime/test_api_v02_continuum_native.py",
-      "tests/python/integration/runtime/test_api_v02_distributed_program_native.py",
       "tests/python/integration/runtime/test_api_v02_entropy_MN_native.py",
       "tests/python/integration/runtime/test_api_v02_euler_correction_native.py",
       "tests/python/integration/runtime/test_api_v02_finite_arrays_native.py",
@@ -1069,7 +1068,7 @@
       "scope": "M0-M7 migration additions",
       "timing_limit": "The inherited scalar-advection pipeline estimate is not refreshed from the local OMP qualification, where a full run exceeded 4299 s. CI Serial hardware/cache behavior differs; no observed CI fit is claimed. Preserve the indivisible full scientific test and refresh its estimate from the next complete CI artifact."
     },
-    "total_files": 1022,
+    "total_files": 1021,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -4486,7 +4485,9 @@
             3
           ],
           "native_dimension": 2,
-          "registration": "v10"
+          "registration": "v10",
+          "execution_lane": "mpi_only",
+          "entrypoint": "tests/python/integration/mpi/test_api_v02_distributed_program_mpi2.py"
         },
         "tests/python/integration/runtime/test_api_v02_entropy_MN_native.py": {
           "kind": "native_profile",
@@ -4501,7 +4502,16 @@
         "tests/python/integration/runtime/test_api_v02_finite_arrays_native.py": {
           "kind": "native_profile",
           "estimated_seconds": 600,
-          "native_dimension": 2
+          "native_dimension": 2,
+          "registration": "ci_mpi_20261014",
+          "declared_cases": 8,
+          "ci_ranks": [
+            1,
+            2
+          ],
+          "entrypoint": "tests/python/integration/mpi/test_api_v02_finite_arrays_mpi2.py",
+          "execution_lane": "serial_and_mpi",
+          "basis": "Existing 600-second serial scheduling estimate unchanged. A strict MPI2 wrapper additionally requires every case without skips; its unchanged watchdog is 1200 seconds. This registration is not a native execution receipt."
         },
         "tests/python/integration/runtime/test_api_v02_flux_correction_native.py": {
           "kind": "native_profile",
@@ -4585,7 +4595,16 @@
         "tests/python/integration/runtime/test_api_v02_regions_native.py": {
           "kind": "native_profile",
           "estimated_seconds": 600,
-          "native_dimension": 2
+          "native_dimension": 2,
+          "registration": "ci_mpi_20261014",
+          "declared_cases": 6,
+          "ci_ranks": [
+            1,
+            2
+          ],
+          "entrypoint": "tests/python/integration/mpi/test_api_v02_regions_mpi2.py",
+          "execution_lane": "serial_and_mpi",
+          "basis": "Existing 600-second serial scheduling estimate unchanged. A strict MPI2 wrapper additionally requires every case without skips; its unchanged watchdog is 1200 seconds. This registration is not a native execution receipt."
         },
         "tests/python/integration/runtime/test_api_v02_representations_native.py": {
           "kind": "native_profile",
@@ -5850,6 +5869,16 @@
         "estimates_not_measurements": true,
         "native_watchdog_seconds": 1200,
         "native_watchdog_unchanged": true
+      },
+      "mpi_routing_20261014": {
+        "exclusive_receiver": "tests/python/integration/runtime/test_api_v02_distributed_program_native.py",
+        "exclusive_cases": 4,
+        "additional_mpi_receivers": 2,
+        "additional_mpi_cases": 14,
+        "serial_receiver_weights_unchanged": true,
+        "existing_mpi_watchdog_seconds": 1200,
+        "github_ci_received": false,
+        "basis": "Correct exclusive MPI ownership for distributed Program; retain serial coverage of two mixed modules and add exact whole-module MPI2 receipts. Case counts are verified by collection; serial MPI-only skips are not native passing evidence."
       }
     }
   },
@@ -5954,7 +5983,6 @@
   "tests/python/integration/runtime/test_api_v02_ale_native.py": 300,
   "tests/python/integration/runtime/test_api_v02_algebra_native.py": 300,
   "tests/python/integration/runtime/test_api_v02_continuum_native.py": 600,
-  "tests/python/integration/runtime/test_api_v02_distributed_program_native.py": 900,
   "tests/python/integration/runtime/test_api_v02_entropy_MN_native.py": 900,
   "tests/python/integration/runtime/test_api_v02_euler_correction_native.py": 600,
   "tests/python/integration/runtime/test_api_v02_finite_arrays_native.py": 600,

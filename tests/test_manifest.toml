@@ -1463,6 +1463,8 @@ mpi_entrypoints = [
   { path = "tests/python/integration/mpi/test_api_v02_collective_preparation_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_continuation_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_distributed_program_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_finite_arrays_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_regions_mpi2.py", nproc = 2, native_dimension = 2 },
 ]
 mpi_orchestrators = [
   { path = "tests/python/integration/mpi/test_amr_rank_change_restart.py" },
@@ -1544,6 +1546,7 @@ name = "pops_python_integration_runtime"
 path = "tests/python/integration/runtime"
 labels = ["integration", "python", "runtime", "mpi", "medium"]
 mpi_receivers = [
+  { path = "tests/python/integration/runtime/test_api_v02_distributed_program_native.py", entrypoint = "tests/python/integration/mpi/test_api_v02_distributed_program_mpi2.py" },
   { path = "tests/python/integration/runtime/test_bundle_repartition_v14_native.py", entrypoint = "tests/python/integration/mpi/test_api_v14_bundle_repartition_mpi2.py" },
   { path = "tests/python/integration/runtime/test_distributed_algebra_v14_native.py", entrypoint = "tests/python/integration/mpi/test_api_v14_distributed_algebra_mpi2.py" },
   { path = "tests/python/integration/runtime/test_distributed_failure_v14_native.py", entrypoint = "tests/python/integration/mpi/test_api_v14_distributed_failure_mpi2.py" },

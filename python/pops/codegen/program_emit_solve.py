@@ -418,8 +418,10 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         prelude.append("});")
     if target == "amr_system" and v.attrs.get("scope") == "hierarchy" and any(w.op == "field_problem_apply" for w in block):
         from pops.solvers._composite_field import _field_apply
-        _field_apply(v)
-        # The authenticated hierarchy provider owns its complete apply and persistent resources.
+        var[("hierarchy_field_apply", apply_id)] = _field_apply(v)
+        # The authenticated provider owns the complete apply. There is no emitted
+        # C++ lambda binding; its exact graph is mapped at the provider call below.
+        var[apply_id] = None
         return
     coupled_jacvec = _coupled_interface_jacvec_plan(
         v,
@@ -1420,12 +1422,32 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
                 max_iterations=max_iter,
             )
         )
-        prelude.extend(hierarchy_emission.configure)
+        field_apply = var.get(("hierarchy_field_apply", op_value.id))
+        if field_apply is not None:
+            if not direct_provider_execution:
+                raise ValueError("provider-owned field apply requires direct hierarchy emission")
+            from .program_source_map import operation
+            # These are the exact formals authenticated by _field_apply, not C++
+            # callback arguments: storage and matvecs live inside the provider.
+            for formal in field_apply.inputs[:2]:
+                with operation(formal, prelude, channel="hierarchy_operator_formal",
+                               binding_role="provider_internal_parameter"):
+                    pass
+            with operation(field_apply, prelude, channel="hierarchy_operator_install"):
+                prelude.extend(hierarchy_emission.configure)
+        else:
+            prelude.extend(hierarchy_emission.configure)
 
     if direct_provider_execution:
         if hierarchy_emission is None:
             raise ValueError("a direct hierarchy phase has no native provider emission")
-        lines.extend(hierarchy_emission.solve)
+        field_apply = var.get(("hierarchy_field_apply", op_value.id))
+        if field_apply is not None:
+            from .program_source_map import operation
+            with operation(field_apply, lines, channel="hierarchy_operator_solve"):
+                lines.extend(hierarchy_emission.solve)
+        else:
+            lines.extend(hierarchy_emission.solve)
         _append_solve_report_guard(
             program, v, kr, lines, label="solve_linear", phase="solve")
         return

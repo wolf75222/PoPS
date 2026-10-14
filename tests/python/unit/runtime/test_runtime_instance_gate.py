@@ -626,6 +626,13 @@ def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_aut
             self.live_nodes = live_nodes
             self.name = name
 
+        def _checkpoint_continuation_schema(self):
+            # Match a native System without a configured finite continuation.
+            return ""
+
+        def _checkpoint_continuation_capacity(self):
+            return 0
+
         @staticmethod
         def variable_names(block, space):
             assert (block, space) == ("fluid", "conservative")

@@ -70,8 +70,10 @@ def affine_amr_case(*, levels=1, case_name="affine_amr_public_body",
     q = program.state(subject)
 
     def image(value):
-        return affine_push_forward(value, indices=INDICES, matrix=tuple(map(tuple, MATRIX)),
-                                   offset=tuple(OFFSET))
+        return affine_push_forward(
+            value, indices=INDICES,
+            matrix=tuple(tuple(float(entry) for entry in row) for row in MATRIX),
+            offset=tuple(float(entry) for entry in OFFSET))
 
     target = program.value("mapped_stage", image(q.n), at=q.next.point)
     seed = program.value("distinct_seed", 1.1*q.n, at=q.next.point)

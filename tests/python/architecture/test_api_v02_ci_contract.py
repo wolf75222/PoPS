@@ -150,7 +150,11 @@ def test_v10_receivers_have_exact_cardinality_and_ranked_pytest_entrypoints():
         found[receiver] = options
         entry = entries[str(wrapper.relative_to(ROOT))]
         assert entry["nproc"] == 2 and entry["native_dimension"] == 2
-    assert set(found) == set(native)
+    mixed = {path for path, row in rows.items()
+             if row.get("registration") == "ci_mpi_20261014"}
+    assert mixed == {RUNTIME + "test_api_v02_finite_arrays_native.py",
+                     RUNTIME + "test_api_v02_regions_native.py"}
+    assert set(found) == set(native) | mixed
     for path, row in native.items():
         assert sum(_test_case_count(path).values()) == row["declared_cases"], path
         assert found[path] == {"expected_cases": row["declared_cases"], "ranks": 2}
@@ -202,13 +206,14 @@ def test_v14_receivers_have_exact_counts_and_unchanged_bounded_mpi2_launches():
                 assert launch["timeout_seconds"] == 1200
 
 
-def test_v14_mpi_only_modules_have_exact_exclusive_receivers_without_serial_skips():
+def test_api_v02_mpi_only_modules_have_exact_exclusive_receivers_without_serial_skips():
     from scripts import ci_select_tests as selection
     _, rows = _registration()
     manifest = selection.load_manifest()
     receivers = selection.manifest_python_mpi_receivers(manifest)
     expected = {RUNTIME + "test_" + name + "_v14_native.py" for name in (
         "bundle_repartition", "distributed_algebra", "distributed_failure", "distributed_gc")}
+    expected.add(RUNTIME + "test_api_v02_distributed_program_native.py")
     assert {row["path"] for row in receivers} == expected
     serial = {path for suite in selection.manifest_python_suites(manifest) for path in suite["files"]}
     assert not serial & expected
@@ -284,3 +289,50 @@ def test_v15_inventory_and_closure_registration_has_exact_counts_and_mpi2_route(
                 if Path(launch["path"]).name.startswith("test_api_v15_")]
     assert len(launches) == summary["mpi2_entrypoints"]
     assert all(launch["timeout_seconds"] == 1200 for launch in launches)
+
+
+def test_distributed_program_has_one_mandatory_mpi_owner_and_no_serial_assignment():
+    from scripts import ci_select_tests as selection
+    from scripts import ci_python_mpi as mpi
+    path = RUNTIME + "test_api_v02_distributed_program_native.py"
+    entrypoint = "tests/python/integration/mpi/test_api_v02_distributed_program_mpi2.py"
+    manifest = selection.load_manifest()
+    owners = [row for row in selection.manifest_python_mpi_receivers(manifest)
+              if row["path"] == path]
+    assert owners == [{"path": path, "entrypoint": entrypoint, "expected_cases": 4, "nproc": 2}]
+    assert _test_case_count(path) == {
+        "test_distributed_program_checks_native_data_before_commit": 3,
+        "test_corrupt_import_unhandled_failure_preserves_payload_and_rolls_back": 1,
+    }
+    assert all(path not in suite["files"] for suite in selection.manifest_python_suites(manifest))
+    launches = [launch for group in mpi.make_plan(manifest)["groups"]
+                for launch in group["launches"] if launch["path"] == entrypoint]
+    assert len(launches) == 1
+    assert launches[0]["nproc"] == 2 and launches[0]["timeout_seconds"] == 1200
+
+
+@pytest.mark.parametrize("name,cases", [("finite_arrays", 8), ("regions", 6)])
+def test_mixed_api_v02_collective_receivers_keep_serial_and_exact_mpi_coverage(name, cases):
+    from scripts import ci_select_tests as selection
+    from scripts import ci_python_mpi as mpi
+    path = RUNTIME + "test_api_v02_" + name + "_native.py"
+    entrypoint = "tests/python/integration/mpi/test_api_v02_" + name + "_mpi2.py"
+    manifest = selection.load_manifest()
+    serial = {path for suite in selection.manifest_python_suites(manifest) for path in suite["files"]}
+    assert path in serial
+    timings, rows = _registration()
+    assert timings[path] == rows[path]["estimated_seconds"] == 600
+    assert rows[path]["declared_cases"] == sum(_test_case_count(path).values()) == cases
+    tree = ast.parse((ROOT / entrypoint).read_text())
+    assert any(isinstance(node, ast.ImportFrom)
+               and node.module == "tests.python.support.mpi_pytest_entrypoint"
+               and [(alias.name, alias.asname) for alias in node.names] == [("run", None)]
+               for node in tree.body)
+    call, = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Name) and node.func.id == "run"]
+    assert [ast.literal_eval(arg) for arg in call.args] == [path]
+    assert {item.arg: ast.literal_eval(item.value) for item in call.keywords} == {
+        "expected_cases": cases, "ranks": 2}
+    launch, = [launch for group in mpi.make_plan(manifest)["groups"]
+               for launch in group["launches"] if launch["path"] == entrypoint]
+    assert launch["nproc"] == 2 and launch["timeout_seconds"] == 1200

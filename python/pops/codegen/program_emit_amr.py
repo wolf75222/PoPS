@@ -633,12 +633,22 @@ def _emit_amr_install(
     flux_temporal_families = _emit_flux_temporal_family_install(program)
     provider_register = _emit_amr_program_provider_register(provider_plan_install)
     if cell_local_time is not None:
+        from .program_source_map import operation_group
+
         cell_local_contract, cell_local_routes = cell_local_time
         clock_identity = json.dumps(program.clock.qualified_id)
         route_rows = ", ".join(
             "{%d, -1, %d}" % (program_block, rhs_id) for program_block, rhs_id in cell_local_routes
         )
         route_count = len(cell_local_routes)
+        # The bounded-shape check above proves that this native provider owns
+        # every state read, default-flux RHS and U + dt*RHS update in the IR.
+        # They execute together in this call, with no separate generated SSA
+        # variables. Record the coalesced call, not the discarded global body.
+        advance_lines = []
+        with operation_group(program._values, advance_lines, environment={},
+                             channel="cell_local_provider_advance"):
+            advance_lines.append("    ctx_owner->advance_same_level_cell_temporal(dt);")
         return (
             flux_expression_budget + "\n#include <pops/runtime/program/amr_program_context.hpp>\n"
             + provider_register
@@ -654,8 +664,8 @@ def _emit_amr_install(
             f"{clock_identity}, {cell_local_contract.tick_denominator}, "
             f"{cell_local_contract.rung}, cell_temporal_routes);\n"
             "  ctx.install([ctx_owner](double dt) {\n"
-            "    ctx_owner->advance_same_level_cell_temporal(dt);\n"
-            "  }, ctx_owner);\n"
+            + "\n".join(advance_lines) + "\n"
+            + "  }, ctx_owner);\n"
             "}\n"
         )
 

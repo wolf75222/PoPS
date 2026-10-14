@@ -54,7 +54,7 @@ class ValueType:
         raise ValueError("dependent type data requires authenticated authority reconstruction")
 
     def matches(self, value):
-        from pops.time._program.structured_control import same_signature
+        from pops.time.value_signatures import same_signature
         return same_signature(instantiate(self, value.point).signature, type_of(value).signature)
 
     def __eq__(self, other):
@@ -71,7 +71,7 @@ Bool, Int64, Float64 = _scalar("bool"), _scalar("int64"), _scalar("scalar")
 
 def type_of(value):
     from pops.time.values import ProgramValue
-    from pops.time._program.structured_control import value_signature
+    from pops.time.value_signatures import value_signature
     if not isinstance(value, ProgramValue):
         raise TypeError("type_of requires a ProgramValue")
     return ValueType(value_signature(value))

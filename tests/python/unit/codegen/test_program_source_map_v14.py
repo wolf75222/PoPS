@@ -211,6 +211,59 @@ def test_field_operator_bodies_and_same_named_formals_keep_distinct_lambda_regio
             assert any('apply_general_field' in cpp.splitlines()[line-1]
                 for first,last in producer['ranges'] for line in range(first,last+1))
 
+    # Direct hierarchy providers own their internal matvec storage rather than
+    # emitting the Uniform callback above. Cover the actual scalar and tuple
+    # graphs used by the native AMR receivers, without compiling or running them.
+    import pops
+    from pops.codegen.program_models import ProgramModelGraph
+    from tests.python.integration.runtime.test_public_composite_field import build
+    from test_diffusion_frozen_input_quadrature import _guarded_portable_resolved
+    case, layout = build(16)
+    tuple_plan = pops.resolve(pops.validate(case), layout=layout)
+    scalar_plan, scalar_graph, _ = _guarded_portable_resolved()
+    for plan, graph in ((tuple_plan, ProgramModelGraph.from_resolved_blocks(tuple_plan.blocks)),
+                        (scalar_plan, scalar_graph)):
+        cpp = emit_cpp_program(plan.time, target="amr_system",
+            model_graph=graph, field_plans=plan.field_plans)
+        data = source_map(cpp)
+        assert data['complete'] and not data['unlocated']
+        rows = data['operations']
+        applications = [row for row in rows if row['op'] == 'field_problem_apply']
+        assert {row['channel'] for row in applications} == {
+            'hierarchy_operator_install', 'hierarchy_operator_solve'}
+        for row in applications:
+            expected = ('ctx.configure_hierarchy_field_solver(' if
+                row['channel'] == 'hierarchy_operator_install' else 'ctx.solve_hierarchy_field(')
+            assert any(expected in cpp.splitlines()[line-1]
+                for first,last in row['ranges'] for line in range(first,last+1))
+            assert row['location_basis'] == 'direct_statements'
+            assert row['cpp_binding'] is None
+        formals = [row for row in rows if row['op'] in ('apply_in', 'apply_out')]
+        assert len(formals) == 2
+        assert {row['op'] for row in formals} == {'apply_in', 'apply_out'}
+        for row in formals:
+            assert row['channel'] == 'hierarchy_operator_formal'
+            assert row['binding_role'] == 'provider_internal_parameter'
+            assert row['cpp_binding'] is None
+            assert row['ranges'] == row['effective_ranges'] == row['binding_origins'] == []
+        operators = [row for row in rows if row['op'] == 'matrix_free_operator']
+        assert all(row['cpp_binding'] is None for row in operators)
+
+        # An environment token or the surrounding solve must never make a
+        # removed apply mapping look complete, even when all C++ remains intact.
+        import base64
+        apply_ids = {row['ssa'] for row in applications}
+        def keep(line):
+            marker = line.strip().split(' ', 3)
+            if len(marker) == 4 and marker[:2] == ['//', 'pops-source-map@1'] \
+                    and marker[2] in ('begin', 'end'):
+                return json.loads(base64.b64decode(marker[3]))['ssa'] not in apply_ids
+            return True
+        missing = source_map('\n'.join(line for line in cpp.splitlines() if keep(line)))
+        assert not missing['complete']
+        assert {row['ssa'] for row in missing['unlocated']} == apply_ids
+        assert all(row['status'] == 'not_emitted_or_unmapped' for row in missing['unlocated'])
+
 
 def test_binding_alias_does_not_borrow_an_identical_name_from_another_lambda():
     from pops.codegen.program_source_map import _mark

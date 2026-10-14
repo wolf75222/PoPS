@@ -107,13 +107,24 @@ def test_native_load_emits_collective_preflight_and_domain_refusal_before_use():
 
 def test_component_emission_requires_its_consumed_exact_unknown_and_native_problem():
     from pops.time._graph.base import CanonicalData
+    from pops.time.stencil import StencilAccess
 
     unknown = Handle("potential", kind="field", owner=OwnerPath.case("field-owner"))
     identity = field_identity("field-problem", {"observation": True}).token
     program = Program("field_observation_authority")
+    metadata = {"field_problem_identity": identity, "field_dependencies": (), "ncomp": 1,
+                "stencil_access": StencilAccess.pointwise()}
     load = program._new("scalar_field", "field_problem_load", (),
-                        {"field_problem_identity": identity}, "load", None)
-    solve = program._new("scalar_field", "solve_linear", (load,), {"solve_request": {
+                        dict(metadata), "load", None)
+    coefficients = program._new("scalar_field", "field_problem_coefficients", (),
+                                {**metadata, "unknown_ncomp": 1}, "coefficients", None)
+    operator = program.matrix_free_operator("field_operator", ncomp=1)
+    def apply(p, out, value):
+        return p._new("scalar_field", "field_problem_apply", (out, value, coefficients),
+                      {**metadata, "stencil_access": StencilAccess.nearest_neighbour()},
+                      "field_apply", None)
+    operator = program.set_apply(operator, apply)
+    solve = program._new("scalar_field", "solve_linear", (operator, load), {"solve_request": {
         "physical_problem": CanonicalData({"unknown_components": (
             unknown.canonical_identity(),)}).to_data()}}, "solve", None)
     outcome = program._new("solve_outcome", "solve_outcome", (solve,), {}, "outcome", None)

@@ -20,7 +20,7 @@ class CaseSpec:
         if self.dt <= 0 or self.t_end <= 0:
             raise ValueError("a reception case needs a positive step and final time")
         if not self.initial_values and not self.subjects:
-            from pops.time.finite_state import require_finite_state_program
+            from pops.time._program.finite_state import require_finite_state_program
             require_finite_state_program(self.case._time)
         elif not self.initial_values or not self.subjects:
             raise ValueError("initial bindings, subjects and a precise profile are required")

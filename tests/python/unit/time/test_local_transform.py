@@ -155,7 +155,9 @@ def test_local_transform_program_emits_one_collective_fail_closed_kernel() -> No
 
 
 def test_generated_operator_preflight_keeps_only_unqualified_cartesian_kernels() -> None:
-    source = inspect.getsource(program_emit_ops._emit_op)
+    # The public emitter records source provenance around the actual dispatcher.
+    assert "_emit_op_impl(" in inspect.getsource(program_emit_ops._emit_op)
+    source = inspect.getsource(program_emit_ops._emit_op_impl)
 
     def branch(operation: str, next_operation: str) -> str:
         return source.split('elif v.op == "%s":' % operation, 1)[1].split(

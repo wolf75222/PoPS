@@ -686,6 +686,7 @@ TEST(ProgramRuntime, GlobalCadencePublishesExactSubstepAndStrideWindowTimes) {
   auto config = unit_domain_config<kNativeDimension>(4);
 
   System<kNativeDimension> subcycled(config);
+  install_execution_lane(subcycled, "test.program.cadence-subcycled");
   subcycled.set_clock(1.0, 10);
   runtime::program::ProgramContext subcycled_context(&subcycled);
   std::vector<double> subcycled_times;
@@ -705,6 +706,7 @@ TEST(ProgramRuntime, GlobalCadencePublishesExactSubstepAndStrideWindowTimes) {
   EXPECT_EQ(subcycled.macro_step(), 11);
 
   System<kNativeDimension> catchup(config);
+  install_execution_lane(catchup, "test.program.cadence-catchup");
   runtime::program::ProgramContext catchup_context(&catchup);
   catchup_context.configure_primary_clock("macro");
   std::vector<double> catchup_times;
@@ -832,6 +834,7 @@ TEST(ProgramRuntime,
   auto config = unit_domain_config<kNativeDimension>(4);
 
   System<kNativeDimension> system(config);
+  install_execution_lane(system, "test.program.cadence-nonassociative-endpoint");
   system.set_clock(0.1, 0);
   runtime::program::ProgramContext context(&system);
   std::vector<double> starts;
@@ -883,6 +886,7 @@ TEST(ProgramRuntime, CadenceWindowRestartAndRejectedDueStepAreTransactional) {
   auto config = unit_domain_config<kNativeDimension>(4);
 
   System<kNativeDimension> system(config);
+  install_execution_lane(system, "test.program.cadence-rejected-window");
   std::vector<double> accepted_steps;
   bool reject = true;
   system.install_program_step([&](double h) {
@@ -909,6 +913,7 @@ TEST(ProgramRuntime, CadenceWindowRestartAndRejectedDueStepAreTransactional) {
   EXPECT_EQ(system.program_cadence_window_steps(), 0);
 
   System<kNativeDimension> restarted(config);
+  install_execution_lane(restarted, "test.program.cadence-restarted-window");
   std::vector<double> restarted_times;
   restarted.install_program_step([&](double) { restarted_times.push_back(restarted.time()); });
   restarted.set_program_cadence(/*substeps=*/1, /*stride=*/2);
@@ -931,6 +936,7 @@ TEST(ProgramRuntime, CadenceRestoreCommitsOnlyForTheExactAcceptedClockPair) {
   auto config = unit_domain_config<kNativeDimension>(4);
 
   System<kNativeDimension> system(config);
+  install_execution_lane(system, "test.program.cadence-restore-clock");
   system.install_program_step([](double) {});
   system.set_program_cadence(/*substeps=*/1, /*stride=*/2);
 

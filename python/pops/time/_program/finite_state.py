@@ -3,10 +3,12 @@ from __future__ import annotations
 
 
 def require_finite_state_program(program):
-    from pops.time import Program
+    from pops.time._authoring import require_program
     from pops.time._program.versioned_values import validate_continuations
-    if type(program) is not Program:
-        raise TypeError("a block-free Case requires a complete finite-state Program")
+    try:
+        require_program(program, exact=True, where="a block-free Case")
+    except TypeError:
+        raise TypeError("a block-free Case requires a complete finite-state Program") from None
     validate_continuations(program, target="system")
     roots = [v for v in program._values if v.op == "continuation_open"]
     if len(roots) != 1 or roots[0].attrs["schema"]["fields"]:
