@@ -7,6 +7,10 @@ which returns the complete package, including geometry, maps and histories.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from pops.graph_functions import GraphFunction
+
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -173,7 +177,7 @@ class Remap:
     equations and the enclosing Assess must test the numerical requirements.
     A ``reject`` policy refuses this remap, rather than erasing that history.
     """
-    body: object
+    body: GraphFunction
     source_instance: tuple
     histories: tuple
 

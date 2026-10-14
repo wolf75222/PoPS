@@ -8,7 +8,8 @@ import json
 from collections.abc import Mapping
 from enum import Enum
 from types import FunctionType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Iterable
 
 from pops.identity.scalar import scalar_data
 from pops.model.handles import Handle
@@ -129,7 +130,7 @@ class _ProgramSerialization(_ProgramBase):
                 attrs[key] = None
             else:
                 rows = []
-                for child in block:
+                for child in cast("Iterable[ProgramValue]", block):
                     row = _ProgramSerialization._serialize_node(
                         child, include_provenance=include_provenance)
                     # The old parent pass normalizes the child's shell as well

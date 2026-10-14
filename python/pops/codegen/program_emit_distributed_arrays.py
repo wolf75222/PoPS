@@ -105,7 +105,7 @@ def _local_catches(v, block, lines, *, iterations="0", extra=()):
     lines.append("return "+CV+"::variant(0,"+_runtime_error(v,"3",iterations)+"); }")
 
 
-def schema(sig):
+def schema(sig) -> str:
     if sig["vtype"] in ("index_set","index","array") and sig.get("ownership")==OWNERSHIP:
         native={"index_set":"DistributedDomain","index":"DistributedIndex","array":"DistributedArray"}[sig["vtype"]]
         children=schema(sig["element"]) if sig["vtype"]=="array" else ""

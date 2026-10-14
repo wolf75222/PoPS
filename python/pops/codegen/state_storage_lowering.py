@@ -1,5 +1,6 @@
 """Exact physical frame admission for Program-owned state storage."""
 from collections.abc import Mapping
+from typing import cast
 
 from pops._cartesian_axes import canonical_axis_mapping
 
@@ -93,7 +94,9 @@ def prepare_state_storage_requirements(
             if callable(requirements):
                 requirements = requirements()
                 if requirements is not None:
-                    depth = max(depth, requirements["ghost_depth"])
+                    # The resolved numerics plan validates this provider's exact
+                    # Mapping[str, int] contract before storage lowering.
+                    depth = max(depth, cast(Mapping[str, int], requirements)["ghost_depth"])
     if resolved_operations is not None:
         from pops.codegen.resolved_operations import ResolvedOperationPlan
 

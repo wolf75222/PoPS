@@ -1,8 +1,15 @@
 """Program construction of a closed native conservative face stencil."""
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pops.time._program.contract import _ProgramBase
+else:
+    _ProgramBase = object
+
 from pops.time._authoring import atomic_authoring
 
 
-class _ProgramStencilFlux:
+class _ProgramStencilFlux(_ProgramBase):
     @atomic_authoring
     def stencil_flux_divergence(self, name, state, *, flux, fields=(), parameters=()):
         """Return ``-div_h(flux)`` using one stored oriented face transfer.

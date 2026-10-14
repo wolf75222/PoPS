@@ -8,7 +8,7 @@ no _pops, no module-scope dsl import.
 from __future__ import annotations
 
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pops._ir import Equation
 from pops.identity.scalar import scalar_data
@@ -24,6 +24,10 @@ from pops.time.value_metadata import (
     CoeffPolynomial, CoefficientLiteralError, _exact_add, _exact_divide, _exact_multiply,
     _exact_negate, _exact_number, _freeze_attr, validate_program_value_identity,
 )
+
+
+if TYPE_CHECKING:
+    from pops.time.value_support import _ValueProgram
 
 
 class _Coeff(ImmutableSymbolic, _MethodCoefficientBase):
@@ -280,6 +284,8 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
     matrix-free linear solve), DISTINCT from the n_cons conservative ``state`` even though both lower
     to an pops::MultiFab; a ``matrix_free_op`` names a matrix-free operator A whose apply sub-block is
     recorded by ``set_apply`` and lowered to a C++ lambda the runtime Krylov loop calls."""
+
+    prog: _ValueProgram[ProgramValue]
 
     _FIELD = ("state", "rhs", "scalar_field")
     _SCALAR = ("scalar", "bool", "int64")  # runtime values: never a Python bool / index

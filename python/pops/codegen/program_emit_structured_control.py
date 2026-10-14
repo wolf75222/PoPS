@@ -124,13 +124,16 @@ def _cpp_type(kind):
 
 class _DeferredField(str):
     """A field slot whose geometry is allocated only when its sum arm becomes active."""
-    def __new__(cls, token, node_id, slot):
+    node_id: int
+    slot: int
+
+    def __new__(cls, token: str, node_id: int, slot: int):
         value = super().__new__(cls, token)
         value.node_id, value.slot = node_id, slot
         return value
 
 
-def _storage_width(signature):
+def _storage_width(signature) -> int:
     if signature["vtype"] in ("product", "variant"):
         return sum(_storage_width(child) for _, child in signature["members"])
     return 1
@@ -421,6 +424,7 @@ def _emit_loop(program, value, var, model, lines, prelude, block_idx, field_plan
     lines.append("  %s = 2;" % origin)
     lines.append("}")
     if typed_errors is not None:
+        assert error_slots is not None
         lines.append("%s: ;" % exit_label)
         lines.append("if (%s != 0 && %s < 0) {" % (status, error_slots["tag"]))
         lines.append("  %s = %d;" % (error_slots["tag"], _variant_tag(typed_errors, "runtime")))
@@ -589,10 +593,13 @@ def _emit_typed_capture(program, value, var, model, lines, prelude, block_idx, f
 
 def emit_structured_branch(program, value, var, model, lines, prelude, block_idx, field_plans, target):
     is_match = value.op == "result_match"
-    result = var[value.inputs[0].id] if is_match else None
     signature = value_signature(value)
     output = _slots(signature, None, value.id, "matched", lines, pointers=True)
-    condition = "%s == 0" % result["code"] if is_match else var[value.inputs[0].id]
+    if is_match:
+        result = var[value.inputs[0].id]
+        condition = "%s == 0" % result["code"]
+    else:
+        condition = var[value.inputs[0].id]
     condition_token = "branch_choice_%d" % value.id
     lines.append("const long %s = (%s) ? 1L : 0L;" % (condition_token, condition))
     _uniform_int(condition_token, lines, "structured branch differs across execution lane")

@@ -6,21 +6,32 @@ once while building the graph; generated C++ and PoPS field storage execute all 
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+from collections.abc import Callable
+
+if TYPE_CHECKING:
+    from pops.time._program.contract import _ProgramBase
+else:
+    _ProgramBase = object
+
 from pops.time._authoring import atomic_authoring
 from pops.time.values import ProgramValue
 from pops.time.value_signatures import value_signature, same_signature
+
+if TYPE_CHECKING:
+    from pops.time.value_signatures import ValueSignature
 from pops.time._program.value_validation import require_owned, require_region, validate_input_regions
 
 
-def product_signature(fields):
-    return {"vtype": "product", "members": tuple(fields)}
+def product_signature(fields) -> ValueSignature:
+    return cast("ValueSignature", {"vtype": "product", "members": tuple(fields)})
 
 
-def scalar_signature(kind):
-    return dict(vtype=kind, block=None, space=None, state_ref=None, field_context=None)
+def scalar_signature(kind) -> ValueSignature:
+    return cast("ValueSignature", dict(vtype=kind, block=None, space=None, state_ref=None, field_context=None))
 
 
-def new_typed(program, signature, op, inputs, attrs, *, point=None, name=None):
+def new_typed(program, signature, op, inputs, attrs, *, point=None, name=None) -> ProgramValue:
     attrs = dict(attrs)
     if signature["vtype"] in ("product", "variant", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted"):
         attrs["signature"] = signature
@@ -38,14 +49,14 @@ def new_typed(program, signature, op, inputs, attrs, *, point=None, name=None):
         state_ref=signature.get("state_ref"), point=point, inherit_state_ref=False)
 
 
-def iteration_signature(result):
+def iteration_signature(result) -> ValueSignature:
     return product_signature((
         ("state", result.attrs["state_signature"]),
         ("iterations", {**scalar_signature("int64"), "point": result.point}),
     ))
 
 
-def success_signature(result):
+def success_signature(result) -> ValueSignature:
     if result.vtype == "variant":
         members = dict(value_signature(result)["members"])
         if set(members) == {"ok", "err"}:
@@ -58,7 +69,7 @@ def success_signature(result):
     raise TypeError("expected a typed Result or IterationResult")
 
 
-def failure_signature(result):
+def failure_signature(result) -> ValueSignature:
     if result.vtype == "variant":
         success_signature(result)
         return dict(value_signature(result)["members"])["err"]
@@ -99,7 +110,7 @@ def _typed_capture_errors(block, output):
     return {"vtype": "variant", "members": tuple(sorted(members.items()))}, is_result
 
 
-def _record_region(program, callback, initial, *, with_index=False):
+def _record_region(program, callback: Callable[..., ProgramValue], initial, *, with_index=False):
     block = []
     region = program._region_for_block(block)
     for parent in program._recording:
@@ -123,7 +134,7 @@ def _record_region(program, callback, initial, *, with_index=False):
     return block, region, argument, index, result
 
 
-class _ProgramStructuredControl:
+class _ProgramStructuredControl(_ProgramBase):
     @atomic_authoring
     def variant(self, variant_type, tag, payload):
         """Inject a typed native payload into a closed, case-authored tagged sum."""
@@ -268,7 +279,7 @@ class _ProgramStructuredControl:
                           "body_argument": argument, "body_index": index}, point=initial.point)
 
     @atomic_authoring
-    def iterate(self, initial, step, stop, *, max_steps):
+    def iterate(self, initial, step: Callable[..., ProgramValue], stop: Callable[..., ProgramValue], *, max_steps):
         """Bounded native iteration returning an opaque success/failure sum.
 
         ``stop(P, x)`` is evaluated before the first step and after each successful step.  A zero
@@ -340,7 +351,7 @@ class _ProgramStructuredControl:
                          point=success_template.point, inherit_state_ref=False)
 
     @atomic_authoring
-    def capture(self, body, *, _continuation_scope=False):
+    def capture(self, body: Callable[..., ProgramValue], *, _continuation_scope=False):
         """Capture recoverable failures in one closed native region, without nested Result sugar."""
         if not callable(body):
             raise TypeError("capture body must be callable accepting Program")

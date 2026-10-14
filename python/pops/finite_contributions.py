@@ -4,7 +4,13 @@ No routine here evaluates a numerical value in Python. A finite interval is
 scientific data: the parent Assess must compare it with its requested window.
 It is not an independently issued permission to publish a runtime frontier.
 """
+from __future__ import annotations
+
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pops.graph_functions import GraphFunction
 
 from pops.time.values import ProgramValue
 from pops.time.variant_types import Failure, Float64, Product, Result, type_of
@@ -93,12 +99,12 @@ class LinearMap:
     action as its actual graph differential, rather than trusting a claim of
     linearity. Primal parameters and topology are fixed by immutable SSA.
     """
-    function: object
+    function: GraphFunction
     at: ProgramValue
     wrt: str
     transport_byte_capacity: int | None = None
     differentiate_iterations: bool = False
-    action: object = field(init=False)
+    action: GraphFunction = field(init=False)
 
     @classmethod
     def differential(cls, function, *, at, wrt, differentiate_iterations=False,

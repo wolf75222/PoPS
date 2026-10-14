@@ -1017,6 +1017,8 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             )
         var[v.id] = var[scalar_in.id]
     elif v.op == "stencil_flux_divergence":
+        if bidx is None:
+            raise ValueError("stencil flux delegate requires an explicit resolved block owner")
         from .program_emit_stencil_flux import emit_stencil_flux
         from .program_value_authority import delegated_output_boundaries
         publication = emit_stencil_flux(v, var, lines, block=bidx, target=target)

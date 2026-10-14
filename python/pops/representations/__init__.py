@@ -22,7 +22,7 @@ def _freeze_data(value):
         return value
     if isinstance(value, Mapping) and all(type(key) is str and key for key in value):
         return MappingProxyType({key: _freeze_data(value[key]) for key in sorted(value)})
-    if type(value) in (list, tuple):
+    if type(value) is list or type(value) is tuple:
         return tuple(_freeze_data(item) for item in value)
     raise TypeError("representation metadata must be finite inert JSON data")
 
@@ -319,7 +319,8 @@ class Representation:
             space = name
             if data is not None:
                 raise TypeError("scientific representations derive data from their finite maps")
-            if any(type(value) is not ScientificMap for value in (encode, decode, pairing)):
+            if (type(encode) is not ScientificMap or type(decode) is not ScientificMap
+                    or type(pairing) is not ScientificMap):
                 raise TypeError("encode, decode and pairing require executable ScientificMaps")
             if set(encode.inputs) != {"value"} or set(decode.inputs) != {"value"}:
                 raise TypeError("encode/decode require exactly the scientific input 'value'")

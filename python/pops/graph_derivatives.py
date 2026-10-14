@@ -9,9 +9,11 @@ of forward columns with authored pairings, not a reverse-mode performance claim.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 from pops.graph_functions import GraphFunction, _Codec, graph
 from pops.time._program.structured_control import new_typed, value_signature
+from pops.time.values import ProgramValue
 from pops.time.variant_types import Bool, Failure, Float64, Int64, Product, Result, ValueType, Variant, as_type, type_of
 
 
@@ -328,7 +330,7 @@ class _Forward:
                     _ref(attrs, 'cond_argument'): (carried['value'], carried['tangent'])},
                     _ref(attrs, 'cond'), predicate=True)
                 return pair['value']
-            def step(q, carried):
+            def iterate_step(q, carried):
                 pair = self.region(record['blocks']['body_block'], {
                     _ref(attrs, 'body_argument'): (carried['value'], carried['tangent'])},
                     _ref(attrs, 'body'))
@@ -336,7 +338,7 @@ class _Forward:
                     from pops._differential_results import paired_result
                     return paired_result(q, pair['value'], pair['tangent'])
                 return pair
-            paired = p.iterate(initial, step, stop, max_steps=xs[1])
+            paired = p.iterate(initial, iterate_step, stop, max_steps=xs[1])
             if legacy:
                 tangent = _IterationTangent(paired)
                 self.validate_iteration_differential(paired)
@@ -374,12 +376,12 @@ class _Forward:
             tangent = p.success(ds[0]) if op == 'result_ok' else p.failure(ds[0], xs[1])
         elif op == 'structured_fold':
             initial = p.product(value=xs[0], tangent=ds[0])
-            def step(q, carried, index):
+            def fold_step(q, carried, index):
                 return self.region(record['blocks']['body_block'], {
                     _ref(attrs, 'body_argument'): (carried['value'], carried['tangent']),
                     _ref(attrs, 'body_index'): (index, q.product()),
                 }, _ref(attrs, 'body'))
-            pair = p.fold(initial, xs[1], step, max_steps=xs[2])
+            pair = p.fold(initial, xs[1], fold_step, max_steps=xs[2])
             value, tangent = pair['value'], pair['tangent']
         elif op == 'finite_map':
             domain = xs[0]
@@ -389,13 +391,13 @@ class _Forward:
             tangent = p.map(domain, lambda q, index: q.at(paired, index)['tangent'])
         elif op == 'finite_scan':
             initial, domain = xs[0], xs[1]
-            def step(q, carried, index):
+            def scan_step(q, carried, index):
                 pair = self.region(record['blocks']['body_block'], {
                     _ref(attrs, 'body_argument'): (carried['value'], carried['tangent']),
                     _ref(attrs, 'body_index'): (index, q.product())}, _ref(attrs, 'body'))
                 return q.product(state=q.product(value=pair['value']['state'], tangent=pair['tangent']['state']),
                                  value=q.product(value=pair['value']['value'], tangent=pair['tangent']['value']))
-            paired = p.scan(domain, p.product(value=initial, tangent=ds[0]), step, order='ascending')
+            paired = p.scan(domain, p.product(value=initial, tangent=ds[0]), scan_step, order='ascending')
             value = p.product(state=paired['state']['value'], values=p.map(domain,
                 lambda q, index: q.at(paired['values'], index)['value']))
             tangent = p.product(state=paired['state']['tangent'], values=p.map(domain,
@@ -409,13 +411,21 @@ class _Forward:
             elif op == 'product_get':
                 tangent = ds[0][value.attrs['field']]
             elif op == 'scalar_op':
-                operands = [(xs[x], ds[x]) if kind == 'v' else (x.to_python(), 0.)
-                            for kind, x in value.attrs['operands']]
+                # A scalar operation's value inputs carry scalar Program tangents;
+                # literal operands instead have the numeric zero tangent.
+                operands = [
+                    (xs[x], cast(ProgramValue, ds[x])) if kind == 'v' else (x.to_python(), 0.)
+                    for kind, x in value.attrs['operands']]
                 (a, da), (b, db) = operands
                 operation = value.attrs['fn']
-                tangent = {'add': lambda: da+db, 'sub': lambda: da-db,
-                           'mul': lambda: da*b+a*db,
-                           'div': lambda: (da*b-a*db)/(b*b)}[operation]()
+                if all(kind == 'c' for kind, _ in value.attrs['operands']):
+                    # Serialized graphs also admit two literals. Their derivative is
+                    # zero, but the original primal operation and its native guards stay.
+                    tangent = p.float64(0.)
+                else:
+                    tangent = {'add': lambda: da+db, 'sub': lambda: da-db,
+                               'mul': lambda: da*b+a*db,
+                               'div': lambda: (da*b-a*db)/(b*b)}[operation]()
                 if not hasattr(tangent, 'vtype'): tangent = p.float64(tangent)
             elif op == 'scalar_expression':
                 tangent = _expression_tangent(p, value, ds)

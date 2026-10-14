@@ -8,10 +8,12 @@ declared conversion remains an author obligation; its numerical body is always i
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from decimal import Decimal
 from fractions import Fraction
 from collections.abc import Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
+from typing import TypeAlias
 import hashlib
 import json
 
@@ -22,7 +24,8 @@ DIMENSIONLESS = PhysicalDimension()
 ANNOTATION = "scientific_type_v14"
 CONTRACT = "scientific_graph_v14"
 APPLICATION = "scientific_application_v14"
-_MAP_SCOPE = ContextVar("pops_scientific_map_scope", default=None)
+_MAP_SCOPE: ContextVar[tuple[bool, ScientificConversion | None] | None] = ContextVar(
+    "pops_scientific_map_scope", default=None)
 
 
 @contextmanager
@@ -83,25 +86,25 @@ class _Scalar:
     context: tuple | None = None
     affine: str = "linear"
     origin: str | None = None
-    literal: object = None
+    literal: int | float | Fraction | Decimal | None = None
     domain: str = "real"
 
 
 @dataclass(frozen=True)
 class _Array:
     domain: str
-    element: object
+    element: _Meaning
 
 
 @dataclass(frozen=True)
 class _Sum:
-    members: tuple
+    members: tuple[tuple[str, _Meaning], ...]
 
 
 @dataclass(frozen=True)
 class _Capability:
     kind: str
-    payload: object
+    payload: _Meaning
 
 
 @dataclass(frozen=True)
@@ -109,7 +112,13 @@ class _Discrete:
     kind: str
 
 
-_BOTTOM = object()
+class _Bottom:
+    """The unreachable member of a finite scientific sum."""
+
+
+_BOTTOM = _Bottom()
+_Meaning: TypeAlias = (_Scalar | _Array | _Sum | _Capability | _Discrete | _Bottom
+                       | dict[str, "_Meaning"] | tuple["_Meaning", ...])
 
 
 class _UnboundScientificInput(TypeError):
@@ -128,14 +137,14 @@ def _domain(signature):
                  if key not in ("element", "vtype", "point")})
 
 
-def _meaning(scientific_type):
+def _meaning(scientific_type) -> _Meaning:
     from pops.representations import ScientificType
     if type(scientific_type) is not ScientificType:
         raise TypeError("scientific schema leaves must be ScientificType")
     return _meaning_data(scientific_type.to_data())
 
 
-def _meaning_data(data):
+def _meaning_data(data) -> _Meaning:
     """Read inert scientific meaning; this never issues a finite domain/field authority."""
     if data.get("contract") != "pops.scientific-type@1":
         raise TypeError("unknown scientific type metadata")
@@ -145,7 +154,7 @@ def _meaning_data(data):
                data["representation_identity"], _key(data["coordinate_units"]),
                _key(data["space"]["sampling"]), _key(data["space"]["representation"]))
     domain = data["space"]["domain"]
-    def visit(signature):
+    def visit(signature) -> _Meaning:
         kind = signature["vtype"]
         if kind == "product":
             return {key: visit(child) for key, child in signature["members"]}
@@ -172,7 +181,7 @@ def _meaning_data(data):
     return result
 
 
-def _untyped(signature):
+def _untyped(signature) -> _Meaning:
     kind = signature["vtype"]
     if kind == "product":
         return {key: _untyped(child) for key, child in signature["members"]}
@@ -187,7 +196,7 @@ def _untyped(signature):
     raise TypeError("untyped scientific real payload needs a declared schema")
 
 
-def _compatible(a, b, *, interpretation=False, domain_assumption=False):
+def _compatible(a, b, *, interpretation=False, domain_assumption=False) -> _Meaning:
     if a is _BOTTOM or b is _BOTTOM:
         return b if a is _BOTTOM else a
     if isinstance(a, _Scalar) and isinstance(b, _Scalar):
@@ -230,6 +239,18 @@ def _compatible(a, b, *, interpretation=False, domain_assumption=False):
 def _real(value):
     if not isinstance(value, _Scalar):
         raise TypeError("scientific arithmetic requires a real scalar component")
+    return value
+
+
+def _product(value: _Meaning) -> dict[str, _Meaning]:
+    if not isinstance(value, dict):
+        raise TypeError("scientific projection requires a Product")
+    return value
+
+
+def _sum(value: _Meaning) -> _Sum:
+    if not isinstance(value, _Sum):
+        raise TypeError("scientific projection requires a Variant")
     return value
 
 
@@ -278,9 +299,12 @@ def _arithmetic(op, a, b=None, *, conversion=None):
     if op == "pow":
         if b.unit != DIMENSIONLESS or b.context is not None:
             raise TypeError("scientific exponent must be dimensionless")
-        if a.unit != DIMENSIONLESS and b.literal is None:
-            raise TypeError("a dimensional base requires a constant rational exponent")
-        unit = DIMENSIONLESS if a.unit == DIMENSIONLESS else _power(a.unit, Fraction(b.literal))
+        if a.unit == DIMENSIONLESS:
+            unit = DIMENSIONLESS
+        else:
+            if b.literal is None:
+                raise TypeError("a dimensional base requires a constant rational exponent")
+            unit = _power(a.unit, Fraction(b.literal))
     elif op in ("mul", "div"):
         unit = _unit(a.unit, b.unit, 1 if op == "mul" else -1)
     else:
@@ -331,7 +355,7 @@ class _Analyzer:
         for value in values:
             self.get(value)
 
-    def expression(self, node, inputs):
+    def expression(self, node, inputs) -> _Meaning:
         values = []
         for item in node.attrs["expression_nodes"]:
             op = item[0]
@@ -352,7 +376,7 @@ class _Analyzer:
         result = tuple(values[index] for index in node.attrs["expressions"])
         return result[0] if node.vtype == "scalar" else result
 
-    def get(self, value):
+    def get(self, value) -> _Meaning:
         value = value.prog._canonical_value(value)
         if value.id in self.known:
             if ANNOTATION in value.attrs:
@@ -431,7 +455,7 @@ class _Analyzer:
         self.visited.remove(value.id)
         return result
 
-    def operation(self, value, x):
+    def operation(self, value, x) -> _Meaning:
         from pops.time._program.structured_control import value_signature
         a, op = value.attrs, value.op
         if op == 'provenance_bind':
@@ -528,10 +552,10 @@ class _Analyzer:
             return _Array(_domain(value_signature(value)), self.get(a["body"]))
         if op == "distributed_map":
             self.block(a.get("body_block", ()))
-            body = dict(self.get(a["body"]).members)
+            body = dict(_sum(self.get(a["body"])).members)
             signature = dict(value_signature(value)["members"])
             runtime = dict(dict(signature["err"]["members"])["reason"]["members"])["runtime"]
-            error = dict(rank=_Discrete("int64"), gid=_Discrete("int64"),
+            error: dict[str, _Meaning] = dict(rank=_Discrete("int64"), gid=_Discrete("int64"),
                          reason=_Sum((("runtime", _untyped(runtime)), ("user", body["err"]))))
             return _Sum((("ok", _Array(_domain(signature["ok"]), body["ok"])), ("err", error)))
         if op == "distributed_requests":
@@ -548,19 +572,20 @@ class _Analyzer:
             self.known[a["body_value"].id] = x[0].element
             self.block(a.get("body_block", ()))
             body = self.get(a["body"])
-            result = _compatible(initial, body["state"] if op == "distributed_scan" else body)
+            result = _compatible(initial, _product(body)["state"] if op == "distributed_scan" else body)
             if op == "distributed_reduce": return result
             signature = value_signature(value)
             if op == "distributed_scatter_reduce": return _Array(_domain(signature), result)
-            return dict(state=result, values=_Array(_domain(dict(signature["members"])["values"]), body["value"]))
+            return dict(state=result, values=_Array(_domain(dict(signature["members"])["values"]), _product(body)["value"]))
         if op in ("structured_fold", "finite_scan"):
             self.known[a["body_argument"].id] = x[0]
             self.block(a.get("body_block", ()))
             result = self.get(a["body"])
             if op == "structured_fold":
                 return _compatible(x[0], result)
-            state = _compatible(x[0], result["state"])
-            return dict(state=state, values=_Array(_domain(a["array_signature"]), result["value"]))
+            product = _product(result)
+            state = _compatible(x[0], product["state"])
+            return dict(state=state, values=_Array(_domain(a["array_signature"]), product["value"]))
         if op == "variant_construct":
             return _Sum(tuple((tag, x[0] if tag == a["tag"] else _BOTTOM)
                               for tag, _ in value_signature(value)["members"]))
@@ -755,7 +780,7 @@ def _check_scientific_graph(function, *, inputs, output, conversion=None, aliase
                 domain_obligations=([dict(classification="analytical_assumption",
                     graph_identity=function.identity, justification=conversion.justification,
                     inputs={key: typ.space.domain for key, typ in inputs.items()},
-                    output=output.space.domain)] if domain_assumption else []))
+                    output=output.space.domain)] if conversion is not None and domain_assumption else []))
     return ScientificGraphContract(_key(data))
 
 
@@ -1033,8 +1058,8 @@ def scientific_packet_schema(signature, scientific):
     return tuple(entries)
 
 
-def _packet_apply(meaning, declarations, *, initial=False):
-    def change(root, path, expected):
+def _packet_apply(meaning, declarations, *, initial=False) -> _Meaning:
+    def change(root, path, expected) -> _Meaning:
         if not path:
             return expected if initial and not _has_context(root) else _compatible(root, expected)
         key, *tail = path
@@ -1093,7 +1118,7 @@ def _scientific_at(signature, path):
     return signature
 
 
-def _declare_initial_packet(actual, expected):
+def _declare_initial_packet(actual, expected) -> _Meaning:
     """An initial datum may acquire meaning once; existing scientific meaning is checked."""
     if actual is _BOTTOM:
         return expected

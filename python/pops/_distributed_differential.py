@@ -31,7 +31,7 @@ def transform(compiler, record, xs, ds):
         return value, zero_like(p,value)
     if op == 'distributed_map':
         domain = xs[0]
-        def body(q,index):
+        def map_body(q,index):
             def evaluate(r):
                 pair = compiler.region(record['blocks']['body_block'],
                     {_ref(attrs,'body_index'):(index,r.product())},_ref(attrs,'body'))
@@ -40,7 +40,7 @@ def transform(compiler, record, xs, ds):
                     return paired_result(r,value,pair['tangent'])
                 return pair
             return q.capture(evaluate)
-        paired = dist.local_map(domain,body,byte_capacity=transport_capacity())
+        paired = dist.local_map(domain,map_body,byte_capacity=transport_capacity())
         original = ValueType(compiler.codec.decode(record['signature']))
         derivative = tangent_type(original)
         original_error = ValueType(dict(original.signature['members'])['err'])
@@ -72,7 +72,7 @@ def transform(compiler, record, xs, ds):
             q.product(value=q.at(values,i),tangent=q.at(ds[0],i)))
         initial_index = 3 if op == 'distributed_scatter_reduce' else 1
         initial = p.product(value=xs[initial_index],tangent=ds[initial_index])
-        def body(q,state,item):
+        def reduce_body(q,state,item):
             pair = compiler.region(record['blocks']['body_block'], {
                 _ref(attrs,'body_argument'):(state['value'],state['tangent']),
                 _ref(attrs,'body_value'):(item['value'],item['tangent'])},_ref(attrs,'body'))
@@ -82,14 +82,14 @@ def transform(compiler, record, xs, ds):
             return pair
         kw = dict(order='global_gid_ascending',byte_capacity=transport_capacity())
         if op == 'distributed_reduce':
-            result=dist.reduce(paired_values,initial,body,**kw)
+            result=dist.reduce(paired_values,initial,reduce_body,**kw)
             return result['value'],result['tangent']
         if op == 'distributed_scatter_reduce':
-            result=dist.scatter_reduce(paired_values,xs[1],xs[2],initial,body,**kw)
+            result=dist.scatter_reduce(paired_values,xs[1],xs[2],initial,reduce_body,**kw)
             domain=xs[2]
             return (array_map(p,domain,lambda q,i:q.at(result,i)['value']),
                     array_map(p,domain,lambda q,i:q.at(result,i)['tangent']))
-        result=dist.scan(paired_values,initial,body,**kw)
+        result=dist.scan(paired_values,initial,reduce_body,**kw)
         domain=p.domain(values)
         return (p.product(state=result['state']['value'],values=array_map(p,domain,
                     lambda q,i:q.at(result['values'],i)['value'])),

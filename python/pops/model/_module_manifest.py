@@ -49,7 +49,7 @@ _PARAM_ROW_KEYS = {
     "handle",
 }
 
-_DECLARATION_ROW_KEYS = {
+_DECLARATION_ROW_KEYS: dict[str, tuple[set[str], ...]] = {
     "state": ({
         "components", "roles", "layout", "storage", "representation", "centering",
         "units", "frame", "clock", "support", "sampling", "value_shape", "domain", "qid", "handle",

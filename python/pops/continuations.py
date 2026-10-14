@@ -6,7 +6,12 @@ continuation authority, never to a Python record or a caller-chosen version inte
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pops.graph_functions import GraphFunction
 from types import MappingProxyType
 
 from pops.time._authoring import atomic_authoring
@@ -68,7 +73,7 @@ def Candidate(program, *, base, proposal, continuation, increment, observations,
 @dataclass(frozen=True)
 class Assess:
     """Closed graph: (base,proposal,candidate) -> Product(accepted:Bool,checks:Product)."""
-    body: object
+    body: GraphFunction
 
     def __post_init__(self):
         _closed(self.body, "Assess")
@@ -94,9 +99,9 @@ class DecisionAssess:
     This distinguishes a child's Reject from this assessment's Reject without
     restricting the tags or compositions inside supplied graphs.
     """
-    body: object
-    transforms: object
-    _ticket: object = field(init=False, repr=False)
+    body: GraphFunction
+    transforms: Mapping[str, GraphFunction]
+    _ticket: Assess = field(init=False, repr=False)
 
     def __post_init__(self):
         from pops.graph_functions import graph
@@ -170,9 +175,9 @@ class Advance:
     only Reject invokes Retry, binding base,proposal,controller=controller_update,reason.
     Both return Result(Product(proposal,controller)); neither can replace the scientific base.
     """
-    trial: object
+    trial: GraphFunction
     assessment: Assess | DecisionAssess
-    retry: object | None = None
+    retry: GraphFunction | None = None
 
     def __post_init__(self):
         _closed(self.trial, "Advance.trial")
@@ -270,7 +275,8 @@ def advance(program, method, *, base, proposal, controller=None, max_attempts=No
     """Return Result(AcceptedProvisional,Failure); retries execute in native bounded regions."""
     if type(method) is not Advance:
         raise TypeError("advance requires Advance")
-    if method.retry is None:
+    retry_policy = method.retry
+    if retry_policy is None:
         if controller is not None or max_attempts is not None:
             raise ValueError("controller/budget require a declared closed retry policy")
         return advance_once(program, method, base=base, proposal=proposal,max_transforms=max_transforms)
@@ -298,10 +304,10 @@ def advance(program, method, *, base, proposal, controller=None, max_attempts=No
                 # exhausted budgets retain their exact payload and propagate.
                 state_type=Product(proposal=type_of(proposal),controller=type_of(controller),status=status_type)
                 error_type=type_of(failure)
-                def propagate(r,unused):
+                def propagate(r,payload):
                     return r.require_success(r.variant(Result(state_type,error_type),'err',failure))
                 def rejected(r,payload):
-                    answer=method.retry(r,base=r.continuation_read(base),proposal=old_proposal,
+                    answer=retry_policy(r,base=r.continuation_read(base),proposal=old_proposal,
                         controller=payload['controller_update'],reason=payload['reason'])
                     _result(answer,"DecisionAssess retry policy")
                     updated=r.require_success(answer)
@@ -312,7 +318,7 @@ def advance(program, method, *, base, proposal, controller=None, max_attempts=No
                 arms={tag:propagate for tag,_ in value_signature(failure)['members']}
                 if 'decision_reject' in arms: arms['decision_reject']=rejected
                 return q.match(failure,**arms)
-            answer = method.retry(q, base=q.continuation_read(base), proposal=old_proposal,
+            answer = retry_policy(q, base=q.continuation_read(base), proposal=old_proposal,
                                   controller=old_controller, failure=failure)
             _result(answer, "retry policy")
             updated = q.require_success(answer)

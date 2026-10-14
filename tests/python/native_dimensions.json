@@ -21,6 +21,7 @@
     "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py": 2,
     "tests/python/integration/runtime/test_api_v02_models_M01_M14.py": 2,
     "tests/python/integration/runtime/test_api_v02_models_M15_M21.py": 2,
+    "tests/python/integration/runtime/test_api_v02_models_M19_M21.py": 2,
     "tests/python/integration/runtime/test_api_v02_realization_choices_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_realization_loops_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_regions_native.py": 2,

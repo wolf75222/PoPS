@@ -240,3 +240,18 @@ def test_finite_domains_created_in_function_are_alpha_renamed_on_each_call():
     maps = [v for v in p._values if v.op == 'finite_map']
     with pytest.raises(ValueError, match='domain family'):
         p.at(maps[0], p.index(domains[2], 0))
+
+
+@pytest.mark.parametrize("field", ("attrs", "signature"))
+@pytest.mark.parametrize("encoded", (None, {"$float": "0x1.0000000000000p+0"}, {"$tuple": []}))
+def test_closed_operation_requires_mapping_payloads(field, encoded):
+    function = graph(inputs=Product(x=Float64), output=Float64)(lambda p, a: a['x']*2)
+    snapshot = function.to_data()
+    snapshot['nodes'][-1][field] = encoded
+    with pytest.raises(ValueError, match="must decode to.*mapping"):
+        GraphFunction.from_data(snapshot)
+
+
+def test_untyped_builder_output_is_rejected_before_snapshot():
+    with pytest.raises(TypeError, match="must return a ProgramValue"):
+        graph(inputs=Product(x=Float64), output=Float64)(lambda p, a: object())

@@ -126,3 +126,58 @@ def test_conversion_from_continuous_unknown_to_integer_is_not_differentiable():
     def integer(p, args): return p.int64(args['x'])
     with pytest.raises(NotImplementedError, match='int64_cast'):
         jvp(integer)
+
+
+def test_exact_scalar_literals_keep_their_graph_derivatives():
+    from decimal import Decimal
+    from fractions import Fraction
+
+    for literal in (Fraction(1, 3), Decimal('0.3')):
+        for operation in ('add', 'sub', 'mul', 'div'):
+            for literal_first in (False, True):
+                @graph(inputs=Product(x=Float64), output=Float64)
+                def f(p, args):
+                    a, b = (literal, args['x']) if literal_first else (args['x'], literal)
+                    return {'add': lambda: a+b, 'sub': lambda: a-b,
+                            'mul': lambda: a*b, 'div': lambda: a/b}[operation]()
+
+                loaded = GraphFunction.from_data(json.loads(json.dumps(f.to_data())))
+                cpp = _cpp(jvp(loaded), lambda p: dict(
+                    primal=p.product(x=p.float64(2)), tangent=p.product(x=p.float64(1))))
+                assert 'ctx.record_scalar("derivative"' in cpp
+
+
+def test_serialized_literal_only_derivative_keeps_primal_operation_and_native_guards():
+    from decimal import Decimal
+    from fractions import Fraction
+    from pops.identity.scalar import scalar_literal
+
+    # These two-constant nodes are admitted by GraphFunction.from_data. Their
+    # derivative is zero even when Python would reject Decimal*0.0 or mixed literals.
+    for left, right, operation in (
+        (Decimal('0.3'), Decimal('0.2'), 'mul'),
+        (Fraction(1, 3), Fraction(2, 3), 'div'),
+        (Decimal('0.3'), Fraction(1, 3), 'mul'),
+        (Decimal('0.3'), 0, 'div'),
+    ):
+        @graph(inputs=Product(x=Float64), output=Float64)
+        def f(p, args):
+            return p._scalar_binop(left, right, operation)
+
+        loaded = GraphFunction.from_data(json.loads(json.dumps(f.to_data())))
+        derivative = GraphFunction.from_data(json.loads(json.dumps(jvp(loaded).to_data())))
+        p = Program('literal_derivative')
+        state = typed_state(p, 'field', state_name='U')
+        pair = derivative(p, primal=p.product(x=p.float64(2)),
+                          tangent=p.product(x=p.float64(1)))
+        primal, tangent = pair.inputs
+        assert primal.op == 'scalar_op' and not primal.inputs
+        assert primal.attrs['fn'] == operation
+        assert primal.attrs['operands'] == (('c', scalar_literal(left)), ('c', scalar_literal(right)))
+        assert tangent.op == 'finite_real' and tangent.attrs['value'] == 0.
+        p.record_scalar('primal', primal)
+        p.record_scalar('derivative', tangent)
+        p.commit(state.next, p.value('accepted', state.n, at=state.next.point))
+        cpp = emit_cpp_program(p)
+        assert 'ctx.record_scalar("primal"' in cpp
+        assert '!std::isfinite(' in cpp

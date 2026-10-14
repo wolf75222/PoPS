@@ -7,6 +7,7 @@ an interpolation between unrelated supports or an AMR reflux policy.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -128,7 +129,7 @@ class Delivery:
 
     contribution: Contribution
     recipient: ProgramValue
-    linear_map: object
+    linear_map: LinearMap | Iterable[Iterable[object]]
 
     def __post_init__(self):
         if type(self.contribution) is not Contribution:
@@ -152,6 +153,11 @@ class Delivery:
             return
         if self.recipient.state_ref is None:
             raise ValueError("delivery requires a qualified recipient state authority")
+        if isinstance(self.linear_map, LinearMap):
+            raise TypeError("field Delivery requires an authored component matrix")
+        source_space, recipient_space = source.space, self.recipient.space
+        if source_space is None or recipient_space is None:
+            raise TypeError("field Delivery requires explicit source and recipient spaces")
         rows = tuple(tuple(exact_numeric_scalar(x, where="delivery map") for x in row)
                      for row in self.linear_map)
         if (len(rows) != len(component_names(self.recipient))
@@ -162,7 +168,7 @@ class Delivery:
                 raise ValueError("delivery co-location obligation: different " + attribute)
         for i, row in enumerate(rows):
             for j, weight in enumerate(row):
-                if weight != 0 and source.space.units[j] != self.recipient.space.units[i]:
+                if weight != 0 and source_space.units[j] != recipient_space.units[i]:
                     raise ValueError("delivery dimensionless map connects incompatible component units")
         object.__setattr__(self, "linear_map", rows)
 
@@ -247,7 +253,10 @@ class Increment:
                 raise ValueError("increment base differs from its exact recipient representation")
             # The dense authored map may have a different input block/component
             # width. Its target remains the exact recipient state authority.
-            for i, row in enumerate(delivery.linear_map):
+            matrix = delivery.linear_map
+            if isinstance(matrix, LinearMap):
+                raise TypeError("field increment requires an authored component matrix")
+            for i, row in enumerate(matrix):
                 for j, weight in enumerate(row):
                     if weight != 0:
                         components[i] = components[i] + weight * value[j]

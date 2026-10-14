@@ -11,7 +11,7 @@
       ]
     },
     "ci_20260914_field_provider_install": "Conservative 5-second scheduling estimate for mocked field-provider installation contracts; not a measured CI duration. Replace from a complete per-file timing receipt.",
-    "estimated_count": 956,
+    "estimated_count": 957,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -125,6 +125,7 @@
       "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py",
       "tests/python/integration/runtime/test_api_v02_models_M01_M14.py",
       "tests/python/integration/runtime/test_api_v02_models_M15_M21.py",
+      "tests/python/integration/runtime/test_api_v02_models_M19_M21.py",
       "tests/python/integration/runtime/test_api_v02_realization_choices_native.py",
       "tests/python/integration/runtime/test_api_v02_realization_loops_native.py",
       "tests/python/integration/runtime/test_api_v02_regions_native.py",
@@ -1068,7 +1069,7 @@
       "scope": "M0-M7 migration additions",
       "timing_limit": "The inherited scalar-advection pipeline estimate is not refreshed from the local OMP qualification, where a full run exceeded 4299 s. CI Serial hardware/cache behavior differs; no observed CI fit is claimed. Preserve the indivisible full scientific test and refresh its estimate from the next complete CI artifact."
     },
-    "total_files": 1021,
+    "total_files": 1022,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -4567,7 +4568,7 @@
         },
         "tests/python/integration/runtime/test_api_v02_models_M15_M21.py": {
           "kind": "native_profile",
-          "estimated_seconds": 900,
+          "estimated_seconds": 1020,
           "native_dimension": 2
         },
         "tests/python/integration/runtime/test_api_v02_realization_choices_native.py": {
@@ -5585,6 +5586,11 @@
           "kind": "source_contract",
           "estimated_seconds": 15,
           "basis": "Source-only authoring, serialization, type and equation-contract scheduling allowance; not a CI timing measurement."
+        },
+        "tests/python/integration/runtime/test_api_v02_models_M19_M21.py": {
+          "kind": "native_profile",
+          "estimated_seconds": 330,
+          "native_dimension": 2
         }
       },
       "shard_capacity": {
@@ -5880,6 +5886,79 @@
         "github_ci_received": false,
         "basis": "Correct exclusive MPI ownership for distributed Program; retain serial coverage of two mixed modules and add exact whole-module MPI2 receipts. Case counts are verified by collection; serial MPI-only skips are not native passing evidence."
       }
+    },
+    "ci_20261014_shard49_rebalance": {
+      "run_id": 38575532016,
+      "job_id": 115893645436,
+      "head": "5bd23ddcaefeda0e38b2853e4c51640a44b7b61c",
+      "backend": "Kokkos Serial, installed Dim2, Python 3.12.15",
+      "job_log_sha256": "ae986989def1405a2354f2fdadfcefa2b4535a1b38aa86fb43569b571d097141",
+      "basis": "Observed GitHub timestamp intervals from collection-complete to the last M15_M21 PASS report, and from the preceding file's last PASS report to the last M19 PASS report. All seven and six cases respectively reported PASS before the unchanged 45-minute test-step timeout. These transcript intervals are not complete setup/call/teardown receipts or exact per-file wall times: they include boundary/logging overhead and exclude final teardown. Scheduling estimates are 1.25 times each interval, rounded up to 50 seconds. Preserve all cases, file selection and watchdogs; redistribute with the same LPT planner. No successful shard completion or remote CI acceptance is inferred. The M15_M21 file is split without changing its seven test bodies: M16/M17/M18 plus oblique refusal retain 1020 seconds, M19/M20/M21 receive 330 seconds. The total 1350-second allowance is unchanged; both receivers remain below the existing 1200-second registration ceiling.",
+      "windows": [
+        {
+          "path": "tests/python/integration/runtime/test_api_v02_models_M15_M21.py",
+          "first_log_line": 960,
+          "last_log_line": 968,
+          "from": "2026-10-14T13:57:57.9896902Z",
+          "to": "2026-10-14T14:15:49.7842526Z",
+          "transcript_window_seconds": 1071.794562,
+          "observed_pass_reports": 7,
+          "previous_weight_seconds": 900,
+          "planning_weight_seconds": 1350
+        },
+        {
+          "path": "tests/python/integration/runtime/test_m19_product_support_runtime.py",
+          "first_log_line": 983,
+          "last_log_line": 989,
+          "from": "2026-10-14T14:15:49.8241512Z",
+          "to": "2026-10-14T14:41:02.6321177Z",
+          "transcript_window_seconds": 1512.807966,
+          "observed_pass_reports": 6,
+          "previous_weight_seconds": 600,
+          "planning_weight_seconds": 1900
+        }
+      ],
+      "partition": {
+        "previous_shards": 96,
+        "new_shards": 97,
+        "total_files": 1022,
+        "sharded_files": 1021,
+        "dedicated_compile_cache_files": 1,
+        "ordinary_budget_seconds": 2100,
+        "new_weights_previous_shards_max_seconds": 2110.0,
+        "new_shards_max_seconds": 2086.5,
+        "smallest_non_decreasing_shard_count_within_budget": 97,
+        "coverage": "Same seven scientific cases split across two receivers (+1 file); every selected file occurs exactly once, unchanged MPI/OpenMP routing and watchdogs."
+      },
+      "split_receivers": {
+        "original": "tests/python/integration/runtime/test_api_v02_models_M15_M21.py",
+        "files": {
+          "tests/python/integration/runtime/test_api_v02_models_M15_M21.py": {
+            "models": [
+              "M16",
+              "M17",
+              "M18"
+            ],
+            "oblique_refusal": true,
+            "cases": 4,
+            "estimated_seconds": 1020
+          },
+          "tests/python/integration/runtime/test_api_v02_models_M19_M21.py": {
+            "models": [
+              "M19",
+              "M20",
+              "M21"
+            ],
+            "oblique_refusal": false,
+            "cases": 3,
+            "estimated_seconds": 330
+          }
+        },
+        "original_cases": 7,
+        "total_cases": 7,
+        "total_estimated_seconds": 1350,
+        "shared_support": "tests/python/support/api_v02_moment_profiles.py"
+      }
     }
   },
   "tests/python/examples/final/test_hyqmom15_final_example.py": 285,
@@ -5994,7 +6073,8 @@
   "tests/python/integration/runtime/test_api_v02_intervals_native.py": 300,
   "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py": 1200,
   "tests/python/integration/runtime/test_api_v02_models_M01_M14.py": 1200,
-  "tests/python/integration/runtime/test_api_v02_models_M15_M21.py": 900,
+  "tests/python/integration/runtime/test_api_v02_models_M15_M21.py": 1020,
+  "tests/python/integration/runtime/test_api_v02_models_M19_M21.py": 330,
   "tests/python/integration/runtime/test_api_v02_realization_choices_native.py": 1200,
   "tests/python/integration/runtime/test_api_v02_realization_loops_native.py": 300,
   "tests/python/integration/runtime/test_api_v02_regions_native.py": 600,
@@ -6083,7 +6163,7 @@
   "tests/python/integration/runtime/test_m19_amr_consumed_runtime.py": 600,
   "tests/python/integration/runtime/test_m19_bgk_runtime.py": 600,
   "tests/python/integration/runtime/test_m19_freestreaming_runtime.py": 600,
-  "tests/python/integration/runtime/test_m19_product_support_runtime.py": 600,
+  "tests/python/integration/runtime/test_m19_product_support_runtime.py": 1900,
   "tests/python/integration/runtime/test_m19_thermal_consumed_runtime.py": 600,
   "tests/python/integration/runtime/test_m19_vlasov_poisson_runtime.py": 600,
   "tests/python/integration/runtime/test_m23_hall_fourier_runtime.py": 600,

@@ -8,6 +8,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
+from pops.time.value_signatures import _validate_signature_shape
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from pops.time.value_signatures import ValueSignature
 
 
 def _freeze(value):
@@ -22,13 +27,14 @@ def _freeze(value):
 class ValueType:
     """Immutable exact Program value signature; no implicit scientific conversion."""
 
-    signature: Mapping
+    signature: ValueSignature
     __pops_ir_immutable__ = True
 
     def __init__(self, signature):
         if not isinstance(signature, Mapping) or not isinstance(signature.get("vtype"), str):
             raise TypeError("ValueType requires a structural value signature")
-        object.__setattr__(self, "signature", _freeze(signature))
+        _validate_signature_shape(signature)
+        object.__setattr__(self, "signature", cast("ValueSignature", _freeze(signature)))
 
     def to_data(self):
         from pops.time.canonical_data import _json_ready
@@ -83,12 +89,12 @@ def as_type(value):
 
 def instantiate(value_type, point):
     """Bind only undeclared scalar evaluation points; exact field/index authorities stay exact."""
-    def bind(signature):
+    def bind(signature: ValueSignature):
         result = dict(signature)
         if result["vtype"] in ("scalar", "bool", "int64") and result.get("point") is None:
             result["point"] = point
         if result["vtype"] in ("product", "variant"):
-            result["members"] = tuple((key, bind(child)) for key, child in result["members"])
+            result["members"] = tuple((key, bind(child)) for key, child in cast("ValueSignature", result)["members"])
         return result
     return ValueType(bind(as_type(value_type).signature))
 

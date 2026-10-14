@@ -15,6 +15,7 @@ they describe shapes, never behaviour.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
 
 if TYPE_CHECKING:
     from pops._ir.quantity import PhysicalDimension
@@ -41,6 +42,7 @@ class _ProgramBase:
     _case_owner_path: Any
     _values: list
     _next_id: int
+    _next_finite_domain_identity: int
     _commits: dict
     _recording: list
     _next_region: int
@@ -104,6 +106,15 @@ class _ProgramBase:
 
     @property
     def owner_path(self) -> Any: ...
+
+    # --- finite structural algebra on the same Program owner ---
+    def int64(self, value: int | ProgramValue) -> ProgramValue: ...
+    def require_success(self, result: ProgramValue) -> ProgramValue: ...
+    def branch(self, condition: ProgramValue, when_true: Callable[..., ProgramValue],
+               when_false: Callable[..., ProgramValue], name: str | None = None) -> ProgramValue: ...
+    def fold(self, initial: ProgramValue, count: int | ProgramValue,
+             body_fn: Callable[..., ProgramValue], *, max_steps: int | ProgramValue | None = None) -> ProgramValue: ...
+    def capture(self, body: Callable[..., ProgramValue], *, _continuation_scope: bool = False) -> ProgramValue: ...
 
     # --- node construction / core builder (_ProgramCore) ---
     def _new(self, vtype: Any, op: Any, inputs: Any, attrs: Any, name: Any, block: Any,

@@ -156,7 +156,8 @@ class FiberRepresentation:
         if len(values) != self.size or type(axis) is not int or not 0 <= axis < len(self.axes):
             raise ValueError("fibre divergence requires the exact width and one axis")
         selected = self.axes[axis]
-        if selected.edges is None:
+        edges = selected.edges
+        if edges is None:
             raise ValueError("finite-volume divergence requires explicit control-volume edges")
         faces = {}
         def face(index, direction):
@@ -167,7 +168,7 @@ class FiberRepresentation:
             key = (left,right)
             if key not in faces:
                 faces[key] = flux(values[self.flat_index(left)], values[self.flat_index(right)],
-                                  selected.edges[left[axis]+1])
+                                  edges[left[axis]+1])
             return faces[key]
         return tuple((face(index,1)-face(index,-1))/selected.weights[index[axis]]
                      for index in self.indices)

@@ -108,10 +108,23 @@ def test_ale_split_preserves_all_eight_cases_and_no_test_module_imports():
 def test_hyqmom_orders_are_four_dim1_cases_outside_the_dim2_model_receiver():
     assert _test_case_count(RUNTIME + "test_api_v02_hyqmom_orders_native.py") == {
         "test_native_hyqmom_multiple_orders_and_regimes": 4}
-    tree = ast.parse((ROOT / (RUNTIME + "test_api_v02_models_M15_M21.py")).read_text())
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Constant):
-            assert node.value != "M15", "M15 must not select the Dim1 ABI in a Dim2 test process"
+    receivers = ("test_api_v02_models_M15_M21.py", "test_api_v02_models_M19_M21.py")
+    models = []
+    for receiver in receivers:
+        tree = ast.parse((ROOT / (RUNTIME + receiver)).read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant):
+                assert node.value != "M15", "M15 must not select the Dim1 ABI in a Dim2 test process"
+                if isinstance(node.value, str) and node.value in {"M16", "M17", "M18", "M19", "M20", "M21"}:
+                    models.append(node.value)
+    # M16 appears once as a successful profile and once as the oblique refusal.
+    assert sorted(models) == ["M16", "M16", "M17", "M18", "M19", "M20", "M21"]
+    assert sum(sum(_test_case_count(RUNTIME + receiver).values()) for receiver in receivers) == 7
+    helper = "tests/python/support/api_v02_moment_profiles.py"
+    for path in [*(RUNTIME + receiver for receiver in receivers), helper]:
+        for node in ast.walk(ast.parse((ROOT / path).read_text())):
+            if isinstance(node, ast.ImportFrom):
+                assert not any(part.startswith("test_") for part in (node.module or "").split("."))
 
 
 def test_v09_native_receivers_match_their_declared_case_counts():

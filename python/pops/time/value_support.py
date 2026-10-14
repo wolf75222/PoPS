@@ -4,17 +4,29 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from typing import Protocol
+    from typing import Protocol, TypeVar
+
+    from pops.time.points import Clock
+
+    _OwnerValue = TypeVar("_OwnerValue", bound="_ProgramValueBase", covariant=True)
 
     class _CoefficientPolynomial(Protocol):
         """The exact coefficient projection consumed by expression identity."""
 
         def to_data(self) -> Any: ...
 
-    class _ValueProgram(Protocol):
+    class _ValueProgram(Protocol[_OwnerValue]):
         """Only the owner surface read through a symbolic value, without reverse imports."""
 
         _values: list
+        clock: Clock
+
+        def _int64_compare(self, lhs: object, rhs: object, comparison: str) -> _OwnerValue: ...
+        def _int64_binop(self, lhs: object, rhs: object, operation: str) -> _OwnerValue: ...
+        def at(self, array: _ProgramValueBase, index: object) -> _OwnerValue: ...
+        def _product_get(self, value: _ProgramValueBase, key: str) -> _OwnerValue: ...
+        def scalar_expression(self, name: str, expression: object) -> _OwnerValue: ...
+        def _replace_value(self, value: _ProgramValueBase, **changes: object) -> _OwnerValue: ...
 
         @property
         def owner_path(self) -> Any: ...
@@ -39,7 +51,7 @@ class _ProgramValueBase:
     __slots__ = ()
     vtype: str
     block: Any
-    prog: _ValueProgram
+    prog: _ValueProgram[_ProgramValueBase]
     id: int
     name: str
 

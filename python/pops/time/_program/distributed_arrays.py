@@ -8,6 +8,12 @@ collective liveness frontiers reclaim unreachable immutable versions. There is
 no AMR invocation-calendar adaptation.
 Distributed gid/index/rank/at_local require a lexical local region.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, cast
+if TYPE_CHECKING:
+    from pops.time.value_signatures import ValueSignature
+
 from pops.time._authoring import atomic_authoring
 from pops.time._program.structured_control import new_typed, value_signature, same_signature, scalar_signature, failure_signature, success_signature
 from pops.time._program.finite_arrays import _record_body, finite_signature
@@ -32,8 +38,8 @@ LOCAL_OPS = LOCAL_OPS | frozenset(("finite_range_set","finite_size","finite_doma
 LOCAL_REGIONS = ("true_block", "false_block", "body_block", "cond_block")
 
 
-def signature(value):
-    return value.attrs["signature"] if value.vtype == "csr" else value_signature(value)
+def signature(value) -> ValueSignature:
+    return cast("ValueSignature", value.attrs["signature"]) if value.vtype == "csr" else value_signature(value)
 
 
 def transportable(sig):
@@ -90,7 +96,7 @@ def _capacity(value):
     return value
 
 
-def _distributed(value, kind=None):
+def _distributed(value, kind=None) -> ValueSignature:
     sig=signature(value)
     if (kind is not None and value.vtype!=kind) or sig.get("ownership")!=OWNERSHIP:
         raise TypeError("operation requires an authenticated contiguous distributed value")
@@ -211,7 +217,7 @@ class Distributed:
         with _transaction(p):
             if order!="global_gid_ascending":raise ValueError("distributed scan requires order='global_gid_ascending'")
             _capacity(byte_capacity);attrs=_combine(p,values,initial,body,scan=True)
-            element=dict(attrs["body_signature"]["members"])["value"]
+            element=dict(cast("ValueSignature", attrs["body_signature"])["members"])["value"]
             attrs.update(order=order,byte_capacity=byte_capacity,element=element)
             array=dict(_distributed(values,"array"),element=element)
             sig={"vtype":"product","members":(("state",value_signature(initial)),("values",array))}

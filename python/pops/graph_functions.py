@@ -151,12 +151,13 @@ class _Codec:
         for path, authority in self.anchors:
             if value is authority:
                 return {"$authority": list(path)}
-        if isinstance(value, TimePoint) and value.clock == self.program.clock and value.step == 0 \
+        if isinstance(value, TimePoint) and self.program is not None and value.clock == self.program.clock and value.step == 0 \
                 and value.offset.to_python() == 0:
             return {"$point": "call"}
         # A numerical rate derives its exact authority from its state formal, never a name lookup.
-        if getattr(value, "kind", None) == "rate" and getattr(value, "base_space", None) is not None:
-            return {"$rate": self.encode(value.base_space)}
+        base_space = getattr(value, "base_space", None)
+        if getattr(value, "kind", None) == "rate" and base_space is not None:
+            return {"$rate": self.encode(base_space)}
         raise TypeError("GraphFunction contains an unbound authority or unsupported capture: %s"
                         % type(value).__name__)
 
@@ -212,6 +213,8 @@ class _Codec:
             from pops.model.spaces import Rate
             return Rate(self.decode(item))
         if key == "$finite_signature":
+            if self.program is None:
+                raise ValueError("a finite GraphFunction signature requires a call Program")
             family, signature = item
             if type(family) is not int or family < 0:
                 raise ValueError("invalid GraphFunction finite domain family")
@@ -235,6 +238,8 @@ class _Codec:
                 "point": self.encode(value.point), "effects": sorted(effects)}
 
     def inline(self, node):
+        if self.program is None:
+            raise ValueError("GraphFunction inlining requires a call Program")
         if set(node) != {"id", "op", "vtype", "inputs", "attrs", "blocks", "signature", "point", "effects"} \
                 or type(node["id"]) is not int or node["id"] < 0:
             raise ValueError("malformed GraphFunction operation record")
@@ -260,6 +265,8 @@ class _Codec:
             blocks[key] = block
             blocks[key.replace("_block", "_region")] = region
         attrs = self.decode(node["attrs"])
+        if not isinstance(attrs, dict) or any(type(key) is not str for key in attrs):
+            raise ValueError("GraphFunction attributes must decode to a named mapping")
         # A closed graph's default allocator is a context parameter. Bind it at the
         # call site, while an explicitly declared bound remains an exact contract.
         from pops.time._program.distributed_arrays import GLOBAL_OPS, _capacity
@@ -285,6 +292,8 @@ class _Codec:
             raise ValueError("GraphFunction regions must use explicit closed block records")
         attrs.update(blocks)
         signature = self.decode(node["signature"])
+        if not isinstance(signature, dict) or not isinstance(signature.get("vtype"), str):
+            raise ValueError("GraphFunction signature must decode to a structural mapping")
         if signature["vtype"] != node["vtype"]:
             raise TypeError("GraphFunction operation has inconsistent value types")
         inputs = tuple(self.values[index] for index in node["inputs"])
@@ -531,6 +540,8 @@ def graph(*, inputs, output, captures=None, effects=None):
         is_result = output.signature["vtype"] == "variant" and set(
             dict(output.signature["members"])) == {"ok", "err"}
         result = program.capture(elaborate) if is_result else elaborate(program)
+        if not isinstance(result, ProgramValue):
+            raise TypeError("GraphFunction elaborator must return a ProgramValue")
         require_owned(program, result, "GraphFunction result")
         validate_input_regions(program, (result,), 0, "GraphFunction result")
         if program._commits or program._histories:

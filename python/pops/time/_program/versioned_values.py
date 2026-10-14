@@ -6,6 +6,15 @@ Structural metadata describes the payload; it cannot manufacture a live capabili
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from pops.time.value_signatures import ValueSignature
+
+if TYPE_CHECKING:
+    from pops.time._program.contract import _ProgramBase
+else:
+    _ProgramBase = object
 import hashlib
 import json
 
@@ -76,7 +85,7 @@ def _path(value):
     return tuple(value)
 
 
-def _at(signature, path):
+def _at(signature: ValueSignature, path) -> ValueSignature:
     for key in _path(path):
         if signature["vtype"] != "product":
             raise TypeError("continuation binding traverses a non-Product")
@@ -87,13 +96,13 @@ def _at(signature, path):
     return signature
 
 
-def _replace(signature, path, replacement):
+def _replace(signature, path, replacement) -> ValueSignature:
     key, *tail = path
     if signature["vtype"] != "product" or key not in dict(signature["members"]):
         raise ValueError("continuation binding names a missing Product member")
-    return dict(signature, members=tuple((name, (_replace(child, tail, replacement) if tail else replacement)
+    return cast("ValueSignature", dict(signature, members=tuple((name, (_replace(child, tail, replacement) if tail else replacement)
                                          if name == key else child)
-                                        for name, child in signature["members"]))
+                                        for name, child in signature["members"])))
 
 
 def _fields(signature, path=()):
@@ -301,7 +310,7 @@ def validate_continuations(program, *, target=None):
             raise ValueError("continuation carrier projects a different accepted candidate")
 
 
-class _ProgramVersionedValues:
+class _ProgramVersionedValues(_ProgramBase):
     @atomic_authoring
     def continuation_capture(self, body):
         """A real native child scope, revoked on Failure and promoted on accepted success."""

@@ -7,7 +7,9 @@ or a converged implicit relation is a separate contract and is not inferred.
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from typing import cast
 
 from pops._ir.expr import Expr, Const, _wrap
 from pops._ir.lowering import diff
@@ -71,8 +73,9 @@ class Pairings:
     map is presumed to be an inverse, a unit conversion or an unweighted identity.
     Builders execute once and must return finite tuples of PoPS expressions.
     """
-    output_to_covector: object
-    input_from_covector: object
+    # Returned scalars pass through _wrap, which also accepts literal and symbolic protocols.
+    output_to_covector: Callable[[tuple[Expr, ...]], Iterable[object]]
+    input_from_covector: Callable[[tuple[Expr, ...]], Iterable[object]]
 
     def __post_init__(self):
         if not callable(self.output_to_covector) or not callable(self.input_from_covector):
@@ -107,8 +110,9 @@ def vjp(expressions, *, wrt=None, covector=None, pairings, differentiate_iterati
     dual = tuple(_wrap(value) for value in pairings.output_to_covector(representative))
     if len(dual) != len(outputs):
         raise ValueError("output pairing returned the wrong width")
-    pullback = tuple(sum((diff(output, variable) * weight
-                          for output, weight in zip(outputs, dual, strict=True)), Const(0))
+    # Expr arithmetic retains its symbolic type, including the explicit zero seed.
+    pullback = tuple(cast(Expr, sum((diff(output, variable) * weight
+                          for output, weight in zip(outputs, dual, strict=True)), Const(0)))
                      for variable in inputs)
     result = tuple(_wrap(value) for value in pairings.input_from_covector(pullback))
     if len(result) != len(inputs):

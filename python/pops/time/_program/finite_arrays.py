@@ -8,6 +8,16 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast
+from collections.abc import Callable
+
+if TYPE_CHECKING:
+    from pops.time.value_signatures import ValueSignature
+
+if TYPE_CHECKING:
+    from pops.time._program.contract import _ProgramBase
+else:
+    _ProgramBase = object
 
 from pops.time._authoring import atomic_authoring
 from pops.time.values import ProgramValue
@@ -33,10 +43,10 @@ class IndexFamily:
             raise ValueError("use Distributed for a distributed domain family")
 
 
-def finite_signature(value):
+def finite_signature(value) -> ValueSignature:
     if value.vtype not in FINITE_VALUE_TYPES:
         raise TypeError("expected a finite set, checked index or array")
-    return value.attrs["signature"]
+    return cast("ValueSignature", value.attrs["signature"])
 
 
 def _element_type(signature):
@@ -50,13 +60,13 @@ def _element_type(signature):
         raise TypeError("replicated array elements require finite handled values, products or variants")
 
 
-def _domain_signature(signature):
-    return {key: value for key, value in signature.items() if key != "element"} | {"vtype": "index_set"}
+def _domain_signature(signature) -> ValueSignature:
+    return cast("ValueSignature", {key: value for key, value in signature.items() if key != "element"} | {"vtype": "index_set"})
 
 
-def _array_signature(domain, element):
+def _array_signature(domain, element) -> ValueSignature:
     _element_type(element)
-    return dict(finite_signature(domain), vtype="array", element=element)
+    return cast("ValueSignature", dict(finite_signature(domain), vtype="array", element=element))
 
 
 def validate_finite_operation(op, inputs, attrs, signature):
@@ -128,7 +138,7 @@ def validate_finite_arrays(program):
     walk(program._values)
 
 
-def _record_body(program, domain, initial, callback):
+def _record_body(program, domain, initial, callback: Callable[..., ProgramValue]):
     block = []
     region = program._region_for_block(block)
     for parent in program._recording:
@@ -154,7 +164,7 @@ def _record_body(program, domain, initial, callback):
     return block, region, argument, index, result
 
 
-class _ProgramFiniteArrays:
+class _ProgramFiniteArrays(_ProgramBase):
     @atomic_authoring
     def float64(self, value):
         """Explicit finite Float64 constant/cast; Int64 conversion may round by IEEE rules."""
@@ -280,7 +290,7 @@ class _ProgramFiniteArrays:
         return new_typed(self, finite_signature(array)["element"], "finite_at", (array,index), {})
 
     @atomic_authoring
-    def map(self, domain=None, body=None, *, physical_map=None, source=None, target=None, byte_capacity=None):
+    def map(self, domain=None, body: Callable[..., ProgramValue] | None = None, *, physical_map=None, source=None, target=None, byte_capacity=None):
         # Preserve the existing physical-support map route. The type selects a language
         # operation, never a physical model, and its original validator owns that contract.
         if physical_map is not None:
@@ -312,7 +322,7 @@ class _ProgramFiniteArrays:
                           "body": result}, point=domain.point)
 
     @atomic_authoring
-    def scan(self, domain, initial, body, *, order, byte_capacity=None):
+    def scan(self, domain, initial, body: Callable[..., ProgramValue], *, order, byte_capacity=None):
         """Ordered scan returning product(state=final, values=Array(D,T)).
 
         body(P, state, Index) returns product(state=next_state, value=emitted_element).
@@ -366,7 +376,7 @@ class _ProgramFiniteArrays:
             raise TypeError("replicated gather does not use a transport budget")
         return self.map(self.domain(indices), lambda p,i: p.at(values,p.at(indices,i)))
 
-    def reduce(self, values, initial, body, *, order, byte_capacity=None):
+    def reduce(self, values, initial, body: Callable[..., ProgramValue], *, order, byte_capacity=None):
         """Local ordered fold on replicated entries; never sums a replica per MPI rank."""
         require_owned(self, values, "reduce values")
         if values.vtype != "array" or not callable(body):

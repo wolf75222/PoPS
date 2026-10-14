@@ -9,7 +9,7 @@ from __future__ import annotations
 from contextvars import ContextVar
 from functools import wraps
 
-_TRANSPORT_BYTES = ContextVar("pops_ad_transport_bytes", default=None)
+_TRANSPORT_BYTES: ContextVar[int | None] = ContextVar("pops_ad_transport_bytes", default=None)
 
 def with_transport(byte_capacity):
     """Scope an explicit elaboration option; every use is serialized in native IR attrs."""

@@ -8,8 +8,17 @@ from functools import wraps
 import hashlib
 import json
 import re
+from typing import TypedDict
 
-_ACTIVE = ContextVar("pops_program_source_map", default=None)
+
+class _EmissionScope(TypedDict):
+    program_hash: str
+    nodes: dict[int, dict[str, object]]
+    bindings: dict[int, dict[str, object]]
+    unbound: set[int]
+
+
+_ACTIVE: ContextVar[_EmissionScope | None] = ContextVar("pops_program_source_map", default=None)
 _PREFIX = "// pops-source-map@1 "
 
 
@@ -124,8 +133,8 @@ def emission_scope(function):
                 nodes[value.id] = _node(value)
                 for child in program._subblock_value_refs(value):
                     nodes[child.id] = _node(child)
-        scope = {"program_hash": program._ir_hash(), "nodes": nodes, "bindings": {},
-                 "unbound": set(nodes)}
+        scope: _EmissionScope = {"program_hash": program._ir_hash(), "nodes": nodes, "bindings": {},
+                                 "unbound": set(nodes)}
         token = _ACTIVE.set(scope)
         try:
             source = function(program, *args, **kwargs)

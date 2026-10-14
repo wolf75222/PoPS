@@ -1,5 +1,6 @@
 """Closed user sums through actual Program authoring/serialization/C++ lowering (no runtime mock)."""
 import json
+from collections import UserList
 
 import pytest
 
@@ -247,3 +248,46 @@ def test_nested_arrays_and_variants_use_distinct_native_loop_indices():
     source = emit_cpp_program(p)
     assert "element_i_0" in source and "element_i_1" in source
     assert p.to_graph().to_data() == detach_compiled_program(p).to_graph().to_data()
+
+
+@pytest.mark.parametrize("extra", [
+    {"members": 17},
+    {"members": UserList([["x", {"vtype": "scalar"}]])},
+    {"members": (("x", 17),)},
+    {"members": ((17, {"vtype": "scalar"}),)},
+    {"members": (("x", {"vtype": "array", "capacity": "4"}),)},
+    {"element": 17},
+    {"schema": {"read": 17}},
+    {"family": True},
+    {"view": "old"},
+    {"time_path": (17,)},
+    {"bundle": {"domains": ((17,),)}},
+    {"bundle": {"bindings": ((("q",), (17,)),)}},
+    {"fields": ((object(), (17,)),)},
+    {"roles": 17},
+    {"current_dependencies": ({"target": ("z",), "inputs": 17, "function": {}},)},
+])
+def test_value_type_rejects_malformed_present_structural_fields(extra):
+    # Construction must establish the type promised by signature access; a later
+    # len()/dict()/projection must not be the first place malformed data is found.
+    with pytest.raises(TypeError, match="signature"):
+        ValueType({"vtype": "product", **extra})
+
+
+def test_value_type_shape_validation_preserves_exact_authorities_and_opaque_metadata():
+    p, u = fixture("signature-authority")
+    field = type_of(u.n)
+    opaque = object()
+    schema = ValueType({"vtype": "product", "members": [["q", field.signature]],
+                        "bundle": {"domains": (), "bindings": ()}, "extension": opaque})
+    assert isinstance(schema.signature["members"], tuple)
+    assert isinstance(schema.signature["members"][0], tuple)
+    retained = dict(schema.signature["members"])["q"]
+    for key in ("block", "space", "state_ref", "field_context", "point"):
+        assert retained[key] is field.signature[key]
+    assert schema.signature["extension"] is opaque
+    assert tuple(schema.signature["bundle"]) == ("domains", "bindings")
+    cyclic = {"vtype": "product"}
+    cyclic["members"] = (("self", cyclic),)
+    with pytest.raises(TypeError, match="cyclic"):
+        ValueType(cyclic)

@@ -199,6 +199,8 @@ def _load(data):
         if isinstance(value, (list, tuple)): return [thaw(v) for v in value]
         return value
     snapshot = thaw(data['graph'])
+    if not isinstance(snapshot, dict):
+        raise ValueError("inventory graph must be a mapping")
     if 'inputs' in snapshot or 'output' in snapshot:
         raise ValueError('inventory graph headers must come from their exact live type witnesses')
     inputs, output = ValueType(data['inputs']), ValueType(data['output'])
