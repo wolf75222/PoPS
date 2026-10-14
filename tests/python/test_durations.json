@@ -5469,7 +5469,7 @@
         "tests/python/unit/time/test_ledger_provenance_v15.py": {
           "kind": "source_contract",
           "registration": "v15",
-          "declared_cases": 18,
+          "declared_cases": 26,
           "estimated_seconds": 60,
           "basis": "Source-only scheduling estimate for authoring, guards, serialization and C++ emission; no native or GitHub CI timing or qualification is claimed."
         },
@@ -5846,7 +5846,7 @@
         "native_files": 2,
         "native_cases": 9,
         "source_files": 12,
-        "source_cases": 191,
+        "source_cases": 199,
         "mpi2_entrypoints": 2,
         "native_received": false,
         "github_ci_executed": false,
