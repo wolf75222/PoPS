@@ -29,7 +29,7 @@ from tests.python.support.explicit_program import (
     install_forward_euler_program,
 )
 
-# Five model packages and two time Programs compile on a cold runner.
+# Four distinct model packages and two time Programs compile on a cold runner.
 # Keep this runtime group separate from the independent compiler-capability cases.
 POPS_PROCESS_TIMEOUT = 900
 
@@ -116,8 +116,10 @@ chk(
 print("== (B) AMR : aucun Newton cache dans le runtime spatial ==")
 amr_program_only = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
 amr_program_only.set_temporal_relations([2], [1], ["integral_only"])
+# The same positive model and owner in B/C reuse one authenticated compiled artifact.
+# Keep B's ModelSpec path, including automatic installation of its field provider.
 amr_program_only.add_equation(
-    "e",
+    "e1",
     iso_model(n0=rho16_mean),
     spatial=engine.Spatial(limiter=Minmod()),
     time=engine.Explicit(),
@@ -127,6 +129,10 @@ chk(
     report["enabled"] is False,
     "Explicit AMR package publishes no Newton report until solve_implicit_source runs",
 )
+
+# Read the complete native coarse-level conserved state to detect shared writable storage.
+# B stays at its unseeded initial state and never installs or executes a time Program.
+b_state_before = np.asarray(amr_program_only.block_level_state("e1", 0)).copy()
 
 # --- (C) set_conservative_state multi-blocs ------------------------------------------
 print("== (C) set_conservative_state multi-blocs : etat complet seede (avec derive) ==")
@@ -158,6 +164,15 @@ chk(np.all(np.isfinite(d_after)), "multi-blocs + etat complet : pas fini")
 chk(
     float(np.max(np.abs(d_after - d_before))) > 1e-5,
     "la quantite de mouvement seedee advecte la densite (etat complet actif)",
+)
+
+b_state_after = np.asarray(amr_program_only.block_level_state("e1", 0))
+chk(
+    b_state_before.shape == (3 * n * n,)
+    and b_state_after.shape == b_state_before.shape
+    and b_state_after.dtype == b_state_before.dtype
+    and b_state_after.tobytes() == b_state_before.tobytes(),
+    "package partage : l'etat complet de B reste identique apres le seed et le pas de C",
 )
 
 if fails:
