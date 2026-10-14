@@ -73,6 +73,10 @@ class CanonicalData:
 
 
 def _json_ready(value: Any) -> Any:
+    # Exact builtins have neither descriptor hooks nor reference authority.  Keep
+    # subclasses on the protocol path (an int/str subclass may define to_data).
+    if value is None or type(value) in (bool, int, float, str):
+        return value
     if isinstance(value, Handle):
         return {"handle": handle_data(value)}
     from pops._ir.expr import Expr

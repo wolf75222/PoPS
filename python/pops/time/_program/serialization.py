@@ -118,6 +118,35 @@ class _ProgramSerialization(_ProgramBase):
             from pops.fields._program_nonlinear_problem import validate_nonlinear_field_request
             validate_nonlinear_field_request(value.prog, value)
         attrs = dict(value.attrs)
+        if value.op == "provenance_bind":
+            from pops.ledger_provenance import contract_json_data
+            attrs["contract"] = contract_json_data(attrs["contract"])
+        projected_blocks: set[str] = set()
+
+        def project_block(key: str, *, empty_is_none: bool = False) -> None:
+            block = attrs.get(key) if empty_is_none else attrs[key]
+            if empty_is_none and not block:
+                attrs[key] = None
+            else:
+                rows = []
+                for child in block:
+                    row = _ProgramSerialization._serialize_node(
+                        child, include_provenance=include_provenance)
+                    # The old parent pass normalizes the child's shell as well
+                    # as its attrs. Preserve that first normalization, but do
+                    # not rewalk attrs already projected by the child's call.
+                    rows.append({
+                        name: item if name == "attrs" else _json_ready(item)
+                        for name, item in row.items()
+                    })
+                attrs[key] = rows
+            projected_blocks.add(key)
+
+        if "scientific_application_v14" in attrs:
+            # These are exact SSA inputs, not integer ids hidden in metadata.
+            # The graph codec/rebuilder remaps them before this JSON projection.
+            attrs["scientific_application_v14"] = _schedule_json_ready(
+                attrs["scientific_application_v14"])
         if "schedule" in attrs:
             attrs["schedule"] = _serialize_schedule(attrs["schedule"])
         if value.op == "scalar_op":
@@ -128,49 +157,47 @@ class _ProgramSerialization(_ProgramBase):
             attrs["rhs"] = scalar_data(attrs["rhs"])
         elif value.op == "cell_compare":
             attrs["value"] = scalar_data(attrs["value"])
-        if value.op == "while":
-            attrs["cond_block"] = [
-                _ProgramSerialization._serialize_node(
-                    node, include_provenance=include_provenance) for node in attrs["cond_block"]]
-            attrs["body_block"] = [
-                _ProgramSerialization._serialize_node(
-                    node, include_provenance=include_provenance) for node in attrs["body_block"]]
+        if value.op in ("while", "structured_iterate"):
+            project_block("cond_block")
+            project_block("body_block")
             attrs["cond"], attrs["body"] = attrs["cond"].id, attrs["body"].id
-        elif value.op in ("range", "subcycle", "post_synchronization"):
-            attrs["body_block"] = [
-                _ProgramSerialization._serialize_node(
-                    node, include_provenance=include_provenance) for node in attrs["body_block"]]
+        elif value.op in ("range", "subcycle", "post_synchronization", "structured_fold", "capture_result", "finite_map", "finite_scan", "distributed_map", "distributed_requests", "distributed_csr", "distributed_reduce", "distributed_scatter_reduce", "distributed_scan"):
+            project_block("body_block")
             if value.op != "post_synchronization":
                 attrs["body"] = attrs["body"].id
-        elif value.op == "branch":
+        elif value.op in ("branch", "result_match"):
             for arm in ("true", "false"):
-                attrs[arm + "_block"] = [
-                    _ProgramSerialization._serialize_node(
-                        node, include_provenance=include_provenance)
-                    for node in attrs[arm + "_block"]]
+                project_block(arm + "_block")
                 attrs[arm + "_result"] = attrs[arm + "_result"].id
         elif value.op == "matrix_free_operator":
-            attrs["apply_block"] = ([
-                _ProgramSerialization._serialize_node(
-                    node, include_provenance=include_provenance) for node in attrs["apply_block"]]
-                if attrs.get("apply_block") else None)
+            project_block("apply_block", empty_is_none=True)
             for key in ("apply_result", "apply_in", "apply_out"):
                 ref = attrs.get(key)
                 attrs[key] = (_affine_ids(ref) if isinstance(ref, _Affine)
                               else (ref.id if isinstance(ref, ProgramValue) else None))
         elif value.op in ("solve_local_nonlinear", "solve_spatial_nonlinear") or (
                 value.op == "solve_coupled_implicit" and "residual_block" in attrs):
-            attrs["residual_block"] = [
-                _ProgramSerialization._serialize_node(
-                    node, include_provenance=include_provenance) for node in attrs["residual_block"]]
+            project_block("residual_block")
             for key in ("residual", "iterate", "guess"):
                 if key in attrs:
                     attrs[key] = attrs[key].id
+        for key in ("body_argument", "body_index", "body_value", "body_offset", "cond_argument"):
+            if key in attrs:
+                attrs[key] = attrs[key].id
+        # Only the blocks projected above may bypass the ordinary metadata
+        # protocol. Preserve mapping order and its non-string-key fallback.
+        if all(isinstance(key, str) and key for key in attrs):
+            projected_attrs = {
+                key: item if key in projected_blocks else _json_ready(item)
+                for key, item in attrs.items()
+            }
+        else:
+            projected_attrs = _json_ready(attrs)
         node: dict[str, Any] = {"id": value.id, "name": value.name, "vtype": value.vtype, "op": value.op,
                 "block": handle_data(value.block) if value.block is not None else None,
                 "state": handle_data(value.state_ref) if value.state_ref is not None else None,
                 "point": _json_ready(value.point),
-                "inputs": [item.id for item in value.inputs], "attrs": _json_ready(attrs)}
+                "inputs": [item.id for item in value.inputs], "attrs": projected_attrs}
         if value.space is not None:
             node["space"] = _json_ready(value.space)
         # A local operator's context is a validation-only authoring witness. The solve node already
@@ -300,6 +327,12 @@ class _ProgramSerialization(_ProgramBase):
             if id(node) in seen:
                 continue
             seen.add(id(node))
+            if node.op in ("scalar_op", "scalar_isfinite", "scalar_expression"):
+                _raise_ir_version(result, 28)
+            if node.op.startswith(("variant_", "finite_", "continuation_", "distributed_")) or node.vtype == "variant":
+                # v29: persistent domain authority, dynamic continuation capabilities and
+                # complete typed terminal errors change executable value/control semantics.
+                _raise_ir_version(result, 29)
             if node.id in trace_rates and node.region != 0:
                 # Version25 authenticates region-owned accepted trace quadrature/carry semantics.
                 _raise_ir_version(result, 25)

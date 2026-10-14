@@ -157,6 +157,11 @@ class ImmutableSymbolic(metaclass=_ImmutableSymbolicMeta):
     def __bool__(self) -> bool:
         raise SymbolicTruthValueError(self)
 
+    def __array__(self, dtype=None, copy=None):
+        raise TypeError(
+            "symbolic PoPS values cannot become NumPy arrays during authoring; "
+            "compose Python tuples/expressions and materialize them through Program")
+
 
 __all__ = [
     "ImmutableSymbolic", "SourceLocation", "SymbolicTruthValueError",

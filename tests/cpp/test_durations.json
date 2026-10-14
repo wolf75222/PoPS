@@ -24,6 +24,7 @@
       "test_amr_synchronized_continuation",
       "test_amr_synthetic_program_loader_transaction",
       "test_amr_transition_invariants",
+      "test_bundle_v14",
       "test_cartesian_poisson_nd",
       "test_cell_temporal_partition_executor",
       "test_cell_temporal_program_route",
@@ -32,6 +33,9 @@
       "test_composite_fac_fft_coarse",
       "test_composite_fac_variable_k",
       "test_composite_general_field",
+      "test_continuation_image",
+      "test_distributed_algebra_v14",
+      "test_distributed_gc_v14",
       "test_elliptic_named_device_kernels",
       "test_external_field_backend_preparation",
       "test_float32_poisson_residual",
@@ -69,6 +73,7 @@
       "test_prepared_spatial_residual",
       "test_prepared_stream_executor",
       "test_spatial_provider_matrix",
+      "test_state_carriers_zero_block_v14",
       "test_system_interface_core_session",
       "test_temporal_partition_restart",
       "test_tensor_coarse_gmres",
@@ -84,7 +89,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 205,
+    "target_count": 209,
     "unit_seconds": "aggregate CTest wall time per build target",
     "v12_estimate_source": "The edd85c10f6184e7b14b048ee16d5cc39bc606b62 full CTest diagnostic observed approximately 0.7 s history-snapshot, 0.52 s AMR-transition, and 0.5 s collective-rejection aggregate work. Each is conservatively scheduled at 1 s; these are scheduling estimates, not controlled performance measurements.",
     "v18_estimate_source": "Unmeasured analogous-target scheduling estimates: AMR publication uses test_amr_program_diffusion; general composite field uses test_composite_fac_variable_k; physical support transfer uses test_nd_transfer; prepared resource cache uses test_cache_manager. Replace from the next complete CI timing artifact; no local timing measurements are claimed.",
@@ -119,7 +124,10 @@
       "target": "test_amr_interaction_history_snapshot",
       "estimated_seconds": 5.0,
       "basis": "Conservative unmeasured CI scheduling estimate added 2026-10-13: 5.0 s, above the existing local macOS Dim2 CTest receipts for all fourteen Serial cases plus the MPI2 variant containing fourteen cases on each rank. The immutable a9297394-history-snapshot-cpp-receptions.json records command walls of 1.86 s Serial and 0.82 s MPI2 (2.68 s combined); this supports the seed but is not a Linux CI timing measurement or a fresh qualification. No native tests are rerun. Replace from the next complete CTest per-target timing artifact."
-    }
+    },
+    "api_v02_v10_estimate_source": "Unmeasured scheduling seed for test_continuation_image: build 60 s exceeds twice the 23.99 s checkpoint_history estimate; runtime 5 s uses the interaction_history_snapshot tier. No provider DSO is compiled. These are not measured CI or native receipts. MPI-only test_distributed_array is declared in the manifest and excluded from these non-MPI duration catalogs by the existing planner. Existing target weights and watchdogs are unchanged; replace the new estimate from complete target timing artifacts.",
+    "api_v14_estimate_source": "Unmeasured standalone structural codec/domain runtime contract allowance; 120 s cold build and 10 s runtime per new target. No local or CI timing is claimed; replace from complete receipts.",
+    "api_v14_zero_block_estimate_source": "Unmeasured scheduling estimate: native codec-only target with three serial GTests; declared ranks 1/2/3 are archive data, not MPI execution. Same conservative seed as other v14 structural codec tests; replace only from an authenticated cold-CI measurement."
   },
   "test_amr_compiled_model": 0.01,
   "test_amr_composite_poisson": 1.15,
@@ -325,5 +333,10 @@
   "test_prepared_polar_poisson_inverse": 2.92,
   "test_tensor_coarse_gmres": 14.12,
   "test_tensor_fac_conservative_interface": 45.0,
-  "test_tensor_fac_partial_hierarchy": 45.0
+  "test_tensor_fac_partial_hierarchy": 45.0,
+  "test_continuation_image": 5.0,
+  "test_bundle_v14": 10.0,
+  "test_distributed_algebra_v14": 10.0,
+  "test_distributed_gc_v14": 10.0,
+  "test_state_carriers_zero_block_v14": 10.0
 }

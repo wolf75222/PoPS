@@ -15,7 +15,7 @@ CONTRACT = "pops.accepted-static-provider-read@1"
 def _static_read_keys(authority, block, module, pack, selected, reads):
     """Close exact derived recipes over the observed immutable input surface."""
     from pops._ir.expr import (
-        Abs, Add, Const, Div, Exp, Maximum, Minimum, Mul, Neg, Pow, Sqrt, Sub,
+        Abs, Add, Const, Div, Exp, Sin, Cos, Log, Expm1, Maximum, Minimum, Mul, Neg, Pow, Sqrt, Sub,
     )
     from pops._ir.handle_expr import ValueExpr
     from pops.fields.aux import DerivedAux
@@ -61,7 +61,7 @@ def _static_read_keys(authority, block, module, pack, selected, reads):
         if type(expression) in (Add, Sub, Mul, Div, Pow, Minimum, Maximum):
             return tuple(dict.fromkeys(expression_dependencies(expression.a)
                                        + expression_dependencies(expression.b)))
-        if type(expression) in (Neg, Sqrt, Exp, Abs):
+        if type(expression) in (Neg, Sqrt, Exp, Sin, Cos, Log, Expm1, Abs):
             return expression_dependencies(expression.a)
         raise ValueError("static derived provider has an unknown expression operation")
 

@@ -39,7 +39,7 @@ from pops.time.values import ProgramValue, _to_affine  # noqa: F401
 # Ops the Phase-4b codegen lowers ONLY when a physical model is supplied (they read the model's
 # symbolic source_term / linear_source coefficients). Without a model they raise NotImplementedError.
 _MODEL_OPS = (
-    "diffusive_rhs", "principal_rate", "input_fields", "source",
+    "diffusive_rhs", "stencil_flux_divergence", "principal_rate", "input_fields", "source",
     "apply",
     "local_transform",
     "affine_moment_update",
@@ -52,6 +52,7 @@ _ALLOWED_OPS = frozenset(
     {
         "solve_spatial_field",
         "state",
+        "provenance_bind",
         "geometry_state",
         "reynolds_update",
         "layout_map_export",
@@ -68,6 +69,8 @@ _ALLOWED_OPS = frozenset(
         "linear_source",
         "reduce",
         "scalar_op",
+        "scalar_isfinite",
+        "scalar_expression",
         "compare",
         "hmin",
         "max_wave_speed",
@@ -107,6 +110,12 @@ _ALLOWED_OPS = frozenset(
         "project",
         "record_scalar",
         "requested_dt",
+        "interval_begin",
+        "interval_end",
+        "interval_check",
+        "history_interval_begin",
+        "history_interval_duration",
+        "history_interval_check",
         "reached_duration",
         "record_balance_term",
         "cell_compare",
@@ -419,6 +428,8 @@ def _prepared_native_component_includes(program: Any, *, target: str = "system")
     from .program_lowerability import all_ops
     if any(value.attrs.get("native_functions") for value in all_ops(program)):
         result = "#include <pops/core/model/native_call.hpp>\n" + result
+    if any(value.op == "variant_require_success" for value in all_ops(program)):
+        result = "#include <pops/runtime/program/typed_failure.hpp>\n" + result
     return result
 
 
@@ -445,6 +456,8 @@ def _block_inverse_include(program: Any) -> str:
     if any(v.op == "affine_moment_update" for v in program._values):
         result += "#include <pops/numerics/moments/affine_velocity.hpp>\n"
     from .program_lowerability import all_ops
+    if any(v.op == "stencil_flux_divergence" for v in all_ops(program)):
+        result += "#include <pops/numerics/fv/stencil_flux.hpp>\n"
     if any(any(node[0] == "finite_linear_v1" for node in v.attrs.get("expression_nodes", ()))
            for v in all_ops(program)):
         result += "#include <pops/numerics/linalg/finite_linear.hpp>\n"

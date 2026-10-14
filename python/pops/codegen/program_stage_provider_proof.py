@@ -56,7 +56,8 @@ def _authenticate_linear_equations(plan, solve, program):
     ResolvedProgramFieldPlan already owns the physical problem and solver graph;
     expression re-encoding additionally refuses stale payloads under unchanged IDs.
     """
-    from .program_field_plan import _nodes, _reachable, _canonical
+    from .program_field_plan import _canonical
+    from pops.fields._observation_contract import direct_native_field_operations
     from pops.fields._program_problem import _physical_coefficients, _physical_boundary, validate_field_apply
     from pops.fields._program_expression import encode_field_expression, field_expression_dependencies
     from pops.identity.scalar import scalar_literal
@@ -64,8 +65,7 @@ def _authenticate_linear_equations(plan, solve, program):
     problem = plan.operator
     diffusion, reaction = _physical_coefficients(problem)
     expected_boundary = _physical_boundary(problem)
-    operations = [v for v in _reachable(solve, _nodes(program)) if v.op in
-                  ("field_problem_load", "field_problem_coefficients", "field_problem_apply")]
+    operations = direct_native_field_operations(solve)
     for node in operations:
         if node.attrs.get("physical_boundary") != expected_boundary:
             raise ValueError("stage provider operation changed its registered physical boundary")

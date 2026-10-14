@@ -76,8 +76,19 @@ def _affine_terms(value, stops=()):
 
 
 def _is_rate(value):
-    return value.op in {"diffusive_rhs", "principal_rate"} or (
-        value.op == "rhs" and value.attrs.get("flux", True))
+    return value.op in {"diffusive_rhs", "principal_rate", "stencil_flux_divergence", "source", "rhs"} or _is_pointwise_rate(value)
+
+
+def _is_pointwise_rate(value):
+    if "numerical_pointwise_rate" not in value.attrs:
+        return False
+    from pops.time._program.expressions import validate_pointwise_rate
+    validate_pointwise_rate(value)
+    return True
+
+
+def _is_local_source(value):
+    return value.op == "source" or (value.op == "rhs" and not value.attrs.get("flux", True)) or _is_pointwise_rate(value)
 
 
 def explicit_update_consumers(program):
@@ -210,6 +221,10 @@ def partition_stability_groups(value, *, include_transport=False):
     if not include_transport and not (any(node.op == "rhs" for node in rates)
                                       and any(node.op == "diffusive_rhs" for node in rates)):
         return ()
+    if not include_transport and any(_is_local_source(node) for node in rates):
+        # Preserve the stronger existing transport/diffusion contract. The
+        # numerical-face Courant envelope below is explicitly spatial only.
+        raise ValueError(_DIAGNOSTIC + "; separate sources need their own certificate")
     bases = {_rate_state(node).id: _rate_state(node) for node in rates}
     terms = _affine_terms(value, bases)
     terms = _retain_convex_stage_values(terms)
@@ -262,6 +277,10 @@ def emit_partition_stability(value, var, lines, *, block_index, include_transpor
     for index, (_, alpha, rates) in enumerate(groups):
         terms = []
         for rate, beta in rates:
+            if _is_local_source(rate):
+                # This certificate bounds spatial transport/diffusion only.
+                # A local source retains its own admissibility/stability duties.
+                continue
             token = var.get(("partition_frequency", rate.id))
             if token is None:
                 raise ValueError(_DIAGNOSTIC + "; rate frequency is unavailable in this region")
@@ -296,6 +315,8 @@ def emit_user_face_stability(value, var, lines, *, block_index):
             continue
         terms = []
         for rate, beta in rates:
+            if _is_local_source(rate):
+                continue
             token = var.get(("partition_frequency", rate.id))
             if token is None:
                 raise ValueError(_DIAGNOSTIC + "; numerical face frequency is unavailable")

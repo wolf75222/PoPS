@@ -1,6 +1,41 @@
 # Generated from the reorganized test tree. Keep paths and labels in sync with CMake/pytest.
 
 [[cpp.suite]]
+name = "test_state_carriers_zero_block_v14"
+sources = ["tests/cpp/integration/runtime/test_state_carriers_zero_block_v14.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_bundle_v14"
+sources = ["tests/cpp/integration/runtime/test_bundle_v14.cpp"]
+labels = ["integration", "runtime", "medium"]
+mpi_variants = [2, 3]
+
+[[cpp.suite]]
+name = "test_distributed_algebra_v14"
+sources = ["tests/cpp/integration/runtime/test_distributed_algebra_v14.cpp"]
+labels = ["integration", "runtime", "medium"]
+mpi_variants = [2, 3]
+
+[[cpp.suite]]
+name = "test_distributed_gc_v14"
+sources = ["tests/cpp/integration/runtime/test_distributed_gc_v14.cpp"]
+labels = ["integration", "runtime", "medium"]
+mpi_variants = [2, 3]
+
+[[cpp.suite]]
+name = "test_continuation_image"
+sources = ["tests/cpp/integration/runtime/test_continuation_image.cpp"]
+labels = ["integration", "runtime", "medium"]
+mpi_variants = [2]
+
+[[cpp.suite]]
+name = "test_distributed_array"
+sources = ["tests/cpp/integration/runtime/test_distributed_array.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2, 3]
+
+[[cpp.suite]]
 name = "test_amr_composite_poisson"
 sources = ["tests/cpp/integration/amr/test_amr_composite_poisson.cpp"]
 labels = ["integration", "amr", "medium"]
@@ -1383,6 +1418,37 @@ name = "pops_python_integration_mpi"
 path = "tests/python/integration/mpi"
 labels = ["integration", "python", "mpi", "medium"]
 mpi_entrypoints = [
+  { path = "tests/python/integration/mpi/test_api_v15_inventory_derivative_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v15_inventory_publication_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_actions_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_array_derivatives_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_bundle_remap_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_bundle_repartition_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_coarsening_moments_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_localized_event_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_decision_assess_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_decision_assess_stop_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_decision_assess_parent_stop_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_decision_assess_budget_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_decision_assess_nested_success_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_decision_assess_nested_reject_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_distributed_algebra_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_distributed_derivatives_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_distributed_failure_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_distributed_gc_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_extension_closure_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_finite_bdf2_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_finite_iteration_ad_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_hierarchy_flux_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_implicit_arrays_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_implicit_domain_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_multisupport_children_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_multisupport_double_consume_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_multisupport_parent_reject_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_multisupport_stale_assessment_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_scientific_spatial_gmres_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v14_scientific_spatial_mpi2.py", nproc = 2, native_dimension = 2 },
+
   { path = "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py", nproc = 2 },
   { path = "tests/python/integration/mpi/test_amr_history_mpi.py", nproc = 2 },
   { path = "tests/python/integration/mpi/test_amr_nonlinear_collective_mpi.py", nproc = 2 },
@@ -1391,6 +1457,12 @@ mpi_entrypoints = [
   { path = "tests/python/integration/mpi/test_external_amr_field_solver_mpi.py", nproc = 2 },
   { path = "tests/python/integration/mpi/test_scientific_output_mpi.py", nproc = 2 },
   { path = "tests/python/integration/mpi/test_uniform_history_checkpoint_mpi.py", nproc = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_implicit_derivatives_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_realization_loops_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_terminal_failure_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_collective_preparation_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_continuation_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_distributed_program_mpi2.py", nproc = 2, native_dimension = 2 },
 ]
 mpi_orchestrators = [
   { path = "tests/python/integration/mpi/test_amr_rank_change_restart.py" },
@@ -1471,6 +1543,12 @@ hardware_entrypoints = [
 name = "pops_python_integration_runtime"
 path = "tests/python/integration/runtime"
 labels = ["integration", "python", "runtime", "mpi", "medium"]
+mpi_receivers = [
+  { path = "tests/python/integration/runtime/test_bundle_repartition_v14_native.py", entrypoint = "tests/python/integration/mpi/test_api_v14_bundle_repartition_mpi2.py" },
+  { path = "tests/python/integration/runtime/test_distributed_algebra_v14_native.py", entrypoint = "tests/python/integration/mpi/test_api_v14_distributed_algebra_mpi2.py" },
+  { path = "tests/python/integration/runtime/test_distributed_failure_v14_native.py", entrypoint = "tests/python/integration/mpi/test_api_v14_distributed_failure_mpi2.py" },
+  { path = "tests/python/integration/runtime/test_distributed_gc_v14_native.py", entrypoint = "tests/python/integration/mpi/test_api_v14_distributed_gc_mpi2.py" },
+]
 mpi_entrypoints = [
   { path = "tests/python/integration/runtime/test_m15_mpi_collective_rejection.py", nproc = 2, native_dimension = 1 },
   { path = "tests/python/integration/runtime/test_mapped_field_binding_collective_runtime.py", nproc = 2 },

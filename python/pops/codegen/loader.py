@@ -397,6 +397,13 @@ class CompiledProblem(CompiledProblemDumpMixin):
     # The print(compiled) reports + the codegen/IR dumps. All INERT metadata-reading (they aggregate
     # the carried Program + model + compile artifacts), EXCEPT dump_cpp which REUSES the existing
     # emit_cpp_program codegen. None binds, dlopens, allocates or runs.
+    @property
+    def source_maps(self) -> dict[str, Any]:
+        """Exact Program source correspondence, distinct from an execution trace."""
+        from .program_source_map import source_map
+        source = self._generated_cpp
+        return {} if source is None else {"program": source_map(source)}
+
     def inspect(self) -> Any:
         """A printable :class:`pops.codegen.inspect_report.CompiledReport` of this artifact (sec.12.1).
 

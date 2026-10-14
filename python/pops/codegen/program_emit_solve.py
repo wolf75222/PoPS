@@ -834,256 +834,258 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     var[("operator_prepare_refresh", apply_id)] = tuple(prepare_refresh)
     # 2) The lambda body: the laplacian / gradient ops + the result write into `out`.
     body = ["const pops::Real dt = *%s;" % apply_dt]
+    from .program_source_map import operation
     for w in block:
-        if w.op in ("scalar_field", "apply_in", "apply_out"):
-            continue  # scratch shared_ptr / lambda params: already bound in `sub`, nothing to emit
-        if w.op == "vector_field":
-            sources = ", ".join(
-                "&%s" % _apply_in_arg(sub, value) for value in w.inputs)
-            body.append(
-                "ctx.pack_vector(*%s, std::array<const pops::MultiFab<"
-                "pops::kNativeDimension>*, pops::kNativeDimension>{%s});"
-                % (sub[w.id], sources))
-            continue
-        if w.op == "where":
-            from pops.codegen.program_emit_kernels import _emit_where_kernel
-            mask, first, second = w.inputs
-            body.extend(_emit_where_kernel(
-                _apply_in_arg(sub, mask), _apply_in_arg(sub, first),
-                _apply_in_arg(sub, second), "*%s" % sub[w.id]))
-            continue
-        if w.op == "cell_compare":
-            from pops.codegen.program_emit_kernels import _emit_cell_compare_kernel
-            body.extend(_emit_cell_compare_kernel(
-                _apply_in_arg(sub, w.inputs[0]), "*%s" % sub[w.id],
-                w.attrs["cmp"], w.attrs["value"]))
-            continue
-        if w.op == "linear_combine":
-            body.append("pops::PureFieldAlgebra::zero_valid(*%s);" % sub[w.id])
-            for operand, coefficient in zip(w.inputs, w.attrs["coeffs"], strict=True):
-                body.append("pops::PureFieldAlgebra::axpy(*%s, %s, %s);" % (
-                    sub[w.id], _coeff_cpp(coefficient), _apply_in_arg(sub, operand)))
-            continue
-        if w.op == "laplacian":
-            o, i = w.inputs
-            sub[w.id] = sub[o.id]
-            point_arg = ", *%s" % stencil_point if stencil_point else ""
-            body.append("ctx.laplacian(*%s, %s, *%s%s);"
-                        % (sub[o.id], _apply_in_arg(sub, i), stencil_boundary_for(i), point_arg))
-        elif w.op == "gradient":
-            o, p = w.inputs
-            sub[w.id] = sub[o.id]
-            point_arg = ", *%s" % stencil_point if stencil_point else ""
-            body.append("ctx.gradient(*%s, %s, *%s%s);"
-                        % (sub[o.id], _apply_in_arg(sub, p), stencil_boundary_for(p), point_arg))
-        elif w.op == "divergence":
-            o, flux = w.inputs
-            sub[w.id] = sub[o.id]
-            point_arg = ", *%s" % stencil_point if stencil_point else ""
-            body.append("ctx.divergence(*%s, %s, *%s%s);"
-                        % (sub[o.id], _apply_in_arg(sub, flux), stencil_boundary_for(flux),
-                           point_arg))
-        elif w.op == "apply_laplacian_coeff":
-            # out = div(A grad in), with one exact row-major Dim*Dim tensor field.
-            o, i, coeffs = w.inputs
-            tensor = frozen_coefficients[var.get(("amr_coefficient_template", coeffs.id), var[coeffs.id])]
-            sub[w.id] = sub[o.id]
-            boundary = tensor_boundary or stencil_boundary_for(i)
-            point = tensor_point if tensor_boundary else stencil_point
-            point_arg = ", *%s" % point if point else ""
-            body.append("ctx.tensor_laplacian(*%s, %s, *%s, *%s%s);"
-                        % (sub[o.id], _apply_in_arg(sub, i), tensor,
-                           boundary, point_arg))
-        elif w.op == "field_problem_apply":
-            o, i, _coefficients = w.inputs
-            frozen, unknown, boundary, _coefficient_boundary, _width, coefficient_width, _admission = general_fields[w.id]
-            sub[w.id] = sub[o.id]
-            output = "out" if sub[o.id] == "out" else "*%s" % sub[o.id]
-            ncomp = int(w.attrs["ncomp"])
-            from pops.fields._program_expression import decode_field_literal
-            reaction = ", ".join("static_cast<pops::Real>(%s)" % decode_field_literal(value).to_cpp()
-                                 for value in w.attrs["reaction"])
-            physical = w.attrs["physical_boundary"]
-            body.append("pops::PureFieldAlgebra::copy(*%s, %s);" % (unknown, _apply_in_arg(sub, i)))
-            body.append("pops::elliptic::nd::apply_general_field<pops::kNativeDimension, %d, %d>("
-                "%s, *%s, *%s, *%s, std::array<pops::Real, %d>{%s}, "
-                "[] { std::array<pops::elliptic::nd::PhysicalFieldBoundary, "
-                "2 * pops::kNativeDimension> result{}; "
-                "result.fill(pops::elliptic::nd::PhysicalFieldBoundary::%s); return result; }());"
-                % (ncomp, coefficient_width, output, unknown, frozen, boundary, ncomp * ncomp, reaction, physical))
-        elif w.op == "rhs_jacvec":
-            if coupled_pair is not None and coupled_widths is not None:
-                sub[w.id] = sub[w.inputs[0].id]
-                if w is coupled_pair[0]:
-                    continue
-                first, second = coupled_pair
-                first_width, second_width = coupled_widths
-                first_entry = jac_scratch[first.id]
-                second_entry = jac_scratch[second.id]
-                (first_uk, first_r0, first_up, first_rp, _first_r0_core,
-                 _first_boundary_work, point, _first_has_boundary, _first_field_slot, cdt,
-                 first_block_idx, metric_scratch) = first_entry
-                (second_uk, second_r0, second_up, second_rp, _second_r0_core,
-                 _second_boundary_work, _second_point, _second_has_boundary, _second_field_slot,
-                 _second_cdt, second_block_idx, _second_metric_scratch) = second_entry
-                eps = scalar_cpp(first.attrs["eps"])
-                first_default = first.attrs.get("sources")
-                first_default = first_default is None or "default" in first_default
-                second_default = second.attrs.get("sources")
-                second_default = second_default is None or "default" in second_default
-                first_flux_only = "false" if first_default else "true"
-                second_flux_only = "false" if second_default else "true"
-                body.append("{")
+        with operation(w, body, environment=sub, channel="operator_apply"):
+            if w.op in ("scalar_field", "apply_in", "apply_out"):
+                continue  # scratch shared_ptr / lambda params: already bound in `sub`, nothing to emit
+            if w.op == "vector_field":
+                sources = ", ".join(
+                    "&%s" % _apply_in_arg(sub, value) for value in w.inputs)
                 body.append(
-                    "  const pops::Real jvn = std::sqrt("
-                    "pops::detail::PreparedFieldAlgebra::dot("
-                    "in, in, ctx.program_resource_vector_distribution(), "
-                    "*%s, *execution_lane));" % metric_scratch)
-                body.append(
-                    "  const pops::Real jukn = std::sqrt("
-                    "pops::detail::PreparedFieldAlgebra::dot("
-                    "*%s, *%s, ctx.program_resource_vector_distribution(), "
-                    "*%s, *execution_lane));"
-                    % (coupled_packed_uk, coupled_packed_uk, metric_scratch))
-                body.append(
-                    "  const pops::Real jh = jvn > pops::Real(0) ? "
-                    "static_cast<pops::Real>(%s) * (pops::Real(1) + jukn) / jvn "
-                    ": static_cast<pops::Real>(%s);" % (eps, eps))
-                body.append(
-                    "  ctx.copy_component_span(*%s, 0, in, 0, %d);"
-                    % (first_rp, first_width))
-                body.append(
-                    "  ctx.copy_component_span(*%s, 0, in, %d, %d);"
-                    % (second_rp, first_width, second_width))
-                body.append(
-                    "  pops::PureFieldAlgebra::lincomb(*%s, pops::Real(1), *%s, jh, *%s);"
-                    % (first_up, first_uk, first_rp))
-                body.append(
-                    "  pops::PureFieldAlgebra::lincomb(*%s, pops::Real(1), *%s, jh, *%s);"
-                    % (second_up, second_uk, second_rp))
-                body.append(
-                    "  ctx.rhs_jacvec_pair_into_at(*%s, %d, *%s, *%s, %s, "
-                    "%d, *%s, *%s, %s);"
-                    % (point, first_block_idx, first_up, first_rp, first_flux_only,
-                       second_block_idx, second_up, second_rp, second_flux_only))
-                body.append("  const pops::Real jc = *%s / jh;" % cdt)
-                body.append(
-                    "  ctx.copy_component_span(*%s, 0, in, 0, %d);"
-                    % (first_up, first_width))
-                # Subtract residuals before scaling: adding v between two O(1/h)
-                # terms loses the correction even for a linear flux.
-                body.append(
-                    "  pops::PureFieldAlgebra::axpy(*%s, pops::Real(-1), *%s);"
-                    % (first_rp, first_r0))
-                body.append(
-                    "  pops::PureFieldAlgebra::axpy(*%s, -jc, *%s);"
-                    % (first_up, first_rp))
-                body.append(
-                    "  ctx.copy_component_span(*%s, 0, in, %d, %d);"
-                    % (second_up, first_width, second_width))
-                # Subtract residuals before scaling: adding v between two O(1/h)
-                # terms loses the correction even for a linear flux.
-                body.append(
-                    "  pops::PureFieldAlgebra::axpy(*%s, pops::Real(-1), *%s);"
-                    % (second_rp, second_r0))
-                body.append(
-                    "  pops::PureFieldAlgebra::axpy(*%s, -jc, *%s);"
-                    % (second_up, second_rp))
-                body.append(
-                    "  ctx.copy_component_span(out, 0, *%s, 0, %d);"
-                    % (first_up, first_width))
-                body.append(
-                    "  ctx.copy_component_span(out, %d, *%s, 0, %d);"
-                    % (first_width, second_up, second_width))
-                body.append("}")
+                    "ctx.pack_vector(*%s, std::array<const pops::MultiFab<"
+                    "pops::kNativeDimension>*, pops::kNativeDimension>{%s});"
+                    % (sub[w.id], sources))
                 continue
-            # out = J(U^k) in = in - (c*dt/h)(rhs(U^k + h*in) - rhs(U^k)), the finite-difference
-            # Jacobian-vector product of the implicit-flux BDF residual (ADC-431). h is a relatively
-            # scaled FD step (Brown-Saad / WP: h = eps*(1+||U^k||)/||in||, eps the relative step). The
-            # captured jac_uk / jac_r0 hold U^k and rhs(U^k) (refreshed in the step body); jac_up /
-            # jac_rp are per-matvec scratch; jac_cdt holds c*dt. The op writes directly into `out`.
-            o, i = w.inputs[0], w.inputs[1]
-            (uk, r0, up, rp, r0_core, boundary_work, point, has_boundary,
-             field_slot, cdt, block_idx, metric_scratch) = jac_scratch[w.id]
-            boundary_session = boundary_sessions[block_idx]
-            in_arg = _apply_in_arg(sub, i)        # the Krylov vector v (the lambda's const `in`)
-            out_tok = sub[o.id]                   # the apply out buffer (== "out")
-            eps = scalar_cpp(w.attrs["eps"])
-            sub[w.id] = out_tok
-            want_default = w.attrs.get("sources")
-            want_default = want_default is None or "default" in want_default
-            flux_only = "false" if want_default else "true"
-            body.append("{")
-            # FD step norms use PureFieldAlgebra::dot over the complete prepared vector
-            # distribution: the same reduction contract as the Krylov residual norm.
-            body.append("  const pops::Real jvn = std::sqrt("
+            if w.op == "where":
+                from pops.codegen.program_emit_kernels import _emit_where_kernel
+                mask, first, second = w.inputs
+                body.extend(_emit_where_kernel(
+                    _apply_in_arg(sub, mask), _apply_in_arg(sub, first),
+                    _apply_in_arg(sub, second), "*%s" % sub[w.id]))
+                continue
+            if w.op == "cell_compare":
+                from pops.codegen.program_emit_kernels import _emit_cell_compare_kernel
+                body.extend(_emit_cell_compare_kernel(
+                    _apply_in_arg(sub, w.inputs[0]), "*%s" % sub[w.id],
+                    w.attrs["cmp"], w.attrs["value"]))
+                continue
+            if w.op == "linear_combine":
+                body.append("pops::PureFieldAlgebra::zero_valid(*%s);" % sub[w.id])
+                for operand, coefficient in zip(w.inputs, w.attrs["coeffs"], strict=True):
+                    body.append("pops::PureFieldAlgebra::axpy(*%s, %s, %s);" % (
+                        sub[w.id], _coeff_cpp(coefficient), _apply_in_arg(sub, operand)))
+                continue
+            if w.op == "laplacian":
+                o, i = w.inputs
+                sub[w.id] = sub[o.id]
+                point_arg = ", *%s" % stencil_point if stencil_point else ""
+                body.append("ctx.laplacian(*%s, %s, *%s%s);"
+                            % (sub[o.id], _apply_in_arg(sub, i), stencil_boundary_for(i), point_arg))
+            elif w.op == "gradient":
+                o, p = w.inputs
+                sub[w.id] = sub[o.id]
+                point_arg = ", *%s" % stencil_point if stencil_point else ""
+                body.append("ctx.gradient(*%s, %s, *%s%s);"
+                            % (sub[o.id], _apply_in_arg(sub, p), stencil_boundary_for(p), point_arg))
+            elif w.op == "divergence":
+                o, flux = w.inputs
+                sub[w.id] = sub[o.id]
+                point_arg = ", *%s" % stencil_point if stencil_point else ""
+                body.append("ctx.divergence(*%s, %s, *%s%s);"
+                            % (sub[o.id], _apply_in_arg(sub, flux), stencil_boundary_for(flux),
+                               point_arg))
+            elif w.op == "apply_laplacian_coeff":
+                # out = div(A grad in), with one exact row-major Dim*Dim tensor field.
+                o, i, coeffs = w.inputs
+                tensor = frozen_coefficients[var.get(("amr_coefficient_template", coeffs.id), var[coeffs.id])]
+                sub[w.id] = sub[o.id]
+                boundary = tensor_boundary or stencil_boundary_for(i)
+                point = tensor_point if tensor_boundary else stencil_point
+                point_arg = ", *%s" % point if point else ""
+                body.append("ctx.tensor_laplacian(*%s, %s, *%s, *%s%s);"
+                            % (sub[o.id], _apply_in_arg(sub, i), tensor,
+                               boundary, point_arg))
+            elif w.op == "field_problem_apply":
+                o, i, _coefficients = w.inputs
+                frozen, unknown, boundary, _coefficient_boundary, _width, coefficient_width, _admission = general_fields[w.id]
+                sub[w.id] = sub[o.id]
+                output = "out" if sub[o.id] == "out" else "*%s" % sub[o.id]
+                ncomp = int(w.attrs["ncomp"])
+                from pops.fields._program_expression import decode_field_literal
+                reaction = ", ".join("static_cast<pops::Real>(%s)" % decode_field_literal(value).to_cpp()
+                                     for value in w.attrs["reaction"])
+                physical = w.attrs["physical_boundary"]
+                body.append("pops::PureFieldAlgebra::copy(*%s, %s);" % (unknown, _apply_in_arg(sub, i)))
+                body.append("pops::elliptic::nd::apply_general_field<pops::kNativeDimension, %d, %d>("
+                    "%s, *%s, *%s, *%s, std::array<pops::Real, %d>{%s}, "
+                    "[] { std::array<pops::elliptic::nd::PhysicalFieldBoundary, "
+                    "2 * pops::kNativeDimension> result{}; "
+                    "result.fill(pops::elliptic::nd::PhysicalFieldBoundary::%s); return result; }());"
+                    % (ncomp, coefficient_width, output, unknown, frozen, boundary, ncomp * ncomp, reaction, physical))
+            elif w.op == "rhs_jacvec":
+                if coupled_pair is not None and coupled_widths is not None:
+                    sub[w.id] = sub[w.inputs[0].id]
+                    if w is coupled_pair[0]:
+                        continue
+                    first, second = coupled_pair
+                    first_width, second_width = coupled_widths
+                    first_entry = jac_scratch[first.id]
+                    second_entry = jac_scratch[second.id]
+                    (first_uk, first_r0, first_up, first_rp, _first_r0_core,
+                     _first_boundary_work, point, _first_has_boundary, _first_field_slot, cdt,
+                     first_block_idx, metric_scratch) = first_entry
+                    (second_uk, second_r0, second_up, second_rp, _second_r0_core,
+                     _second_boundary_work, _second_point, _second_has_boundary, _second_field_slot,
+                     _second_cdt, second_block_idx, _second_metric_scratch) = second_entry
+                    eps = scalar_cpp(first.attrs["eps"])
+                    first_default = first.attrs.get("sources")
+                    first_default = first_default is None or "default" in first_default
+                    second_default = second.attrs.get("sources")
+                    second_default = second_default is None or "default" in second_default
+                    first_flux_only = "false" if first_default else "true"
+                    second_flux_only = "false" if second_default else "true"
+                    body.append("{")
+                    body.append(
+                        "  const pops::Real jvn = std::sqrt("
                         "pops::detail::PreparedFieldAlgebra::dot("
-                        "%s, %s, ctx.program_resource_vector_distribution(), "
-                        "*%s, *execution_lane));" % (in_arg, in_arg, metric_scratch))
-            body.append("  const pops::Real jukn = std::sqrt("
+                        "in, in, ctx.program_resource_vector_distribution(), "
+                        "*%s, *execution_lane));" % metric_scratch)
+                    body.append(
+                        "  const pops::Real jukn = std::sqrt("
                         "pops::detail::PreparedFieldAlgebra::dot("
                         "*%s, *%s, ctx.program_resource_vector_distribution(), "
-                        "*%s, *execution_lane));" % (uk, uk, metric_scratch))
-            body.append("  const pops::Real jh = jvn > pops::Real(0) ? "
+                        "*%s, *execution_lane));"
+                        % (coupled_packed_uk, coupled_packed_uk, metric_scratch))
+                    body.append(
+                        "  const pops::Real jh = jvn > pops::Real(0) ? "
                         "static_cast<pops::Real>(%s) * (pops::Real(1) + jukn) / jvn "
                         ": static_cast<pops::Real>(%s);" % (eps, eps))
-            # U^k + h*v -> jac_up; solve fields from that SAME perturbed state before evaluating rhs.
-            # This includes elliptic dependence in Jv instead of reusing stale U^n/U^k fields.
-            body.append("  pops::PureFieldAlgebra::lincomb(*%s, pops::Real(1), *%s, jh, %s);"
-                        % (up, uk, in_arg))
-            if w.attrs["field_coupled"]:
-                # ``block_idx`` is the program block, not the AMR level.  The captured
-                # BoundaryEvaluationPoint carries ``point.level == active_level_`` so every
-                # level bundle uses the same tangent-field provider with an explicit index.
-                body.append("  ctx.evaluate_with_field_state_at("
-                            "*%s, %s, %d, *%s, *%s, [&]() {"
-                            % (point, field_slot, block_idx, up, uk))
-                body.append("    ctx.rhs_core_into_at(*%s, %d, *%s, *%s, %s, *%s);"
-                            % (point, block_idx, up, rp, flux_only, boundary_session))
-                # Keep the perturbed provider publication active while evaluating the boundary
-                # contribution.  This finite-differences the complete residual, including a
-                # boundary law that reads a solved field, instead of applying its analytic JVP
-                # after evaluate_with_field_state_at() has restored the frozen provider.
-                body.append("    if (%s) {" % has_boundary)
-                body.append("      pops::PureFieldAlgebra::zero_valid(*%s);" % boundary_work)
-                body.append(
-                    "      ctx.boundary_residual_into_at(*%s, %d, *%s, *%s, *%s);"
-                    % (point, block_idx, up, boundary_work, boundary_session))
-                body.append(
-                    "      pops::PureFieldAlgebra::axpy(*%s, pops::Real(1), *%s);"
-                    % (rp, boundary_work))
-                body.append("    }")
-                body.append("  });")
+                    body.append(
+                        "  ctx.copy_component_span(*%s, 0, in, 0, %d);"
+                        % (first_rp, first_width))
+                    body.append(
+                        "  ctx.copy_component_span(*%s, 0, in, %d, %d);"
+                        % (second_rp, first_width, second_width))
+                    body.append(
+                        "  pops::PureFieldAlgebra::lincomb(*%s, pops::Real(1), *%s, jh, *%s);"
+                        % (first_up, first_uk, first_rp))
+                    body.append(
+                        "  pops::PureFieldAlgebra::lincomb(*%s, pops::Real(1), *%s, jh, *%s);"
+                        % (second_up, second_uk, second_rp))
+                    body.append(
+                        "  ctx.rhs_jacvec_pair_into_at(*%s, %d, *%s, *%s, %s, "
+                        "%d, *%s, *%s, %s);"
+                        % (point, first_block_idx, first_up, first_rp, first_flux_only,
+                           second_block_idx, second_up, second_rp, second_flux_only))
+                    body.append("  const pops::Real jc = *%s / jh;" % cdt)
+                    body.append(
+                        "  ctx.copy_component_span(*%s, 0, in, 0, %d);"
+                        % (first_up, first_width))
+                    # Subtract residuals before scaling: adding v between two O(1/h)
+                    # terms loses the correction even for a linear flux.
+                    body.append(
+                        "  pops::PureFieldAlgebra::axpy(*%s, pops::Real(-1), *%s);"
+                        % (first_rp, first_r0))
+                    body.append(
+                        "  pops::PureFieldAlgebra::axpy(*%s, -jc, *%s);"
+                        % (first_up, first_rp))
+                    body.append(
+                        "  ctx.copy_component_span(*%s, 0, in, %d, %d);"
+                        % (second_up, first_width, second_width))
+                    # Subtract residuals before scaling: adding v between two O(1/h)
+                    # terms loses the correction even for a linear flux.
+                    body.append(
+                        "  pops::PureFieldAlgebra::axpy(*%s, pops::Real(-1), *%s);"
+                        % (second_rp, second_r0))
+                    body.append(
+                        "  pops::PureFieldAlgebra::axpy(*%s, -jc, *%s);"
+                        % (second_up, second_rp))
+                    body.append(
+                        "  ctx.copy_component_span(out, 0, *%s, 0, %d);"
+                        % (first_up, first_width))
+                    body.append(
+                        "  ctx.copy_component_span(out, %d, *%s, 0, %d);"
+                        % (first_width, second_up, second_width))
+                    body.append("}")
+                    continue
+                # out = J(U^k) in = in - (c*dt/h)(rhs(U^k + h*in) - rhs(U^k)), the finite-difference
+                # Jacobian-vector product of the implicit-flux BDF residual (ADC-431). h is a relatively
+                # scaled FD step (Brown-Saad / WP: h = eps*(1+||U^k||)/||in||, eps the relative step). The
+                # captured jac_uk / jac_r0 hold U^k and rhs(U^k) (refreshed in the step body); jac_up /
+                # jac_rp are per-matvec scratch; jac_cdt holds c*dt. The op writes directly into `out`.
+                o, i = w.inputs[0], w.inputs[1]
+                (uk, r0, up, rp, r0_core, boundary_work, point, has_boundary,
+                 field_slot, cdt, block_idx, metric_scratch) = jac_scratch[w.id]
+                boundary_session = boundary_sessions[block_idx]
+                in_arg = _apply_in_arg(sub, i)        # the Krylov vector v (the lambda's const `in`)
+                out_tok = sub[o.id]                   # the apply out buffer (== "out")
+                eps = scalar_cpp(w.attrs["eps"])
+                sub[w.id] = out_tok
+                want_default = w.attrs.get("sources")
+                want_default = want_default is None or "default" in want_default
+                flux_only = "false" if want_default else "true"
+                body.append("{")
+                # FD step norms use PureFieldAlgebra::dot over the complete prepared vector
+                # distribution: the same reduction contract as the Krylov residual norm.
+                body.append("  const pops::Real jvn = std::sqrt("
+                            "pops::detail::PreparedFieldAlgebra::dot("
+                            "%s, %s, ctx.program_resource_vector_distribution(), "
+                            "*%s, *execution_lane));" % (in_arg, in_arg, metric_scratch))
+                body.append("  const pops::Real jukn = std::sqrt("
+                            "pops::detail::PreparedFieldAlgebra::dot("
+                            "*%s, *%s, ctx.program_resource_vector_distribution(), "
+                            "*%s, *execution_lane));" % (uk, uk, metric_scratch))
+                body.append("  const pops::Real jh = jvn > pops::Real(0) ? "
+                            "static_cast<pops::Real>(%s) * (pops::Real(1) + jukn) / jvn "
+                            ": static_cast<pops::Real>(%s);" % (eps, eps))
+                # U^k + h*v -> jac_up; solve fields from that SAME perturbed state before evaluating rhs.
+                # This includes elliptic dependence in Jv instead of reusing stale U^n/U^k fields.
+                body.append("  pops::PureFieldAlgebra::lincomb(*%s, pops::Real(1), *%s, jh, %s);"
+                            % (up, uk, in_arg))
+                if w.attrs["field_coupled"]:
+                    # ``block_idx`` is the program block, not the AMR level.  The captured
+                    # BoundaryEvaluationPoint carries ``point.level == active_level_`` so every
+                    # level bundle uses the same tangent-field provider with an explicit index.
+                    body.append("  ctx.evaluate_with_field_state_at("
+                                "*%s, %s, %d, *%s, *%s, [&]() {"
+                                % (point, field_slot, block_idx, up, uk))
+                    body.append("    ctx.rhs_core_into_at(*%s, %d, *%s, *%s, %s, *%s);"
+                                % (point, block_idx, up, rp, flux_only, boundary_session))
+                    # Keep the perturbed provider publication active while evaluating the boundary
+                    # contribution.  This finite-differences the complete residual, including a
+                    # boundary law that reads a solved field, instead of applying its analytic JVP
+                    # after evaluate_with_field_state_at() has restored the frozen provider.
+                    body.append("    if (%s) {" % has_boundary)
+                    body.append("      pops::PureFieldAlgebra::zero_valid(*%s);" % boundary_work)
+                    body.append(
+                        "      ctx.boundary_residual_into_at(*%s, %d, *%s, *%s, *%s);"
+                        % (point, block_idx, up, boundary_work, boundary_session))
+                    body.append(
+                        "      pops::PureFieldAlgebra::axpy(*%s, pops::Real(1), *%s);"
+                        % (rp, boundary_work))
+                    body.append("    }")
+                    body.append("  });")
+                else:
+                    body.append("  ctx.rhs_core_into_at(*%s, %d, *%s, *%s, %s, *%s);"
+                                % (point, block_idx, up, rp, flux_only, boundary_session))
+                # A field-coupled apply finite-differences the complete residual while the perturbed
+                # provider publication is active.  The ordinary state-only route keeps the split core
+                # difference plus its exact prepared boundary JVP, avoiding an invalid finite
+                # difference of ghost/action effects.
+                body.append("  const pops::Real jc = *%s / jh;" % cdt)
+                body.append("  pops::PureFieldAlgebra::lincomb(%s, pops::Real(1), %s, -jc, *%s);"
+                            % (out_tok, in_arg, rp))
+                if w.attrs["field_coupled"]:
+                    body.append("  pops::PureFieldAlgebra::axpy(%s, jc, *%s);" % (out_tok, r0))
+                else:
+                    body.append("  if (%s) {" % has_boundary)
+                    body.append("    pops::PureFieldAlgebra::axpy(%s, jc, *%s);"
+                                % (out_tok, r0_core))
+                    body.append("    pops::PureFieldAlgebra::zero_valid(*%s);" % boundary_work)
+                    body.append("    ctx.boundary_jvp_into_at(*%s, %d, *%s, %s, *%s, *%s);"
+                                % (point, block_idx, uk, in_arg, boundary_work, boundary_session))
+                    body.append("    pops::PureFieldAlgebra::axpy(%s, -*%s, *%s);"
+                                % (out_tok, cdt, boundary_work))
+                    body.append("  } else {")
+                    body.append("    pops::PureFieldAlgebra::axpy(%s, jc, *%s);" % (out_tok, r0))
+                    body.append("  }")
+                body.append("}")
             else:
-                body.append("  ctx.rhs_core_into_at(*%s, %d, *%s, *%s, %s, *%s);"
-                            % (point, block_idx, up, rp, flux_only, boundary_session))
-            # A field-coupled apply finite-differences the complete residual while the perturbed
-            # provider publication is active.  The ordinary state-only route keeps the split core
-            # difference plus its exact prepared boundary JVP, avoiding an invalid finite
-            # difference of ghost/action effects.
-            body.append("  const pops::Real jc = *%s / jh;" % cdt)
-            body.append("  pops::PureFieldAlgebra::lincomb(%s, pops::Real(1), %s, -jc, *%s);"
-                        % (out_tok, in_arg, rp))
-            if w.attrs["field_coupled"]:
-                body.append("  pops::PureFieldAlgebra::axpy(%s, jc, *%s);" % (out_tok, r0))
-            else:
-                body.append("  if (%s) {" % has_boundary)
-                body.append("    pops::PureFieldAlgebra::axpy(%s, jc, *%s);"
-                            % (out_tok, r0_core))
-                body.append("    pops::PureFieldAlgebra::zero_valid(*%s);" % boundary_work)
-                body.append("    ctx.boundary_jvp_into_at(*%s, %d, *%s, %s, *%s, *%s);"
-                            % (point, block_idx, uk, in_arg, boundary_work, boundary_session))
-                body.append("    pops::PureFieldAlgebra::axpy(%s, -*%s, *%s);"
-                            % (out_tok, cdt, boundary_work))
-                body.append("  } else {")
-                body.append("    pops::PureFieldAlgebra::axpy(%s, jc, *%s);" % (out_tok, r0))
-                body.append("  }")
-            body.append("}")
-        else:
-            raise NotImplementedError(
-                "emit_cpp_program: op '%s' is not lowerable inside a matrix_free_operator apply "
-                "(supported: scalar_field, laplacian, gradient, divergence, apply_laplacian_coeff, "
-                "rhs_jacvec)" % w.op)
+                raise NotImplementedError(
+                    "emit_cpp_program: op '%s' is not lowerable inside a matrix_free_operator apply "
+                    "(supported: scalar_field, laplacian, gradient, divergence, apply_laplacian_coeff, "
+                    "rhs_jacvec)" % w.op)
     body += _emit_field_combine(
         result, "out", sub, acc_sp, dt_symbol="(*%s)" % operator_dt)
     factory = "make_apply_A%d_session" % apply_id

@@ -338,6 +338,10 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         if suite["mpi_variants"]
     }
     assert variant_targets == {
+        "test_bundle_v14": (2, 3),
+        "test_distributed_algebra_v14": (2, 3),
+        "test_distributed_gc_v14": (2, 3),
+        "test_continuation_image": (2,),
         "test_amr_history_ring": (2,),
         "test_amr_history_remap_collective": (2,),
         "test_amr_interaction_history_snapshot": (2,),
@@ -392,13 +396,16 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 126
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 135
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
     assert ctest_plan["test_mpi_amr_distributed_coarse_rank_parity"] == 4
     assert ctest_plan["test_mpi_amr_program_reflux_np4"] == 4
     assert ctest_plan["test_mpi_system_analytic_level_set_np2"] == 2
+    assert ctest_plan["test_continuation_image_np2"] == 2
+    assert ctest_plan["test_distributed_array_np2"] == 2
+    assert ctest_plan["test_distributed_array_np3"] == 3
     assert ctest_plan["test_world_communicator_np2"] == 2
     assert ctest_plan["test_amr_history_remap_collective_np2"] == 2
     assert ctest_plan["test_amr_interaction_history_snapshot_np2"] == 2
@@ -843,6 +850,222 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
         },
         {
             "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v02_collective_preparation_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v02_continuation_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v02_distributed_program_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v02_implicit_derivatives_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v02_realization_loops_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v02_terminal_failure_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_actions_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_array_derivatives_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_bundle_remap_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_bundle_repartition_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_coarsening_moments_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_decision_assess_budget_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_decision_assess_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_decision_assess_nested_reject_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_decision_assess_nested_success_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_decision_assess_parent_stop_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_decision_assess_stop_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_distributed_algebra_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_distributed_derivatives_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_distributed_failure_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_distributed_gc_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_extension_closure_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_finite_bdf2_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_finite_iteration_ad_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_hierarchy_flux_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_implicit_arrays_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_implicit_domain_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_localized_event_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_multisupport_children_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_multisupport_double_consume_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_multisupport_parent_reject_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_multisupport_stale_assessment_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_scientific_spatial_gmres_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v14_scientific_spatial_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v15_inventory_derivative_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v15_inventory_publication_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
             "path": "tests/python/integration/mpi/test_async_balance_cadence_mpi.py",
             "nproc": 2,
         },
@@ -1044,6 +1267,42 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         "2\ttests/python/integration/mpi/test_amr_history_mpi.py",
         "2\ttests/python/integration/mpi/test_amr_nonlinear_collective_mpi.py",
         "2\ttests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py",
+        "2\ttests/python/integration/mpi/test_api_v02_collective_preparation_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v02_continuation_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v02_distributed_program_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v02_implicit_derivatives_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v02_realization_loops_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v02_terminal_failure_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_actions_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_array_derivatives_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_bundle_remap_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_bundle_repartition_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_coarsening_moments_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_decision_assess_budget_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_decision_assess_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_decision_assess_nested_reject_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_decision_assess_nested_success_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_decision_assess_parent_stop_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_decision_assess_stop_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_distributed_algebra_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_distributed_derivatives_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_distributed_failure_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_distributed_gc_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_extension_closure_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_finite_bdf2_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_finite_iteration_ad_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_hierarchy_flux_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_implicit_arrays_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_implicit_domain_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_localized_event_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_multisupport_children_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_multisupport_double_consume_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_multisupport_parent_reject_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_multisupport_stale_assessment_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_scientific_spatial_gmres_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v14_scientific_spatial_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v15_inventory_derivative_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v15_inventory_publication_mpi2.py",
         "2\ttests/python/integration/mpi/test_async_balance_cadence_mpi.py",
         "2\ttests/python/integration/mpi/test_external_amr_field_solver_mpi.py",
         "2\ttests/python/integration/mpi/test_scientific_output_mpi.py",
@@ -1086,8 +1345,8 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         line.partition("=")[::2]
         for line in (tmp_path / "github-output.txt").read_text().splitlines()
     )
-    assert outputs["python_mpi_count"] == "38"
-    assert outputs["python_mpi_entrypoint_count"] == "10"
+    assert outputs["python_mpi_count"] == "74"
+    assert outputs["python_mpi_entrypoint_count"] == "46"
     assert outputs["python_mpi_orchestrator_count"] == "28"
 
 
@@ -1898,7 +2157,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert 'PYTHONUNBUFFERED: "1"' in python_shards_block
     assert 'cp "$timings/selected.txt" "$timings/timings.tsv"' not in python_shards_block
     assert "shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}" in python_shards_block
-    assert 'SHARD_TOTAL: "71"' in python_shards_block
+    assert 'SHARD_TOTAL: "96"' in python_shards_block
     assert "strategy.job-total" not in python_shards_block
     for family, block in (("cpp", cpp_shards_block), ("python", python_shards_block)):
         assert "name: ci-plan" in block

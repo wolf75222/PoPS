@@ -388,7 +388,14 @@ class Case:
         report = ReportTree(
             phase="validation", severity="info", code="validation.problem.root",
             source="problem", owner=self.owner_path)
-        report = report.extend(self._block_registry.validate(context))
+        if len(self._block_registry):
+            report = report.extend(self._block_registry.validate(context))
+        else:
+            from pops.time.finite_state import require_finite_state_program
+            try:
+                require_finite_state_program(self._time)
+            except (TypeError, ValueError, NotImplementedError) as exc:
+                report = report.error("block", "invalid_finite_state", str(exc))
         report = account_block_plan_fields(report, self._block_registry)
         # Carry the mesh layout into each field problem's validation so its solver can refuse a
         # layout it cannot serve (Spec 6 sec.8/9), precisely, before any compile.

@@ -632,6 +632,7 @@ void bind_system_assembly(py::class_<System>& cls) {
            py::arg("evolve") = true, py::arg("stride") = 1, py::arg("positivity_floor") = 0.0,
            py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon))
       .def("_finalize_native_packages", &System::finalize_native_packages)
+      .def("_seal_auxiliary_providers", &System::seal_auxiliary_providers)
       // Compiled time Program (epic ADC-399 / ADC-401): dlopen a generated problem.so, verify its
       // ABI key against this module (fail-loud -> RuntimeError), and install its macro-step body. The
       // block(s) must already exist (add_equation); the Program drives sim.step(dt) via ProgramContext.
@@ -1210,6 +1211,23 @@ void bind_system_stepping(py::class_<System>& cls) {
       .def("_begin_step_transaction", &System::begin_step_transaction)
       .def("_begin_nested_step_transaction", &System::begin_nested_step_transaction)
       .def("_step_transaction_depth", &System::step_transaction_depth)
+      .def("_checkpoint_continuation_schema", &System::checkpoint_continuation_schema)
+      .def("_checkpoint_continuation_capacity", &System::checkpoint_continuation_capacity)
+      .def("_checkpoint_continuation_image", [](const System& system) {
+        const auto bytes = system.checkpoint_continuation_image();
+        return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+      })
+      .def("_validate_checkpoint_continuation_image", [](const System& system, py::bytes payload,
+                                                           double time, int step) {
+        const auto* bytes = reinterpret_cast<const std::uint8_t*>(PyBytes_AS_STRING(payload.ptr()));
+        system.validate_checkpoint_continuation_image(
+            std::span<const std::uint8_t>(bytes, static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr()))), time, step);
+      })
+      .def("_restore_checkpoint_continuation_image", [](System& system, py::bytes payload) {
+        const auto* bytes = reinterpret_cast<const std::uint8_t*>(PyBytes_AS_STRING(payload.ptr()));
+        system.restore_checkpoint_continuation_image(
+            std::span<const std::uint8_t>(bytes, static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr()))));
+      })
       .def("_checkpoint_program_exchanges",
            [](const System& system) {
              // RuntimeInstance stages this image inside its outer accepted-effect

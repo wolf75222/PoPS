@@ -27,7 +27,7 @@ def _components(handle):
 
 def lower_expression(expression,*,output_state=None):
     """Return scalar C++ and exact leaf manifest; never execute/sample an Expr."""
-    from pops._ir.expr import Const,_Bin,Neg,Sqrt,Exp,Abs,Sign,Pow
+    from pops._ir.expr import Const,_Bin,Neg,Sqrt,Exp,UnaryMath,Abs,Sign,Pow
     from pops._ir.handle_expr import ValueExpr
     from pops._ir.quantity import QuantityRef
     from pops._ir.values import RuntimeParamRef
@@ -78,6 +78,7 @@ def lower_expression(expression,*,output_state=None):
             if node.op not in ('+','-','*','/'):raise NotImplementedError(SCHEMA+' unsupported scalar operation '+node.op)
             return '(%s %s %s)'%(visit(node.a),node.op,visit(node.b))
         if isinstance(node,Neg):return '(-%s)'%visit(node.a)
+        if isinstance(node,UnaryMath):return 'Kokkos::%s(%s)'%(node.operation,visit(node.a))
         functions={Sqrt:'sqrt',Exp:'exp',Abs:'abs'}
         for kind,name in functions.items():
             if isinstance(node,kind):return 'std::%s(%s)'%(name,visit(node.a))

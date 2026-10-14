@@ -230,6 +230,22 @@ class _PairFamily:
         self._frozen = True
 
 
+class _StateStorageFamily(_PairFamily):
+    """Explicit storage for a Program-defined evolution, without inventing a rate."""
+
+    def __init__(self):
+        super().__init__("states")
+
+    def add(self, subject, method):
+        from .state_storage import StateStorage
+        subject = getattr(subject, "handle", subject)
+        if not isinstance(subject, Handle) or subject.kind != "state":
+            raise TypeError("states.add requires an exact state declaration")
+        if type(method) is not StateStorage:
+            raise TypeError("states.add selects storage only; bind numerical methods to equations")
+        return super().add(subject, method)
+
+
 class _ValueFamily:
     """Register-once descriptors such as boundary/interface authorities."""
 
@@ -351,19 +367,20 @@ class ResolvedDiscretizationPlan:
     sources: tuple[ResolvedNumericalBinding, ...]
     interfaces: tuple[Any, ...]
     principal_groups: tuple[Any, ...] = ()
+    states: tuple[ResolvedNumericalBinding, ...] = ()
     identity: Identity = field(init=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.block, Handle) or self.block.kind != "block" or not self.block.is_resolved:
             raise TypeError("resolved numerical plan requires a canonical BlockHandle")
-        if not self.rates:
-            raise ValueError("resolved numerical plan has no rate method for its block")
-        for name in ("rates", "fields", "boundaries", "sources", "interfaces"):
+        if not self.rates and not self.states:
+            raise ValueError("resolved numerical plan has no rate method or explicit state storage")
+        for name in ("rates", "fields", "boundaries", "sources", "interfaces", "states"):
             if not isinstance(getattr(self, name), tuple):
                 raise TypeError("ResolvedDiscretizationPlan.%s must be a tuple" % name)
         if any(type(row) is not ResolvedRateMethod for row in self.rates):
             raise TypeError("ResolvedDiscretizationPlan.rates must contain ResolvedRateMethod")
-        for family in ("fields", "sources"):
+        for family in ("fields", "sources", "states"):
             if any(type(row) is not ResolvedNumericalBinding for row in getattr(self, family)):
                 raise TypeError(
                     "ResolvedDiscretizationPlan.%s must contain ResolvedNumericalBinding"
@@ -383,6 +400,7 @@ class ResolvedDiscretizationPlan:
             "sources": [row.to_data() for row in self.sources],
             "interfaces": [_callable_projection(row, "resolved interface") for row in self.interfaces],
             "principal_groups": [group.to_data() for group in self.principal_groups],
+            **({"states": [row.to_data() for row in self.states]} if self.states else {}),
         }
 
     def to_data(self) -> dict[str, Any]:
@@ -405,7 +423,7 @@ class ResolvedDiscretizationPlan:
         reconstruction/Riemann/variable selection. Every per-rate numerical binding remains
         authoritative; genuinely different transport configurations still fail closed.
         """
-        methods = [row.method for row in self.rates]
+        methods = [row.method for row in (*self.rates, *self.states)]
         configurations = []
         storage_depths = []
         for method in methods:
@@ -448,9 +466,9 @@ class ResolvedDiscretizationPlan:
 
         if isinstance(dimension, bool) or dimension not in (1, 2, 3):
             raise ValueError("AMR stencil dimension must be 1, 2, or 3")
-        ghost_depth = max(self.joint_ghost_depth(),
-                          *(row.method.ghost_depth for row in self.rates))
-        lookahead = max(row.method.formal_order - 1 for row in self.rates)
+        methods = tuple(row.method for row in (*self.rates, *self.states))
+        ghost_depth = max(self.joint_ghost_depth(), *(method.ghost_depth for method in methods))
+        lookahead = max(method.formal_order - 1 for method in methods)
         evidence = {
             "plan": self.identity.to_data(),
             "dimension": dimension,
@@ -494,6 +512,7 @@ class DiscretizationPlan(Descriptor):
 
     def __init__(self) -> None:
         self.rates = _RateFamily()
+        self.states = _StateStorageFamily()
         self.fields = _PairFamily("fields")
         self.boundaries = _ValueFamily("boundaries")
         self.sources = _PairFamily("sources")
@@ -502,6 +521,7 @@ class DiscretizationPlan(Descriptor):
     def options(self) -> dict[str, Any]:
         return {
             "rates": self.rates.items(),
+            **({"states": self.states.items()} if self.states.items() else {}),
             "fields": self.fields.items(),
             "boundaries": self.boundaries.values(),
             "sources": self.sources.items(),
@@ -511,7 +531,7 @@ class DiscretizationPlan(Descriptor):
     def freeze(self) -> DiscretizationPlan:
         if getattr(self, "_frozen", False):
             return self
-        for family in (self.rates, self.fields, self.boundaries, self.sources, self.interfaces):
+        for family in (self.rates, self.states, self.fields, self.boundaries, self.sources, self.interfaces):
             family.freeze()
         object.__setattr__(self, "_frozen", True)
         return self
@@ -536,11 +556,23 @@ class DiscretizationPlan(Descriptor):
                     "missing=%s extra=%s"
                     % (model.name, sorted(row.local_id for row in missing),
                        sorted(row.local_id for row in extra)))
-        if not selected:
+        storage = self.states.items()
+        allowed_states = set(model.states.values()) if states is None else set(states)
+        for subject, method in storage:
+            if subject not in allowed_states:
+                raise ValueError("explicit state storage belongs to another Model or block state")
+            method.validate()
+        covered_states = {model.rate_contract(rate)["state"] for rate in selected}
+        covered_states.update(subject for subject, _ in storage)
+        if storage and covered_states != allowed_states:
+            raise ValueError("explicit state storage must cover every otherwise unbound block state")
+        if not selected and not storage:
             raise ValueError("DiscretizationPlan has no rate binding for Model %r" % model.name)
         for rate, method in selected.items():
             contract = model.rate_contract(rate)
             method.validate_rate_contract(contract)
+            if getattr(method, "requires_program_coverage", False):
+                method.validate_balance_view(getattr(model, "_retained_rates", {}).get(rate))
             method.validate()
         return True
 
@@ -662,6 +694,7 @@ class DiscretizationPlan(Descriptor):
             resolve_pairs(self.sources.items(), "sources"),
             resolved_interfaces,
             resolve_principal_groups(case, block),
+            states=resolve_pairs(self.states.items(), "states"),
         )
 
     def inspect(self) -> dict[str, Any]:
@@ -673,6 +706,7 @@ class DiscretizationPlan(Descriptor):
                 for rate, method in self.rates.items()
             ],
             "fields": len(self.fields.items()),
+            "states": len(self.states.items()),
             "boundaries": len(self.boundaries.values()),
             "sources": len(self.sources.items()),
             "interfaces": len(self.interfaces.values()),

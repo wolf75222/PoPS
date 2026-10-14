@@ -65,6 +65,12 @@ _DECLARATION_ROW_KEYS = {
 }
 
 
+# Optional inert mathematical representation descriptor, retained in identity.
+for _kind in ("state", "field"):
+    _rows = _DECLARATION_ROW_KEYS[_kind]
+    _DECLARATION_ROW_KEYS[_kind] = _rows + tuple(row | {"representation_data"} for row in _rows)
+
+
 def _validate_declaration_rows(
     rows: Any,
     *,

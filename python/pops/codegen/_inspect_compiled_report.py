@@ -312,6 +312,13 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
                  "header_signature": _abi_token(abi_key, "headers") or "unknown",
                  "cache_key": _short(cache_key),
                  "cache_keys": cache_keys}
+    artifacts["program_source_maps"] = {
+        owner: {"source_sha256": data["source_sha256"], "map_sha256": data["map_sha256"],
+                "operation_emissions": len(data["operations"]),
+                "unlocated_ssa": len(data["unlocated"]), "complete": data["complete"],
+                "evidence": data["evidence"]}
+        for owner, data in getattr(compiled, "source_maps", {}).items()
+    }
     from pops._capabilities import native_capability_report
     try:
         capability_report = native_capability_report(

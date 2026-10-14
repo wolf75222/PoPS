@@ -55,6 +55,8 @@ void require_collective_exact_layout(const MultiFab<Dim>& value, const mesh::Box
 
 template <int Dim>
 void System<Dim>::set_clock(double t, int macro_step) {
+  if (p_->program_.continuation_.initialized() && !p_->external_restart_transaction_)
+    throw std::logic_error("clock is an authoritative Continuation frontier; publish a Candidate instead");
   try {
     if (macro_step < 0)
       throw std::runtime_error("System::set_clock : macro_step >= 0 (restart)");

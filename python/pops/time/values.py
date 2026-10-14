@@ -282,7 +282,7 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
     recorded by ``set_apply`` and lowered to a C++ lambda the runtime Krylov loop calls."""
 
     _FIELD = ("state", "rhs", "scalar_field")
-    _SCALAR = ("scalar", "bool")  # runtime scalars / predicates: never a Python bool / index
+    _SCALAR = ("scalar", "bool", "int64")  # runtime values: never a Python bool / index
 
     def __pops_finite_components__(self, dofs):
         from pops.time.expressions import as_expression, component_names
@@ -340,6 +340,8 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
         return self.vtype in ProgramValue._FIELD
 
     def __eq__(self, other: Any) -> Any:
+        if self.vtype == "int64":
+            return self.prog._int64_compare(self, other, "==")
         if self.vtype == "scalar":
             return self.prog._compare(self, other, "==")
         # Field-value equality is equation authoring syntax, never Python identity. Cross-Program
@@ -347,6 +349,8 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
         return Equation(self, other)
 
     def __ne__(self, other: Any) -> Any:
+        if self.vtype == "int64":
+            return self.prog._int64_compare(self, other, "!=")
         if self.vtype == "scalar":
             return self.prog._compare(self, other, "!=")
         # ``==`` has equation-building semantics for fields.  There is no meaningful
@@ -395,6 +399,8 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
 
     # --- scalar comparisons (scalar values only): build a Bool predicate, do not compare in Python ---
     def _compare(self, other: Any, cmp: Any) -> Any:
+        if self.vtype == "int64":
+            return self.prog._int64_compare(self, other, cmp)
         if self.vtype != "scalar":
             raise TypeError("%s value %r is not a scalar; only P.norm2 / P.dot results compare"
                             % (self.vtype, self.name))
@@ -413,12 +419,36 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
         return self._compare(other, "<=")
 
     def __getitem__(self, component):
+        if self.vtype == "array":
+            return self.prog.at(self, component)
+        if self.vtype in ("index", "index_set"):
+            raise TypeError("finite domains and indices have no component projection")
+        if self.vtype == "product":
+            return self.prog._product_get(self, component)
+        if self.vtype in ("iteration_result", "result", "variant"):
+            raise TypeError("result is opaque; use Program.match or require_success")
         from pops.time.expressions import ProgramComponent
         return ProgramComponent(self, component)
 
     def __pow__(self, exponent):
+        if self.vtype == "scalar":
+            from pops._ir.expr import Pow
+            from pops._ir.ops import _elementary
+            return _elementary(Pow, self, exponent)
         from pops.time.expressions import as_expression
         return as_expression(self) ** exponent
+
+    def __pops_scalar_expression__(self):
+        if self.vtype != "scalar":
+            raise TypeError("a temporal field requires an explicit component in a scalar equation")
+        from pops.time.expressions import ProgramScalar
+        return ProgramScalar(self)
+
+    def __abs__(self):
+        if self.vtype != "scalar":
+            raise TypeError("abs requires a native Scalar or an explicit field component")
+        from pops._ir.ops import abs_
+        return abs_(self)
 
     # --- affine algebra (field values only) ---
     def _affine(self) -> Any:
@@ -435,9 +465,15 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
         if self.vtype != "scalar":
             raise NotImplementedError("scalar arithmetic is only defined for Scalar values")
         a, b = (other, self) if swap else (self, other)
+        from pops._ir import expr as ir
+        if isinstance(other, ir.Expr):
+            operation = {"add": ir.Add, "sub": ir.Sub, "mul": ir.Mul, "div": ir.Div}[fn]
+            return operation(ir._wrap(a), ir._wrap(b))
         return self.prog._scalar_binop(a, b, fn)
 
     def __add__(self, other: Any) -> Any:
+        if self.vtype == "int64":
+            return self.prog._int64_binop(self, other, "add")
         if self.vtype == "scalar":
             return self._scalar_op(other, "add")
         from pops.time.expressions import ProgramExpression, as_expression
@@ -446,6 +482,8 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
         return self._affine() + _to_affine(other)
 
     def __radd__(self, other: Any) -> Any:
+        if self.vtype == "int64":
+            return self.prog._int64_binop(other, self, "add")
         if self.vtype == "scalar":
             return self._scalar_op(other, "add", swap=True)
         from pops.time.expressions import ProgramExpression, as_expression
@@ -454,11 +492,15 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
         return self._affine() + _to_affine(other)
 
     def __neg__(self) -> Any:
+        if self.vtype == "int64":
+            return self.prog._int64_binop(0, self, "sub")
         if self.vtype == "scalar":
             return self._scalar_op(-1, "mul")
         return -self._affine()
 
     def __sub__(self, other: Any) -> Any:
+        if self.vtype == "int64":
+            return self.prog._int64_binop(self, other, "sub")
         if self.vtype == "scalar":
             return self._scalar_op(other, "sub")
         from pops.time.expressions import ProgramExpression, as_expression
@@ -467,11 +509,15 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
         return self._affine() - _to_affine(other)
 
     def __rsub__(self, other: Any) -> Any:
+        if self.vtype == "int64":
+            return self.prog._int64_binop(other, self, "sub")
         if self.vtype == "scalar":
             return self._scalar_op(other, "sub", swap=True)
         return _to_affine(other) - self._affine()
 
     def __mul__(self, other: Any) -> Any:
+        if self.vtype == "int64":
+            return self.prog._int64_binop(self, other, "mul")
         resolved = _resolve_handle(other)
         from pops.time.expressions import ProgramExpression, as_expression
         if self.vtype == "scalar" and (_is_field_value(resolved) or isinstance(resolved, ProgramExpression)):
@@ -506,6 +552,8 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
         return NotImplemented
 
     def __rmul__(self, other: Any) -> Any:
+        if self.vtype == "int64":
+            return self.prog._int64_binop(other, self, "mul")
         if self.vtype == "scalar" and _is_field_value(_resolve_handle(other)):
             from pops.time.expressions import as_expression
             return as_expression(_resolve_handle(other)) * self
@@ -513,7 +561,29 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
             return self._scalar_op(other, "mul", swap=True)
         return self.__mul__(other)
 
+    def __floordiv__(self, other: Any) -> Any:
+        if self.vtype != "int64":
+            raise TypeError("// is defined only for Int64 Program values")
+        return self.prog._int64_binop(self, other, "floordiv")
+
+    def __rfloordiv__(self, other: Any) -> Any:
+        if self.vtype != "int64":
+            raise TypeError("// is defined only for Int64 Program values")
+        return self.prog._int64_binop(other, self, "floordiv")
+
+    def __mod__(self, other: Any) -> Any:
+        if self.vtype != "int64":
+            raise TypeError("% is defined only for Int64 Program values")
+        return self.prog._int64_binop(self, other, "mod")
+
+    def __rmod__(self, other: Any) -> Any:
+        if self.vtype != "int64":
+            raise TypeError("% is defined only for Int64 Program values")
+        return self.prog._int64_binop(other, self, "mod")
+
     def __truediv__(self, other: Any) -> Any:
+        if self.vtype == "int64":
+            raise TypeError("Int64 division requires //; no implicit conversion to Scalar")
         if self.vtype == "scalar":
             return self._scalar_op(other, "div")
         from pops.time.expressions import ProgramExpression, as_expression
@@ -532,6 +602,8 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
         return self._affine() * (_Coeff({0: 1}) / exact)
 
     def __rtruediv__(self, other: Any) -> Any:
+        if self.vtype == "int64":
+            raise TypeError("Int64 division requires //; no implicit conversion to Scalar")
         if self.vtype == "scalar":
             return self._scalar_op(other, "div", swap=True)
         from pops.time.expressions import as_expression

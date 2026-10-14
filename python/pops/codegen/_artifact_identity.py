@@ -80,6 +80,7 @@ def program_artifact_spec(
     from pops.codegen.cache import _precision_cache_key, _registry_cache_key
     from pops.codegen.toolchain import _native_feature_key
     from pops.identity import artifact_spec_identity
+    from pops.codegen.program_source_map import source_map
     from pops.identity.semantic import (
         model_semantic_data, program_semantic_data, semantic_identity, semantic_identity_of,
     )
@@ -126,6 +127,7 @@ def program_artifact_spec(
         routes={"registry": _registry_cache_key(), "features": _native_feature_key()},
         components={
             "generated_source": hashlib.sha256(source.encode("utf-8")).digest(),
+            "program_source_map": source_map(source)["map_sha256"],
             "native_dependency_contract": (
                 "compiler-observed-sdk-metadata-v2" if toolchain_capture is not None
                 else "compiler-observed-v1"),

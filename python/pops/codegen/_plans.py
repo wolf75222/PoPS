@@ -586,8 +586,13 @@ class ResolvedSimulationPlan:
         if type(self.bind_schema) is not BindSchema:
             raise TypeError("ResolvedSimulationPlan.bind_schema must be an exact BindSchema")
         blocks = tuple(self.blocks)
-        if not blocks or any(type(block) is not ResolvedBlock for block in blocks):
+        if any(type(block) is not ResolvedBlock for block in blocks):
             raise TypeError("ResolvedSimulationPlan blocks must contain exact ResolvedBlock values")
+        if not blocks:
+            from pops.time.finite_state import require_finite_state_program
+            require_finite_state_program(self.time)
+            if self.target != "system":
+                raise ValueError("finite-state packets use the whole-System execution context")
         names = [block.name for block in blocks]
         if len(set(names)) != len(names):
             raise ValueError("ResolvedSimulationPlan block names must be unique")

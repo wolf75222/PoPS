@@ -61,15 +61,11 @@ class ProgramModelGraph:
         program_field_plans: Mapping[str, Any] | None = None,
         scalar_layout_plan: Any = None,
     ) -> None:
-        if not models_by_owner:
-            raise ValueError("ProgramModelGraph requires at least one model owner")
         keys = set(models_by_owner)
         if set(source_modules_by_owner) != keys or set(authorities_by_owner) != keys:
             raise ValueError(
                 "ProgramModelGraph owner tables must have exactly the same keys"
             )
-        if not owners_by_block:
-            raise ValueError("ProgramModelGraph requires at least one block route")
         if any(not isinstance(name, str) or not name for name in owners_by_block):
             raise TypeError("ProgramModelGraph block names must be non-empty strings")
         unknown = set(owners_by_block.values()) - keys
@@ -127,7 +123,7 @@ class ProgramModelGraph:
         from pops.codegen.module_lowering import lower_and_validate
 
         blocks = tuple(blocks)
-        if not blocks or any(type(block) is not ResolvedBlock for block in blocks):
+        if any(type(block) is not ResolvedBlock for block in blocks):
             raise TypeError(
                 "ProgramModelGraph requires one or more exact ResolvedBlock values"
             )
@@ -165,7 +161,8 @@ class ProgramModelGraph:
                 where="Program block %r" % block.name,
                 required=operation_plan is not None or bool(block.instance_owner_qid))
             authority_key = (id(block.model), block.state_spaces,
-                             None if operation_plan is None else operation_plan.identity.token)
+                             None if operation_plan is None else operation_plan.identity.token,
+                             None if block.numerics is None else block.numerics.identity.token)
             lowered = lowered_by_authority.get(authority_key)
             if lowered is None:
                 lowered = lower_and_validate(

@@ -68,18 +68,24 @@ def validate_program_regions(program: Any) -> None:
                 attrs.get(key.replace("_block", "_region")))
             for key in _BLOCK_KEYS if key in attrs and attrs[key] is not None
         }
-        if value.op == "while":
+        if value.op in ("while", "structured_iterate"):
             if "cond" in attrs:
                 require_region(program, attrs["cond"], regions["cond_block"], "while cond")
             if "body" in attrs:
                 require_region(
                     program, attrs["body"], regions["body_block"], "while body",
                     allow=value.inputs)
-        elif value.op in ("range", "subcycle"):
+        elif value.op == "capture_result":
+            validate_input_regions(program, (attrs["body"],), regions["body_block"],
+                                   "capture body result")
+        elif value.op in ("finite_map", "finite_scan", "distributed_map", "distributed_requests", "distributed_csr", "distributed_reduce", "distributed_scatter_reduce", "distributed_scan"):
+            validate_input_regions(program, (attrs["body"],), regions["body_block"],
+                                   "finite array body result")
+        elif value.op in ("range", "subcycle", "structured_fold"):
             require_region(
                 program, attrs["body"], regions["body_block"], "%s body" % value.op,
                 allow=value.inputs)
-        elif value.op == "branch":
+        elif value.op in ("branch", "result_match"):
             require_region(
                 program, attrs["true_result"], regions["true_block"], "branch when_true",
                 allow=(attrs["true_result"],)

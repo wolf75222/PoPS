@@ -25,7 +25,8 @@ def _tree(value, dimension):
             raise ValueError("interaction coordinate is outside its declared dimension")
         return (prefix, int(value.name[1:]))
     binary = {ast.Add: "add", ast.Sub: "sub", ast.Mul: "mul", ast.Div: "div", ast.Pow: "pow"}
-    unary = {ast.Neg: "neg", ast.Abs: "abs", ast.Sqrt: "sqrt", ast.Exp: "exp"}
+    unary = {ast.Neg: "neg", ast.Abs: "abs", ast.Sqrt: "sqrt", ast.Exp: "exp",
+             ast.Sin: "sin", ast.Cos: "cos", ast.Log: "log", ast.Expm1: "expm1"}
     if type(value) in binary:
         return (binary[type(value)], _tree(value.a, dimension), _tree(value.b, dimension))
     if type(value) in unary:
@@ -50,7 +51,7 @@ def kernel_cpp(tree, dimension):
         if op == "pow":
             return "Kokkos::pow(%s, %s)" % (a, b)
         return "(%s %s %s)" % (a, {"add": "+", "sub": "-", "mul": "*", "div": "/"}[op], b)
-    if op in ("neg", "abs", "sqrt", "exp") and len(tree) == 2:
+    if op in ("neg", "abs", "sqrt", "exp", "sin", "cos", "log", "expm1") and len(tree) == 2:
         a = kernel_cpp(tree[1], dimension)
         return "(-%s)" % a if op == "neg" else "Kokkos::%s(%s)" % ({"abs": "fabs"}.get(op, op), a)
     raise ValueError("invalid spatial interaction kernel operation/arity")

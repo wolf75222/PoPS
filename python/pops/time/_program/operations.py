@@ -94,7 +94,9 @@ class _ProgramCore(
         attrs = qualify_evaluation_attrs(self, op, attrs)
         validate_input_clocks(
             value_inputs, point, "IR op %r" % op,
-            constructing_synchronize=op == "synchronize")
+            # Products package independently timed values; projections restore each exact leaf
+            # point. Neither operation performs a numerical cross-clock evaluation.
+            constructing_synchronize=op in ("synchronize", "product", "product_get"))
         vid = self._next_id
         if name is None:
             name = "%s%d" % (op, vid)

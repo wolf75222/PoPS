@@ -62,6 +62,7 @@
 #include <pops/runtime/program/accepted_exchange.hpp>
 #include <pops/runtime/program/moving_interval_geometry.hpp>
 #include <pops/runtime/program/collective_step_rejection.hpp>
+#include <pops/runtime/program/continuation_authority.hpp>
 #include <pops/runtime/program/cache_manager.hpp>    // CacheManager (held-node scheduler cache)
 #include <pops/runtime/program/prepared_resource_lifetime.hpp>
 #include <pops/runtime/program/module_metadata.hpp>  // frozen checkpoint-shape metadata
@@ -449,6 +450,11 @@ struct ProgramRuntimeState {
   /// Weak native-resource hook distinguishes quiescence, region success and revocation.
   /// Attempt identities live in the context cache, outside accepted snapshots.
   std::function<void(PreparedResourceAction)> resource_lifetime_;
+  // Separate from ordinary rejection: only a successful externally published restart changes
+  // the lifetime of domain issuers. The accepted decoded realm is preserved by native possession.
+  using RestartLifetime = std::function<void(const FiniteDomainRealmRef&,
+                                            const std::shared_ptr<distributed::Registry>&)>;
+  RestartLifetime restart_lifetime_;
   /// AMR-only, artifact-owned remap boundary. Unlike hierarchy_refresh_, this callback is reached
   /// only after AmrSystem published a topology and atomically exchanged a prepared history manager.
   /// Keeping it distinct prevents a generic hierarchy refresh from accepting stale history storage.
@@ -622,6 +628,7 @@ struct ProgramRuntimeState {
   /// MULTISTEP HISTORY (ADC-406a), UNIFORM ONLY. Ring buffers for multistep schemes; the uniform
   /// checkpoint serializes them. Empty on AMR (history seam not wired).
   HistoryManager<Dim> hist_;
+  ContinuationStore<Dim> continuation_;
 
   // --- self-contained helpers (grid-free, Program-subsystem-worded errors) -------------------------
 
@@ -631,6 +638,7 @@ struct ProgramRuntimeState {
     std::function<void()> resource_refresh;
     bool resource_refresh_pending = false;
     std::function<void(PreparedResourceAction)> resource_lifetime;
+    RestartLifetime restart_lifetime;
     std::function<void(const AmrProgramHistoryRemapDescriptor&)> history_remap_accepted;
     std::function<void()> restart_regrid_preflight;
     std::function<void()> restart_regrid;
@@ -649,6 +657,7 @@ struct ProgramRuntimeState {
     std::map<std::string, MovingIntervalGeometry<Dim>> moving_interval_geometry;
     CacheManager<Dim> cache;
     HistoryManager<Dim> history;
+    ContinuationStore<Dim> continuation;
     bool artifact_backed = false;
   };
 
@@ -693,6 +702,7 @@ struct ProgramRuntimeState {
           block_params_(accepted.block_params_),
           cache_(accepted.cache_),
           hist_(accepted.hist_),
+          continuation_(accepted.continuation_),
           profiler_restore_(owner.profiler_.prepare_restore(accepted.profiler_)) {}
 
     ProgramRuntimeState* owner_ = nullptr;
@@ -722,6 +732,7 @@ struct ProgramRuntimeState {
     std::map<int, RuntimeParams> block_params_;
     CacheManager<Dim> cache_;
     HistoryManager<Dim> hist_;
+  ContinuationStore<Dim> continuation_;
     Profiler::PreparedRestore profiler_restore_;
   };
 
@@ -769,6 +780,7 @@ struct ProgramRuntimeState {
     block_params_.swap(prepared.block_params_);
     std::swap(cache_, prepared.cache_);
     std::swap(hist_, prepared.hist_);
+    continuation_.swap(prepared.continuation_);
     profiler_.publish_prepared_restore(std::move(prepared.profiler_restore_));
   }
 
@@ -804,6 +816,7 @@ struct ProgramRuntimeState {
       throw std::overflow_error("Program step-install generation overflow");
     reject_resource_work();
     resource_lifetime_ = nullptr;
+    restart_lifetime_ = nullptr;
     step_ = std::move(step);
     hierarchy_refresh_ = nullptr;
     resource_refresh_ = nullptr;
@@ -830,6 +843,7 @@ struct ProgramRuntimeState {
                                        resource_refresh_,
                                        resource_refresh_pending_,
                                        resource_lifetime_,
+                                       restart_lifetime_,
                                        history_remap_accepted_,
                                        restart_regrid_preflight_,
                                        restart_regrid_,
@@ -848,6 +862,7 @@ struct ProgramRuntimeState {
                                        moving_interval_geometry_,
                                        cache_,
                                        hist_,
+                                       continuation_,
                                        artifact_backed_};
   }
 
@@ -862,11 +877,13 @@ struct ProgramRuntimeState {
     moving_interval_geometry_.clear();
     cache_.clear();
     hist_ = HistoryManager<Dim>{};
+    continuation_ = ContinuationStore<Dim>{};
   }
 
   void rollback_artifact_step_install(ArtifactStepInstallSnapshot&& snapshot) noexcept {
     reject_resource_work();
     resource_lifetime_ = std::move(snapshot.resource_lifetime);
+    restart_lifetime_ = std::move(snapshot.restart_lifetime);
     step_ = std::move(snapshot.step);
     hierarchy_refresh_ = std::move(snapshot.hierarchy_refresh);
     resource_refresh_ = std::move(snapshot.resource_refresh);
@@ -889,6 +906,7 @@ struct ProgramRuntimeState {
     moving_interval_geometry_.swap(snapshot.moving_interval_geometry);
     cache_ = std::move(snapshot.cache);
     hist_ = std::move(snapshot.history);
+    continuation_.swap(snapshot.continuation);
     artifact_backed_ = snapshot.artifact_backed;
   }
 
@@ -927,6 +945,23 @@ struct ProgramRuntimeState {
       throw std::invalid_argument("Program resource lifetime requires an installed step and hook");
     reject_resource_work();
     resource_lifetime_ = std::move(hook);
+  }
+
+  void install_restart_lifetime(RestartLifetime hook) {
+    if (!step_ || !hook)
+      throw std::invalid_argument("Program restart lifetime requires an installed step and hook");
+    restart_lifetime_ = std::move(hook);
+  }
+
+  // All fallible decode/validation/allocation happened before external restart publication.
+  // The installed native hook only revokes flags and releases shared/weak references.
+  void finalize_restart_resources() const noexcept {
+    try {
+      if (restart_lifetime_)
+        restart_lifetime_(continuation_.domain_realm(), continuation_.distributed_registry());
+    } catch (...) {
+      std::terminate();
+    }
   }
 
   /// A snapshot or regrid may proceed only after real queue completion. Drainage

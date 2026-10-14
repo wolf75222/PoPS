@@ -18,6 +18,7 @@ The module is stdlib-only and runs before any ``pip install`` in CI.
 from __future__ import annotations
 
 import argparse
+import ast
 from collections.abc import Iterable
 import json
 import math
@@ -699,6 +700,51 @@ def manifest_python_hardware_entrypoints(manifest: dict) -> list[dict]:
     return sorted(entries, key=lambda row: row['path'])
 
 
+def manifest_python_mpi_receivers(manifest: dict) -> list[dict]:
+    """Pytest modules owned exclusively by an exact declared MPI script receiver.
+
+    The script's literal ``run`` call must name this module. This is routing, not
+    a skip: removing or changing the MPI entrypoint invalidates the serial plan.
+    """
+    entries = {row["path"]: row for row in manifest_python_mpi_entrypoints(manifest)}
+    result, seen = [], set()
+    for suite in manifest.get("python", {}).get("suite", []):
+        rows = suite.get("mpi_receivers", [])
+        if not isinstance(rows, list) or (rows and "mpi" not in suite.get("labels", [])):
+            raise SystemExit("MPI receivers need a list in an MPI-labelled owning suite")
+        prefix = normalize(str(suite.get("path", ""))).rstrip("/") + "/"
+        for row in rows:
+            if not isinstance(row, dict) or set(row) != {"path", "entrypoint"}:
+                raise SystemExit("MPI receiver needs exactly path and entrypoint")
+            path, entrypoint = row["path"], row["entrypoint"]
+            if (not isinstance(path, str) or not path.startswith(prefix)
+                    or Path(path).is_absolute() or ".." in Path(path).parts
+                    or not Path(path).name.startswith("test_") or not path.endswith(".py")
+                    or not (ROOT / path).is_file() or path in seen or path in entries
+                    or not isinstance(entrypoint, str) or entrypoint not in entries):
+                raise SystemExit("MPI receiver lacks an exact unique declared owner: " + str(path))
+            tree = ast.parse((ROOT / entrypoint).read_text())
+            calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                     and isinstance(node.func, ast.Name) and node.func.id == "run"]
+            try:
+                call, = calls
+                receiver, = call.args
+                options = {item.arg: ast.literal_eval(item.value) for item in call.keywords}
+                valid = (ast.literal_eval(receiver) == path
+                         and set(options) == {"expected_cases", "ranks"}
+                         and type(options["expected_cases"]) is int
+                         and options["expected_cases"] > 0
+                         and options["ranks"] == entries[entrypoint]["nproc"])
+            except (ValueError, TypeError, SyntaxError):
+                valid = False
+            if not valid:
+                raise SystemExit("MPI receiver entrypoint does not invoke its exact receiver: " + path)
+            seen.add(path)
+            result.append({**row, "expected_cases": options["expected_cases"],
+                           "nproc": entries[entrypoint]["nproc"]})
+    return sorted(result, key=lambda row: row["path"])
+
+
 def manifest_python_suites(manifest: dict) -> list[dict]:
     # CI selects the repository snapshot, not arbitrary untracked scratch files in a developer
     # checkout.  This also keeps local plans stable when editors create suffixed copies beside a
@@ -721,6 +767,7 @@ def manifest_python_suites(manifest: dict) -> list[dict]:
         orchestrator["path"]
         for orchestrator in manifest_python_mpi_orchestrators(manifest)
     )
+    dedicated_mpi_paths.update(row["path"] for row in manifest_python_mpi_receivers(manifest))
     dedicated_hardware_paths = {
         row['path'] for row in manifest_python_hardware_entrypoints(manifest)
     }

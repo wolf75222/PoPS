@@ -151,7 +151,15 @@ def _law(value):
             third,second,first=initial.pop(),initial.pop(),initial.pop(); result=(op,first,second,third)
         elif op in {"pow","atan2","hypot","minimum","maximum","eq","ne","lt","le","gt","ge","and","or"}:
             right,left=initial.pop(),initial.pop(); result=(op,left,right)
-        else: result=(op,initial.pop())
+        else:
+            argument=initial.pop()
+            # Exact elementary identities, not a floating-point sample of the
+            # coordinate law. In particular sin(t) vanishes at t=0 just as t does.
+            if argument==0. and op in {"sin","sqrt","abs","erf"}: result=0.
+            elif argument==0. and op in {"cos","exp","erfc"}: result=1.
+            elif argument==1. and op=="log": result=0.
+            elif argument==1. and op in {"sqrt","abs"}: result=1.
+            else: result=(op,argument)
         initial.append(result)
     if initial != [("reference",)]:
         raise NotImplementedError("the initial coordinate map needs a prepared physical-state "

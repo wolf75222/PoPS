@@ -1,4 +1,5 @@
 #include "../bindings_detail.hpp"
+#include "collective_python_prepare.hpp"
 
 #if !defined(POPS_RUNTIME_SHARED_EXCEPTION_ABI) || !defined(POPS_EXPORT_BUILDING_MODULE)
 #error "the _pops host must build the shared runtime exception ABI as its exporting producer"
@@ -446,18 +447,23 @@ void init_core(py::module_& m) {
           },
           py::arg("payload"), py::arg("root") = 0)
       .def(
+          "collective_prepare",
+          [](const pops::WorldCommunicator& world, py::handle callback) {
+            return pops::python_collective::collective_prepare(world, callback);
+          },
+          py::arg("callback"),
+          "Run one strictly local callback; return only after every rank prepared successfully.")
+      .def(
+          "agree_control_bytes",
+          [](const pops::WorldCommunicator& world, py::handle schema, py::handle payload) {
+            return pops::python_collective::agree_control_bytes(world, schema, payload);
+          },
+          py::arg("schema"), py::arg("payload"),
+          "Compare two exact byte strings collectively with fixed-memory native chunks.")
+      .def(
           "allgather_bytes",
-          [](const pops::WorldCommunicator& world, const py::bytes& payload) {
-            const std::string native = payload.cast<std::string>();
-            std::vector<std::string> gathered;
-            {
-              py::gil_scoped_release release;
-              gathered = world.allgather_bytes(native);
-            }
-            py::tuple result(gathered.size());
-            for (std::size_t index = 0; index < gathered.size(); ++index)
-              result[index] = py::bytes(gathered[index]);
-            return result;
+          [](const pops::WorldCommunicator& world, py::handle payload) {
+            return pops::python_collective::allgather_bytes(world, payload);
           },
           py::arg("payload"))
       .def(
@@ -516,18 +522,23 @@ void init_core(py::module_& m) {
           },
           py::arg("payload"), py::arg("root") = 0)
       .def(
+          "collective_prepare",
+          [](const pops::ObserverMpiLane& lane, py::handle callback) {
+            return pops::python_collective::collective_prepare(lane, callback);
+          },
+          py::arg("callback"),
+          "Run one strictly local callback; return only after every rank prepared successfully.")
+      .def(
+          "agree_control_bytes",
+          [](const pops::ObserverMpiLane& lane, py::handle schema, py::handle payload) {
+            return pops::python_collective::agree_control_bytes(lane, schema, payload);
+          },
+          py::arg("schema"), py::arg("payload"),
+          "Compare two exact byte strings collectively with fixed-memory native chunks.")
+      .def(
           "allgather_bytes",
-          [](const pops::ObserverMpiLane& lane, const py::bytes& payload) {
-            const std::string native = payload.cast<std::string>();
-            std::vector<std::string> gathered;
-            {
-              py::gil_scoped_release release;
-              gathered = lane.allgather_bytes(native);
-            }
-            py::tuple result(gathered.size());
-            for (std::size_t index = 0; index < gathered.size(); ++index)
-              result[index] = py::bytes(gathered[index]);
-            return result;
+          [](const pops::ObserverMpiLane& lane, py::handle payload) {
+            return pops::python_collective::allgather_bytes(lane, payload);
           },
           py::arg("payload"))
       .def(

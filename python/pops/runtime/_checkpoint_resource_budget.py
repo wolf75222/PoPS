@@ -568,6 +568,7 @@ def _checkpoint_member_names(
     levels: int,
     rank_capacity: int,
     has_amr_legacy_phi: bool = False,
+    has_finite_continuation: bool = False,
 ) -> tuple[str, ...]:
     from pops.runtime._checkpoint_embedded_boundary import EMBEDDED_BOUNDARY_CONTRACT_KEY
     from pops.output._checkpoint_contract import IDENTITY_KEY, MANIFEST_KEY
@@ -658,6 +659,11 @@ def _checkpoint_member_names(
         names.append("program_accepted_state")
         for level in range(levels):
             names.extend(("distribution_mode_%d" % level, "dmap_%d" % level))
+    if has_finite_continuation:
+        if runtime_kind != "uniform":
+            raise ValueError("finite continuation AMR checkpoint is not qualified")
+        from pops.runtime._checkpoint_finite_continuation import FINITE_CONTINUATION_KEYS
+        names.extend(sorted(FINITE_CONTINUATION_KEYS))
     names.extend((*runtime, MANIFEST_KEY, IDENTITY_KEY))
     if not names or len(names) != len(set(names)):
         raise RuntimeError("checkpoint resource authority produced duplicate member names")
@@ -747,6 +753,18 @@ def _common_budget(
         rank_capacity=max(rank_capacity, checkpoint_topology(owner).size),
         resolved_plan=install_plan.artifact.plan)
     owner._checkpoint_exchange_byte_capacity = exchange_bytes
+    finite_bytes = 0
+    finite_schema = ""
+    if runtime_kind == "uniform":
+        from pops.runtime._checkpoint_finite_continuation import installed_capacity
+        finite_schema, per_rank = installed_capacity(owner)
+        if per_rank:
+            ranks = max(rank_capacity, checkpoint_topology(owner).size)
+            finite_bytes = _add(_mul(per_rank, ranks, where="finite continuation ranked byte capacity"),
+                                _add(_mul(ranks + 1, 8, where="finite continuation offsets capacity"),
+                                     _mul(len(finite_schema), 4, where="finite continuation schema capacity"),
+                                     where="finite continuation archive metadata"),
+                                where="finite continuation archive capacity")
     program_bytes = _mul(
         accepted_program_bytes,
         1,
@@ -771,6 +789,7 @@ def _common_budget(
         program_bytes,
         history_flux_snapshot_bytes,
         exchange_bytes,
+        finite_bytes,
         source_authority_bytes,
         structural_bytes,
         migration_bytes,
@@ -786,6 +805,7 @@ def _common_budget(
         levels=len(cells),
         rank_capacity=rank_capacity,
         has_amr_legacy_phi=runtime_kind == "amr" and bool(field_names),
+        has_finite_continuation=bool(finite_schema),
     )
     consumer_identity, consumer_count, consumer_data = _consumer_evidence(install_plan)
     temporal_manifest = program.temporal_manifest()
@@ -816,6 +836,8 @@ def _common_budget(
     }
     control_data["state_carriers_capacity_contract"] = "pops.%s.state-carriers-capacity@1" % runtime_kind
     control_data["state_carriers_bytes"] = state_carriers_bytes
+    if finite_schema:
+        control_data["finite_continuation"] = {"schema": finite_schema, "ranked_bytes": finite_bytes}
     control_characters = len(
         json.dumps(control_data, sort_keys=True, separators=(",", ":"), allow_nan=False)
     )

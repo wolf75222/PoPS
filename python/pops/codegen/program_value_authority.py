@@ -59,7 +59,7 @@ class ProgramValueAuthorityPlan:
 
 
 _BUFFER_TYPES = frozenset(("state", "rhs", "scalar_field", "vector_field", "mask"))
-_RHS_STORAGE = frozenset(("rhs", "diffusive_rhs", "source", "implicit_source", "apply"))
+_RHS_STORAGE = frozenset(("rhs", "diffusive_rhs", "stencil_flux_divergence", "source", "implicit_source", "apply"))
 _STATE_STORAGE = frozenset(("linear_combine", "solve_local_linear", "solve_local_nonlinear",
                             "solve_implicit_source", "where", "pointwise_expression"))
 _PURE_ALIASES = frozenset(("solve_outcome", "solve_outcome_component",

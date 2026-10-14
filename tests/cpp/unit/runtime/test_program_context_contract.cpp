@@ -3125,3 +3125,36 @@ TEST(ProgramContextContract,
 }
 
 #include "solve_outcome_attempt_review.inc"
+
+TEST(ProgramContextContract, DomainIssuersChangeOnlyAfterSuccessfulRestartFinalization) {
+  namespace distributed = runtime::program::distributed;
+  ensure_kokkos(); comm_init();
+  NativeSystem sim(native_config(8));
+  install_execution_lane(sim, "pops.test.restart-domain-lifetime");
+  add_gas_block(sim, "gas"); sim.set_state("gas", ic(8));
+  sim.set_program_block_map({0});
+  NativeProgramContext context(&sim); // stack ownership must remain supported
+  context.install([](double) {});
+  auto finite = context.continuation_new_domain(1, 4, 91);
+  const auto ordinal = finite->version;
+  std::vector<std::int64_t> offsets(n_ranks() + 1, 1); offsets.front() = 0;
+  auto domain = context.distributed_registry().issue(91, 4, offsets);
+  sim.begin_step_transaction(); sim.rollback_step_transaction();
+  EXPECT_TRUE(finite->visible()); EXPECT_TRUE(domain->visible());
+  sim.begin_restart_transaction(); sim.rollback_restart_transaction();
+  EXPECT_TRUE(finite->visible()); EXPECT_TRUE(domain->visible());
+  sim.begin_restart_transaction(); sim.commit_restart_transaction();
+  // Commit remains rollbackable while external restart publication may still fail.
+  EXPECT_TRUE(finite->visible()); EXPECT_TRUE(domain->visible());
+  sim.finalize_restart_transaction();
+  EXPECT_FALSE(finite->visible()); EXPECT_FALSE(domain->visible());
+  EXPECT_THROW(finite->require_live(), std::logic_error);
+  EXPECT_THROW(domain->size(), distributed::Failure);
+  auto fresh = context.continuation_new_domain(1, 4, 91);
+  EXPECT_TRUE(fresh->visible()); EXPECT_GT(fresh->version, ordinal);
+  auto new_domain = context.distributed_registry().issue(91, 4, offsets);
+  EXPECT_TRUE(new_domain->visible());
+  // Calling finalize without an active, committed restart has no revocation effect.
+  sim.finalize_restart_transaction();
+  EXPECT_TRUE(fresh->visible()); EXPECT_TRUE(new_domain->visible());
+}

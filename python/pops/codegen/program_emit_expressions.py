@@ -30,6 +30,12 @@ def expression_cpp(node, inputs):
 def pointwise_output_template(value):
     """One authenticated output authority for allocation, mask and cell evaluation."""
     from pops.time.expressions import component_names
+    if "numerical_pointwise_rate" in value.attrs:
+        from pops.time._program.expressions import validate_pointwise_rate
+        return validate_pointwise_rate(value)
+    if "cell_mean_projection" in value.attrs:
+        from pops.time._program.spatial_interaction import validate_cell_mean
+        return validate_cell_mean(value)
     if value.vtype != "state" and "field_product_seed" not in value.attrs:
         raise ValueError("typed pointwise output lost its field product authority")
     if "field_product_seed" in value.attrs:
@@ -85,7 +91,8 @@ def checked_expression_dag(expressions, nodes, inputs):
     binary = {"add": ir.Add, "sub": ir.Sub, "mul": ir.Mul, "div": ir.Div,
               "pow": ir.Pow, "minimum": ir.Minimum, "maximum": ir.Maximum,
               "and": ir.BooleanAnd, "or": ir.BooleanOr}
-    unary = {"neg": ir.Neg, "abs": ir.Abs, "sqrt": ir.Sqrt, "exp": ir.Exp, "sign": ir.Sign,
+    unary = {"neg": ir.Neg, "abs": ir.Abs, "sqrt": ir.Sqrt, "exp": ir.Exp,
+             "sin": ir.Sin, "cos": ir.Cos, "log": ir.Log, "expm1": ir.Expm1, "sign": ir.Sign,
              "not": ir.BooleanNot, "rounded": Rounded}
     restored, bindings = [], {}
     for index, node in enumerate(nodes):
@@ -141,7 +148,15 @@ def emit_pointwise_kernel(value, variables, output, *, block_index, status):
     from pops.time.expressions import component_names
     names = [variables[item.id] for item in value.inputs]
     field_names = [variables[item.id] for item in value.inputs if item.vtype != "scalar"]
-    template_name = variables[pointwise_output_template(value).id]
+    # Storage can be a C++ expression such as (*sf6), not an identifier. Give
+    # those expressions local reference names before deriving Array4 names.
+    aliases = {name: (name if name.isidentifier() else "expression_input_%d_%d" % (value.id, index))
+               for index, name in enumerate(dict.fromkeys(field_names))}
+    references = ["const auto& %s = %s;" % (alias, name)
+                  for name, alias in aliases.items() if alias != name]
+    names = [aliases.get(name, name) for name in names]
+    field_names = [aliases[name] for name in field_names]
+    template_name = aliases[variables[pointwise_output_template(value).id]]
     body = _kernel_open(output, template_name)
     index = next(i for i, line in enumerate(body) if "pops::for_each_cell" in line)
     views = []
@@ -189,7 +204,7 @@ def emit_pointwise_kernel(value, variables, output, *, block_index, status):
             captures.append("const pops::Real global_value_%d = ctx.integral_candidate_value(%s,%s,%s);" %
                 (item.id, name, json.dumps(integral_identity(item.prog,item.attrs["integral"])),
                  json.dumps(item.attrs["units"])))
-    return captures + body + _kernel_close()
+    return references + captures + body + _kernel_close()
 def prepared_scalar_input(value, var):
     """Read a prepared global capture through its exact live owner/point contract."""
     if value.op != "integral_candidate":

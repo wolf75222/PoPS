@@ -854,6 +854,12 @@ class System {
       const std::string& integral_identity,
       const runtime::program::AcceptedExchangeLedger::TraceSelection& selection, Real scale);
   POPS_EXPORT std::vector<std::uint8_t> checkpoint_program_exchanges(bool provisional_capture=false) const;
+  POPS_EXPORT std::string checkpoint_continuation_schema() const;
+  POPS_EXPORT std::uint64_t checkpoint_continuation_capacity() const;
+  POPS_EXPORT std::vector<std::uint8_t> checkpoint_continuation_image() const;
+  POPS_EXPORT void validate_checkpoint_continuation_image(std::span<const std::uint8_t>, double, int) const;
+  POPS_EXPORT void restore_checkpoint_continuation_image(std::span<const std::uint8_t>);
+  POPS_EXPORT void require_continuation_projection() const;
   POPS_EXPORT void validate_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes) const;
   POPS_EXPORT void validate_checkpoint_moving_geometry(std::span<const std::uint8_t> bytes,
                                                       double accepted_time, int macro_step) const;
@@ -1465,7 +1471,8 @@ class System {
   /// order. The default slot is included when the installed prepared RHS/configuration can
   /// materialize that exact field, even if it has not been instantiated yet. This query never
   /// constructs ExactNamedField.
-  std::vector<std::string> configured_field_provider_slots() const;
+  /// Generated Continuation shared libraries inspect this through the flat loader ABI.
+  POPS_EXPORT std::vector<std::string> configured_field_provider_slots() const;
   void set_field_potential(const std::string& provider_slot, const std::vector<double>& phi);
   /// Last successfully accepted report for one installed field, including physical accuracy.
   [[nodiscard]] POPS_EXPORT std::optional<SolveReport> field_solve_report(

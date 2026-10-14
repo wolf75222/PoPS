@@ -18,7 +18,7 @@ def cell_state_read_extent(model, expression, *, provider_pack=None):
     leaves = {ir.Const, ir.Var}
     operators = {ir.Add, ir.Sub, ir.Mul, ir.Div, ir.Pow, ir.Minimum,
                  ir.Maximum, ir.Compare, ir.BooleanAnd, ir.BooleanOr,
-                 ir.BooleanNot, ir.Neg, ir.Sqrt, ir.Exp, ir.Abs, ir.Sign,
+                 ir.BooleanNot, ir.Neg, ir.Sqrt, ir.Exp, ir.Sin, ir.Cos, ir.Log, ir.Expm1, ir.Abs, ir.Sign,
                  Where, Rounded}
     roots = [expression]
     roots.extend(model.prim_defs[name] for name in _live_prims(model, [expression]))
@@ -76,7 +76,7 @@ def _pointwise_state_aux_read_extent(model, expression, provider_pack):
     leaves = {ir.Const, ir.Var, RuntimeParamRef}
     operators = {ir.Add, ir.Sub, ir.Mul, ir.Div, ir.Pow, ir.Minimum,
                  ir.Maximum, ir.Compare, ir.BooleanAnd, ir.BooleanOr,
-                 ir.BooleanNot, ir.Neg, ir.Sqrt, ir.Exp, ir.Abs, ir.Sign,
+                 ir.BooleanNot, ir.Neg, ir.Sqrt, ir.Exp, ir.Sin, ir.Cos, ir.Log, ir.Expm1, ir.Abs, ir.Sign,
                  Where, Rounded}
     roots = [expression]
     roots.extend(model.prim_defs[name] for name in _live_prims(model, [expression]))

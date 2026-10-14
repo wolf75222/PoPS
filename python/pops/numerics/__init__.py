@@ -22,6 +22,7 @@ from .spatial import FiniteVolume
 from .nonconservative import NormalizedPolynomialPath, SymbolicPath, PathConservativeFiniteVolume
 from .nonconservative import CoordinatedFace, FaceBalance, CoordinatedFiniteVolume
 from .state_storage import StateStorage
+from .program_realization import ProgramRealization
 from .named_flux import NamedCenteredDivergence
 from .interactions import JointEvaluation
 from .diffusion import Diffusion, TensorDiffusion, CoupledGradient
@@ -32,7 +33,7 @@ from .plan import DiscretizationPlan
 __all__ = ["riemann", "reconstruction", "limiters", "variables", "projections", "terms",
            "FaceBalance", "CoordinatedFace", "CoordinatedFiniteVolume",
            "spatial", "FiniteVolume", "FanLi15RawMomentPath", "NormalizedPolynomialPath", "SymbolicPath", "PathConservativeFiniteVolume",
-           "StateStorage", "NamedCenteredDivergence", "Diffusion", "TensorDiffusion",
+           "StateStorage", "ProgramRealization", "NamedCenteredDivergence", "Diffusion", "TensorDiffusion",
            "CoupledGradient",
            "ScharfetterGummel",
            "DiscreteGradientStencil", "LinearAxisStencil", "DiscretizationPlan", "JointEvaluation"]

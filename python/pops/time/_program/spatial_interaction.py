@@ -1,10 +1,98 @@
 """One explicit nonlocal spatial map; publication belongs to the surrounding Program."""
 from typing import TYPE_CHECKING
 from pops.time.values import ProgramValue, _resolve_handle
-from pops.time._program.value_validation import require_top_level
+from pops.time._program.value_validation import require_top_level, validate_input_regions
 from pops.time._authoring import atomic_authoring
 from pops.model.spaces import FieldSpace
 from pops._ir.quantity import PhysicalDimension
+
+
+def _midpoint_spaces(field, state):
+    """Authenticate an explicit piecewise-constant sampling map, never a cast."""
+    from pops.model.spaces import StateSpace
+    if field.vtype != "scalar_field" or type(field.space) is not FieldSpace:
+        raise TypeError("midpoint sampling requires a typed computed cell field")
+    if state.vtype != "state" or type(state.space) is not StateSpace:
+        raise TypeError("midpoint sampling requires an exact State template")
+    if field.prog is not state.prog or field.block != state.block or field.block is None:
+        raise ValueError("midpoint sampling cannot change Program or block ownership")
+    if field.point != state.point:
+        raise ValueError("midpoint sampling requires the same exact evaluation point")
+    if field.space.sampling != "cell_center" or state.space.sampling != "cell_average":
+        raise ValueError("midpoint sampling requires cell_center and cell_average representations")
+    for key in ("layout", "centering", "frame", "clock", "support"):
+        if getattr(field.space, key) != getattr(state.space, key):
+            raise ValueError("midpoint sampling changes physical " + key)
+    from pops.representations import _data_identity
+    if _data_identity(field.space.representation_data) != _data_identity(state.space.representation_data):
+        raise ValueError("midpoint sampling changes physical representation_data")
+    if (field.space.layout != "cell" or field.space.centering != "cell"
+            or len(field.space.components) != len(state.space.components)
+            or field.space.units != state.space.units
+            or field.space.value_shape != state.space.value_shape):
+        raise ValueError("midpoint sampling changes component shape or units")
+
+
+def validate_cell_field(value):
+    """Recheck loaded/generated midpoint samples against their actual SSA input."""
+    from pops.time.values import _Coeff
+    if (value.op != "linear_combine" or len(value.inputs) != 1
+            or value.attrs.get("cell_field_projection") != "pops.cell-midpoint-sampling@1"
+            or value.attrs.get("coeffs") != (_Coeff({0: 1}).to_polynomial(),)
+            or value.state_ref is not None):
+        raise ValueError("cell field lost its declared midpoint reconstruction")
+    _midpoint_spaces(value, value.inputs[0])
+    return value.inputs[0]
+
+
+def validate_cell_mean(value):
+    from pops.time.expressions import encode_expressions
+    if (value.op != "pointwise_expression" or value.vtype != "state"
+            or len(value.inputs) != 2
+            or value.attrs.get("cell_mean_projection") != "pops.cell-midpoint-quadrature@1"):
+        raise ValueError("cell mean lost its declared midpoint quadrature")
+    field, template = value.inputs
+    _midpoint_spaces(field, template)
+    if (value.space != template.space or value.block != template.block
+            or value.point != template.point or value.state_ref != template.state_ref):
+        raise ValueError("cell mean changed its output authority")
+    encoded, nodes, inputs = encode_expressions(
+        tuple(field[i] for i in range(len(field.space.components))), value.prog)
+    if (inputs != (field,) or value.attrs.get("expressions") != encoded
+            or value.attrs.get("expression_nodes") != nodes):
+        raise ValueError("cell mean changed its quadrature evaluations")
+    return template
+
+
+def validate_spatial_scratch(value):
+    if (value.op != "scalar_field" or len(value.inputs) != 1
+            or value.attrs.get("spatial_port_storage") != "pops.computed-cell-field@1"):
+        raise ValueError("computed cell scratch lost its storage contract")
+    source = value.inputs[0]
+    if (source.vtype != "scalar_field" or type(source.space) is not FieldSpace
+            or value.vtype != "scalar_field" or value.space != source.space
+            or source.block is None or value.block != source.block
+            or value.point != source.point or value.state_ref is not None
+            or value.attrs.get("ncomp") != len(source.space.components)):
+        raise ValueError("computed cell scratch changed its owner, point or representation")
+    return source
+
+
+def validate_computed_laplacian(value):
+    """Authenticate the pure computed-field stencil, including its actual storage input."""
+    if value.op != "laplacian" or len(value.inputs) != 2:
+        raise ValueError("computed Laplacian lost its stencil inputs")
+    output, source = value.inputs
+    validate_spatial_scratch(output)
+    from pops.time.field_sampling import scalar_co_location
+    scalar_co_location(output, source, "computed Laplacian")
+    if (output is source
+            or value.vtype != "scalar_field" or value.space != source.space
+            or value.block != source.block or value.point != source.point
+            or value.state_ref is not None
+            or value.attrs.get("ncomp") != len(source.space.components)):
+        raise ValueError("computed Laplacian changed its prototype, authority or component shape")
+    return output, source
 
 
 def _dimension(data, *, allow_unknown=True):
@@ -208,6 +296,61 @@ else:
 
 
 class _ProgramSpatialInteraction(_ProgramBase):
+    @atomic_authoring
+    def cell_field(self, state, *, quadrature, name=None):
+        """Sample the piecewise-constant reconstruction of cell averages.
+
+        This explicit numerical map preserves the native layout and exact stage.
+        It does not publish a State or assert that arbitrary means equal points.
+        """
+        from pops.fields.spatial_interaction import CellMidpoint
+        from pops.model.spaces import StateSpace
+        from pops.time.values import _Coeff
+        from pops.time.stencil import StencilAccess
+        state = _resolve_handle(state)
+        validate_input_regions(self, (state,), self._current_region(), "cell midpoint reconstruction")
+        if type(quadrature) is not CellMidpoint or state.vtype != "state" or type(state.space) is not StateSpace:
+            raise TypeError("cell_field requires an exact State and explicit CellMidpoint()")
+        space = FieldSpace(name or "cell_midpoint", components=state.space.components,
+            layout=state.space.layout, representation="field", centering=state.space.centering,
+            units=state.space.units, frame=state.space.frame, clock=state.space.clock,
+            support=state.space.support, sampling="cell_center", value_shape=state.space.value_shape,
+            representation_data=state.space.representation_data)
+        value = self._new("scalar_field", "linear_combine", (state,),
+            {"coeffs": (_Coeff({0: 1}).to_polynomial(),), "ncomp": len(space.components),
+             "cell_field_projection": "pops.cell-midpoint-sampling@1",
+             "stencil_access": StencilAccess.pointwise()}, name, state.block,
+            space=space, point=state.point, field_context=state.field_context,
+            inherit_state_ref=False)
+        validate_cell_field(value)
+        return value
+
+    @atomic_authoring
+    def cell_mean(self, field, *, template, quadrature, name=None):
+        """Integrate a computed cell field with the declared midpoint quadrature.
+
+        This map is a numerical approximation, not an identity between sampling
+        representations. Both reads stay provisional inside the same attempt.
+        """
+        from pops.fields.spatial_interaction import CellMidpoint
+        from pops.time.expressions import encode_expressions
+        field, template = _resolve_handle(field), _resolve_handle(template)
+        validate_input_regions(self, (field, template), self._current_region(), "cell midpoint quadrature")
+        if type(quadrature) is not CellMidpoint:
+            raise TypeError("cell_mean requires an explicit CellMidpoint() quadrature")
+        _midpoint_spaces(field, template)
+        encoded, nodes, _ = encode_expressions(
+            tuple(field[i] for i in range(len(field.space.components))), self)
+        from pops.time.field_context import merge_field_provenance
+        context = merge_field_provenance(field.field_context, template.field_context)
+        value = self._new("state", "pointwise_expression", (field, template),
+            {"expressions": encoded, "expression_nodes": nodes,
+             "cell_mean_projection": "pops.cell-midpoint-quadrature@1"},
+            name, template.block, space=template.space, point=template.point,
+            state_ref=template.state_ref, field_context=context)
+        validate_cell_mean(value)
+        return value
+
     @atomic_authoring
     def spatial_interaction(self, state, kernel, *, output_space, measure, quadrature, realization, components=None, source_scope="issued", name=None, owner_block=None):
         """I_c(x)=sum_y W(x,y) rho_c(y) kappa_y volume_y, without commit.

@@ -285,43 +285,46 @@ def _emit_contiguous_rhs_group(
     stage = _stage_fraction(values[0])
     lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
     requests = []
+    from .program_source_map import operation, operation_group
     for value in values:
-        state = value.inputs[0]
-        var[value.id] = "r%d" % value.id
-        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
-                     % (var[value.id], int(value.id), var[state.id]))
-        index = _required_block_index(
-            block_idx, value.block, "emit simultaneous rhs %r" % value.name)
-        requested = value.attrs.get("sources")
-        default_source = requested is None or "default" in requested
-        family = (
-            ", " + json.dumps(_rhs_flux_temporal_family(value))
-            if target == "amr_system" else ""
-        )
-        from pops.codegen.program_models import model_for_node
-        from pops.codegen.program_emit_kernels import prepare_default_rhs_providers
-        lines += prepare_default_rhs_providers(
-            model_for_node(model, value), value, index, var[state.id],
-            var.get(("program_provider_plans",)), target=target,
-            flux=True, source=default_source)
-        from pops.codegen.program_transport_quadrature import declare_transport_faces
-        faces = declare_transport_faces(value, model_for_node(model, value), var, lines)
-        capture = "" if faces is None else ", &"+faces
-        from pops.codegen.program_rhs_input_trace import emit_rhs_input_trace
-        input_trace = emit_rhs_input_trace(value, index, var[state.id], lines, target)
-        var[("rhs_input_trace", value.id)] = input_trace
-        trace = ""
-        if input_trace is not None:
-            if not capture:
-                capture = ", nullptr"
-            trace = ", " + input_trace
-        requests.append("{%d, &%s, &%s, %d, %d%s%s%s}" % (
-            index, var[state.id], var[value.id], int(value.id), 0 if default_source else 1,
-            family, capture, trace))
+        with operation(value, lines, environment=var, channel="rhs_group_preparation"):
+            state = value.inputs[0]
+            var[value.id] = "r%d" % value.id
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
+                         % (var[value.id], int(value.id), var[state.id]))
+            index = _required_block_index(
+                block_idx, value.block, "emit simultaneous rhs %r" % value.name)
+            requested = value.attrs.get("sources")
+            default_source = requested is None or "default" in requested
+            family = (
+                ", " + json.dumps(_rhs_flux_temporal_family(value))
+                if target == "amr_system" else ""
+            )
+            from pops.codegen.program_models import model_for_node
+            from pops.codegen.program_emit_kernels import prepare_default_rhs_providers
+            lines += prepare_default_rhs_providers(
+                model_for_node(model, value), value, index, var[state.id],
+                var.get(("program_provider_plans",)), target=target,
+                flux=True, source=default_source)
+            from pops.codegen.program_transport_quadrature import declare_transport_faces
+            faces = declare_transport_faces(value, model_for_node(model, value), var, lines)
+            capture = "" if faces is None else ", &"+faces
+            from pops.codegen.program_rhs_input_trace import emit_rhs_input_trace
+            input_trace = emit_rhs_input_trace(value, index, var[state.id], lines, target)
+            var[("rhs_input_trace", value.id)] = input_trace
+            trace = ""
+            if input_trace is not None:
+                if not capture:
+                    capture = ", nullptr"
+                trace = ", " + input_trace
+            requests.append("{%d, &%s, &%s, %d, %d%s%s%s}" % (
+                index, var[state.id], var[value.id], int(value.id), 0 if default_source else 1,
+                family, capture, trace))
     from .program_value_authority import begin_value_write_cpp, complete_value_cpp
     for value in values:
         lines.extend(begin_value_write_cpp(value, var))
-    lines.append("ctx.rhs_group(%d, {%s});" % (group_identity, ", ".join(requests)))
+    with operation_group(values, lines, environment=var, channel="rhs_group_call"):
+        lines.append("ctx.rhs_group(%d, {%s});" % (group_identity, ", ".join(requests)))
     from pops.codegen.program_models import model_for_node
     from pops.codegen.program_partition_stability import emit_transport_frequency
     if model is not None:
@@ -587,14 +590,17 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     lines.extend(emit_accepted_diffusive_exchanges(
         program, target=target, block_indices=block_idx, model_authority=model,
         partition_stability_checked=var.get(("partition_stability_checked",), ())))
+    from .program_emit_stencil_flux import emit_accepted_stencil_exchanges
+    lines.extend(emit_accepted_stencil_exchanges(program, var, block_idx, target=target))
     from pops.codegen.program_transport_quadrature import emit_accepted_transport_exchanges
     lines.extend(emit_accepted_transport_exchanges(program, var, block_idx, model, target=target))
     from .program_integral_transfers import emit_integral_transfers
     integral_transfers = emit_integral_transfers(program, var, model_authority=model)
     if target == "system":
         lines.extend(integral_transfers)
-    # All outputs stay provisional until the one atomic publication group.
-    lines.extend(_emit_commit_group(program._commits, bases, var, phase=0))
+    # Continuation mode publishes its complete native image and generated carrier projections.
+    if not any(value.op == 'continuation_publish' for value in program._values):
+        lines.extend(_emit_commit_group(program._commits, bases, var, phase=0))
     # Rotate the history rings ONCE at the very end of the step (after the commit), so the next step
     # reads lag k as the value k stores ago. Only emitted when the Program uses histories.
     if any(row["clock"] == program.clock.qualified_id for row in temporal["histories"]):
@@ -657,34 +663,36 @@ def _emit_post_synchronization_phase(
         raise ValueError("after_synchronization requires target='amr_system'")
     node = nodes[0]
     lines = []
-    for block, base in bases.items():
-        index = block_idx[block]
-        token = "u%d" % base.id
-        var[base.id] = token
-        lines.append(
-            "pops::MultiFab<pops::kNativeDimension>& %s = ctx.state(%d);"
-            % (token, index)
-        )
-        from .program_value_authority import complete_value_cpp
-        lines.extend(complete_value_cpp(base, var))
-    committed_ids = frozenset()
-    for value in node.attrs.get("body_block") or ():
-        _emit_op(
-            program,
-            value,
-            bases.get(value.block),
-            committed_ids,
-            var,
-            model,
-            lines,
-            prelude,
-            block_idx,
-            target=target,
-            field_plans=field_plans,
-            has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
-        )
-    lines.extend(_emit_commit_group(
-        getattr(program, "_post_sync_commits", {}), bases, var, phase=1))
+    from .program_source_map import operation
+    with operation(node, lines, environment=var, channel="post_synchronization"):
+        for block, base in bases.items():
+            index = block_idx[block]
+            token = "u%d" % base.id
+            var[base.id] = token
+            lines.append(
+                "pops::MultiFab<pops::kNativeDimension>& %s = ctx.state(%d);"
+                % (token, index)
+            )
+            from .program_value_authority import complete_value_cpp
+            lines.extend(complete_value_cpp(base, var))
+        committed_ids = frozenset()
+        for value in node.attrs.get("body_block") or ():
+            _emit_op(
+                program,
+                value,
+                bases.get(value.block),
+                committed_ids,
+                var,
+                model,
+                lines,
+                prelude,
+                block_idx,
+                target=target,
+                field_plans=field_plans,
+                has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
+            )
+        lines.extend(_emit_commit_group(
+            getattr(program, "_post_sync_commits", {}), bases, var, phase=1))
     return lines
 
 
@@ -1038,7 +1046,17 @@ def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: A
                  block_idx: Any = None, field_plans: Any = None,
                  *, target: str = "system") -> None:
     """Lower two captured regions to a genuinely lazy C++ ``if``/``else`` value branch."""
+    if (v.vtype in ("product", "variant", "int64", "result", "index_set", "index", "array")
+            or v.inputs[0].op == "variant_is" or var.get(("structured_control",), False)):
+        from .program_emit_structured_control import emit_structured_branch
+        emit_structured_branch(program, v, var, model, lines, prelude, block_idx, field_plans, target)
+        return
     (cond,) = v.inputs
+    # Every lazy arm may contain collectives. Agree on the choice before any allocation
+    # or arm work, including legacy field-valued branches.
+    from .program_emit_structured_control import _uniform_int
+    _uniform_int("std::int64_t(bool(%s))" % var[cond.id], lines,
+                 "branch choice differs across execution ranks")
     x = ("b%d" if v.vtype == "bool" else "s%d") % v.id
     is_field = v.vtype in ("state", "rhs", "scalar_field")
     if is_field:
@@ -1047,8 +1065,13 @@ def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: A
             raise NotImplementedError(
                 "branch codegen for a block-free scalar_field result requires an explicit "
                 "layout template")
-        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
-                     % (x, int(v.id), var[base.id]))
+        lines += ["pops::MultiFab<pops::kNativeDimension>* %s_storage = nullptr;" % x,
+                  "std::exception_ptr %s_error;" % x,
+                  "try { %s_storage = &ctx.scratch_state(%d, 0, %s); }" % (x,int(v.id),var[base.id]),
+                  "catch (...) { %s_error = std::current_exception(); }" % x,
+                  "try { Kokkos::fence(); } catch (...) { if (!%s_error) %s_error = std::current_exception(); }" % (x,x),
+                  'pops::collectively_rethrow_exception(%s_error, ctx.prepared_execution_lane(), "branch allocation");' % x,
+                  "auto& %s = *%s_storage;" % (x,x)]
     else:
         cpp_type = "bool" if v.vtype == "bool" else "pops::Real"
         lines.append("%s %s;" % (cpp_type, x))
@@ -1077,9 +1100,8 @@ def _emit_branch_arm(program: Any, block: Any, result: Any, output: str, is_fiel
             prelude=prelude, block_idx=block_idx, field_plans=field_plans, target=target)
     token = sub[result.id]
     if is_field:
-        arm_lines.append(
-            "ctx.lincomb(%s, static_cast<pops::Real>(0), %s, "
-            "static_cast<pops::Real>(1), %s);" % (output, output, token))
+        from .program_emit_structured_control import _copy, value_signature
+        _copy(value_signature(result), output, token, arm_lines)
     else:
         arm_lines.append("%s = %s;" % (output, token))
     return arm_lines

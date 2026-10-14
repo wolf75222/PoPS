@@ -339,6 +339,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         metadata = {
             "name": name,
             "representation": selected_representation.name,
+            "representation_data": selected_representation.data,
             "centering": "cell" if placement is None else placement.centering,
             "layout": "cell" if placement is None else placement.layout,
             "storage": "multifab" if placement is None else placement.storage,
@@ -380,6 +381,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 layout=metadata["layout"],
                 storage=metadata["storage"],
                 representation=metadata["representation"],
+                representation_data=metadata.get("representation_data"),
                 centering=metadata["centering"],
                 units=metadata["units"],
                 support=metadata["support"],

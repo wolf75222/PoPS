@@ -53,6 +53,17 @@ class ProgramComponent(ir.Expr):
         return ("program_component", str(self.value.prog.owner_path),
                 self.value.id, self.component)
 
+    def canonical_identity(self):
+        """Exact independent-input identity for expression differentiation."""
+        return self.__pops_ir_key__(None)
+
+    def __pops_ir_diff__(self, recurse, target, definitions):
+        # This is the partial derivative of an expression in its explicit SSA inputs.
+        # It does not silently differentiate the earlier Program that produced a field.
+        same = (type(target) is ProgramComponent and target.value.prog is self.value.prog
+                and target.value.id == self.value.id and target.component == self.component)
+        return ir.Const(int(same))
+
     def eval(self, env):
         return env[(self.value.id, self.component)]
 
@@ -74,6 +85,14 @@ class ProgramScalar(ir.Expr):
 
     def __pops_ir_key__(self, recurse):
         return ("program_scalar", str(self.value.prog.owner_path), self.value.id)
+
+    def canonical_identity(self):
+        return self.__pops_ir_key__(None)
+
+    def __pops_ir_diff__(self, recurse, target, definitions):
+        same = (type(target) is ProgramScalar and target.value.prog is self.value.prog
+                and target.value.id == self.value.id)
+        return ir.Const(int(same))
 
     def to_cpp(self):
         raise TypeError("a Program Scalar requires an authenticated Program lowering")
@@ -193,7 +212,8 @@ class CoefficientExpression(ir.Expr):
 _BINARY = {ir.Add: "add", ir.Sub: "sub", ir.Mul: "mul", ir.Div: "div",
            ir.Pow: "pow", ir.Minimum: "minimum", ir.Maximum: "maximum",
            ir.BooleanAnd: "and", ir.BooleanOr: "or"}
-_UNARY = {ir.Neg: "neg", ir.Sqrt: "sqrt", ir.Exp: "exp", ir.Abs: "abs", ir.Sign: "sign",
+_UNARY = {ir.Neg: "neg", ir.Sqrt: "sqrt", ir.Exp: "exp",
+          ir.Sin: "sin", ir.Cos: "cos", ir.Log: "log", ir.Expm1: "expm1", ir.Abs: "abs", ir.Sign: "sign",
           ir.BooleanNot: "not", Rounded: "rounded"}
 
 

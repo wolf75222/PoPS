@@ -413,22 +413,24 @@ def test_structured_rejection_phase_precedes_legacy_message_parsing():
     assert _phase(error) == "guard"
 
 
-def _two_rank_rejection(monkeypatch, error, peer_change=None):
+def _two_rank_rejection(monkeypatch, error, peer_change=None, *, typed_agreement=True):
     from pops import _native_collectives
     from pops.runtime import _step_strategy
 
-    world = SimpleNamespace(rank=0, size=2)
+    world = SimpleNamespace(rank=0, size=2, collective_prepare=lambda callback: callback(),
+                            agree_control_bytes=lambda schema, payload: typed_agreement)
     monkeypatch.setattr(_step_strategy, "_attempt_world", lambda engine: world)
 
-    def gathered(selected, row):
-        assert selected is world and row["rank"] == 0
+    def gathered(frame):
+        row = _native_collectives.decode_value(frame)
+        assert row["rank"] == 0
         peer = deepcopy(row)
         peer["rank"] = 1
         if peer_change is not None:
             peer_change(peer)
-        return row, peer
+        return tuple(_native_collectives.encode_value(value) for value in (row, peer))
 
-    monkeypatch.setattr(_native_collectives, "allgather_value", gathered)
+    world.allgather_bytes = gathered
     engine = _Engine(FixedDt(.1))
     return engine, _step_strategy._collective_attempt_error(engine, error)
 
@@ -459,6 +461,32 @@ def test_two_rank_rejection_preserves_native_phase_and_detail_while_report_uses_
     assert report.status == "rejected" and report.phase == "stage"
     assert report.action == "reject_attempt" and report.attempts == 1
     assert report.diagnostics == (str(error),)
+
+
+@pytest.mark.parametrize("payload", [b"\x00\xff\x80" + ((1 << 60) + 17).to_bytes(8, "big"), b"field\x00shard1\xffshard2"])
+def test_two_rank_rejection_retains_exact_typed_payload(monkeypatch, payload):
+    original = _native_evaluation_rejection()
+    original.typed_failure_schema = '{"type":"closed"}'
+    original.typed_failure_payload = payload
+    _, error = _two_rank_rejection(monkeypatch, original)
+    assert isinstance(error, StepAttemptRejected)
+    assert error.typed_failure_schema == original.typed_failure_schema
+    assert error.typed_failure_payload == payload
+
+
+@pytest.mark.parametrize("schema,payload", [(None, b"x"), ("x", "text"), ("", b"x"), ("x", b"")])
+def test_two_rank_rejection_refuses_incomplete_typed_payload(monkeypatch, schema, payload):
+    original = _native_evaluation_rejection()
+    original.typed_failure_schema, original.typed_failure_payload = schema, payload
+    _, error = _two_rank_rejection(monkeypatch, original)
+    assert type(error) is RuntimeError and "invalid typed failure" in str(error)
+
+
+def test_two_rank_rejection_refuses_disagreeing_typed_payload(monkeypatch):
+    original = _native_evaluation_rejection()
+    original.typed_failure_schema, original.typed_failure_payload = "schema", b"first"
+    _, error = _two_rank_rejection(monkeypatch, original, typed_agreement=False)
+    assert type(error) is RuntimeError and "collective step attempt failed" in str(error)
 
 
 def test_two_rank_rejection_keeps_legacy_phase_fallback_only_when_absent(monkeypatch):
@@ -1235,7 +1263,7 @@ def test_composite_checkpoint_preflight_authenticates_uniform_and_amr_temporal_e
         _PreparedUniformRestart(
             payload=None, restart_identity=None, temporal_state=leaves[0], cadence_state=None,
             auxiliary_checkpoint=b"", exchange_checkpoint=b"",
-            program_diagnostic_checkpoint=b"", state_carriers=None,
+            program_diagnostic_checkpoint=b"", state_carriers=None, finite_continuation=None,
         ),
         _PreparedAMRSystemRestart(None, SimpleNamespace(temporal_state=leaves[1])),
     )

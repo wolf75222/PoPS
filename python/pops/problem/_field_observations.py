@@ -123,6 +123,18 @@ def scalar_co_location(left: Any, right: Any, where: str, *, same_space: bool = 
         raise TypeError(where + ": expected scalar fields")
     first, second = left.attrs.get("scalar_storage"), right.attrs.get("scalar_storage")
     if first is None and second is None:
+        if (left.space is not None or right.space is not None) and (
+                left.attrs.get("spatial_port_storage") is not None
+                or right.attrs.get("spatial_port_storage") is not None):
+            if (type(left.space) is not FieldSpace or type(right.space) is not FieldSpace
+                    or left.block is None or left.block != right.block
+                    or left.point != right.point or left.prog is not right.prog):
+                raise ValueError(where + ": computed fields have different owner/point/representation")
+            for attribute in ("layout", "centering", "sampling", "frame", "clock", "support"):
+                if getattr(left.space, attribute) != getattr(right.space, attribute):
+                    raise ValueError(where + ": computed field co-location differs on " + attribute)
+            if same_space and left.space != right.space:
+                raise ValueError(where + ": computed field physical spaces differ")
         return
     if type(first) is not FieldStorageBinding or type(second) is not FieldStorageBinding:
         raise ValueError(where + ": both scalar fields need explicit storage authority")

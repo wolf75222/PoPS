@@ -761,82 +761,84 @@ def _emit_local_residual_nodes(block, initial_components, residual_width, physic
     from pops.time.expressions import component_names
     comps = dict(initial_components)
     lines = []
+    from .program_source_map import operation
     for w in block:
-        if w.id in comps:
-            continue
-        if w.op == "linear_source":
-            continue  # immutable operator descriptor, consumed by typed apply
-        if w.op in ("state", "input_fields"):
-            raise ValueError("local residual contains an unbound argument")
-        n = len(component_names(w))
-        if w.op in ("source", "apply"):
-            impl, setup = physical_environment(w)
-            exprs = _residual_term_exprs(impl, w)
-            if len(exprs) != n:
-                raise ValueError("local residual operator output Space changed")
-            # Bind the actual argument of every call, including frozen captures and
-            # earlier derived values. Using Ueval unconditionally changes the equation.
-            source = comps[w.inputs[0].id]
-            target = "residual_value_%d" % w.id
-            lines.append("pops::Real %s[%d];" % (target, n))
-            lines.append("{")
-            lines.extend(setup)
-            # Use the same checked evaluation policy as Program expressions. A
-            # final finite residual alone cannot detect sqrt(-u) hidden by fmin.
-            # Bind leaves, too: otherwise a non-finite captured argument could
-            # disappear behind a finite min/max. The common emitter keeps where
-            # branches lazy and rounded barriers intact.
-            from .cpp_symbols import variable_bindings
-            bindings = variable_bindings(exprs)
-            bindings.update({('cons',name):value for name,value in zip(impl.cons_names, source, strict=True)})
-            temporaries, rendered, observed = _cse_emit(
-                exprs, "pops::Real", "  ", materialize_all=True, return_names=True,
-                scalar_bindings=bindings)
-            lines.extend(temporaries)
-            invalid = " || ".join("!Kokkos::isfinite(%s)" % name
-                                   for name in dict.fromkeys([*observed, *rendered])) or "false"
-            lines.append("  if (%s) {" % invalid)
-            for c in range(residual_width):
-                lines.append("    rout[%d] = std::numeric_limits<pops::Real>::quiet_NaN();" % c)
-            lines.extend(["    return;", "  }"])
-            for c, expression in enumerate(rendered):
-                lines.append("  %s[%d] = %s;" % (target, c, expression))
-            lines.append("}")
-            comps[w.id] = ["%s[%d]" % (target, c) for c in range(n)]
-        elif w.op == "pointwise_expression":
-            from pops.codegen.program_emit_expressions import checked_pointwise_rows
-            temporaries, rendered, invalid = checked_pointwise_rows(
-                w, [comps[item.id] for item in w.inputs])
-            target = "residual_expression_%d" % w.id
-            lines.extend(["pops::Real %s[%d];" % (target, n), "{"])
-            lines.extend("  " + line for line in temporaries)
-            lines.append("  if (%s) {" % invalid)
-            for c in range(residual_width):
-                lines.append("    rout[%d] = std::numeric_limits<pops::Real>::quiet_NaN();" % c)
-            lines.extend(["    return;", "  }"])
-            lines.extend("  %s[%d] = %s;" % (target, c, expression)
-                         for c, expression in enumerate(rendered))
-            lines.append("}")
-            comps[w.id] = ["%s[%d]" % (target, c) for c in range(n)]
-        elif w.op == "linear_combine":
-            # An affine sum over earlier terms: comps[w] = sum_k coeff_k(dt) * comps[input_k].
-            coeffs = w.attrs["coeffs"]  # aligned with w.inputs; each a dt-polynomial power->float dict
-            for inp in w.inputs:
-                if inp.id not in comps:  # an input outside the residual sub-block (validate() guards this)
-                    raise NotImplementedError(
-                        "emit_cpp_program: residual combine reads value '%s' which is not produced "
-                        "inside the residual (only the iterate / guess and earlier residual ops are "
-                        "available to a per-cell Newton kernel)" % inp.name)
-            row = []
-            for c in range(n):
-                parts = []
-                for inp, coeff in zip(w.inputs, coeffs, strict=True):
-                    parts.append("%s * (%s)" % (_coeff_cpp(coeff), comps[inp.id][c]))
-                row.append(" + ".join(parts) if parts else "static_cast<pops::Real>(0)")
-            comps[w.id] = row
-        else:  # builder guards _RESIDUAL_LOCAL_OPS; this is belt-and-suspenders
-            raise NotImplementedError(
-                "emit_cpp_program: residual op '%s' is not lowerable in a local Newton kernel" % w.op)
+        with operation(w, lines, environment=comps, channel="local_residual"):
+            if w.id in comps:
+                continue
+            if w.op == "linear_source":
+                continue  # immutable operator descriptor, consumed by typed apply
+            if w.op in ("state", "input_fields"):
+                raise ValueError("local residual contains an unbound argument")
+            n = len(component_names(w))
+            if w.op in ("source", "apply"):
+                impl, setup = physical_environment(w)
+                exprs = _residual_term_exprs(impl, w)
+                if len(exprs) != n:
+                    raise ValueError("local residual operator output Space changed")
+                # Bind the actual argument of every call, including frozen captures and
+                # earlier derived values. Using Ueval unconditionally changes the equation.
+                source = comps[w.inputs[0].id]
+                target = "residual_value_%d" % w.id
+                lines.append("pops::Real %s[%d];" % (target, n))
+                lines.append("{")
+                lines.extend(setup)
+                # Use the same checked evaluation policy as Program expressions. A
+                # final finite residual alone cannot detect sqrt(-u) hidden by fmin.
+                # Bind leaves, too: otherwise a non-finite captured argument could
+                # disappear behind a finite min/max. The common emitter keeps where
+                # branches lazy and rounded barriers intact.
+                from .cpp_symbols import variable_bindings
+                bindings = variable_bindings(exprs)
+                bindings.update({('cons',name):value for name,value in zip(impl.cons_names, source, strict=True)})
+                temporaries, rendered, observed = _cse_emit(
+                    exprs, "pops::Real", "  ", materialize_all=True, return_names=True,
+                    scalar_bindings=bindings)
+                lines.extend(temporaries)
+                invalid = " || ".join("!Kokkos::isfinite(%s)" % name
+                                       for name in dict.fromkeys([*observed, *rendered])) or "false"
+                lines.append("  if (%s) {" % invalid)
+                for c in range(residual_width):
+                    lines.append("    rout[%d] = std::numeric_limits<pops::Real>::quiet_NaN();" % c)
+                lines.extend(["    return;", "  }"])
+                for c, expression in enumerate(rendered):
+                    lines.append("  %s[%d] = %s;" % (target, c, expression))
+                lines.append("}")
+                comps[w.id] = ["%s[%d]" % (target, c) for c in range(n)]
+            elif w.op == "pointwise_expression":
+                from pops.codegen.program_emit_expressions import checked_pointwise_rows
+                temporaries, rendered, invalid = checked_pointwise_rows(
+                    w, [comps[item.id] for item in w.inputs])
+                target = "residual_expression_%d" % w.id
+                lines.extend(["pops::Real %s[%d];" % (target, n), "{"])
+                lines.extend("  " + line for line in temporaries)
+                lines.append("  if (%s) {" % invalid)
+                for c in range(residual_width):
+                    lines.append("    rout[%d] = std::numeric_limits<pops::Real>::quiet_NaN();" % c)
+                lines.extend(["    return;", "  }"])
+                lines.extend("  %s[%d] = %s;" % (target, c, expression)
+                             for c, expression in enumerate(rendered))
+                lines.append("}")
+                comps[w.id] = ["%s[%d]" % (target, c) for c in range(n)]
+            elif w.op == "linear_combine":
+                # An affine sum over earlier terms: comps[w] = sum_k coeff_k(dt) * comps[input_k].
+                coeffs = w.attrs["coeffs"]  # aligned with w.inputs; each a dt-polynomial power->float dict
+                for inp in w.inputs:
+                    if inp.id not in comps:  # an input outside the residual sub-block (validate() guards this)
+                        raise NotImplementedError(
+                            "emit_cpp_program: residual combine reads value '%s' which is not produced "
+                            "inside the residual (only the iterate / guess and earlier residual ops are "
+                            "available to a per-cell Newton kernel)" % inp.name)
+                row = []
+                for c in range(n):
+                    parts = []
+                    for inp, coeff in zip(w.inputs, coeffs, strict=True):
+                        parts.append("%s * (%s)" % (_coeff_cpp(coeff), comps[inp.id][c]))
+                    row.append(" + ".join(parts) if parts else "static_cast<pops::Real>(0)")
+                comps[w.id] = row
+            else:  # builder guards _RESIDUAL_LOCAL_OPS; this is belt-and-suspenders
+                raise NotImplementedError(
+                    "emit_cpp_program: residual op '%s' is not lowerable in a local Newton kernel" % w.op)
     return lines, comps
 
 

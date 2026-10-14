@@ -179,9 +179,8 @@ class ResolvedProgramFieldPlan:
                 if {_canonical(canonical_handle(value.state_ref).canonical_identity()) for value in captures} != expected_dependencies:
                     raise ValueError("native residual captures differ from the physical dependencies")
                 continue
-            reachable = _reachable(solve, all_nodes)
-            operations = tuple(node for node in reachable if node.op in (
-                "field_problem_load", "field_problem_coefficients", "field_problem_apply"))
+            from pops.fields._observation_contract import direct_native_field_operations
+            operations = direct_native_field_operations(solve)
             if not {"field_problem_load", "field_problem_apply"}.issubset(
                     {node.op for node in operations}):
                 raise ValueError("Program field metadata has no executable load and apply graph")

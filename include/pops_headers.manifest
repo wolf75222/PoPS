@@ -150,6 +150,7 @@ api pops/numerics/fv/flux_failure.hpp
 api pops/numerics/fv/numerical_flux.hpp
 api pops/numerics/fv/reconstruction.hpp
 api pops/numerics/fv/spatial_discretisation.hpp
+api pops/numerics/fv/stencil_flux.hpp
 api pops/numerics/linalg/block_inverse.hpp
 api pops/numerics/linalg/finite_linear.hpp
 api pops/numerics/linalg/dense_eig.hpp
@@ -343,6 +344,11 @@ sdk-support pops/runtime/program/prepared_hierarchy_barrier.hpp
 sdk-support pops/runtime/program/amr_program_context_mapping_continuation.inc
 sdk-support pops/runtime/program/amr_program_context_subcycling_runtime.inc
 sdk-support pops/runtime/program/cache_manager.hpp
+sdk-support pops/runtime/program/continuation_image.hpp
+sdk-support pops/runtime/program/continuation_codec_extended.inc
+sdk-support pops/runtime/program/continuation_closure.hpp
+sdk-support pops/runtime/program/continuation_authority.hpp
+sdk-support pops/runtime/program/program_context_continuation.inc
 sdk-support pops/runtime/program/history_sample_identity_codec.hpp
 sdk-support pops/runtime/program/cell_temporal_partition.hpp
 sdk-support pops/runtime/program/cell_temporal_partition_executor.hpp
@@ -379,6 +385,10 @@ sdk-support pops/runtime/program/source_mask.hpp
 sdk-root pops/runtime/program/accepted_exchange.hpp
 sdk-root pops/runtime/program/prepared_spatial_residual.hpp
 sdk-support pops/runtime/program/collective_step_rejection.hpp
+sdk-support pops/runtime/program/typed_failure.hpp
+sdk-support pops/runtime/program/distributed_array.hpp
+sdk-support pops/runtime/program/distributed_domain.hpp
+sdk-support pops/runtime/program/distributed_gc.hpp
 sdk-root pops/runtime/program/step_transaction.hpp
 abi pops/runtime/program/wire_ids.hpp
 api pops/runtime/runtime_environment.hpp

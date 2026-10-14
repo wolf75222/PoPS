@@ -16,7 +16,11 @@ from pops.model.ownership import OwnerKind, OwnerPath
 from pops.time._program.contract import register_program_type
 from pops.time._cadence import ProgramCadence
 from pops.time._program.authoring import _ProgramAuthoring
+from pops.time._program.structured_control import _ProgramStructuredControl
+from pops.time._program.finite_arrays import _ProgramFiniteArrays
+from pops.time._program.versioned_values import _ProgramVersionedValues
 from pops.time._program.expressions import _ProgramExpressions
+from pops.time._program.stencil_flux import _ProgramStencilFlux
 from pops.time._program.affine_moments import _ProgramAffineMoments
 from pops.time._program.condensed import _ProgramCondensed
 from pops.time._program.operations import _ProgramCore
@@ -45,6 +49,10 @@ from pops.time.values import _Coeff, ProgramValue  # noqa: F401  (ProgramValue u
 
 @register_program_type
 class Program(
+    _ProgramFiniteArrays,
+    _ProgramVersionedValues,
+    _ProgramStencilFlux,
+    _ProgramStructuredControl,
     _ProgramExpressions,
     _ProgramAffineMoments,
     _ProgramTimeHandles,
@@ -108,6 +116,7 @@ class Program(
         self._values = []
         self._issued_values = {}  # id -> strong identity, including stale immutable replacement records
         self._next_id = 0
+        self._next_finite_domain_identity = 0
         self._commits = {}  # qualified state Handle -> State value
         self._geometry_states = {}  # qualified physical State -> coupled geometry SSA
         self._recording = []  # stack of sub-block lists (a control-flow body); see _new / while_

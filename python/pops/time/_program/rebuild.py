@@ -87,6 +87,11 @@ def rebuild_program(
         object.__setattr__(out, "clock", Clock("macro", owner=out.owner_path))
     out.dt = self.dt
     out._next_stage_identity = self._next_stage_identity
+    out._next_finite_domain_identity = self._next_finite_domain_identity
+    out._finite_families = dict(getattr(self, "_finite_families", {}))
+    if hasattr(self, "_distributed_storage_policy"):
+        out._distributed_storage_policy = self._distributed_storage_policy
+        out._distributed_storage_explicit = getattr(self, "_distributed_storage_explicit", False)
     out._step_strategy = getattr(self, "_step_strategy", None)
     out._cadence = getattr(self, "_cadence", None)
     out._cell_local_time = getattr(self, "_cell_local_time", None)
@@ -247,6 +252,8 @@ def rebuild_program(
 
     def remap_metadata(value: Any) -> Any:
         """Recursively reown ProgramValue and semantic Handle leaves in IR metadata."""
+        if type(value) in (TimePoint, StagePoint):
+            return remap_point(value)
         if isinstance(value, (ProgramValue, _Affine)):
             return remap(value)
         from pops.model.handles import Handle

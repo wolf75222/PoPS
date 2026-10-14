@@ -656,18 +656,23 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
                 ("when_false", false_result, false_region)):
             if not isinstance(result, ProgramValue):
                 raise TypeError("branch: %s must return a ProgramValue" % label)
-            if result.region not in (0, region, parent_region):
+            if (result.region not in (0, region, parent_region) and
+                    result.region not in self._region_imports.get(region, ())):
                 raise ValueError(
                     "branch: %s result escapes an unrelated authoring region" % label)
             validate_input_regions(self, (result,), region, "branch %s" % label)
         self._require_branch_compatible(true_result, false_result)
         if condition.clock != true_result.clock:
             raise ValueError("branch: condition and result arms must share one clock")
+        structured = ({"signature": true_result.attrs["signature"]}
+                      if true_result.vtype in ("product", "variant", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted") else
+                      {"success_signature": true_result.attrs["success_signature"]}
+                      if true_result.vtype == "result" else {})
         return self._new(
             true_result.vtype, "branch", (condition,),
             {"true_block": true_block, "true_region": true_region,
              "true_result": true_result, "false_block": false_block,
-             "false_region": false_region, "false_result": false_result},
+             "false_region": false_region, "false_result": false_result, **structured},
             name, true_result.block, space=true_result.space, point=true_result.point,
             field_context=true_result.field_context, state_ref=true_result.state_ref,
             inherit_state_ref=False)
@@ -676,6 +681,10 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
     def _require_branch_compatible(left: Any, right: Any) -> None:
         if left.vtype != right.vtype:
             raise ValueError("branch: both arms must return the same value type")
+        if left.vtype in ("product", "variant", "result", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted"):
+            from .structured_control import value_signature, same_signature
+            if not same_signature(value_signature(left), value_signature(right)):
+                raise ValueError("branch: product arms must have identical structural types")
         if left.block != right.block:
             raise ValueError("branch: both arms must return values from the same owned block")
         if left.clock != right.clock or left.point != right.point:
@@ -783,6 +792,9 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
 
     def _record_branch_arm(self, fn: Any) -> Any:
         sub = []
+        region = self._region_for_block(sub)
+        for parent in self._recording:
+            self._allow_region_capture(self._region_for_block(parent), region)
         self._recording.append(sub)
         try:
             result = fn(self)

@@ -377,6 +377,18 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
              field_plans: Any = None,
              has_shared_interface_implicit_jacvec: bool = False, *,
              implicit_spatial_residual: bool = False) -> None:
+    from .program_source_map import operation
+    with operation(v, lines, prelude, environment=var):
+        _emit_op_impl(program, v, base, committed_ids, var, model, lines, prelude,
+            block_idx, target, field_plans, has_shared_interface_implicit_jacvec,
+            implicit_spatial_residual=implicit_spatial_residual)
+
+
+def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
+             prelude: Any = None, block_idx: Any = None, target: Any = "system",
+             field_plans: Any = None,
+             has_shared_interface_implicit_jacvec: bool = False, *,
+             implicit_spatial_residual: bool = False) -> None:
     """Lower a SINGLE op to C++, appending to @p lines and recording its C++ token in @p var. Shared
     by the top-level walk and the while sub-blocks (a while body re-runs this per op each pass), so
     reductions / compares / linear_combine all lower identically inside the loop. @p base is the
@@ -386,6 +398,31 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     the matrix-free Krylov ops; None inside a sub-block (those ops only appear at the top level for
     now). @p block_idx maps exact ``BlockHandle`` identities to runtime indices (ADC-426). Missing
     routing is always an error; even a one-block Program reaches index 0 through an explicit map."""
+    if v.op == "provenance_bind":
+        from pops.ledger_provenance import validate_contract_operation
+        from pops.time._program.structured_control import value_signature
+        validate_contract_operation(v.inputs, v.attrs, value_signature(v))
+        # The contract is checked at authoring/reload/emission. The native value
+        # is the exact existing binding, including any structured ownership.
+        var[v.id] = var[v.inputs[0].id]
+        return
+    from .program_emit_distributed_arrays import OPS as DISTRIBUTED_OPS, emit_distributed_op
+    if v.op in DISTRIBUTED_OPS or (v.op == "finite_same_domain" and
+            v.inputs[0].attrs["signature"]["ownership"] != "replicated"):
+        emit_distributed_op(program, v, var, model, lines, prelude, block_idx, field_plans, target)
+        return
+    from .program_emit_structured_control import STRUCTURED_OPS, emit_structured_op
+    if v.op in STRUCTURED_OPS:
+        emit_structured_op(program, v, var, model, lines, prelude, block_idx, field_plans, target)
+        return
+    from .program_emit_versioned import VERSIONED_OPS, emit_versioned_op
+    if v.op in VERSIONED_OPS:
+        emit_versioned_op(program, v, var, model, lines, prelude, block_idx, field_plans, target)
+        return
+    from .program_emit_finite_arrays import FINITE_OPS, emit_finite_op
+    if v.op in FINITE_OPS:
+        emit_finite_op(program, v, var, model, lines, prelude, block_idx, field_plans, target)
+        return
     bidx = (_required_block_index(block_idx, v.block, "emit op %r" % v.name)
             if v.block is not None else None)
     if v.id in var.get(("moving_deferred_rates",), ()):
@@ -749,7 +786,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # slot, the declared step-0 value -- while the default multistep read keeps the fail-loud
         # ctx.history byte-identical (a store-first scheme reading before its store is a config error).
         var[v.id] = "h%d" % v.id
-        if "ncomp" in v.attrs:
+        from .program_emit_intervals import emit_authenticated_history_read
+        if emit_authenticated_history_read(program, v, var, lines, target=target):
+            output_setup_end = len(lines)
+        elif "ncomp" in v.attrs:
             if target == "amr_system" and bidx is not None:
                 lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.history_zero_start(%s, %d, %d, %d);"
                              % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"]),
@@ -938,6 +978,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                      % (var[v.id], int(v.id), var[a_in.id]))
         output_setup_end = len(lines)
         lines += _emit_where_kernel(var[mask_in.id], var[a_in.id], var[b_in.id], var[v.id])
+    elif v.op in {"interval_begin", "interval_end", "interval_check", "history_interval_begin",
+                  "history_interval_duration", "history_interval_check"}:
+        from .program_emit_intervals import emit_interval
+        emit_interval(program, v, var, lines, target=target, block_idx=block_idx)
     elif v.op == "requested_dt":
         var[v.id] = "requested_dt_%d" % v.id
         lines.append("const pops::Real %s = static_cast<pops::Real>(dt);" % var[v.id])
@@ -972,6 +1016,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 )
             )
         var[v.id] = var[scalar_in.id]
+    elif v.op == "stencil_flux_divergence":
+        from .program_emit_stencil_flux import emit_stencil_flux
+        from .program_value_authority import delegated_output_boundaries
+        publication = emit_stencil_flux(v, var, lines, block=bidx, target=target)
+        output_setup_end, delegated_before_write = delegated_output_boundaries(
+            v, var, lines, _profile_start, bidx, publication)
     elif v.op == "diffusive_rhs":
         if bidx is None:
             raise ValueError("diffusive delegate requires an explicit resolved block owner")
@@ -1324,6 +1374,16 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         sp = "sf%d" % v.id
         var[v.id] = "(*%s)" % sp
         ncomp = int(v.attrs.get("ncomp", 1))
+        if "spatial_port_storage" in v.attrs:
+            from pops.time._program.spatial_interaction import validate_spatial_scratch
+            validate_spatial_scratch(v)
+            if target != "system":
+                raise NotImplementedError("computed cell scratch currently requires a Uniform layout; composite ghosts need their own port")
+            owner = _cartesian_generated_owner_index(block_idx, v, where="computed cell scratch")
+            prelude.append("auto %s = ctx.alloc_shared_scalar_field_for_block(%d, %d, 1);"
+                           % (sp, owner, ncomp))
+            var[("field_pointer", v.id)] = sp
+            return
         if v.attrs.get("scalar_storage") is not None:
             if target == "amr_system":
                 rebound = v.id in var.get(("hierarchy_retained_bindings",), ())
@@ -1381,6 +1441,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # Step-body bare Laplacian (e.g. Lap phi^n for the condensed RHS). Inside an apply sub-block
         # this op is handled by _emit_matrix_free_operator; here it is the top-level path.
         o, i = v.inputs
+        if var.get(("structured_control",)):
+            from pops.codegen.program_emit_structured_control import emit_region_laplacian
+            owner = _cartesian_generated_owner_index(block_idx, v, where="region computed Laplacian")
+            emit_region_laplacian(v, var, lines, owner=owner, target=target)
+            return
         if target == "system":
             owner = _cartesian_generated_owner_index(
                 block_idx, v, where="preflight laplacian %r" % v.name)
@@ -1575,6 +1640,30 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         if due is not None:
             expression = "(%s) ? (%s) : pops::Real(0)" % (due, expression)
         lines.append("const pops::Real %s = %s;" % (var[v.id], expression))
+        from pops.codegen.program_emit_structured_control import _reject_if
+        _reject_if("!std::isfinite(%s)" % var[v.id], lines,
+                   "nonfinite scalar arithmetic or invalid division")
+    elif v.op == "scalar_isfinite":
+        from pops.codegen.program_emit_expressions import prepared_scalar_input
+        var[v.id] = "std::isfinite(%s)" % prepared_scalar_input(v.inputs[0], var)
+    elif v.op == "scalar_expression":
+        from pops.codegen.program_emit_expressions import checked_expression_dag, prepared_scalar_input
+        from pops.codegen.program_emit_structured_control import _reject_if
+        if v.vtype != "scalar" or any(item.vtype != "scalar" for item in v.inputs):
+            raise TypeError("scalar expression has lost its finite scalar authority")
+        body, outputs, invalid = checked_expression_dag(
+            v.attrs["expressions"], v.attrs["expression_nodes"],
+            tuple((prepared_scalar_input(item, var),) for item in v.inputs))
+        if len(outputs) != 1:
+            raise ValueError("a scalar expression must yield exactly one value")
+        evaluation = "scalar_evaluation_%d" % v.id
+        lines.append("const auto %s = [&]() {" % evaluation)
+        lines.extend("  " + line for line in body)
+        lines.append("  return std::pair<pops::Real, bool>{%s, (%s)};" % (outputs[0], invalid))
+        lines.append("}();")
+        _reject_if(evaluation + ".second", lines, "scalar expression domain or nonfinite result")
+        var[v.id] = "s%d" % v.id
+        lines.append("const pops::Real %s = %s.first;" % (var[v.id], evaluation))
     elif v.op == "compare":
         # A predicate over scalars -> an inline boolean C++ expression (no statement of its own; the
         # while op embeds it directly in `if (!(<expr>)) break;`).
@@ -1665,6 +1754,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                      "\"non-finite scientific expression input or intermediate\");")
         lines.append("}")
     elif v.op == "linear_combine":
+        if "cell_field_projection" in v.attrs:
+            from pops.time._program.spatial_interaction import validate_cell_field
+            validate_cell_field(v)
+            if target != "system":
+                raise NotImplementedError("computed cell sampling currently requires a Uniform layout")
         from pops.codegen.program_partition_stability import (
             emit_partition_stability, has_independent_diffusion_transport,
         )

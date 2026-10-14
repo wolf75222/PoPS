@@ -25,6 +25,7 @@
       "test_amr_synthetic_program_loader_transaction",
       "test_amr_transition_invariants",
       "test_box",
+      "test_bundle_v14",
       "test_cartesian_poisson_nd",
       "test_cell_temporal_partition_executor",
       "test_cell_temporal_program_route",
@@ -33,6 +34,9 @@
       "test_composite_fac_fft_coarse",
       "test_composite_fac_variable_k",
       "test_composite_general_field",
+      "test_continuation_image",
+      "test_distributed_algebra_v14",
+      "test_distributed_gc_v14",
       "test_elliptic_named_device_kernels",
       "test_external_field_backend_preparation",
       "test_float32_poisson_residual",
@@ -70,6 +74,7 @@
       "test_prepared_spatial_residual",
       "test_prepared_stream_executor",
       "test_spatial_provider_matrix",
+      "test_state_carriers_zero_block_v14",
       "test_system_interface_core_session",
       "test_temporal_partition_restart",
       "test_tensor_coarse_gmres",
@@ -85,7 +90,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 205,
+    "target_count": 209,
     "v12_estimate_source": "No per-target cold-build receipt exists. History snapshot and AMR transition use the 300 s heavy-template tier; collective rejection uses the 2 s parallel-share floor. Replace from the next complete cold-CI build timing artifact.",
     "unit_seconds": "modeled shard wall time: measured serial-pool TU or parallel-share floor",
     "v18_estimate_source": "Unmeasured scheduling estimates: AMR publication and general composite solver use the existing 300 s heavy-template tier; small runtime contracts use the 2 s parallel-share floor. Replace from the next complete CI timing artifact; no local timing measurements are claimed.",
@@ -115,7 +120,10 @@
       "target": "test_amr_interaction_history_snapshot",
       "estimated_seconds": 309.79,
       "basis": "Unmeasured cold-CI scheduling estimate added 2026-10-13: 309.79 s copied from test_amr_hierarchy_barrier_continuation. The fixture instantiates the compiled AMR model and full AmrProgramContext for real two-level partial hierarchy history capture, collective refusal and rollback. No provider DSO build is added. The existing local incremental build log includes runtime dependencies and does not establish a target-only or cold-CI duration. Replace from the next complete cold-CI per-target timing artifact."
-    }
+    },
+    "api_v02_v10_estimate_source": "Unmeasured scheduling seed for test_continuation_image: build 60 s exceeds twice the 23.99 s checkpoint_history estimate; runtime 5 s uses the interaction_history_snapshot tier. No provider DSO is compiled. These are not measured CI or native receipts. MPI-only test_distributed_array is declared in the manifest and excluded from these non-MPI duration catalogs by the existing planner. Existing target weights and watchdogs are unchanged; replace the new estimate from complete target timing artifacts.",
+    "api_v14_estimate_source": "Unmeasured standalone structural codec/domain runtime contract allowance; 120 s cold build and 10 s runtime per new target. No local or CI timing is claimed; replace from complete receipts.",
+    "api_v14_zero_block_estimate_source": "Unmeasured scheduling estimate: native codec-only target with three serial GTests; declared ranks 1/2/3 are archive data, not MPI execution. Same conservative seed as other v14 structural codec tests; replace only from an authenticated cold-CI measurement."
   },
   "test_amr_compiled_model": 2.0,
   "test_amr_composite_poisson": 2.0,
@@ -321,5 +329,10 @@
   "test_prepared_polar_poisson_inverse": 2.0,
   "test_tensor_coarse_gmres": 2.0,
   "test_tensor_fac_conservative_interface": 2.0,
-  "test_tensor_fac_partial_hierarchy": 2.0
+  "test_tensor_fac_partial_hierarchy": 2.0,
+  "test_continuation_image": 60.0,
+  "test_bundle_v14": 120.0,
+  "test_distributed_algebra_v14": 120.0,
+  "test_distributed_gc_v14": 120.0,
+  "test_state_carriers_zero_block_v14": 120.0
 }

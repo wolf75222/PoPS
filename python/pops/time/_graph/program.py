@@ -7,14 +7,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from pops.time._graph.base import ValueRef, nonempty
-from pops.time._graph.control import Branch, Loop
+from pops.time._graph.control import Branch, Capture, Loop
 from pops.time._graph.nodes import NODE_TYPES
 from pops.time._graph.validation import validate_nodes
 from pops.time.points import Clock
 from pops.time._cadence import ProgramCadence
 
 
-GRAPH_NODE_TYPES = (*NODE_TYPES, Branch, Loop)
+GRAPH_NODE_TYPES = (*NODE_TYPES, Branch, Capture, Loop)
 
 
 @dataclass(frozen=True, slots=True, init=False)

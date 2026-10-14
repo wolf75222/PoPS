@@ -627,7 +627,7 @@ def _emit_auxiliary_route_registration(
         free-name ``Var`` and state/parameter reads are rejected rather than
         becoming a hidden carrier lookup.
         """
-        from pops._ir.expr import Abs, Const, Div, Exp, Maximum, Minimum, Mul, Neg, Pow, Sqrt, Sub, Add
+        from pops._ir.expr import Abs, Const, Div, Exp, UnaryMath, Maximum, Minimum, Mul, Neg, Pow, Sqrt, Sub, Add
         from pops._ir.handle_expr import ValueExpr
 
         if isinstance(expression, Const):
@@ -666,6 +666,8 @@ def _emit_auxiliary_route_registration(
             return "(-%s)" % derived_expression_cpp(expression.a, bindings)
         if isinstance(expression, Sqrt):
             return "Kokkos::sqrt(%s)" % derived_expression_cpp(expression.a, bindings)
+        if isinstance(expression, UnaryMath):
+            return "Kokkos::%s(%s)" % (expression.operation, derived_expression_cpp(expression.a, bindings))
         if isinstance(expression, Exp):
             return "Kokkos::exp(%s)" % derived_expression_cpp(expression.a, bindings)
         if isinstance(expression, Abs):

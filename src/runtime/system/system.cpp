@@ -107,6 +107,7 @@ void System<Dim>::step(double dt) {
   p_->program_.profiler_.count("steps");
   p_->execute_step_transaction(communicator, [&] {
     p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, dt, "System", communicator);
+    require_continuation_projection();
     if (solve_outcome_authority_->pending.load(std::memory_order_acquire) != 0)
       throw std::logic_error("System Program step left a native solve result unconsumed");
     if (p_->has_pending_field_warm_start())
@@ -280,8 +281,8 @@ std::vector<std::vector<std::uint8_t>> System<Dim>::capture_state_storage_(bool 
     image.real_bits = sizeof(Real) * 8;
     image.ranks = lane.size(); image.shard = lane.rank(); image.levels = 1;
     image.blocks = p_->blocks_.names();
-    if (image.blocks.empty())
-      throw std::logic_error("accepted state storage observation has no installed blocks");
+    if (image.blocks.empty() && !p_->program_.continuation_.configured())
+      throw std::logic_error("accepted state storage observation requires blocks or a complete Continuation");
     if (!std::isfinite(p_->t) || p_->macro_step_ < 0)
       throw std::logic_error("accepted state storage observation has an invalid clock");
     ExactContractBuilder contract;
@@ -391,6 +392,9 @@ std::uint64_t System<Dim>::checkpoint_state_carriers_capacity() const {
   std::exception_ptr error;
   try {
     std::vector<StateCarrierStorageCapacity<Dim>> blocks;
+    if (p_->blocks_.names().empty() && !p_->program_.continuation_.configured())
+      throw std::logic_error(
+          "state carrier capacity requires blocks or a complete Continuation");
     std::uint64_t cells = 0;
     for (const auto& name : p_->blocks_.names()) {
       const auto& field = p_->find(name).U;
@@ -679,6 +683,7 @@ void System<Dim>::begin_restart_transaction() {
 
 template <int Dim>
 void System<Dim>::commit_restart_transaction() {
+  require_continuation_projection();
   runtime::program::require_step_transaction_control(
       prepared_boundary_execution_lane(), 6, static_cast<long>(step_transaction_depth()),
       p_->external_restart_transaction_, "System::commit_restart_transaction");
@@ -691,6 +696,7 @@ void System<Dim>::finalize_restart_transaction() noexcept {
   // finalizer runs after external effects publish, so it must remain total and non-throwing.
   if (!p_->external_restart_transaction_ || !p_->external_step_transaction_committed_)
     return;
+  p_->program_.finalize_restart_resources();
   p_->external_step_transaction_.reset();
   p_->external_step_transaction_committed_ = false;
   p_->external_restart_transaction_ = false;
@@ -1164,6 +1170,8 @@ EffectiveOptionsReport System<Dim>::effective_options_report() const {
   }
   return report;
 }
+
+#include "system_continuation.inc"
 
 template std::string System<kNativeDimension>::abi_key();
 template System<kNativeDimension>::System(const SystemConfig<kNativeDimension>&);

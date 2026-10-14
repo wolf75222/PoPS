@@ -494,6 +494,9 @@ const MultiFab<Dim>* System<Dim>::validate_program_state_publication_candidate_(
 
 template <int Dim>
 void System<Dim>::set_density(const std::string& name, const std::vector<double>& density_values) {
+  if (p_->program_.continuation_.initialized() && !p_->external_restart_transaction_)
+    throw std::logic_error("state is an authoritative Continuation projection; publish a Candidate instead");
+
   typename Impl::Species& block = p_->find(name);
   const std::size_t cells = checked_cell_count(p_->dom);
   if (density_values.size() != cells)
@@ -514,6 +517,9 @@ void System<Dim>::set_density(const std::string& name, const std::vector<double>
 template <int Dim>
 void System<Dim>::set_primitive_state(const std::string& name,
                                       const std::vector<double>& primitive) {
+  if (p_->program_.continuation_.initialized() && !p_->external_restart_transaction_)
+    throw std::logic_error("state is an authoritative Continuation projection; publish a Candidate instead");
+
   typename Impl::Species& block = p_->find(name);
   const std::size_t cells = checked_cell_count(p_->dom);
   if (primitive.size() != static_cast<std::size_t>(block.ncomp) * cells)
@@ -1506,6 +1512,9 @@ std::vector<double> System<Dim>::get_state(const std::string& name) {
 
 template <int Dim>
 void System<Dim>::set_state(const std::string& name, const std::vector<double>& state) {
+  if (p_->program_.continuation_.initialized() && !p_->external_restart_transaction_)
+    throw std::logic_error("state is an authoritative Continuation projection; publish a Candidate instead");
+
   typename Impl::Species& block = p_->find(name);
   write_global(block.U, p_->dom, state, block.ncomp);
 }

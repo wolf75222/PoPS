@@ -241,7 +241,7 @@ class CompiledPlanRecord:
             raise ValueError("CompiledPlanRecord component contracts contain a duplicate")
         object.__setattr__(self, "component_contracts", contracts)
         blocks = tuple(self.blocks)
-        if not blocks or any(type(block) is not CompiledPlanBlock for block in blocks):
+        if any(type(block) is not CompiledPlanBlock for block in blocks):
             raise TypeError("CompiledPlanRecord blocks must be exact CompiledPlanBlock values")
         object.__setattr__(self, "blocks", blocks)
         from pops.initial import InitialConditionPlan
@@ -495,7 +495,7 @@ class CompiledLayoutProgram:
         if self.target not in ("system", "amr_system"):
             raise ValueError("CompiledLayoutProgram target is unsupported")
         names = tuple(self.block_names)
-        if not names or any(not isinstance(name, str) or not name for name in names):
+        if any(not isinstance(name, str) or not name for name in names):
             raise TypeError("CompiledLayoutProgram.block_names must contain non-empty names")
         if len(names) != len(set(names)):
             raise ValueError("CompiledLayoutProgram.block_names contains a duplicate")
@@ -576,7 +576,7 @@ class CompiledSimulationArtifact:
                 "ResolvedSimulationPlan")
         self.plan.verify()
         blocks = tuple(self.blocks)
-        if not blocks or any(type(block) is not CompiledBlockArtifact for block in blocks):
+        if any(type(block) is not CompiledBlockArtifact for block in blocks):
             raise TypeError(
                 "CompiledSimulationArtifact.blocks must contain exact CompiledBlockArtifact values")
         expected = tuple(block.name for block in self.plan.blocks)
@@ -919,6 +919,14 @@ class CompiledSimulationArtifact:
                 or self._component_evidence != _deep_freeze(current)
                 or self.platform_manifest != current_platform):
             raise ValueError("CompiledSimulationArtifact identity verification failed")
+
+    @property
+    def source_maps(self) -> dict[str, Any]:
+        """Owner-qualified exact Program maps; no model-carrier substitution."""
+        if self.layout_programs:
+            return {"layout:" + row.layout_id: row.program.source_maps["program"]
+                    for row in self.layout_programs if "program" in row.program.source_maps}
+        return {} if self.program is None else self.program.source_maps
 
     def inspect(self) -> Any:
         from pops.codegen.inspect_report import build_compiled_report

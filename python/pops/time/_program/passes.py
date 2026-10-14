@@ -315,9 +315,19 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
         """Structural validation of the IR. Raises ValueError on a malformed program."""
         from pops.time._program.region_validation import validate_program_regions
         validate_program_regions(self)
+        from pops.realization import validate_realized_outputs
+        validate_realized_outputs(self)
+        from pops.intervals import validate_intervals
+        validate_intervals(self)
+        from pops.time._program.versioned_values import validate_continuations
+        validate_continuations(self)
+        from pops.scientific_graph import validate_scientific_program
+        validate_scientific_program(self)
+        from pops.time._program.finite_arrays import validate_finite_arrays
+        validate_finite_arrays(self)
         if not self._commits:
-            raise ValueError("a time Program must commit each advanced block exactly once "
-                             "(no block was committed)")
+            from pops.time.finite_state import require_finite_state_program
+            require_finite_state_program(self)
         from pops.time._step.strategy import ComputedDt
         computed = [v for v in self._values if v.op == "reached_duration"]
         if type(self._step_strategy) is ComputedDt:

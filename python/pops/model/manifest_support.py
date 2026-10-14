@@ -35,6 +35,8 @@ def state_space_row(space: Any) -> Any:
         "layout": getattr(space, "layout", "cell"),
         "storage": getattr(space, "storage", "multifab"),
         "representation": space.representation,
+        **({"representation_data": space.to_data()["representation_data"]}
+           if space.representation_data is not None else {}),
         "centering": space.centering,
         "units": space.to_data()["units"],
         "frame": space.frame,
@@ -51,6 +53,8 @@ def field_space_row(space: Any) -> Any:
         "components": list(space.components),
         "layout": getattr(space, "layout", "cell"),
         "representation": space.representation,
+        **({"representation_data": space.to_data()["representation_data"]}
+           if space.representation_data is not None else {}),
         "centering": space.centering,
         "units": space.to_data()["units"],
         "frame": space.frame,

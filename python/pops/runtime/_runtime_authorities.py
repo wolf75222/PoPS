@@ -634,15 +634,16 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
     # native constructor/prepare rejects any item.  Retrying therefore never
     # encounters a half-installed duplicate plan.
     discard = getattr(native, "_discard_boundary_plans", None)
+    needs_lane = bool(state_routes or getattr(artifact, "layout_programs", ()))
     if state_routes and not callable(install_state_route):
         raise NotImplementedError(
             "the selected native provider cannot bind qualified block state storage"
         )
-    if state_routes and not callable(discard):
+    if needs_lane and not callable(discard):
         raise NotImplementedError(
             "the selected native provider cannot roll back boundary authority installation"
         )
-    if state_routes and not callable(prepare_execution_lane):
+    if needs_lane and not callable(prepare_execution_lane):
         raise NotImplementedError(
             "the selected native provider cannot prepare the RuntimeInstance boundary lane"
         )
@@ -667,7 +668,7 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                     cast(Callable[..., Any], preflight)(
                         component, row, parameters_json, target_json, context
                     )
-        if state_routes:
+        if needs_lane:
             has_lane = getattr(native, "has_package_assembly_lane", None)
             if not (callable(has_lane) and has_lane()):
                 try:

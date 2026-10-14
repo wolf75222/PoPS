@@ -79,6 +79,21 @@ def test_compiled_layout_program_accepts_exact_name_bijection_in_program_order()
     assert row.program.program_block_routes == ((0, "ions"), (1, "electrons"))
 
 
+def test_component_free_program_does_not_acquire_an_unproved_reproducibility_guarantee():
+    from pops.runtime._runtime_planning import _determinism
+    install = _install()
+    ordinary = build_runtime_plans(install, {"fluid": _manifest("fluid")})
+    identity = _compiled_layout_program((), ()).identity
+    result = _determinism((), {}, install.execution_context, ordinary.communication,
+                          program_identities=(identity,))
+    assert result.classification == "nondeterministic"
+    assert not result.scope and not result.assumptions
+    assert result.component_evidence["compiled_programs"][0]["digest"] == identity.digest
+    with pytest.raises(RuntimePlanningError) as error:
+        _determinism((), {}, install.execution_context, ordinary.communication)
+    assert error.value.code == "missing_runtime_determinism_evidence"
+
+
 @pytest.mark.parametrize(
     "routes, message",
     [

@@ -4,6 +4,7 @@
 #pragma once
 
 #include <pops/runtime/program/step_transaction.hpp>
+#include <pops/runtime/program/distributed_array.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/geometry/swept_interval.hpp>
@@ -42,6 +43,8 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
+#include <type_traits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -247,8 +250,15 @@ class ProgramContext {
 
   void install(std::function<void(double)> step) const {
     auto lifetime = program_resource_lifetime_();
+    std::weak_ptr<AlgebraLifetime> algebra = algebra_lifetime_;
+    auto restart =
+        [algebra](const FiniteDomainRealmRef& keep,
+                  const std::shared_ptr<distributed::Registry>& restored) noexcept {
+          if (auto live = algebra.lock()) live->restart_committed(keep, restored);
+        };
     system_->install_program_step(std::move(step));
     runtime_state().install_resource_lifetime(std::move(lifetime));
+    runtime_state().install_restart_lifetime(std::move(restart));
   }
 
   void reached_duration(double duration) const {
@@ -270,6 +280,11 @@ class ProgramContext {
       throw std::invalid_argument("ProgramContext step requires a finite positive dt");
     program_values_.revoke_();
     (void)prepared_resources_.begin_attempt(prepared_execution_lane());
+    if (runtime_state().continuation_.configured()) {
+      continuation_local_phase([&] { algebra_lifetime_->continuation.begin(resource_attempt()); },
+                               "continuation attempt issuance");
+      continuation_control_consensus();
+    }
     drain_program_value_writes_();
     current_dt_ = dt;
     stage_time_ = ::pops::amr::Rational(0, 1);
@@ -350,6 +365,21 @@ class ProgramContext {
 
   /// Borrow the runtime-owned lane authenticated during Uniform boundary preparation. Generated
   /// implicit reports use this same lane for every reduction, diagnostic selection, and outcome.
+  // Live domain issuance is outside accepted snapshots: rollback never reuses an ordinal.
+  [[nodiscard]] distributed::Registry& distributed_registry() const {
+    const auto& lane = prepared_execution_lane();
+    const long present = algebra_lifetime_->distributed ? 1L : 0L;
+    if (all_reduce_min(present, lane) != all_reduce_max(present, lane))
+      throw std::logic_error("distributed registry lifecycle differs across execution ranks");
+    if (!algebra_lifetime_->distributed)
+      algebra_lifetime_->distributed = std::make_shared<distributed::Registry>(lane);
+    return *algebra_lifetime_->distributed;
+  }
+  void revoke_distributed_registry_on_restart() const noexcept { algebra_lifetime_->distributed.reset(); }
+  [[nodiscard]] distributed::Registry* distributed_registry_if_present() const noexcept {
+    return algebra_lifetime_->distributed.get();
+  }
+
   [[nodiscard]] const ExecutionLane& prepared_execution_lane() const {
     return system_->prepared_boundary_execution_lane();
   }
@@ -987,6 +1017,10 @@ class ProgramContext {
   }
 
   void commit_many(std::initializer_list<std::pair<field_type*, const field_type*>> commits) const {
+    commit_many(std::span<const std::pair<field_type*, const field_type*>>(commits.begin(), commits.size()));
+  }
+
+  void commit_many(std::span<const std::pair<field_type*, const field_type*>> commits) const {
     const ExecutionLane& lane = prepared_execution_lane();
     std::vector<field_type*> targets;
     std::vector<const field_type*> sources;
@@ -2092,6 +2126,8 @@ class ProgramContext {
 
   runtime_state_type& runtime_state() const { return system_->program_runtime_state_(); }
 
+#include <pops/runtime/program/program_context_continuation.inc>
+
   const PreparedVectorDistribution<Dim>& program_resource_vector_distribution() const {
     return PreparedVectorDistribution<Dim>::Distributed;
   }
@@ -2798,6 +2834,26 @@ class ProgramContext {
   mutable std::map<ScratchKey, field_type> scratch_;
   mutable PreparedResourceCache prepared_resources_;
   mutable ProgramValueAuthority<Dim> program_values_;
+  // This live authority object is never part of accepted-state snapshots. A weak callback
+  // survives artifact rollback without borrowing a Context address (stack views are valid).
+  struct AlgebraLifetime {
+    ContinuationAuthority<Dim> continuation;
+    FiniteDomainRegistry finite;
+    FiniteDomainRegistry local_finite{false};
+    ContinuationTransportSession<Dim> transport;
+    std::shared_ptr<distributed::Registry> distributed;
+    void restart_committed(const FiniteDomainRealmRef& keep,
+                           const std::shared_ptr<distributed::Registry>& restored) noexcept {
+      continuation.revoke();
+      finite.revoke_on_restart(keep);
+      local_finite.revoke_on_restart();
+      // The prepared Store already validated the restored budget and ownership.
+      // Replacing this shared owner releases the old issuer, never adopts it.
+      distributed = restored;
+      transport.clear();
+    }
+  };
+  const std::shared_ptr<AlgebraLifetime> algebra_lifetime_ = std::make_shared<AlgebraLifetime>();
   mutable std::map<std::int64_t, GeneratedFieldRoute> generated_field_routes_;
 };
 

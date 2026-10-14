@@ -38,7 +38,7 @@ def native_profile(*, dimension=2, scope="public native fixture",
         world = require_world(native.mpi_world())
     expected = os.environ.get(expected_rank_env)
     if expected is not None:
-        if expected not in {"1", "2"} or world is None or int(world.size) != int(expected):
+        if expected not in {"1", "2", "3"} or world is None or int(world.size) != int(expected):
             raise AssertionError(scope + " MPI profile differs from its requested world")
     return native, world
 

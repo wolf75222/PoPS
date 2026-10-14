@@ -276,7 +276,7 @@ def validate_dag_key_data(graph, *, root_count=None):
         else: fail()
 
     binary = {"+", "-", "*", "/", "**", "minimum", "maximum", "==", "!=", "<", "<=", ">", ">=", "&", "|"}
-    unary = {"neg", "sqrt", "exp", "abs", "sign", "boolean_not"}
+    unary = {"neg", "sqrt", "exp", "sin", "cos", "log", "expm1", "abs", "sign", "boolean_not"}
     for index, node in enumerate(nodes):
         if not seq(node) or not node or not text(node[0]):
             fail()

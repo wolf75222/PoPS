@@ -15,6 +15,16 @@ else:
 
 
 class _ProgramClocks(_ProgramBase):
+    def interval(self, *, duration=None, role="reached"):
+        """Issue begin/duration/end SSA for this uniform native invocation."""
+        from pops.intervals import issue_interval
+        return issue_interval(self, duration=duration, role=role)
+
+    def history_interval(self, value):
+        """Reconstruct the exact native publication window of a retained State."""
+        from pops.intervals import issue_history_interval
+        return issue_history_interval(self,value)
+
     def stage(self, name: str, *, c: Any) -> StagePoint:
         """Declare a fresh stage at exact fraction ``c`` of this Program's local step.
 

@@ -79,11 +79,21 @@ def prepare_local_state_storage_carrier(emitter, module, frame, *, state_space=N
 
 
 def prepare_state_storage_requirements(
-    emitter, module, resolved_operations, *, emitter_is_private=False
+    emitter, module, resolved_operations, *, emitter_is_private=False, numerics=None
 ):
     """Carry the resolved neighborhood into the private native storage model."""
     impl = getattr(emitter, "_m", emitter)
     depth = MIN_NATIVE_STATE_STORAGE_GHOST_DEPTH
+    if numerics is not None:
+        # A Program may define its complete discrete evolution without declaring
+        # a fictitious continuum rate. Its explicit storage still owns the halos.
+        depth = max((depth, *(row.method.ghost_depth for row in numerics.states)))
+        for row in numerics.rates:
+            requirements = getattr(row.method, "runtime_storage_requirements", None)
+            if callable(requirements):
+                requirements = requirements()
+                if requirements is not None:
+                    depth = max(depth, requirements["ghost_depth"])
     if resolved_operations is not None:
         from pops.codegen.resolved_operations import ResolvedOperationPlan
 

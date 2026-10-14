@@ -14,7 +14,7 @@ from typing import Any
 
 from .expr import (
     Expr, _wrap,
-    Const, Var, Add, Sub, Mul, Div, Pow, Neg, Sqrt, Exp, Abs, Sign,
+    Const, Var, Add, Sub, Mul, Div, Pow, Neg, Sqrt, Exp, Log, Abs, Sign,
 )
 from pops.identity.scalar import (
     exact_decimal_add,
@@ -219,8 +219,8 @@ def diff(expr: Any, var: Any, defs: Any = None, *, native_derivative_route: str 
     other than @p var is independent (derivative 0).
 
     @return an Expr minimally simplified (0*x, 1*x, x+0, ... removed for a readable emission).
-    Raises NotImplementedError on a non differentiable node (naming its type) or a power whose
-    exponent depends on @p var (would need a logarithm, a node absent from the DSL)."""
+    Raises NotImplementedError on a non differentiable node (naming its type). A variable
+    exponent uses the real differentiable branch of the power, whose base must be positive."""
     from .quantity import QuantityRef
     from .native_call import NativeProjection
     if native_derivative_route not in ("exact", "approximate"):
@@ -252,7 +252,7 @@ def diff(expr: Any, var: Any, defs: Any = None, *, native_derivative_route: str 
         if isinstance(e, RuntimeParamRef):
             return Const(0)  # runtime parameter: constant with respect to the conservative state
         if isinstance(e, Var):
-            if e.name == target:
+            if e.name == target and (not isinstance(var, Var) or e.kind == var.kind):
                 return Const(1)
             if e.name in d:
                 return go(d[e.name])  # defined primitive -> derivative of its definition (chain)
@@ -284,9 +284,10 @@ def diff(expr: Any, var: Any, defs: Any = None, *, native_derivative_route: str 
             return Const(0)
         if isinstance(e, Pow):
             if not _is_const(go(e.b), 0):
-                raise NotImplementedError(
-                    "dsl.diff: derivative of a**b with exponent depending on '%s' (needs a "
-                    "logarithm, a node absent from the DSL)" % target)
+                # Real differentiable branch: a > 0. Preserve the constant-exponent
+                # rule below, which also supports negative bases and integer powers.
+                return _s_mul(e, _s_add(_s_mul(go(e.b), Log(e.a)),
+                                       _s_div(_s_mul(e.b, go(e.a)), e.a)))
             # constant exponent with respect to var: (a^b)' = b a^(b-1) a'
             return _s_mul(_s_mul(e.b, _s_pow(e.a, _s_sub(e.b, Const(1)))), go(e.a))
         raise NotImplementedError("dsl.diff: non differentiable node %s (%r)" % (type(e).__name__, e))
