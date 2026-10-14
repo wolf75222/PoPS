@@ -68,9 +68,9 @@ def compile_profile_plan_once(world, resolved, *, route, compile_artifact):
             raise RuntimeError("compiler returned no artifact")
         artifact.verify()
         return artifact
-    from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
-    return compile_resolved_plan_once(world, resolved, route=route,
-                                      compile_artifact=compile_artifact)
+    from tests.python.integration.mpi._compile_once import compile_resolved_plan_cached
+    return compile_resolved_plan_cached(world, resolved, route=route,
+                                        compile_artifact=compile_artifact)
 
 
 __all__ = ["native_profile", "rank_and_size", "profile_gather_value", "profile_gather_bytes",
