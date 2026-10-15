@@ -13,15 +13,21 @@ namespace pops::runtime::program {
 struct ContinuationFieldSupport {
   using Ref = std::shared_ptr<const ContinuationFieldSupport>;
 
-  std::string program_identity;
-  std::string origin_point;
-  int program_owner = -1;
-  int producer_level = -1;
-  std::uint64_t topology_epoch = 0;
-  std::uint64_t materialization_generation = 0;
+  const std::string program_identity;
+  const std::string origin_point;
+  const int program_owner = -1;
+  const int producer_level = -1;
+  const std::uint64_t topology_epoch = 0;
+  const std::uint64_t materialization_generation = 0;
+
+  // Empty identifies a State owner; nonempty identifies an independent provider.
+  const std::string field_provider;
 
   void validate() const {
-    if (program_identity.empty() || origin_point.empty() || program_owner < 0 || producer_level < 0)
+    if (program_identity.empty() || origin_point.empty() ||
+        !((program_owner >= 0 && field_provider.empty()) ||
+          (program_owner == -1 && !field_provider.empty())) ||
+        producer_level < 0)
       throw std::invalid_argument("Continuation Field has an incomplete producer support");
   }
 

@@ -6,6 +6,21 @@ from typing import Any
 from pops.identity import Identity, canonical_bytes
 
 
+def field_provider_authority(problem_identity: str, unknown: Any, space: Any) -> dict[str, Any]:
+    """Durable scientific producer, independent of a solve invocation and State owner."""
+    return {"kind": "field_problem", "version": 1, "problem": problem_identity,
+            "unknown": unknown, "components": 1,
+            "space": None if space is None else space.to_data(), "projection": "component"}
+
+
+def field_gradient_authority(source, dimension, space):
+    """Scientific storage identity of the authored observation's realized gradient."""
+    return {**source, "components": dimension,
+            "space": None if space is None else space.to_data(),
+            "projection": {"kind": "gradient", "dimension": dimension,
+                           "differentiation": "cell_centered_second_order", "sampling": "cell"}}
+
+
 def direct_native_field_operations(solve: Any) -> tuple[Any, ...]:
     # The solve owns one load and one native apply closure. State inputs can
     # legitimately contain other field problems from previous RK stages; those
@@ -71,6 +86,11 @@ def validate_field_observation(value: Any) -> tuple[int, int, Any]:
     elif value.space is not None:
         raise ValueError("field observation has no declared physical space authority")
 
+    authority = field_provider_authority(identity.token, unknown.canonical_identity(), value.space)
+    if canonical_bytes(strict_data(value.attrs.get("field_authority"), where="field authority")) != \
+            canonical_bytes(strict_data(authority, where="declared field authority")):
+        raise ValueError("field observation changed its independent provider authority")
+
     if solve.op == "solve_spatial_field":
         from ._program_nonlinear_problem import validate_nonlinear_field_request
         validate_nonlinear_field_request(value.prog, solve)
@@ -131,6 +151,11 @@ def validate_field_gradient(value: Any) -> tuple[int, Any]:
             raise ValueError("field gradient changed its physical units, support or sampling")
     elif value.space is not None:
         raise ValueError("field gradient has no declared physical space authority")
+    from pops.time._graph.base import strict_data
+    expected = field_gradient_authority(source.attrs["field_authority"], dimension, value.space)
+    if canonical_bytes(strict_data(value.attrs.get("field_authority"), where="gradient authority")) != \
+            canonical_bytes(strict_data(expected, where="declared gradient authority")):
+        raise ValueError("field gradient changed its independent provider authority")
     return dimension, solve
 
 

@@ -15,6 +15,18 @@ else:
 
 
 class _ProgramClocks(_ProgramBase):
+    def level(self) -> Any:
+        """Read this native invocation's level as an exact Int64.
+
+        Uniform execution has level zero. AMR returns the authenticated active
+        level, identical across its MPI lane. The value grants no Field access
+        and does not make different hierarchy barrier sequences compatible.
+        """
+        from .structured_control import new_typed, scalar_signature
+        self._guard_mutable("read the invocation level")
+        return new_typed(self, scalar_signature("int64"), "invocation_level", (),
+                         {"schema_version": 1})
+
     def attempt_start(self, state: Any) -> Any:
         """Immutable native macro-entry State, inside ``after_synchronization``.
 

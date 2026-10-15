@@ -110,6 +110,7 @@ _ALLOWED_OPS = frozenset(
         "project",
         "record_scalar",
         "requested_dt",
+        "invocation_level",
         "interval_begin",
         "interval_end",
         "interval_check",

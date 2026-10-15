@@ -550,11 +550,14 @@ TEST(ContinuationImage, ProducerSupportKeepsHistoricalPointAndExactPrototypeThro
     EXPECT_THROW(finite_structural::unpack<D>(type, value, limits), std::invalid_argument);
   }
   EXPECT_GT(exact_requests, 0);
-  auto foreign = std::make_shared<ContinuationFieldSupport>(*support);
-  foreign->producer_level = 1;
+  auto foreign = std::make_shared<const ContinuationFieldSupport>(ContinuationFieldSupport{
+      support->program_identity, support->origin_point, support->program_owner, 1,
+      support->topology_epoch, support->materialization_generation, support->field_provider});
   auto changed = V::field(field, 0, type.scientific_contract, {}, foreign);
   EXPECT_THROW(codec.encode(changed, 4), std::invalid_argument);
-  foreign->program_owner = 1;
+  foreign = std::make_shared<const ContinuationFieldSupport>(ContinuationFieldSupport{
+      support->program_identity, support->origin_point, 1, 1, support->topology_epoch,
+      support->materialization_generation, support->field_provider});
   EXPECT_THROW(V::field(field, 0, type.scientific_contract, {}, foreign), std::invalid_argument);
 }
 
@@ -1318,4 +1321,201 @@ TEST(ContinuationAuthority, PromotionRejectsMovedHandleForeignIssuerAndRevokedAt
   auto valid = authority.prepare_promotion(moved, accepted);
   cache.reject_attempt();
   EXPECT_THROW(authority.validate_promotion(valid, moved), std::logic_error);
+}
+
+static_assert(!std::is_assignable_v<
+              decltype((std::declval<ContinuationFieldSupport&>().field_provider)), std::string>);
+static_assert(!std::is_assignable_v<
+              decltype((std::declval<ContinuationFieldSupport&>().producer_level)), int>);
+static_assert(!std::is_assignable_v<
+              decltype((std::declval<FieldRepresentationObligation&>().contract)), std::string>);
+static_assert(!std::is_assignable_v<
+              decltype((std::declval<FieldRepresentationObligation&>().origin)), std::string>);
+
+TEST(ContinuationImage, IndependentProviderAndRepresentationHaveExactCONT6Authority) {
+  Extent<D> cells{}, ranks{};
+  for (int d = 0; d < D; ++d) {
+    cells[d] = 2;
+    ranks[d] = 1;
+  }
+  const auto layout = mesh::BoxArray<D>::from_domain(Box<D>::from_extents(cells), cells);
+  const auto distribution =
+      mesh::Distribution<D>::replicated(layout, mesh::RankSpace<D>(Index<D>{}, ranks));
+  MultiFab<D> field(layout, distribution, Index<D>{}, 1, Extent<D>{});
+  field.set_val(Real(7));
+  auto type = scalar(ContinuationKind::Field);
+  type.field_components = 1;
+  type.scientific_contract = "retained/role";
+  type.field_provider = "problem:equation-A/unknown:potential/components:1";
+  auto support = std::make_shared<const ContinuationFieldSupport>(ContinuationFieldSupport{
+      "program", "time:0.125/invocation:4", -1, 2, 7, 19, type.field_provider});
+  auto representation = std::make_shared<const FieldRepresentationObligation>(
+      FieldRepresentationObligation{"transform:exact-a*x*x/a=IEEE:3ff0000000000000", "producer:4"});
+  int requests = 0;
+  Codec codec(type, "test/independent-field", 1ULL << 20,
+              [&](const ContinuationType& selected,
+                  const ContinuationFieldSupport::Ref& origin) -> const MultiFab<D>& {
+                if (selected != type || !origin || *origin != *support)
+                  throw std::invalid_argument("foreign provider or historical support");
+                ++requests;
+                return field;
+              });
+  const auto value = V::field(field, -1, type.scientific_contract, {}, support, type.field_provider,
+                              representation);
+  const auto bytes = codec.encode(value, 23);
+  continuation_detail::Reader wire(bytes);
+  EXPECT_EQ(wire.text(), "POPSCONT6");
+  const auto decoded = codec.decode(bytes);
+  ASSERT_TRUE(decoded.root->field_support());
+  ASSERT_TRUE(decoded.root->field_representation());
+  EXPECT_EQ(decoded.root->field_provider(), type.field_provider);
+  EXPECT_EQ(*decoded.root->field_support(), *support);
+  EXPECT_EQ(*decoded.root->field_representation(), *representation);
+  EXPECT_EQ(codec.encode(decoded.root, 23), bytes);
+  EXPECT_EQ(codec.collective_identity(value, 23), codec.collective_identity(decoded.root, 23));
+  const auto archived = codec.decode_archive(bytes, 0, 1, [](std::uint64_t) {});
+  EXPECT_EQ(codec.archive_collective_identity(archived, 1ULL << 20, [](std::uint64_t) {}),
+            codec.collective_identity(value, 23));
+  EXPECT_GT(requests, 0);
+
+  for (const std::string provider : {"problem:equation-B/unknown:potential/components:1",
+                                     "problem:equation-A/unknown:other/components:1"}) {
+    auto foreign = type;
+    foreign.field_provider = provider;
+    int allocations = 0;
+    Codec rejected(
+        foreign, "test/independent-field", 1ULL << 20,
+        [&](const ContinuationType&, const ContinuationFieldSupport::Ref&) -> const MultiFab<D>& {
+          ++allocations;
+          return field;
+        });
+    EXPECT_THROW(rejected.decode(bytes), std::invalid_argument);
+    EXPECT_EQ(allocations, 0);
+  }
+  auto legacy = Codec(type, "test/independent-field", 1ULL << 20,
+                      [&](int) -> const MultiFab<D>& { return field; });
+  EXPECT_THROW(legacy.encode(value, 23), std::invalid_argument);
+  EXPECT_THROW(V::field(field, 0, type.scientific_contract, {}, support, type.field_provider),
+               std::invalid_argument);
+  auto wrong_support = std::make_shared<const ContinuationFieldSupport>(ContinuationFieldSupport{
+      support->program_identity, support->origin_point, support->program_owner,
+      support->producer_level, support->topology_epoch, support->materialization_generation,
+      support->field_provider + "/forged"});
+  EXPECT_THROW(
+      V::field(field, -1, type.scientific_contract, {}, wrong_support, type.field_provider),
+      std::invalid_argument);
+  auto wrong_owner = type;
+  wrong_owner.field_owner = 0;
+  EXPECT_THROW(wrong_owner.validate(), std::invalid_argument);
+}
+
+TEST(ContinuationImage, RepresentationWithoutFluxSurvivesCopyVariantAndCodec) {
+  Extent<D> cells{}, ranks{};
+  for (int d = 0; d < D; ++d) {
+    cells[d] = 2;
+    ranks[d] = 1;
+  }
+  const auto layout = mesh::BoxArray<D>::from_domain(Box<D>::from_extents(cells), cells);
+  const auto distribution =
+      mesh::Distribution<D>::replicated(layout, mesh::RankSpace<D>(Index<D>{}, ranks));
+  MultiFab<D> field(layout, distribution, Index<D>{}, 1, Extent<D>{});
+  field.set_val(Real(3));
+  auto type = scalar(ContinuationKind::Field);
+  type.field_owner = 0;
+  type.field_components = 1;
+  type.scientific_contract = "same-field-type";
+  auto variant = product({"left", "right"}, {type, type});
+  variant.kind = ContinuationKind::Variant;
+  Codec codec(variant, "test/representation-only", 1ULL << 20,
+              [&](int owner) -> const MultiFab<D>& {
+                if (owner != 0)
+                  throw std::invalid_argument("owner");
+                return field;
+              });
+  const auto a = std::make_shared<const FieldRepresentationObligation>(
+      FieldRepresentationObligation{"graph:K/capture:a=1", "evaluation:7"});
+  const auto b = std::make_shared<const FieldRepresentationObligation>(
+      FieldRepresentationObligation{"graph:K/capture:a=2", "evaluation:8"});
+  const auto first = V::field(field, 0, type.scientific_contract, {}, {}, {}, a);
+  const auto second = V::with_field_representation(first, b);
+  EXPECT_EQ(first->field_storage_owner(), second->field_storage_owner());
+  EXPECT_NE(codec.collective_identity(V::variant(0, first), 1),
+            codec.collective_identity(V::variant(0, second), 1));
+  for (std::uint32_t arm = 0; arm < 2; ++arm) {
+    const auto selected = arm ? second : first;
+    const auto bytes = codec.encode(V::variant(arm, selected), 1);
+    const auto decoded = codec.decode(bytes).root;
+    EXPECT_EQ(decoded->arm(), arm);
+    ASSERT_TRUE(decoded->members()[0]->field_representation());
+    EXPECT_EQ(*decoded->members()[0]->field_representation(), *selected->field_representation());
+    EXPECT_FALSE(decoded->members()[0]->field_exchange_expression());
+    EXPECT_EQ(codec.encode(decoded, 1), bytes);
+    const auto archive = codec.decode_archive(bytes, 0, 1, [](std::uint64_t) {});
+    EXPECT_EQ(codec.archive_collective_identity(archive, 1ULL << 20, [](std::uint64_t) {}),
+              codec.collective_identity(decoded, 1));
+  }
+  const auto copied = V::with_field_metadata(first, first->field_metadata());
+  EXPECT_EQ(copied->field_representation(), a);
+  EXPECT_THROW(
+      V::with_field_representation(first, std::make_shared<const FieldRepresentationObligation>(
+                                              FieldRepresentationObligation{"graph", ""})),
+      std::invalid_argument);
+}
+
+TEST(ContinuationImage, IndependentFieldStructuralPreflightPrecedesCopyPublication) {
+  Extent<D> cells{}, ranks{};
+  for (int d = 0; d < D; ++d) {
+    cells[d] = 2;
+    ranks[d] = 1;
+  }
+  const auto layout = mesh::BoxArray<D>::from_domain(Box<D>::from_extents(cells), cells);
+  const auto distribution =
+      mesh::Distribution<D>::replicated(layout, mesh::RankSpace<D>(Index<D>{}, ranks));
+  MultiFab<D> field(layout, distribution, Index<D>{}, 1, Extent<D>{});
+  field.set_val(Real(7));
+  auto type = scalar(ContinuationKind::Field);
+  type.field_components = 1;
+  type.scientific_contract = "retained/role";
+  type.field_provider = "problem:A/unknown:p";
+  const auto support = std::make_shared<const ContinuationFieldSupport>(ContinuationFieldSupport{
+      "program", "time:0.125/invocation:4", -1, 2, 7, 19, type.field_provider});
+  const ContinuationFieldMetadata metadata{{}, support, {}};
+  const finite_structural::Limits limits{1ULL << 20, 1ULL << 20, 1ULL << 20};
+  int preflights = 0, copies = 0;
+  auto copied = [&](const auto&, const auto&, const auto&, const auto&) {
+    ++copies;
+    return metadata;
+  };
+  auto preflight = [&](const auto& source, const auto& schema, const auto&...) {
+    ++preflights;
+    if (&source != &field || schema.field_provider != type.field_provider)
+      throw std::invalid_argument("stale source incarnation");
+  };
+  const std::any borrowed = std::cref(field);
+  EXPECT_THROW(finite_structural::pack<D>(type, borrowed, limits, copied), std::invalid_argument);
+  EXPECT_EQ(copies, 0);
+  auto reject = [](const auto&, const auto&, const auto&...) {
+    throw std::invalid_argument("revoked source incarnation");
+  };
+  EXPECT_THROW(finite_structural::pack<D>(type, borrowed, limits, copied, reject),
+               std::invalid_argument);
+  EXPECT_EQ(copies, 0);
+  const auto retained = finite_structural::pack<D>(type, borrowed, limits, copied, preflight);
+  EXPECT_EQ(preflights, 1);
+  EXPECT_EQ(copies, 1);
+  EXPECT_EQ(retained->field_support(), support);
+  EXPECT_THROW(finite_structural::unpack<D>(type, retained, limits, copied, reject),
+               std::invalid_argument);
+  EXPECT_EQ(copies, 1);
+  const auto accepted =
+      finite_structural::unpack<D>(type, retained, limits, copied,
+                                   [&](const auto& source, const auto& schema, const auto& proof) {
+                                     ++preflights;
+                                     EXPECT_EQ(&source, &retained->field());
+                                     EXPECT_EQ(schema.field_provider, type.field_provider);
+                                     EXPECT_EQ(proof.support, support);
+                                   });
+  EXPECT_EQ(preflights, 2);
+  EXPECT_EQ(copies, 2);
+  EXPECT_TRUE(std::any_cast<std::shared_ptr<MultiFab<D>>>(accepted));
 }

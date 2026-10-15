@@ -10,6 +10,7 @@ struct ExtendedTable {
   mutable std::vector<bool> field_expression_used;
   bool field_expression_wire = false;
   bool field_support_wire = false;
+  bool field_traits_wire = false;
   mutable std::uint64_t field_support_bytes = 0;
 };
 static FieldExchangeExpressions::Limits field_expression_limits_(std::uint64_t bytes) {
@@ -26,7 +27,8 @@ bool requires_extended_(const Ref& root) const {
       [&](const Value& value) {
         if (continuation_distributed_kind(value.kind()))
           needed = true;
-        if (value.field_exchange_expression() || value.field_support())
+        if (value.field_exchange_expression() || value.field_support() ||
+            !value.field_provider().empty() || value.field_representation())
           needed = true;
         if (const auto& domain = value.domain_ref()) {
           // CONT1 has no realm transport-identity table.  Once a replicated realm has been
@@ -63,6 +65,8 @@ void collect_extended_(const Ref& value, ExtendedTable& table) const {
       value, capacity_,
       [&](const Value& node) {
         table.field_support_wire = table.field_support_wire || bool(node.field_support());
+        table.field_traits_wire = table.field_traits_wire || !node.field_provider().empty() ||
+                                  bool(node.field_representation());
         if (const auto& expression = node.field_exchange_expression();
             expression && std::find(table.field_expressions.begin(), table.field_expressions.end(),
                                     expression) == table.field_expressions.end())
@@ -185,11 +189,13 @@ std::vector<std::uint8_t> encode_extended_(const Ref& root, std::uint64_t public
         throw std::invalid_argument("duplicate finite domain version");
   table.field_expression_wire = !table.field_expressions.empty();
   multi_issuer = multi_issuer || replicated_count > 1 || table.field_expression_wire ||
-                 table.field_support_wire;
+                 table.field_support_wire || table.field_traits_wire;
 
   continuation_detail::Writer out(output_capacity_);
 
-  out.text(table.field_support_wire      ? "POPSCONT5"
+  table.field_support_wire = table.field_support_wire || table.field_traits_wire;
+  out.text(table.field_traits_wire       ? "POPSCONT6"
+           : table.field_support_wire    ? "POPSCONT5"
            : table.field_expression_wire ? "POPSCONT4"
            : multi_issuer                ? "POPSCONT3"
                                          : "POPSCONT2");
@@ -285,8 +291,10 @@ static void encode_extended_value_(const Ref& value, const ExtendedTable& table,
         if (kind == ContinuationKind::Field || kind == ContinuationKind::Boolean ||
             kind == ContinuationKind::Int64 || kind == ContinuationKind::Float64 ||
             kind == ContinuationKind::Domain || kind == ContinuationKind::Index) {
+          if (kind == ContinuationKind::Field && table.field_traits_wire)
+            encode_field_traits_(*value, out);
           if (kind == ContinuationKind::Field && table.field_support_wire)
-            encode_field_support_(value->field_support(), out);
+            encode_field_support_(value->field_support(), out, table.field_traits_wire);
           encode_(value, table.finite, out);
           if (kind == ContinuationKind::Field && table.field_expression_wire)
             out.word(
@@ -317,8 +325,8 @@ static void encode_extended_value_(const Ref& value, const ExtendedTable& table,
       [](const Value&) {});
 }
 Decoded decode_extended_(continuation_detail::Reader& in, bool multi_issuer = false,
-                         bool field_expression_wire = false,
-                         bool field_support_wire = false) const {
+                         bool field_expression_wire = false, bool field_support_wire = false,
+                         bool field_traits_wire = false) const {
   if (in.text() != identity_ || in.word() != Dim)
     throw std::invalid_argument("extended continuation schema or dimension differs");
   Decoded out;
@@ -331,6 +339,7 @@ Decoded decode_extended_(continuation_detail::Reader& in, bool multi_issuer = fa
   }
   ExtendedTable table;
   table.field_support_wire = field_support_wire;
+  table.field_traits_wire = field_traits_wire;
   table.field_expression_wire = field_expression_wire;
   if (field_expression_wire) {
     const auto encoded = in.blob();
@@ -515,7 +524,10 @@ Decoded decode_extended_(continuation_detail::Reader& in, bool multi_issuer = fa
   if (out.realm &&
       std::find(used.realms.begin(), used.realms.end(), out.realm) == used.realms.end())
     used.realms.push_back(out.realm);
-  if (field_support_wire && !used.field_support_wire)
+  if (field_traits_wire && !used.field_traits_wire)
+    throw std::invalid_argument(
+        "CONT6 has no retained Field provider or representation obligation");
+  if (!field_traits_wire && field_support_wire && !used.field_support_wire)
     throw std::invalid_argument("CONT5 has no retained Field producer support");
   if (used.finite.size() != table.finite.size() || used.realms.size() != table.realms.size())
     throw std::invalid_argument("checkpoint tables contain unreachable authorities or values");
@@ -548,17 +560,19 @@ Ref decode_extended_value_(const ContinuationType& type, const ExtendedTable& ta
         if (kind == ContinuationKind::Field || kind == ContinuationKind::Boolean ||
             kind == ContinuationKind::Int64 || kind == ContinuationKind::Float64 ||
             kind == ContinuationKind::Domain || kind == ContinuationKind::Index) {
-          auto support = (kind == ContinuationKind::Field && table.field_support_wire)
-                             ? decode_field_support_(
-                                   in,
-                                   [&](std::uint64_t bytes) {
-                                     if (bytes > capacity_ - table.field_support_bytes)
-                                       throw std::length_error(
-                                           "Field support metadata exceeds installed capacity");
-                                     table.field_support_bytes += bytes;
-                                   })
+          const auto reserve = [&](std::uint64_t bytes) {
+            if (bytes > capacity_ - table.field_support_bytes)
+              throw std::length_error("Field metadata exceeds installed capacity");
+            table.field_support_bytes += bytes;
+          };
+          auto representation = kind == ContinuationKind::Field && table.field_traits_wire
+                                    ? decode_field_traits_(type, in, reserve)
+                                    : FieldRepresentationObligation::Ref{};
+          auto support = kind == ContinuationKind::Field && table.field_support_wire
+                             ? decode_field_support_(in, reserve, table.field_traits_wire)
                              : ContinuationFieldSupport::Ref{};
-          auto leaf = decode_(type, table.finite, in, std::move(support));
+          auto leaf =
+              decode_(type, table.finite, in, std::move(support), std::move(representation));
           if (kind == ContinuationKind::Field && table.field_expression_wire) {
             const auto slot = in.word();
             if (slot > table.field_expressions.size())

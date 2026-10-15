@@ -2,8 +2,16 @@
 
 import json
 import struct
+from types import MappingProxyType
 
 import numpy as np
+
+
+def _frozen_authority_json(value):
+    """Read the frozen schema containers without importing PoPS serializers."""
+    if type(value) is MappingProxyType:
+        return dict(value)
+    raise TypeError(f"unsupported native authority container: {type(value).__name__}")
 
 
 def _decode(spec, image, *, rank=None, schema=None):
@@ -39,18 +47,18 @@ def _decode(spec, image, *, rank=None, schema=None):
         return struct.unpack("<q", struct.pack("<Q", word()))[0]
 
     magic = text()
-    assert magic in {"POPSCONT1", "POPSCONT2", "POPSCONT3", "POPSCONT4", "POPSCONT5"}
+    assert magic in {"POPSCONT1", "POPSCONT2", "POPSCONT3", "POPSCONT4", "POPSCONT5", "POPSCONT6"}
     identity = text()
     dimension = word()
     assert dimension in (1, 2, 3)
     publication = word()
     field_expressions, used_field_expressions = [], set()
     has_expressions = magic == "POPSCONT4"
-    if magic == "POPSCONT5":
+    if magic in {"POPSCONT5", "POPSCONT6"}:
         expression_flag = word()
         assert expression_flag in (0, 1)
         has_expressions = bool(expression_flag)
-    supports_seen = []
+    supports_seen, traits_seen = [], []
     if has_expressions:
         from tests.python.support.field_expression_receipts import decode_field_expressions
         field_expressions = decode_field_expressions(blob())
@@ -66,7 +74,7 @@ def _decode(spec, image, *, rank=None, schema=None):
         ]
     else:
         realm_count = bounded_count(24)
-        if magic in {"POPSCONT3", "POPSCONT4", "POPSCONT5"}:
+        if magic in {"POPSCONT3", "POPSCONT4", "POPSCONT5", "POPSCONT6"}:
             slot = word()
             assert slot <= realm_count
             primary_finite = slot - 1 if slot else None
@@ -94,7 +102,7 @@ def _decode(spec, image, *, rank=None, schema=None):
         assert len({entry["issuer"] for entry in realms}) == len(realms)
         if primary_finite is not None:
             assert realms[primary_finite]["replicated"]
-        if magic in {"POPSCONT3", "POPSCONT4", "POPSCONT5"}:
+        if magic in {"POPSCONT3", "POPSCONT4", "POPSCONT5", "POPSCONT6"}:
             registry_count = bounded_count(32)
             slot = word()
             assert slot <= registry_count
@@ -104,13 +112,13 @@ def _decode(spec, image, *, rank=None, schema=None):
             assert len({entry["issuer"] for entry in registries}) == len(registries)
         count = bounded_count(40)
         if count:
-            if magic not in {"POPSCONT3", "POPSCONT4", "POPSCONT5"}:
+            if magic not in {"POPSCONT3", "POPSCONT4", "POPSCONT5", "POPSCONT6"}:
                 issuer = (word(), word())
                 storage = dict(bytes=word(), versions=word())
                 registries.append(dict(issuer=issuer, **storage))
                 primary_registry = 0
             for i in range(count):
-                slot = word() if magic in {"POPSCONT3", "POPSCONT4", "POPSCONT5"} else 0
+                slot = word() if magic in {"POPSCONT3", "POPSCONT4", "POPSCONT5", "POPSCONT6"} else 0
                 assert slot < len(registries)
                 issuer = registries[slot]["issuer"]
                 version, family, capacity = word(), signed(), signed()
@@ -238,8 +246,22 @@ def _decode(spec, image, *, rank=None, schema=None):
 
     def value(sig):
         name = sig["vtype"]
-        support = None
-        if magic == "POPSCONT5" and name in {"state", "scalar_field"}:
+        support, provider, representation = None, "", None
+        if magic == "POPSCONT6" and name in {"state", "scalar_field"}:
+            provider = text()
+            present = word()
+            assert present in (0, 1)
+            if present:
+                representation = dict(contract=text(), origin=text())
+                assert representation["contract"] and representation["origin"]
+            if provider or representation:
+                traits_seen.append((provider, representation))
+            authority = sig.get("field_authority")
+            expected = "" if authority is None else json.dumps(
+                authority, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+                default=_frozen_authority_json)
+            assert provider == expected, "Field provider differs from declared schema"
+        if magic in {"POPSCONT5", "POPSCONT6"} and name in {"state", "scalar_field"}:
             present = word()
             assert present in (0, 1)
             if present:
@@ -247,9 +269,19 @@ def _decode(spec, image, *, rank=None, schema=None):
                                program_owner=word(), producer_level=word(),
                                topology_epoch=word(), materialization_generation=word())
                 assert support["program_identity"] and support["origin_point"]
-                assert support["program_owner"] <= (1 << 31)-1
+                if magic == "POPSCONT6":
+                    support["field_provider"] = text()
+                    assert support["field_provider"] == provider
+                    if provider:
+                        assert support["program_owner"] == (1 << 64) - 1
+                        support["program_owner"] = -1
+                    else:
+                        assert support["program_owner"] <= (1 << 31) - 1
+                else:
+                    assert support["program_owner"] <= (1 << 31) - 1
                 assert support["producer_level"] <= (1 << 31)-1
                 supports_seen.append(support)
+        assert not provider or support is not None
         kind = word()
         assert kind == native_kind(sig), (kind, name)
         if name in {"bool", "int64", "scalar"}:
@@ -334,6 +366,8 @@ def _decode(spec, image, *, rank=None, schema=None):
             return dict(
                 field_expression=expression,
                 field_support=support,
+                field_provider=provider,
+                field_representation=representation,
                 components=components,
                 axes=axes,
                 replicated=bool(replicated),
@@ -343,7 +377,7 @@ def _decode(spec, image, *, rank=None, schema=None):
             )
         raise AssertionError("unexpected receiver type " + name)
 
-    if magic in {"POPSCONT2", "POPSCONT3", "POPSCONT4", "POPSCONT5"}:
+    if magic in {"POPSCONT2", "POPSCONT3", "POPSCONT4", "POPSCONT5", "POPSCONT6"}:
         for i in range(bounded_count(40)):
             version = word()
             sig = table_signature(blob())
@@ -373,6 +407,7 @@ def _decode(spec, image, *, rank=None, schema=None):
     assert at == len(image)
     assert used_field_expressions == set(range(len(field_expressions)))
     assert magic != "POPSCONT5" or supports_seen
+    assert magic != "POPSCONT6" or traits_seen
     return {
         "root": out,
         "field_expressions": field_expressions,

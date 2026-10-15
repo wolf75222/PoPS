@@ -97,8 +97,8 @@ std::vector<AmrProgramContinuationLevel> rematerialize_continuation_forest(
         auto* archive = source.fields.get();
         source.codec = std::make_unique<Codec>(
             configuration.type, configuration.identity, configuration.byte_capacity,
-            [archive](int owner, const ContinuationFieldSupport::Ref& support)
-                -> const MultiFab<Dim>& { return archive->prototype(owner, support); },
+            [archive](const ContinuationType& type, const ContinuationFieldSupport::Ref& support)
+                -> const MultiFab<Dim>& { return archive->prototype(type, support); },
             nullptr, nullptr, nullptr, &authorities,
             [archive](const ContinuationType& type, std::span<const std::uint8_t> bytes,
                       const ContinuationFieldSupport::Ref& support) -> const MultiFab<Dim>& {

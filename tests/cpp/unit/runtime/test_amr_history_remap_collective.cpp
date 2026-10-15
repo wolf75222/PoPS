@@ -490,4 +490,16 @@ TEST(AmrContinuationFieldStorage, RankLocalPromotionFailurePrecedesTheOnlyCollec
       std::exception);
   Access::discard_promotion_fixture(*fixture.context);
 }
+
+TEST(AmrContinuationFieldStorage, InvocationLevelRequiresTheExactPreparedHierarchy) {
+  Fixture fixture;
+  EXPECT_THROW((void)fixture.context->invocation_level(), std::logic_error);
+  fixture.context->advance_hierarchy(.1, [&](double) {
+    const auto level = fixture.context->invocation_level();
+    EXPECT_EQ(level, fixture.context->level());
+    const auto& lane = fixture.context->prepared_execution_lane();
+    EXPECT_EQ(pops::all_reduce_min(level, lane), level);
+    EXPECT_EQ(pops::all_reduce_max(level, lane), level);
+  });
+}
 }  // namespace

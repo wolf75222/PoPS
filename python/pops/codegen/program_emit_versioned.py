@@ -82,12 +82,25 @@ def schema_cpp(signature, block_idx, *, roles=None, path=()):
             frames.append({"signature": child, "parent": frame, "edge": edge,
                            "children": [], "next": 0})
             continue
-        family, capacity, owner, components, contract = -1, 0, -1, 0, ""
+        family, capacity, owner, components, contract, provider = -1, 0, -1, 0, "", ""
         if kind in ("array", "index", "index_set"):
             family, capacity = node["family"], node["capacity"]
         if kind in ("state", "rhs", "scalar_field"):
-            owner = block_idx[node["block"]]
-            components = len(node["space"].components)
+            authority = node.get("field_authority")
+            if authority is None:
+                owner = block_idx[node["block"]]
+                components = len(node["space"].components)
+            else:
+                from pops._structural_data import canonical_json
+                from pops.time.canonical_data import _json_ready
+                if (kind != "scalar_field" or node.get("block") is not None
+                        or authority.get("kind") != "field_problem"
+                        or authority.get("version") != 1
+                        or type(authority.get("components")) is not int
+                        or authority["components"] < 1):
+                    raise ValueError("independent Field has an invalid provider authority")
+                components = authority["components"]
+                provider = canonical_json(_json_ready(authority))
             edges, cursor = [], frame
             while cursor["parent"] is not None:
                 edges.append(cursor["edge"])
@@ -109,9 +122,9 @@ def schema_cpp(signature, block_idx, *, roles=None, path=()):
         labels = ",".join(json.dumps(name) for name, _ in members) if kind in ("product", "variant") else ""
         lines.append("schema_nodes.emplace_back(%sContinuationKind::%s," % (_NS, native)
                      + "std::vector<%sContinuationType>{},std::vector<std::string>{%s}," % (_NS, labels)
-                     + "%d,%d,%d,%d,%s,std::vector<%sContinuationDomainBinding>{%s},%s);" % (
+                     + "%d,%d,%d,%d,%s,std::vector<%sContinuationDomainBinding>{%s},%s,%s);" % (
                          family, capacity, owner, components, json.dumps(contract), _NS,
-                         ",".join(dependencies), "true" if bundle else "false"))
+                         ",".join(dependencies), "true" if bundle else "false", json.dumps(provider)))
         if frame["children"]:
             lines.append("schema_nodes.back().children.reserve(%d);" % len(frame["children"]))
             for child in frame["children"]:
@@ -192,7 +205,9 @@ def _pack(signature, token, body, prefix, block_idx, roles, path=(), *, capacity
     return (_NS + "finite_structural::pack<" + _DIM + ">(" + schema + "," + storage
             + "," + _limits(capacity)
             + ",[&](const auto& source, const auto& destination, const auto& lifetime, const auto&... metadata) { "
-              "return ctx.continuation_bind_field_provenance(source, destination, lifetime, metadata...); })")
+              "return ctx.continuation_bind_field_provenance(source, destination, lifetime, metadata...); },"
+              "[&](const auto& source, const auto& type, const auto&... metadata) { "
+              "ctx.continuation_preflight_field(source, type, metadata...); })")
 
 
 def _unpack(signature, reference, body, prefix, *, capacity, block_idx=None, roles=None):
@@ -202,7 +217,9 @@ def _unpack(signature, reference, body, prefix, *, capacity, block_idx=None, rol
     expression = (_NS + "finite_structural::unpack<" + _DIM + ">(" + schema + "," + reference
                   + "," + _limits(capacity)
                   + ",[&](const auto& source, const auto& destination, const auto& lifetime, const auto&... metadata) { "
-                    "return ctx.continuation_bind_field_provenance(source, destination, lifetime, metadata...); })")
+                    "return ctx.continuation_bind_field_provenance(source, destination, lifetime, metadata...); },"
+              "[&](const auto& source, const auto& type, const auto&... metadata) { "
+              "ctx.continuation_preflight_field(source, type, metadata...); })")
     return "std::any_cast<%s>(%s)" % (finite_cpp_type(signature), expression)
 
 

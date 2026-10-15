@@ -113,8 +113,11 @@ std::vector<AmrProgramContinuationLevel> rematerialize_continuation_forest_field
           target_fields, owners, replicated, static_cast<int>(ranked.size()),
           static_cast<int>(rank), budget, source_supports));
       Archive& archive = *archives.back();
-      auto fields = [&archive](int owner, const ContinuationFieldSupport::Ref& support)
-          -> const MultiFab<Dim>& { return archive.prototype(owner, support); };
+      auto fields = [&archive](
+                        const ContinuationType& type,
+                        const ContinuationFieldSupport::Ref& support) -> const MultiFab<Dim>& {
+        return archive.prototype(type, support);
+      };
       auto resolve = [&archive](
                          const ContinuationType& type, std::span<const std::uint8_t> bytes,
                          const ContinuationFieldSupport::Ref& support) -> const MultiFab<Dim>& {

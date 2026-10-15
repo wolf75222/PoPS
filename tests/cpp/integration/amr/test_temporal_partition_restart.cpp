@@ -106,7 +106,8 @@ TEST(test_temporal_partition_restart, PendingRemapKeepsOriginAcrossTwoUnchangedQ
     EXPECT_EQ(marker.retained_ring_contract, origin.retained_ring_contract);
     const auto bytes = program::serialize_amr_program_accepted_state(state);
     ASSERT_GE(bytes.size(), 8u);
-    EXPECT_EQ(std::string(bytes.begin(), bytes.begin() + 8), "POPSANDB");
+    // The current envelope carries retained Field support and exact exchange coefficients.
+    EXPECT_EQ(std::string(bytes.begin(), bytes.begin() + 8), "POPSANDE");
     EXPECT_EQ(program::serialized_amr_program_accepted_state_size(state), bytes.size());
     EXPECT_EQ(program::deserialize_amr_program_accepted_state<2>(bytes).pending_history_remaps,
               state.pending_history_remaps);

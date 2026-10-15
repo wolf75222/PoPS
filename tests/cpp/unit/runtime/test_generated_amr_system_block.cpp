@@ -2531,9 +2531,19 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRefusesUnsynchronizedHierarchyBefore
   EXPECT_THROW(
       context->advance_hierarchy(0.01, [&](double) { context->state(0).set_val(pops::Real(9)); }),
       std::runtime_error);
-  // Fine patches can leave a rank empty; reduce on the installed execution lane.
-  EXPECT_EQ(context->max_component(system.engine()->hierarchy().state(0), 0), pops::Real(1));
-  EXPECT_EQ(context->max_component(system.engine()->hierarchy().state(1), 0), pops::Real(1));
+  // Fine patches can leave a rank empty. Select each exact level authority before
+  // reducing on the installed lane; a foreign-level Field grants no read permission.
+  context->with_program_resource_level(0, [&] {
+    EXPECT_THROW(context->require_program_field_access(system.engine()->hierarchy().state(1)),
+                 std::invalid_argument);
+  });
+  std::array<bool, 2> checked{};
+  context->for_each_program_resource_level([&](int level) {
+    checked.at(static_cast<std::size_t>(level)) = true;
+    EXPECT_EQ(context->max_component(context->state(0), 0), pops::Real(1));
+  });
+  EXPECT_TRUE(checked[0]);
+  EXPECT_TRUE(checked[1]);
 }
 
 TEST(GeneratedAmrSystemBlock, SpatialHierarchyTraversalRequiresReleasedLevelEnvelopes) {
@@ -3741,6 +3751,168 @@ TEST(GeneratedAmrSystemBlock, CflUsesFinestExactGeometryAndPreparedModelSpeed) {
   const double expected = cfl * (1.0 / 16.0) * 2.0 / static_cast<double>(Dim);
   EXPECT_NEAR(dt, expected, 1.0e-12);
   EXPECT_EQ(system.last_dt_bound(), "transport:tracer");
+}
+
+TEST(GeneratedAmrSystemBlock, CflComposesTransportWithProgramOnlyStorage) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  config.regrid_every = 0;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 8;
+    config.transition_buffers.front()[axis] = 0;
+    config.transition_lookaheads.front()[axis] = 0;
+  }
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/cfl-mixed-capabilities");
+  system.set_temporal_relations({1}, {1}, {"integral_only"});
+  system.install_block_state_route("tracer", "state/tracer");
+  system.install_block_state_route("storage", "state/storage");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.install_prepared_amr_block(pops::prepare_compiled_amr_system_block<Dim>(
+      "storage", ProgramStateModel<Dim>{}, "state_storage", "unavailable", "conservative", "imex",
+      1.4, 1, 1));
+  const std::vector<double> data(cell_count(config.shape), 1.0);
+  system.set_conservative_state("tracer", data);
+  system.set_conservative_state("storage", data);
+  pops::test::install_prepared_threshold_union(
+      system, {{"tracer", "u", 1.5, pops::test::PreparedThresholdRelation::Above, "state/tracer"}},
+      "tests.generated-amr/cfl-mixed-tagging@1");
+  ASSERT_NE(system.engine(), nullptr);
+  ASSERT_EQ(system.n_levels(), 1);
+  // The facade must publish the same refined topology for BOTH block storages.
+  // Publishing only into the primary engine leaves the peer hierarchy unmaterialized.
+  auto tagged = data;
+  for (std::size_t cell = 0; cell < tagged.size(); ++cell) {
+    std::size_t quotient = cell;
+    bool selected = true;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto coordinate = quotient % static_cast<std::size_t>(config.shape[axis]);
+      selected = selected && coordinate >= 2 && coordinate < 6;
+      quotient /= static_cast<std::size_t>(config.shape[axis]);
+    }
+    if (selected)
+      tagged[cell] = 2.0;
+  }
+  system.set_conservative_state("tracer", tagged);
+  (void)system.execute_prepared_tagging(0);
+  ASSERT_TRUE(system.regrid_from_prepared_tagging(0));
+  ASSERT_EQ(system.n_levels(), 2);
+  const auto fine_shape = system.engine()->hierarchy().layout(1).domain().extent();
+  const std::vector<double> fine_data(cell_count(fine_shape), 1.0);
+  auto expected_fine = fine_data;
+  for (std::size_t cell = 0; cell < expected_fine.size(); ++cell) {
+    std::size_t quotient = cell;
+    pops::Index<Dim> index{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      index[axis] = static_cast<int>(quotient % static_cast<std::size_t>(fine_shape[axis]));
+      quotient /= static_cast<std::size_t>(fine_shape[axis]);
+    }
+    const auto& patches = system.engine()->hierarchy().layout(1).patches().boxes();
+    expected_fine[cell] = std::any_of(patches.begin(), patches.end(),
+                                      [&](const auto& box) { return box.contains(index); })
+                              ? 1.0
+                              : 0.0;
+  }
+  for (const std::string block : {"tracer", "storage"}) {
+    system.set_conservative_state(block, data);
+    system.set_block_level_state(block, 1, fine_data);
+    EXPECT_EQ(system.block_level_state_global(block, 0), data);
+    EXPECT_EQ(system.block_level_state_global(block, 1), expected_fine);
+  }
+  int calls = 0;
+  system.install_program_step([&](double) { ++calls; });
+  EXPECT_NEAR(system.step_cfl(.4), .4 / (16. * Dim), 1.e-12);
+  EXPECT_EQ(system.last_dt_bound(), "transport:tracer");
+  EXPECT_EQ(calls, 1);
+}
+
+TEST(GeneratedAmrSystemBlock, CflProgramStorageRequiresAnActualFiniteBound) {
+  constexpr int Dim = pops::kNativeDimension;
+  for (const std::string kind : {"none", "maximum", "global", "program"}) {
+    SCOPED_TRACE(kind);
+    pops::AmrSystemConfig<Dim> config;
+    for (int axis = 0; axis < Dim; ++axis)
+      config.shape[axis] = 8;
+    pops::AmrSystem<Dim> system(config);
+    pops::test::install_amr_runtime_authority(system, "tests.generated-amr/cfl-storage/" + kind);
+    system.install_block_state_route("storage", "state/storage");
+    system.install_prepared_amr_block(pops::prepare_compiled_amr_system_block<Dim>(
+        "storage", ProgramStateModel<Dim>{}, "state_storage", "unavailable", "conservative", "imex",
+        1.4, 1, 1));
+    const std::vector<double> data(cell_count(config.shape), 1.0);
+    system.set_conservative_state("storage", data);
+    auto context = pops::runtime::program::make_program_execution_provider(&system);
+    context->configure_primary_clock("clock.macro");
+    int calls = 0;
+    context->install([&](double) { ++calls; }, context);
+    system.set_program_block_map({0});
+    using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+    system.install_prepared_amr_program_flux_expression_budget(
+        "tests.generated-amr/cfl-storage-program/" + kind,
+        std::vector<FluxBudget>(1, FluxBudget{1, 1}), 0, 0);
+    if (kind == "global")
+      system.add_dt_bound("authored", [] { return .025; });
+    if (kind == "program")
+      context->runtime_state().dt_bound_ = [](pops::Real cfl) { return cfl / pops::Real(16); };
+    const double maximum = kind == "maximum" ? .025 : std::numeric_limits<double>::infinity();
+    if (kind == "none") {
+      EXPECT_THROW((void)system.step_cfl(.4, 1.e-12, maximum), std::runtime_error);
+      EXPECT_EQ(calls, 0);
+      EXPECT_EQ(system.macro_step(), 0);
+      EXPECT_EQ(system.block_level_state_global("storage", 0), data);
+    } else {
+      EXPECT_NEAR(system.step_cfl(.4, 1.e-12, maximum), .025, 1.e-12);
+      EXPECT_EQ(calls, 1);
+      EXPECT_EQ(system.last_dt_bound(), kind == "maximum"  ? "strategy:max_dt"
+                                        : kind == "global" ? "global:authored"
+                                                           : "program:dt_bound");
+    }
+  }
+}
+
+TEST(GeneratedAmrSystemBlock, CflPresentEmptySpeedCapabilityIsNotAbsent) {
+  constexpr int Dim = pops::kNativeDimension;
+  using Level = pops::PreparedGeneratedAmrLevelBlock<Dim>;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/cfl-empty-provider");
+  system.install_block_state_route("tracer", "state/tracer");
+  auto prepared = pops::prepare_compiled_amr_system_block<Dim>(
+      "tracer", advection_model<Dim>(), "minmod", "rusanov", "conservative", "explicit", 1.4, 1, 1);
+  const auto materialize = prepared.materialize_level;
+  prepared.materialize_level = [materialize](auto& runtime, auto context) {
+    // Exercise the real constructor with every other callback present. An advertised
+    // but removed provider must not become the explicit nullopt storage capability.
+    auto prepare = [](const auto&, auto&) {};
+    auto evaluate = [](const auto&, auto&, auto&) {};
+    auto jvp = [](const auto&, auto&, const auto&, auto&) {};
+    auto implicit = [](const auto&, auto&, pops::Real, const pops::NewtonOptions&) {
+      return pops::SolveOutcome::serial(pops::SolveReport::capability_failure());
+    };
+    const auto make = [&](std::optional<typename Level::Speed> speed) {
+      return Level(runtime, context.level, *context.state, context.state_identity, "tests.provider",
+                   "tests.contract", *context.lane, prepare, prepare, evaluate, evaluate, evaluate,
+                   evaluate, evaluate, jvp, evaluate, implicit, std::move(speed),
+                   [](const auto&, auto&) {}, {}, {}, std::nullopt, {});
+    };
+    EXPECT_THROW((void)make(typename Level::Speed{}), std::invalid_argument);
+    auto absent = make(std::nullopt);
+    EXPECT_EQ(absent.transport_speed(), std::nullopt);
+    EXPECT_THROW((void)absent.maximum_speed(), std::logic_error);
+    for (const pops::Real invalid :
+         {pops::Real(-1), std::numeric_limits<pops::Real>::quiet_NaN()}) {
+      auto present = make(typename Level::Speed([invalid](const auto&) { return invalid; }));
+      EXPECT_NE(present.collective_contract(), absent.collective_contract());
+      EXPECT_THROW((void)present.transport_speed(), std::runtime_error);
+    }
+    return materialize(runtime, std::move(context));
+  };
+  system.install_prepared_amr_block(std::move(prepared));
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  system.install_program_step([](double) {});
+  EXPECT_NEAR(system.step_cfl(.4), .4 / (8. * Dim), 1.e-12);
 }
 
 TEST(GeneratedAmrSystemBlock, CflPublishesCoordinateAuxiliaryBeforeSpeedAndRetainsInvalidGuards) {

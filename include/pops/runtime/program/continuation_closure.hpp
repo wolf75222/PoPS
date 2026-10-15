@@ -47,6 +47,11 @@ std::shared_ptr<const ContinuationClosure<Dim>> continuation_collective_closure(
     continuation_detail::walk_value<Dim>(
         value, capacity,
         [&](const ContinuationValue<Dim>& node) {
+          // This proof comes from immutable Value constructors, never from an
+          // Array's declared element type. A malformed native Array mutation
+          // therefore still exposes its actual distributed edges and cycles.
+          if (node.is_scalar_structure())
+            return false;
           if (const auto& d = node.distributed_domain_ref()) {
             // A registry-local GC census treats other issuers as external
             // ownership edges. Full checkpoint/transport closure never uses this mode.

@@ -361,7 +361,10 @@ void continuation_rethrow_(const std::exception_ptr& error, const char* label) c
   throw std::runtime_error(std::string(label) + " failed collectively");
 }
 typename ContinuationCodec<Dim>::Prototypes continuation_prototypes_() const {
-  return [this](int owner) -> const field_type& { return state(owner); };
+  return [this](const ContinuationType& type,
+                const ContinuationFieldSupport::Ref& support) -> const field_type& {
+    return continuation_field_prototype_(type, support);
+  };
 }
 void continuation_require_profile_() const {
   const auto& runtime = runtime_state();

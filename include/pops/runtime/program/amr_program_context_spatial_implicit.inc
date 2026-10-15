@@ -8,7 +8,7 @@ void prepare_spatial_collectively(Prepare&& prepare) const {
     error = std::current_exception();
   }
   collectively_rethrow_exception(error, prepared_execution_lane(),
-                                  "composite spatial preparation failed collectively");
+                                 "composite spatial preparation failed collectively");
 }
 
 std::shared_ptr<PreparedAmrSpatialResidual<Dim>> prepare_spatial_hierarchy(
@@ -211,7 +211,7 @@ SolveReport solve_spatial_hierarchy(PreparedAmrSpatialResidual<Dim>& workspace) 
                       hierarchy_type& result, int) {
     // Map solver coordinates, then restrict the fine iterate; covered coarse cells are not unknowns.
     for (std::size_t level = 0; level < q.size(); ++level)
-      with_program_attempt_level(static_cast<int>(level), [&] {
+      with_program_attempt_level_or_current(static_cast<int>(level), [&] {
         workspace.conserved[level] = workspace.mappings.at(level)(q[level]);
       });
     for (std::size_t child = q.size(); child-- > 1;)
@@ -220,7 +220,7 @@ SolveReport solve_spatial_hierarchy(PreparedAmrSpatialResidual<Dim>& workspace) 
           prepared_execution_lane(), &facade_->profiler_handle());
     const field_type* parent = nullptr;
     for (std::size_t level = 0; level < q.size(); ++level)
-      with_program_attempt_level(static_cast<int>(level), [&] {
+      with_program_attempt_level_or_current(static_cast<int>(level), [&] {
         parent = workspace.evaluations.at(level)(*workspace.conserved[level], previous[level],
                                                  result[level], parent);
       });

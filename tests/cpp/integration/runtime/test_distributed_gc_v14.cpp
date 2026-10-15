@@ -1,5 +1,6 @@
 #include <pops/runtime/program/distributed_array.hpp>
 #include <gtest/gtest.h>
+#include <chrono>
 
 namespace {
 namespace d = pops::runtime::program::distributed;
@@ -198,8 +199,10 @@ TEST(DistributedGcV14, DeepRemoteRootAndSharedEdgesSurviveClosureAndCollectExact
   d::Registry registry(lane);
   registry.configure(32 * 1024 * 1024, 8);
   auto domain = registry.issue(946, 4, offsets(lane));
-  T type{K::Int64};
-  Ref payload = V::integer(73);
+  // Keep a real distributed edge at the deep leaf. A scalar-only immutable
+  // Product is now proved irrelevant to registry ownership at construction.
+  T type{K::DistributedIndex, {}, {}, 946, 4};
+  Ref payload = V::distributed_index(domain, 3);
   for (std::size_t i = 0; i < depth; ++i) {
     T parent;
     parent.names = {"value"};
@@ -244,7 +247,7 @@ TEST(DistributedGcV14, DeepRemoteRootAndSharedEdgesSurviveClosureAndCollectExact
     for (auto value : held->values) {
       for (std::size_t i = 0; i < depth; ++i)
         value = value->members().at(0);
-      EXPECT_EQ(value->integer(), 73);
+      EXPECT_EQ(value->distributed_index_offset(), 3);
     }
   }
   root.reset();
@@ -254,6 +257,83 @@ TEST(DistributedGcV14, DeepRemoteRootAndSharedEdgesSurviveClosureAndCollectExact
   d::collect_garbage<2>(registry);
   EXPECT_EQ(registry.retained_domains(), 0u);
   EXPECT_EQ(registry.retained_bytes(), 0u);
+}
+
+TEST(DistributedGcV14, ScalarProductCensusScalesWithElementsWithoutOwnershipNodes) {
+  auto lane = pops::ExecutionLane::world();
+  constexpr std::uint64_t storage = 64 * 1024 * 1024;
+  constexpr int versions = 4;
+  const T scalar{K::Float64};
+  const T element{K::Product, {scalar, scalar, scalar}, {"x", "y", "z"}};
+  const T error{K::Int64};
+  for (const std::int64_t count : {4096, 8192}) {
+    d::Registry registry(lane);
+    registry.configure(storage, versions + 1);
+    std::vector<std::int64_t> partition(static_cast<std::size_t>(lane.size()) + 1);
+    for (int rank = 0; rank <= lane.size(); ++rank)
+      partition[static_cast<std::size_t>(rank)] = count * rank / lane.size();
+    auto domain = registry.issue(947, count, partition);
+    std::vector<AR> retained;
+    for (int version = 0; version < versions; ++version) {
+      auto made = d::map<2>(registry, domain, element, error, storage, [&](d::Index index) {
+        return V::variant(1, V::product({V::real(index.gid + version), V::real(2), V::real(3)}));
+      });
+      d::phase(lane, [&] { d::local_require(made.ok(), d::Code::internal); });
+      retained.push_back(std::move(made.value));
+    }
+    std::uint64_t inspected = 0, scalar_values = 0, ownership_nodes = 0;
+    d::phase(lane, [&] {
+      d::gc_detail::Census<2> census(registry.storage_bytes(), registry.issuer());
+      // These are exactly the one Domain and four Arrays published above.
+      // This census measures visited edges only; real root discovery/sweep is
+      // exercised below by collect_garbage, with the registry's borrowed handles.
+      census.register_domain(domain->identity().ordinal, domain);
+      for (const auto& array : retained)
+        census.register_array(array->version.ordinal, array, d::array_type_tag<2>());
+      census.complete();
+      inspected = census.inspected_array_values();
+      scalar_values = census.scalar_values();
+      ownership_nodes = census.ownership_value_nodes();
+    });
+    EXPECT_EQ(inspected, static_cast<std::uint64_t>(domain->local_size()) * versions);
+    EXPECT_EQ(scalar_values, inspected);
+    EXPECT_EQ(ownership_nodes, 0u);
+    const auto bytes = registry.retained_bytes();
+    const auto begin = std::chrono::steady_clock::now();
+    for (int repeat = 0; repeat < 4; ++repeat)
+      d::collect_garbage<2>(registry);
+    const double elapsed =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
+    RecordProperty("gc_seconds_n" + std::to_string(count), std::to_string(elapsed));
+    RecordProperty("census_edges_n" + std::to_string(count), std::to_string(inspected));
+    EXPECT_EQ(registry.retained_values(), versions);
+    EXPECT_EQ(registry.retained_bytes(), bytes);
+    // A remote-only root still retains every shard; scalar pruning cannot
+    // replace collective reachability with rank-local reference counting.
+    if (lane.rank() != 0)
+      retained.clear();
+    d::collect_garbage<2>(registry);
+    EXPECT_EQ(registry.retained_values(), versions);
+    retained.clear();
+    d::collect_garbage<2>(registry);
+    EXPECT_EQ(registry.retained_values(), 0u);
+    domain.reset();
+    d::collect_garbage<2>(registry);
+    EXPECT_EQ(registry.retained_bytes(), 0u);
+  }
+}
+
+TEST(DistributedGcV14, ScalarProofIsClosedOverActualValuesAndKeepsOpaqueKinds) {
+  auto scalar = V::product({V::integer(1), V::variant(0, V::real(2)), V::boolean(true)});
+  EXPECT_TRUE(scalar->is_scalar_structure());
+  EXPECT_FALSE(V::product({scalar, Ref{}})->is_scalar_structure());
+  EXPECT_FALSE(V::variant(1, Ref{})->is_scalar_structure());
+  p::FiniteDomainRegistry finite;
+  auto domain = finite.issue(1, 1, 1);
+  EXPECT_FALSE(V::domain(domain)->is_scalar_structure());
+  EXPECT_FALSE(V::index(domain, 0)->is_scalar_structure());
+  EXPECT_FALSE(V::array(domain, {scalar})->is_scalar_structure());
+  EXPECT_FALSE(V::product({scalar, V::index(domain, 0)})->is_scalar_structure());
 }
 
 }  // namespace

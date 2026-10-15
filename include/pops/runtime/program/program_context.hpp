@@ -340,8 +340,12 @@ class ProgramContext {
       resources(action);
     };
     std::weak_ptr<AlgebraLifetime> algebra = algebra_lifetime_;
-    auto restart = [algebra](const FiniteDomainRealmRef& keep,
-                             const std::shared_ptr<distributed::Registry>& restored) noexcept {
+    std::weak_ptr<ContinuationFieldInstances> fields = continuation_field_instances_;
+    auto restart = [algebra, fields](
+                       const FiniteDomainRealmRef& keep,
+                       const std::shared_ptr<distributed::Registry>& restored) noexcept {
+      if (auto live = fields.lock())
+        live->values.clear();
       if (auto live = algebra.lock())
         live->restart_committed(keep, restored);
     };
@@ -2290,11 +2294,14 @@ class ProgramContext {
 
   runtime_state_type& runtime_state() const { return system_->program_runtime_state_(); }
 
+#include <pops/runtime/program/program_context_continuation_fields.inc>
+
  public:
   /// Own opaque structural storage without performing a numerical Field operation.
   /// The copy constructor retains the complete valid/ghost storage. Its caller
   /// converges allocation/copy errors before publishing any structural slot.
   std::shared_ptr<field_type> own_structural_field(const field_type& source) const {
+    (void)continuation_field_instance_(source);
     auto owned = std::make_shared<field_type>(source);
     continuation_bind_field_provenance(source, *owned, owned);
     return owned;
@@ -2308,23 +2315,39 @@ class ProgramContext {
   FieldExchangeExpressions::Ref continuation_bind_field_provenance(const field_type& source,
                                                                    const field_type& destination,
                                                                    const Lifetime& lifetime) const {
+    const auto instance = continuation_field_instance_(source);
     field_exchanges_->copy_retained(&destination, &source, lifetime);
-    return field_exchanges_->expression(&destination);
+    const auto expression = field_exchanges_->expression(&destination);
+    if (instance) {
+      auto metadata = instance->metadata;
+      metadata.expression = expression;
+      register_continuation_field_copy_(destination, lifetime, std::move(metadata));
+    }
+    return expression;
   }
   template <class Lifetime>
   ContinuationFieldMetadata continuation_bind_field_provenance(const field_type& source,
                                                                const field_type& destination,
                                                                const Lifetime& lifetime,
-                                                               const ContinuationType&) const {
-    return {continuation_bind_field_provenance(source, destination, lifetime), {}};
+                                                               const ContinuationType& type) const {
+    continuation_preflight_field(source, type);
+    const auto instance = continuation_field_instance_(source);
+    const auto expression = continuation_bind_field_provenance(source, destination, lifetime);
+    return {expression, instance ? instance->metadata.support : ContinuationFieldSupport::Ref{},
+            instance ? instance->metadata.representation : FieldRepresentationObligation::Ref{}};
   }
   template <class Lifetime>
   void continuation_bind_field_provenance(const field_type& source, const field_type& destination,
                                           const Lifetime& lifetime,
                                           const ContinuationFieldMetadata& metadata) const {
-    if (metadata.support)
+    const auto instance = continuation_field_instance_(source);
+    if ((metadata.support || metadata.representation) &&
+        (!instance || instance->metadata.support != metadata.support ||
+         instance->metadata.expression != metadata.expression ||
+         instance->metadata.representation != metadata.representation))
       throw std::invalid_argument(
           "Uniform Field restoration requires an explicit support transfer");
+    register_continuation_field_copy_(destination, lifetime, metadata);
     continuation_bind_field_provenance(source, destination, lifetime, metadata.expression);
   }
   template <class Lifetime>
@@ -2341,6 +2364,12 @@ class ProgramContext {
   }
 
   int program_resource_field_level() const noexcept { return 0; }
+
+  std::int64_t invocation_level() const {
+    if (!resource_attempt().visible() || !std::isfinite(current_dt_) || !(current_dt_ > 0.0))
+      throw std::logic_error("invocation level requires a prepared Program attempt");
+    return 0;
+  }
 
   void configure_program_resource_field_nullspace(FieldNullspacePlan<Dim>& plan) const {
     const Geometry<Dim> geom = geometry();

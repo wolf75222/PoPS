@@ -263,12 +263,16 @@ class FieldSolution:
         matches = [index for index, row in enumerate(self.unknowns) if row == _identity(unknown)]
         if len(matches) != 1:
             raise FieldProblemError("field.observation.unknown", "observation selects a foreign field unknown")
+        from ._observation_contract import field_provider_authority
+        space = None if not self.observation_spaces else self.observation_spaces[matches[0]]
+        authority = field_provider_authority(self.problem_identity, self.unknowns[matches[0]], space)
         return self.packed.prog._new("scalar_field", "field_component", (self.packed,),
             {"ncomp": 1, "component": matches[0], "field_problem_identity": self.problem_identity,
+             "field_authority": authority,
              "observation_byte_capacity": self.byte_capacity,
              "field_unknown": self.unknowns[matches[0]], "stencil_access": StencilAccess.pointwise()},
             unknown.local_id + "_value", None, point=self.packed.point, inherit_state_ref=False,
-            space=None if not self.observation_spaces else self.observation_spaces[matches[0]])
+            space=space)
 
     def cell_mean_state(self, unknown: Handle, *, target: Any) -> ProgramValue:
         """Project one solved cell mean to an exact one-component State endpoint.
@@ -358,8 +362,10 @@ class FieldSolution:
             space = FieldSpace(value.space.name + ".gradient", components=tuple("axis%d" % axis for axis in range(dimension)),
                 representation="field", centering="cell", units=tuple(units),
                 support=value.space.support, sampling="cell", frame=value.space.frame, clock=value.space.clock)
+        from ._observation_contract import field_gradient_authority
+        authority = field_gradient_authority(value.attrs["field_authority"], dimension, space)
         return value.prog._new("scalar_field", "field_gradient", (value,),
-            {"ncomp": dimension, "spatial_dimension": dimension,
+            {"ncomp": dimension, "spatial_dimension": dimension, "field_authority": authority,
              "differentiation": "cell_centered_second_order",
              "sampling": "cell", "field_problem_identity": self.problem_identity,
              "stencil_access": StencilAccess.nearest_neighbour()},

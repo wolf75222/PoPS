@@ -120,6 +120,32 @@ def instantiate(value_type, point):
     return ValueType(transform(as_type(value_type).signature, describe))
 
 
+def instantiate_variant_payload(value_type, tag, payload_signature, default_point):
+    """Infer the shared unbound scalar point from exact selected payload leaves."""
+    declared = as_type(value_type).signature
+    if declared["vtype"] != "variant":
+        raise TypeError("variant requires a Variant type")
+    members = dict(declared["members"])
+    if not isinstance(tag, str) or tag not in members:
+        raise ValueError("unknown Variant tag %r" % tag)
+    pending = [(members[tag], payload_signature)]
+    inferred = []
+    while pending:
+        wanted, actual = pending.pop()
+        if wanted["vtype"] != actual["vtype"]:
+            continue  # The exact signature comparison reports the mismatch.
+        if wanted["vtype"] in ("scalar", "bool", "int64") and wanted.get("point") is None:
+            point = actual.get("point")
+            if inferred and point != inferred[0]:
+                raise TypeError("variant payload has incompatible unbound scalar evaluation points")
+            inferred[:] = [point]
+        elif wanted["vtype"] in ("product", "variant"):
+            actual_members = dict(actual["members"])
+            pending.extend((child, actual_members[name]) for name, child in wanted["members"]
+                           if name in actual_members)
+    return instantiate(value_type, inferred[0] if inferred else default_point)
+
+
 def _members(kind, fields):
     if any(not isinstance(key, str) or not key for key in fields):
         raise TypeError("type member names must be non-empty strings")

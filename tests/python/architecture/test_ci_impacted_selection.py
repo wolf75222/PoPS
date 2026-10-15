@@ -935,6 +935,12 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
         },
         {
             "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v02_field_error_capsule_native_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
             "path": "tests/python/integration/mpi/test_api_v02_finite_amr_native_mpi2.py",
             "nproc": 2,
             "native_dimension": 2,
@@ -972,6 +978,18 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
         {
             "suite": "pops_python_integration_mpi",
             "path": "tests/python/integration/mpi/test_api_v02_implicit_derivatives_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v02_independent_field_continuation_native_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v02_interval_regions_native_mpi2.py",
             "nproc": 2,
             "native_dimension": 2,
         },
@@ -1635,6 +1653,7 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         "2\ttests/python/integration/mpi/test_api_v02_distributed_kokkos_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_distributed_program_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_drift_wetdry_native_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v02_field_error_capsule_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_finite_amr_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_finite_arrays_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_finite_kokkos_native_mpi2.py",
@@ -1642,6 +1661,8 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         "2\ttests/python/integration/mpi/test_api_v02_hall_mhd_ct_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_history_transfer_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_implicit_derivatives_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v02_independent_field_continuation_native_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v02_interval_regions_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_kinetic_nd_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_magnetic_midpoint_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_nonlinear_interval_transport_native_mpi2.py",
@@ -1744,8 +1765,8 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         line.partition("=")[::2]
         for line in (tmp_path / "github-output.txt").read_text().splitlines()
     )
-    assert outputs["python_mpi_count"] == "119"
-    assert outputs["python_mpi_entrypoint_count"] == "90"
+    assert outputs["python_mpi_count"] == "122"
+    assert outputs["python_mpi_entrypoint_count"] == "93"
     assert outputs["python_mpi_orchestrator_count"] == "29"
 
 
@@ -2561,7 +2582,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert 'PYTHONUNBUFFERED: "1"' in python_shards_block
     assert 'cp "$timings/selected.txt" "$timings/timings.tsv"' not in python_shards_block
     assert "shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}" in python_shards_block
-    assert 'SHARD_TOTAL: "119"' in python_shards_block
+    assert 'SHARD_TOTAL: "121"' in python_shards_block
     assert "strategy.job-total" not in python_shards_block
     for family, block in (("cpp", cpp_shards_block), ("python", python_shards_block)):
         assert "name: ci-plan" in block

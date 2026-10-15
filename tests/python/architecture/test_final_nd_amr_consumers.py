@@ -30,6 +30,7 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/amr_program_context_continuation_regrid.inc",
         "pops/runtime/program/amr_program_context_continuation_regrid_child.inc",
         "pops/runtime/program/amr_program_context_continuation_field_storage.inc",
+        "pops/runtime/program/amr_program_context_continuation_field_provider.inc",
         "pops/runtime/program/amr_program_context_field_allocation.inc",
         "pops/runtime/program/amr_program_context_field_bundle.inc",
         "pops/runtime/program/amr_program_context_affine_finalization.inc",
@@ -107,6 +108,9 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
         "pops/runtime/program/amr_program_context_continuation_field_storage.inc",
         "pops/runtime/program/amr_program_context_field_allocation.inc",
         "pops/runtime/program/amr_program_context_field_bundle.inc",
+    }),
+    "continuation_field_provider": frozenset({
+        "pops/runtime/program/amr_program_context_continuation_field_provider.inc",
     }),
     "affine_finalization": frozenset({
         "pops/runtime/program/amr_program_context_affine_finalization.inc",
@@ -236,6 +240,9 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     # Producer metadata and exact allocation/lifetime authentication share the
     # copy authority; revoked instances remain tombstones while copies live.
     "continuation_field_storage": 336,
+    # Scientific provider catalogue, per-level prototypes and exact observation
+    # publication are one new responsibility; State ownership is not synthesized.
+    "continuation_field_provider": 240,
     "affine_finalization": 320,
     "affine_history": 320,
     "temporal_field": 288,
@@ -281,6 +288,31 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
 # existing fragments. Keep every former cap unchanged and count these additions
 # in the fragment and aggregate closure as well as their owning responsibility.
 PROGRAM_CONTRACT_EXTENSIONS = {
+    # The public algebra's level value reads an authenticated active invocation.
+    "spatial_context": (16, (
+        ("amr_program_context_spatial.inc", "std::int64_t invocation_level() const",
+         "ProgramResourceTopology program_resource_topology() const"),
+    )),
+    # CONT6 authenticates the independent scientific type and complete metadata
+    # before structural copies. Existing State-copy allowance remains fixed.
+    "continuation_field_storage": (80, (
+        ("amr_program_context_continuation_field_storage.inc",
+         "  if (!result) {\n    if (const auto snapshot =",
+         "  if (!result && continuation_field_storage_.contains"),
+        ("amr_program_context_continuation_field_storage.inc",
+         "void continuation_require_field_type_(",
+         "private:\ntemplate <class Lifetime>"),
+    )),
+    # Observation route validation, metadata budget and canonical origin are
+    # distinct from the pre-existing immutable numerical snapshot operation.
+    "field_observation": (40, (
+        ("amr_program_context_field_observation.inc",
+         "    if (!field_provider.empty()) {\n      const auto& scientific",
+         "    charge(static_cast<std::uint64_t>(nlev())"),
+        ("amr_program_context_field_observation.inc",
+         "    if (!field_provider.empty()) {\n      ExactContractBuilder point;",
+         "    pending->fields_.reserve("),
+    )),
     # Exact affine metadata follows the already evaluated Python equation;
     # producer-family authentication permits independent local quadratures.
     "flux_expression": (112, (
@@ -312,6 +344,8 @@ PROGRAM_CONTRACT_EXTENSIONS = {
     "spatial_operations": (64, (
         ("amr_program_context_spatial_operations.inc", "private:\n// Reuse",
          "Geometry<Dim> geometry()"),
+        ("amr_program_context_spatial_operations.inc", "Real abs_sum_component(const field_type&",
+         "Real max_component(const field_type&"),
     )),
     # Exact HistoryTransfer coefficients retain their budget and authority seal.
     "history_checkpoint": (416 + 8, (
@@ -355,6 +389,7 @@ PROGRAM_NEW_CONTRACT_BUDGET = (
         "continuation_checkpoint",
         "continuation_regrid",
         "continuation_field_storage",
+        "continuation_field_provider",
         "affine_finalization",
         "affine_history",
         "temporal_field",

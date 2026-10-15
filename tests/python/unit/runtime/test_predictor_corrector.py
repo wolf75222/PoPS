@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 import json
+import time
 
 from pops.codegen import Production
 from pops.codegen.program_codegen import emit_cpp_program
@@ -173,7 +174,11 @@ def _manual_fe(block_state, field, electric):
     return program
 
 
-def _resolved_case(name, program_kind):
+def _resolved_case(program_kind):
+    # The comparison changes only the time Program.  Keep the exact same physical/Case
+    # authority so the authenticated model-loader cache can reuse its native component;
+    # naming that identical model after each method needlessly compiles it three times.
+    name = "pc_shared_physics"
     frame, model, state, flux, field_operator, electric, rate, lorentz = _physics(name)
     case = pops.Case("%s-case" % name)
     block = case.block("plasma", model)
@@ -240,9 +245,16 @@ def _initial_state():
     return np.ascontiguousarray(np.stack((rho, 0.4 * rho, -0.2 * rho)))
 
 
-def _compile(resolved):
+def _compile(resolved, label):
+    started = time.monotonic()
+    print("  [%s] compile start" % label, flush=True)
     artifact = pops.compile(resolved)
+    print("  [%s] compile finished in %.2fs; verify start" % (
+        label, time.monotonic() - started), flush=True)
+    verify_started = time.monotonic()
     artifact.verify()
+    print("  [%s] verify finished in %.2fs; Program %s" % (
+        label, time.monotonic() - verify_started, artifact.program_hash), flush=True)
     return artifact
 
 
@@ -283,7 +295,7 @@ def _analytic_lorentz_apply(state):
 
 # ---- (A) the only low-level section: pure generated-C++ assertions ----------------------------
 print("== (A) named-source rhs codegen from a public resolved Case ==")
-manual_fe_plan = _resolved_case("pc_manual_fe", "manual_fe")
+manual_fe_plan = _resolved_case("manual_fe")
 src = _emit_resolved(manual_fe_plan)
 chk(
     "ctx.neg_div_flux_default_into(0, " in src and "ctx.rhs_into(" not in src,
@@ -325,7 +337,7 @@ chk(
 # Resolve the library factory through the same strict Case snapshot/authentication path as the
 # manual Program above.  This also guards the generic ownership protocol used when a public model
 # replaces an earlier live Module view before validation.
-pc_plan = _resolved_case("pc_public", "predictor_corrector")
+pc_plan = _resolved_case("predictor_corrector")
 pc_src = _emit_resolved(pc_plan)
 pc_field_solves = tuple(value for value in pc_plan.time._values if value.op == "solve_fields")
 pc_field_calls = tuple(
@@ -368,9 +380,19 @@ except (ImportError, RuntimeError) as error:
         sys.exit(1)
     _skip("public native lifecycle unavailable: %s" % error)
 
-manual_fe_artifact = _compile(manual_fe_plan)
-reference_fe_artifact = _compile(_resolved_case("pc_rate_fe", "rate_fe"))
-pc_artifact = _compile(pc_plan)
+manual_fe_artifact = _compile(manual_fe_plan, "manual FE")
+reference_fe_artifact = _compile(_resolved_case("rate_fe"), "rate FE")
+pc_artifact = _compile(pc_plan, "predictor-corrector")
+comparison_artifacts = (manual_fe_artifact, reference_fe_artifact, pc_artifact)
+chk(
+    len({artifact.blocks[0].model.so_path for artifact in comparison_artifacts}) == 1,
+    "all three Programs use the same authenticated physical model binary",
+)
+chk(
+    len({artifact.so_path for artifact in comparison_artifacts}) == 3
+    and len({artifact.program_hash for artifact in comparison_artifacts}) == 3,
+    "the three distinct time Programs retain distinct compiled executables and identities",
+)
 
 initial = _initial_state()
 

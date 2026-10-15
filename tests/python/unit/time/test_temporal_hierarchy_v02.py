@@ -41,7 +41,10 @@ def test_temporal_and_synchronized_solves_preserve_their_distinct_authorities():
     assert before is not stores["synchronized"].inputs[0]
     suspension = source.index("ctx.suspend_hierarchy_barrier(")
     assert "program_field_%d_snapshot->local_field()" % before.id in source[suspension:]
-    assert source.count("ctx.capture_hierarchy_field_observation(") == 1
+    assert source.count("ctx.capture_hierarchy_field_observation(") == 2
+    synchronized_value = stores["synchronized"].inputs[0]
+    assert "program_field_%d_snapshot->local_field()" % synchronized_value.id in source
+    assert synchronized_value.id != before.id
     assert source.count("ctx.reduce_hierarchy_field_observation(") == 2
     assert "ctx.reduce_hierarchy_field_component(" not in source
     assert source.index("ctx.capture_hierarchy_field_observation(") < suspension

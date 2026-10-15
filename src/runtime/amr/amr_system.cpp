@@ -21669,10 +21669,14 @@ double AmrSystem<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, d
       runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
           authority_error, &lane, "AMR CFL auxiliary authority validation failed collectively");
     }
-    const Real speed =
-        std::max(prepared_level.prepared->maximum_speed(), static_cast<Real>(speed_floor));
-    double level_dt = cfl * static_cast<double>(prepared_level.spacing) * prepared_level.substeps /
-                      (static_cast<double>(prepared_level.stride) * static_cast<double>(speed));
+    const auto transport = prepared_level.prepared->transport_speed();
+    // Only an actual transport capability contributes a wave-speed restriction.
+    // Program-only storage still participates in every other authenticated bound.
+    const Real speed = transport ? std::max(*transport, static_cast<Real>(speed_floor)) : Real(0);
+    double level_dt =
+        transport ? cfl * static_cast<double>(prepared_level.spacing) * prepared_level.substeps /
+                        (static_cast<double>(prepared_level.stride) * static_cast<double>(speed))
+                  : std::numeric_limits<double>::infinity();
     const char* level_reason = "transport";
     if (const std::optional<Real> parabolic = prepared_level.prepared->parabolic_frequency();
         parabolic) {
@@ -21719,9 +21723,6 @@ double AmrSystem<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, d
       reason_block_index = prepared_level.block_index;
     }
   }
-  if (all_reduce_max(std::isfinite(selected) ? 0L : 1L, lane) != 0)
-    throw std::runtime_error("AmrSystem::step_cfl found no finite generated stability bound");
-
   for (std::size_t bound_index = 0; bound_index < p_->dt_bounds.size(); ++bound_index) {
     const typename Impl::GlobalDtBound& bound = p_->dt_bounds[bound_index];
     double candidate = std::numeric_limits<double>::infinity();
@@ -21781,6 +21782,10 @@ double AmrSystem<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, d
     selected = max_dt;
     reason_kind = BoundKind::maximum_dt;
   }
+  // A Program/global bound or explicit max_dt may be the only finite bound;
+  // absence of every capability remains a collective rejection before advancing.
+  if (all_reduce_max(std::isfinite(selected) && selected > 0.0 ? 0L : 1L, lane) != 0)
+    throw std::runtime_error("AmrSystem::step_cfl found no finite stability bound");
   if (all_reduce_max(selected < min_dt ? 1L : 0L, lane) != 0)
     throw std::runtime_error("AmrSystem::step_cfl stability bound is below declared min_dt");
 
@@ -22365,23 +22370,31 @@ void AmrSystem<Dim>::restore_checkpoint_counters(int regrid_count, std::uint64_t
   if (all_reduce_max(p_->restart_transaction ? 0L : 1L, lane) != 0)
     throw std::logic_error(
         "AmrSystem checkpoint counters require one collective active restart transaction");
-  if (regrid_count < 0)
-    throw std::invalid_argument("AmrSystem checkpoint regrid count must be non-negative");
-
-  ExactContractBuilder request;
-  request.text("pops.amr-system.restore-checkpoint-counters")
-      .scalar(std::uint32_t{1})
-      .scalar(std::int32_t{Dim})
-      .scalar(std::int32_t{regrid_count})
-      .scalar(topology_epoch);
-  const std::string request_contract = std::move(request).release();
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("amr-checkpoint-counters"), std::string_view(request_contract)}},
-          lane))
+  std::string request_contract;
+  std::exception_ptr request_error;
+  try {
+    if (regrid_count < 0)
+      throw std::invalid_argument("AmrSystem checkpoint regrid count must be non-negative");
+    if (!p_->multiblock_hierarchy)
+      throw std::logic_error("AMR checkpoint counters require the complete prepared carrier");
+    ExactContractBuilder request;
+    request.text("pops.amr-system.restore-checkpoint-counters")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .scalar(std::int32_t{regrid_count})
+        .scalar(topology_epoch);
+    request_contract = std::move(request).release();
+  } catch (...) {
+    request_error = std::current_exception();
+  }
+  collectively_rethrow_exception(request_error, lane, "AMR checkpoint counter request failed");
+  const std::array<ExactOrderedBytePair, 1> counter_contract{
+      ExactOrderedBytePair{"amr-checkpoint-counters", request_contract}};
+  if (!all_ranks_agree_exact_ordered_byte_pairs(counter_contract, lane))
     throw std::invalid_argument("AMR checkpoint counters differ between MPI ranks");
 
-  using publication_type = typename Impl::engine_type::PreparedRestorePublication;
-  std::optional<publication_type> publication;
+  using authority_type = typename Impl::multiblock_type::RestartAuthority;
+  std::optional<authority_type> authority;
   std::exception_ptr preparation_error;
   try {
     auto snapshot = p_->engine->snapshot();
@@ -22389,7 +22402,8 @@ void AmrSystem<Dim>::restore_checkpoint_counters(int regrid_count, std::uint64_t
     snapshot.exact_spatial_contract = runtime::amr::detail::exact_runtime_spatial_contract(
         p_->engine->spatial_identity(), snapshot.hierarchy, snapshot.topology_epoch,
         snapshot.materialization_generation);
-    publication.emplace(p_->engine->prepare_restore_publication(snapshot));
+    authority.emplace(authority_type{snapshot.exact_spatial_contract, snapshot.topology_epoch,
+                                     snapshot.materialization_generation});
   } catch (...) {
     preparation_error = std::current_exception();
   }
@@ -22398,7 +22412,10 @@ void AmrSystem<Dim>::restore_checkpoint_counters(int regrid_count, std::uint64_t
       std::rethrow_exception(preparation_error);
     throw std::runtime_error("AMR checkpoint counter publication failed to prepare collectively");
   }
-  p_->engine->publish_prepared_restore(std::move(*publication));
+  // A counter is part of the complete carrier authority. Updating the primary
+  // engine alone would leave its Program block map and flux budget bound to an
+  // older multiblock contract until the later checkpoint requalification.
+  p_->multiblock_hierarchy->requalify_restart_authority_collectively(*authority);
   p_->checkpoint_regrid_count_value = regrid_count;
   p_->refresh_prepared_hierarchy();
 }

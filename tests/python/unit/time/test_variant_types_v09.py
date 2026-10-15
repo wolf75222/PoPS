@@ -1,5 +1,6 @@
 """Closed user sums through actual Program authoring/serialization/C++ lowering (no runtime mock)."""
 import json
+import re
 from collections import UserList
 
 import pytest
@@ -8,14 +9,14 @@ from pops.codegen.program_codegen import emit_cpp_program
 from pops.time import Program
 from pops.time._program.detach import detach_compiled_program
 from pops.time.variant_types import (Bool, Failure, Float64, Int64, Product, Result,
-                                     RuntimeFailure, ValueType, Variant, type_of)
+                                     ValueType, Variant, type_of)
 from typed_program_support import typed_state
 
 
 def fixture(name="variants"):
     p = Program(name)
     u = typed_state(p, "u", state_name="U")
-    u.n
+    _ = u.n
     return p, u
 
 
@@ -134,7 +135,12 @@ def test_product_and_fold_may_carry_variant_with_field_payload():
     commit(p, u, output)
     source = emit_cpp_program(p)
     assert "switch (" in source and "ctx.scratch_state" in source
-    assert "structured control field copy" in source
+    owner = re.search(r"std::shared_ptr<pops::MultiFab<pops::kNativeDimension>> (carry_\d+_s\d+_owner);", source)
+    assert owner is not None
+    prepared = source.index("ctx.own_structural_field(")
+    vote = source.index('"structured control owned copy"', prepared)
+    assert prepared < vote < source.index(owner.group(1) + " = std::move(", vote)
+    assert "(*" + owner.group(1) + ")" in source
     assert p.to_graph().to_data() == detach_compiled_program(p).to_graph().to_data()
 
 
@@ -155,7 +161,11 @@ def test_iteration_propagates_typed_payload_before_copying_failed_state():
     commit(p, u, recovered)
     source = emit_cpp_program(p)
     jump = source.index("goto typed_iteration_done_")
-    assert jump < source.index("copy_with_provenance(next_", jump)
+    prepared = source.index("ctx.own_structural_field(", jump)
+    vote = source.index('"structured control owned copy"', prepared)
+    publish = re.search(r"next_\d+_s\d+_owner = std::move\(structured_pending_\d+\)", source[vote:])
+    assert publish is not None
+    assert jump < prepared < vote < vote + publish.start()
     assert p._ir_hash() == detach_compiled_program(p)._ir_hash()
     assert p.to_graph().to_data() == detach_compiled_program(p).to_graph().to_data()
 
@@ -201,7 +211,11 @@ def test_array_of_variants_snapshots_fields_and_preserves_exact_instance():
                         number=lambda t, x: t.value("numeric", t.float64(x)*u.n)))
     source = emit_cpp_program(p)
     assert "pops_algebra_finite::Record" in source and "std::any_cast<" in source
-    assert "_snapshot" in source and "ctx.scratch_state_like" in source
+    snapshot = re.search(r"(\w+_snapshot) = ctx.own_structural_field\(", source)
+    assert snapshot is not None
+    assert "std::shared_ptr<pops::MultiFab<pops::kNativeDimension>> " + snapshot.group(1) in source
+    store = source.index("std::any(" + snapshot.group(1) + ")", snapshot.end())
+    assert snapshot.end() < store
     assert "array_read_" in source
     assert "std::any_cast<std::int64_t>" in source
     assert "replicated Variant has an invalid discriminant" in source

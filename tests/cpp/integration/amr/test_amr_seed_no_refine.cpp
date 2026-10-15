@@ -479,12 +479,29 @@ TEST(test_amr_seed_no_refine,
                          "AMR Program accepted-state restore failed collectively");
   EXPECT_EQ(restored.program_accepted_state(), before);
   EXPECT_EQ(restored.program_accepted_state_revision(), revision_before);
-  expect_restore_refusal([&] { restored.restore_checkpoint_accepted_state(omission); },
-                         "AMR checkpoint post-requalification validation failed collectively");
+  const auto expect_checkpoint_refusal = [&](const std::vector<std::uint8_t>& image,
+                                             const char* cause) {
+    // Checkpoint requalification reports the failing rank and preserves its diagnostic on
+    // every execution lane, including Serial. The ordinary in-process restore above retains
+    // its local invalid_argument / collective runtime_error contract.
+    const std::string expected = "AMR checkpoint post-requalification validation failed on rank " +
+                                 std::to_string(pops::my_rank()) + ": " + cause;
+    EXPECT_THROW(
+        {
+          try {
+            restored.restore_checkpoint_accepted_state(image);
+          } catch (const std::runtime_error& error) {
+            EXPECT_EQ(std::string(error.what()), expected);
+            throw;
+          }
+        },
+        std::runtime_error);
+  };
+  expect_checkpoint_refusal(omission,
+                            "AMR checkpoint has an unsupported tagging hysteresis schema");
   EXPECT_EQ(restored.program_accepted_state(), before);
   EXPECT_EQ(restored.program_accepted_state_revision(), revision_before);
-  expect_restore_refusal([&] { restored.restore_checkpoint_accepted_state(invalid); },
-                         "AMR checkpoint post-requalification validation failed collectively");
+  expect_checkpoint_refusal(invalid, "AMR checkpoint tagging hysteresis record is invalid");
   EXPECT_EQ(restored.program_accepted_state(), before);
   EXPECT_EQ(restored.program_accepted_state_revision(), revision_before);
 }

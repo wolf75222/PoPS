@@ -393,24 +393,18 @@ def test_three_field_amr_uses_field_owned_composite_provider_and_synchronized_ph
     # Field-owned assembly/solution buffers cannot borrow a species scratch authority. The
     # gradient and finite-value status buffers must retain the same exact solve identity.
     from pops.codegen.program_emit_field_problem import hierarchy_field_solve
-    snapshot_sources = {
-        value.inputs[0].id for value in program._values
-        if value.op in ("reduce", "field_gradient") and len(value.inputs) == 1
-    }
     for value in program._values:
         if value.op in ("field_problem_load", "field_problem_coefficients", "field_component"):
             solve_id = hierarchy_field_solve(value).id
-            if value.op == "field_component" and value.id in snapshot_sources:
+            if value.op == "field_component":
                 assert ("auto program_field_%d_snapshot = ctx.capture_hierarchy_field_observation(%d, %d,"
                         % (value.id, solve_id, value.id)) in code
                 continue
             assert ("auto* program_field_%d_status = &ctx.hierarchy_field_scratch(%d, %d, 1, 1, 0);"
                     % (value.id, solve_id, value.id)) in code
-            if value.op == "field_component":
-                assert ("auto& program_field_%d = ctx.hierarchy_field_scratch(%d, %d, 0, 1, 1);"
-                        % (value.id, solve_id, value.id)) in code
-    assert ("auto& field_gradient_%d = ctx.hierarchy_field_scratch(%d, %d, 0, 2, 1);"
-            % (gradient.id, hierarchy_field_solve(gradient.inputs[0]).id, gradient.id)) in code
+    assert "auto field_gradient_%d = ctx.allocate_hierarchy_continuation_field_observation(" % gradient.id in code
+    assert "ctx.seal_hierarchy_continuation_field_observation(" in code
+    assert "*field_gradient_%d" % gradient.id in code
     for kind in ("sum", "min", "max", "abs_sum"):
         assert 'ctx.reduce_hierarchy_field_observation(program_field_%d_snapshot, "%s")' % (observed_third.id, kind) in code
     assert "ctx.observe_hierarchy_field_gradient(program_field_%d_snapshot," % gradient.inputs[0].id in code

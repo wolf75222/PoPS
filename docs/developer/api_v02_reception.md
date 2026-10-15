@@ -50,6 +50,30 @@ stack traces are preserved. The next qualification must measure the corrected
 collector and must still receive independent Field supports, persistent
 representation obligations, nested implicit compositions and final-source CI.
 
+## Source015 checkpoint
+
+The official Dim2/MPI incremental build passes with an unchanged source manifest.
+Eight Python-authored independent Field, typed-error capsule and interval-region
+receivers pass in the actual installed PoPS runtime. Four temporal hierarchy
+receivers also pass, including checkpoint/restart and rollback of all histories.
+The next nested Path receiver fails scratch ownership; the separate original
+typed-recovery receiver fails exact level-layout validation. Neither correction
+is qualified by these earlier successes.
+
+Ten selected C++ contracts pass on MPI1/2/3 (60 rank observations), covering
+independent observations, assembly scratch, implicit barrier reentrance, CONT6
+images, migration, temporal restart and loader transaction ordering. Six corrected
+CFL, ProjectAndRecheck and complete-vector pairing fixtures pass on those ranks
+(36 observations) against the unchanged native core. The overall fixture campaign
+still fails: replacing an independent Uniform Field on an empty MPI rank exposes
+a missing storage-incarnation check. Failed receipts remain failed.
+
+The next isolated ROMEO CPU and H100 pilots each finish two complete numerical
+oracle/checkpoint repetitions, then hit the unchanged 2400-second watchdog during
+the third. Jobs 747939 and 747940 exit124. Instrumented stacks still identify
+distributed continuation collection. These partial diagnostic runs establish
+neither final-source GPU qualification nor a scaling improvement.
+
 ## Contract of the language
 
 The fixed engine understands values, regions, supports, ownership, effects,

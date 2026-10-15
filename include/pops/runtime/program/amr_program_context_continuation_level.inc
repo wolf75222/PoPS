@@ -458,10 +458,9 @@ level_continuation_store_type& level_continuation_selected_store_() const {
                                   : level_continuation_working_.at(active_level_);
 }
 typename ContinuationCodec<Dim>::Prototypes level_continuation_prototypes_() const {
-  return [this](int block, const ContinuationFieldSupport::Ref& support) -> const field_type& {
-    if (support)
-      return continuation_field_prototype_(block, active_level_, support);
-    return state(block);
+  return [this](const ContinuationType& type,
+                const ContinuationFieldSupport::Ref& support) -> const field_type& {
+    return continuation_field_prototype_(type, active_level_, support);
   };
 }
 void level_continuation_require_time_(const level_continuation_store_type& store,

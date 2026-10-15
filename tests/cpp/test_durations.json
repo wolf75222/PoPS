@@ -10,7 +10,6 @@
     "estimate_policy": "new unmeasured targets use a conservative analogous-target estimate, falling back to the catalog median until the next CTest timing refresh",
     "estimated_targets": [
       "test_amr_hierarchy_barrier_continuation",
-      "test_amr_hierarchy_field_scratch",
       "test_amr_history_flux_snapshot",
       "test_amr_history_remap_collective",
       "test_amr_interaction_history_snapshot",
@@ -132,7 +131,20 @@
     "api_v14_estimate_source": "Unmeasured standalone structural codec/domain runtime contract allowance; 120 s cold build and 10 s runtime per new target. No local or CI timing is claimed; replace from complete receipts.",
     "api_v14_zero_block_estimate_source": "Unmeasured scheduling estimate: native codec-only target with three serial GTests; declared ranks 1/2/3 are archive data, not MPI execution. Same conservative seed as other v14 structural codec tests; replace only from an authenticated cold-CI measurement.",
     "composite_physical_measure_estimate_source": "Unmeasured scheduling estimate added 2026-10-15 for two Kokkos Fab metric/mask/finite-value contracts: 30 s build and 1 s test. Native local correctness receipts are separate and do not measure cold-CI duration. Existing watchdogs are unchanged.",
-    "api_v02_migration_estimate_source": "Unmeasured cold-CI scheduling estimate: test_continuation_field_migration, test_continuation_distributed_migration use the test_continuation_image tier (5.0 seconds). These compile native continuation codecs and exercise Kokkos/MPI storage, without provider DSO compilation. Local incremental native receipts are separate and are not cold-CI timings. Existing weights and watchdogs remain unchanged."
+    "api_v02_migration_estimate_source": "Unmeasured cold-CI scheduling estimate: test_continuation_field_migration, test_continuation_distributed_migration use the test_continuation_image tier (5.0 seconds). These compile native continuation codecs and exercise Kokkos/MPI storage, without provider DSO compilation. Local incremental native receipts are separate and are not cold-CI timings. Existing weights and watchdogs remain unchanged.",
+    "api02_20261015_measured_refresh": {
+      "head": "430d712dac7dac3eabd4e1624b57fd294459cdce",
+      "run": 38802815651,
+      "job": 116658400375,
+      "backend": "Kokkos Serial",
+      "source": "Complete per-case CTest durations summed for these three targets; OpenMP job116658210675 timed out at the unchanged7m shard watchdog. No timeout or partial duration is represented as complete.",
+      "log_sha256": "09faa7446a10b0a7f519557480348a28176a2956cb8289495a298369a8f135d6",
+      "targets": {
+        "test_amr_riemann_native": 151.09,
+        "test_external_riemann_dispatch": 84.53,
+        "test_amr_hierarchy_field_scratch": 54.48
+      }
+    }
   },
   "test_amr_compiled_model": 0.01,
   "test_amr_composite_poisson": 1.15,
@@ -154,7 +166,7 @@
   "test_amr_program_embedded_boundary": 0.3,
   "test_amr_program_positivity_floor": 0.3,
   "test_amr_regrid_variable": 1.52,
-  "test_amr_riemann_native": 5.27,
+  "test_amr_riemann_native": 151.09,
   "test_amr_seed_no_refine": 4.3,
   "test_amr_spatial_parity": 0.06,
   "test_amr_synthetic_program_loader_transaction": 30,
@@ -215,7 +227,7 @@
   "test_external_brick": 0.01,
   "test_external_brick_isolation": 0.02,
   "test_external_brick_json": 0.02,
-  "test_external_riemann_dispatch": 29.82,
+  "test_external_riemann_dispatch": 84.53,
   "test_facade_routing": 1.07,
   "test_fallback_diagnostics": 0.01,
   "test_field_nullspace": 0.01,
@@ -329,7 +341,7 @@
   "test_amr_layout_transfer": 45.0,
   "test_amr_synchronized_continuation": 1.07,
   "test_amr_hierarchy_barrier_continuation": 1.07,
-  "test_amr_hierarchy_field_scratch": 45.0,
+  "test_amr_hierarchy_field_scratch": 54.48,
   "test_amr_path_rhs_barrier": 10.0,
   "test_amr_scalar_output_history": 1.0,
   "test_amr_history_remap_collective": 1.0,

@@ -1108,6 +1108,68 @@ TEST(test_amr_synthetic_program_loader_transaction,
 }
 
 TEST(test_amr_synthetic_program_loader_transaction,
+     CounterRestoreQualifiesCompleteCarrierBeforeProgramRematerialization) {
+  auto artifact = make_attempt_cursor_artifact(true);
+  auto fixture = make_attempt_cursor_fixture(artifact);
+  auto& system = *fixture.system;
+  ASSERT_NO_THROW(system.step(.01));
+  const auto before = system.program_accepted_state();
+  const auto original = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(before);
+  const auto manifest = system.checkpoint_rank_local_carrier_manifest();
+  const auto epoch = system.checkpoint_topology_epoch();
+  const auto regrids = system.checkpoint_regrid_count();
+  std::vector<std::vector<int>> owners;
+  std::vector<std::string> modes;
+  for (int level = 0; level < system.n_levels(); ++level) {
+    owners.push_back(system.level_owner_ranks(level));
+    modes.push_back(system.level_distribution_mode(level));
+  }
+  const auto authority =
+      system.program_accepted_state_source_authority(owners, modes, pops::n_ranks());
+  system.begin_restart_transaction();
+  // A rank-local malformed request must converge before any rank enters the
+  // complete-carrier restore protocol or mutates an accepted image.
+  EXPECT_THROW(system.restore_checkpoint_counters(pops::my_rank() == 0 ? -1 : regrids, epoch),
+               std::exception);
+  EXPECT_EQ(system.checkpoint_topology_epoch(), epoch);
+  EXPECT_EQ(system.checkpoint_rank_local_carrier_manifest(), manifest);
+  if (pops::n_ranks() > 1) {
+    EXPECT_THROW(system.restore_checkpoint_counters(regrids, epoch + 1 + (pops::my_rank() == 0)),
+                 std::exception);
+    EXPECT_EQ(system.checkpoint_topology_epoch(), epoch);
+  }
+
+  ASSERT_NO_THROW(system.restore_checkpoint_counters(regrids, epoch + 1));
+  const auto rematerialized = system.rematerialize_program_accepted_state(
+      before, pops::n_ranks(), owners, owners, modes, modes, authority);
+  const auto accepted =
+      pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(rematerialized);
+  ASSERT_EQ(accepted.topology_epoch, epoch + 1);
+  ASSERT_NE(accepted.flux_budget_contract, original.flux_budget_contract);
+  ASSERT_NE(accepted.coupling_contract, original.coupling_contract);
+  for (int corruption = 0; corruption != 3; ++corruption) {
+    auto wrong = accepted;
+    if (corruption == 0)
+      wrong.flux_budget_contract = original.flux_budget_contract;
+    else if (corruption == 1)
+      wrong.coupling_contract = original.coupling_contract;
+    else
+      ++wrong.topology_epoch;
+    EXPECT_THROW(system.restore_checkpoint_accepted_state(
+                     pops::runtime::program::serialize_amr_program_accepted_state(wrong)),
+                 std::exception);
+  }
+  // The later full requalification is now idempotent: no budget reseal is
+  // performed here and the exact rematerialized image remains the authority.
+  ASSERT_NO_THROW(system.restore_checkpoint_accepted_state(rematerialized));
+  EXPECT_EQ(system.program_accepted_state(), rematerialized);
+  ASSERT_NO_THROW(system.rollback_restart_transaction());
+  EXPECT_EQ(system.checkpoint_topology_epoch(), epoch);
+  EXPECT_EQ(system.checkpoint_rank_local_carrier_manifest(), manifest);
+  EXPECT_EQ(system.program_accepted_state(), before);
+}
+
+TEST(test_amr_synthetic_program_loader_transaction,
      AttemptCursorRollbackBurnsRejectedIdsAndRestoresCommittedBytes) {
   for (const bool mapping : {false, true}) {
     SCOPED_TRACE(mapping);

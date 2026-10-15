@@ -30,7 +30,7 @@ _BLOCKS = ("body_block", "cond_block", "true_block", "false_block")
 _PURE = frozenset({"provenance_bind",
     "product", "product_get", "scalar_op", "scalar_expression", "compare", "bool_constant", "bool_op", "int64_constant",
     "int64_op", "int64_cast", "int64_compare", "finite_real", "scalar_isfinite",
-    "region_argument", "region_index", "linear_combine",
+    "region_argument", "region_index", "linear_combine", "invocation_level",
     "pointwise_expression", "field_component", "vector_field", "cell_compare", "where",
     "branch", "structured_fold", "structured_iterate", "iteration_success", "iteration_is_ok",
     "capture_result", "result_ok", "result_error", "result_success", "result_is_ok",

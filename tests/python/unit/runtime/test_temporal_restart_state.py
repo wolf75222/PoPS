@@ -1102,11 +1102,12 @@ def test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart(
         # Four child stores and rotations leave the recycled .05 sample in slot zero,
         # the .15 sample in lag one and the .1 sample in lag two. These are actual
         # child windows, not macro windows or inferred identities after restart.
-        rows = list(struct.iter_unpack("<QQQQ", identities[-3 * 32:]))
+        assert identities[:8] == b"POPSHID2"
+        rows = list(struct.iter_unpack("<QQQQQQQQ", identities[-3 * 64:]))
         def bits(value):
             return struct.unpack("<Q", struct.pack("<d", value))[0]
 
-        assert rows == [(2, bits(start), bits(0.05), 1)
+        assert rows == [(2, bits(start), bits(0.05), 1, 0, 0, 0, 0)
                         for start in (0.05, 0.1 + 0.05, 0.1)]
         retained_history = {
             key: stored[key].copy() for key in stored.files if key.startswith("history_")

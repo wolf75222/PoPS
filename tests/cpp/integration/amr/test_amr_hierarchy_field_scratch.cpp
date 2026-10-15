@@ -366,6 +366,37 @@ TEST(AmrHierarchyFieldScratch, SolverOwnershipAndExactLevelSlotsReuseWithoutAlia
   EXPECT_FALSE(levels[0]->shares_storage_with(*levels[1]));
 }
 
+TEST(AmrHierarchyFieldScratch, AssemblyReadRequiresExactLiveProviderLevelAndAllocation) {
+  auto fixture = prepare_fixture();
+  auto& context = *fixture.context;
+  std::array<Field*, 2> assemblies{};
+  auto retained_provider = context.retain_hierarchy_field_solver(701);
+  context.for_each_program_resource_level([&](int level) {
+    auto& rhs = context.hierarchy_field_assembly(701, general::rhs_slot);
+    auto& coefficients = context.hierarchy_field_assembly(701, general::coefficient_slot);
+    assemblies[level] = &rhs;
+    EXPECT_NO_THROW(context.require_program_field_access(rhs));
+    EXPECT_NO_THROW(context.require_program_field_access(coefficients));
+    Field lookalike(rhs);
+    EXPECT_THROW(context.require_program_field_access(lookalike), std::invalid_argument);
+    // Numerical read authority does not turn a provider field into a State scratch prototype.
+    EXPECT_THROW(context.scalar_scratch(990, 0, rhs), std::invalid_argument);
+  });
+  context.for_each_program_resource_level([&](int level) {
+    EXPECT_THROW(context.require_program_field_access(*assemblies[1 - level]),
+                 std::invalid_argument);
+  });
+  replace_child(fixture, 2);
+  context.with_program_resource_level(1, [&] {
+    // Keep the retired provider alive so this tests revocation, not dangling memory.
+    EXPECT_THROW(context.require_program_field_access(*assemblies[1]), std::invalid_argument);
+    auto& current = context.hierarchy_field_assembly(701, general::rhs_slot);
+    EXPECT_NE(&current, assemblies[1]);
+    EXPECT_NO_THROW(context.require_program_field_access(current));
+    EXPECT_THROW(context.require_program_field_access(*assemblies[1]), std::invalid_argument);
+  });
+}
+
 TEST(AmrHierarchyFieldScratch, RetainedInputsPreserveBytesAndVoteBeforeAnyReset) {
   auto fixture = prepare_fixture();
   auto& context = *fixture.context;
@@ -572,6 +603,105 @@ TEST(AmrHierarchyFieldScratch, RollbackDiscardsProviderScratchBeforeReconstructi
     expect_value(fixture.system->engine()->hierarchy().state(level), pops::Real(7));
   });
   pops::dynlib::close(handle);
+  std::remove(source.c_str());
+  std::remove(library.c_str());
+}
+
+TEST(AmrHierarchyFieldScratch, IndependentProviderAuthenticatesIssuedObservationAndDerivedStorage) {
+  using namespace pops::runtime::program;
+  pops::comm_init();
+  const std::string stem = std::string(POPS_TEST_TMPDIR) + "/amr_field_provider_" +
+                           std::to_string(pops::my_rank()) + "_" + std::to_string(std::clock());
+  const std::string source = stem + ".cpp", library = stem + ".so";
+  {
+    std::ofstream output(source);
+    output << rollback_program_source();
+  }
+  const auto package = pops::test::native_dso::compile_shared(
+      source, library, "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");
+  if (!package.ok)
+    pops::test::native_dso::report_compile_failure("AmrHierarchyFieldProvider", package);
+  ASSERT_EQ(pops::all_reduce_min(package.ok ? 1L : 0L), 1L);
+  auto fixture = prepare_fixture(library);
+  auto& context = *fixture.context;
+  ASSERT_EQ(fixture.system->installed_program_hash(),
+            "tests.field-scratch/authenticated-rollback@1");
+  constexpr std::string_view component_key = "test.field-problem/unknown-u/component";
+  constexpr std::string_view other_key = "test.field-problem/unknown-v/component";
+  constexpr std::string_view gradient_key = "test.field-problem/unknown-u/gradient";
+  context.configure_hierarchy_continuation_field_provider(component_key, 701, 0);
+  context.configure_hierarchy_continuation_field_provider(component_key, 702, 0);
+  context.configure_hierarchy_continuation_field_provider(other_key, 702, 0);
+  context.configure_hierarchy_continuation_field_provider(gradient_key, 701, 0, Dim, 1);
+  context.begin_step(0.125);
+  context.for_each_program_resource_level([&](int) {
+    auto& field = context.hierarchy_field_solution(701);
+    const auto geometry = context.geometry();
+    for (std::size_t patch = 0; patch < field.local_size(); ++patch) {
+      const auto view = field.fab(patch).view();
+      pops::for_each_cell(field.fab(patch).grown_box(), [=] POPS_HD(const pops::Index<Dim>& cell) {
+        pops::Real value = 0;
+        for (int axis = 0; axis < Dim; ++axis)
+          value += pops::Real(cell[axis]) * geometry.spacing(axis);
+        view(cell, 0) = value;
+      });
+    }
+    context.hierarchy_field_solution(702).set_val(pops::Real(9));
+  });
+  auto first =
+      context.capture_hierarchy_field_observation(701, 941, 0, 1 << 20, true, component_key);
+  auto second =
+      context.capture_hierarchy_field_observation(702, 942, 0, 1 << 20, true, component_key);
+  expect_value(second->local_field(), pops::Real(9));
+  ContinuationType component(ContinuationKind::Field);
+  component.field_owner = -1;
+  component.field_components = 1;
+  component.field_provider = component_key;
+  component.scientific_contract = "test.field-problem/unknown-u/scalar-type";
+  auto retained = context.own_structural_field(first->local_field());
+  const auto metadata = context.continuation_bind_field_provenance(first->local_field(), *retained,
+                                                                   retained, component);
+  ASSERT_NE(metadata.support, nullptr);
+  EXPECT_EQ(metadata.support->program_owner, -1);
+  EXPECT_EQ(metadata.support->field_provider, component_key);
+  EXPECT_EQ(metadata.support->producer_level, 0);
+  EXPECT_NO_THROW(context.continuation_preflight_field(*retained, component, metadata));
+  auto foreign_component = component;
+  foreign_component.field_provider = other_key;
+  EXPECT_THROW(context.continuation_preflight_field(*retained, foreign_component),
+               std::invalid_argument);
+  auto lookalike = std::make_shared<Field>(*retained);
+  EXPECT_THROW(context.continuation_preflight_field(*lookalike, component), std::invalid_argument);
+
+  auto gradient = context.allocate_hierarchy_continuation_field_observation(gradient_key, 1 << 20);
+  context.observe_hierarchy_field_gradient(first, *gradient);
+  expect_value(*gradient, pops::Real(1));
+  auto unissued = std::make_shared<Field>(*gradient);
+  EXPECT_THROW(
+      context.seal_hierarchy_continuation_field_observation(gradient_key, 943, unissued, first),
+      std::exception);
+  EXPECT_NO_THROW(
+      context.seal_hierarchy_continuation_field_observation(gradient_key, 943, gradient, first));
+  EXPECT_THROW(
+      context.seal_hierarchy_continuation_field_observation(gradient_key, 943, gradient, first),
+      std::exception);
+  ContinuationType derived(ContinuationKind::Field);
+  derived.field_owner = -1;
+  derived.field_components = Dim;
+  derived.field_provider = gradient_key;
+  derived.scientific_contract = "test.field-problem/unknown-u/gradient-type";
+  EXPECT_NO_THROW(context.continuation_preflight_field(*gradient, derived));
+  context.with_program_resource_level(1, [&] {
+    // Structural ownership is opaque; numerical use must not reinterpret a
+    // coarse observation as a fine-level allocation with a similar shape.
+    EXPECT_THROW(context.require_program_field_access(*retained), std::invalid_argument);
+    EXPECT_THROW(context.require_program_field_access(*gradient), std::invalid_argument);
+  });
+  EXPECT_NO_THROW(context.require_program_field_access(*gradient));
+  context.resource_attempt().reject();
+  EXPECT_THROW(context.continuation_preflight_field(*retained, component), std::invalid_argument);
+  EXPECT_THROW(context.continuation_preflight_field(*gradient, derived), std::invalid_argument);
+  EXPECT_THROW(context.own_structural_field(*gradient), std::invalid_argument);
   std::remove(source.c_str());
   std::remove(library.c_str());
 }

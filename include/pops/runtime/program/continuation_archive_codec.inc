@@ -107,10 +107,12 @@ ArchiveImage decode_archive(std::span<const std::uint8_t> bytes, int source_rank
     out.root = ids.at(decoded.root.get());
     return out;
   }
-  if (wire != "POPSCONT2" && wire != "POPSCONT3" && wire != "POPSCONT4" && wire != "POPSCONT5")
+  if (wire != "POPSCONT2" && wire != "POPSCONT3" && wire != "POPSCONT4" && wire != "POPSCONT5" &&
+      wire != "POPSCONT6")
     throw std::invalid_argument("inert distributed archive requires an authority-bearing codec");
   bool expressions_wire = wire == "POPSCONT4";
-  const bool support_wire = wire == "POPSCONT5";
+  const bool traits_wire = wire == "POPSCONT6";
+  const bool support_wire = wire == "POPSCONT5" || traits_wire;
   const bool multi = wire != "POPSCONT2";
   if (in.text() != identity_ || in.word() != Dim)
     throw std::invalid_argument("continuation archive changes installed schema or dimension");
@@ -122,7 +124,7 @@ ArchiveImage decode_archive(std::span<const std::uint8_t> bytes, int source_rank
       throw std::invalid_argument("invalid CONT5 archive field expression table tag");
     expressions_wire = tag != 0;
   }
-  bool support_seen = false;
+  bool support_seen = false, traits_seen = false;
   out.source_rank = source_rank;
   out.source_ranks = source_ranks;
   std::vector<FieldExchangeExpressions::Ref> expressions;
@@ -265,11 +267,15 @@ ArchiveImage decode_archive(std::span<const std::uint8_t> bytes, int source_rank
       if (t.kind == ContinuationKind::Field || t.kind == ContinuationKind::Boolean ||
           t.kind == ContinuationKind::Int64 || t.kind == ContinuationKind::Float64 ||
           t.kind == ContinuationKind::Domain || t.kind == ContinuationKind::Index) {
+        auto representation = t.kind == ContinuationKind::Field && traits_wire
+                                  ? decode_field_traits_(t, in, reserve)
+                                  : FieldRepresentationObligation::Ref{};
         auto support = t.kind == ContinuationKind::Field && support_wire
-                           ? decode_field_support_(in, reserve)
+                           ? decode_field_support_(in, reserve, traits_wire)
                            : ContinuationFieldSupport::Ref{};
         support_seen = support_seen || bool(support);
-        node.leaf = decode_(t, out.finite, in, std::move(support));
+        traits_seen = traits_seen || bool(representation) || !t.field_provider.empty();
+        node.leaf = decode_(t, out.finite, in, std::move(support), std::move(representation));
         if (t.kind == ContinuationKind::Field && expressions_wire) {
           const auto slot = in.word();
           if (slot > expressions.size())
@@ -387,6 +393,7 @@ ArchiveImage decode_archive(std::span<const std::uint8_t> bytes, int source_rank
           for (const auto& name : v.names)
             charge(name.size(), 1);
           charge(v.scientific_contract.size(), 1);
+          charge(v.field_provider.size(), 1);
           charge(v.domain_bindings.size(), sizeof(ContinuationDomainBinding));
           for (const auto& binding : v.domain_bindings)
             charge(binding.domain_path.size() + binding.value_path.size(), sizeof(std::size_t));
@@ -416,7 +423,9 @@ ArchiveImage decode_archive(std::span<const std::uint8_t> bytes, int source_rank
     out.arrays.push_back(std::move(array));
   }
   out.root = read_value(type_);
-  if (support_wire && !support_seen)
+  if (traits_wire && !traits_seen)
+    throw std::invalid_argument("CONT6 archive has no provider or representation obligation");
+  if (!traits_wire && support_wire && !support_seen)
     throw std::invalid_argument("CONT5 archive has no retained Field producer support");
   if (in.at != bytes.size())
     throw std::invalid_argument("continuation archive has trailing bytes");

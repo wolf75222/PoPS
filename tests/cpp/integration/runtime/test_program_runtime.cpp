@@ -2164,6 +2164,7 @@ TEST(ProgramRuntime, ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate)
 
   int consumed_solves = 0;
   auto ctx = runtime::program::make_program_execution_provider(&sim);
+  ctx->configure_primary_clock("test.project-recheck-accept");
   ctx->install([ctx, &consumed_solves](double dt) {
     ctx->begin_step(dt);
     MultiFab<kNativeDimension>& state = ctx->state(0);
@@ -2193,7 +2194,12 @@ TEST(ProgramRuntime, ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate)
   EXPECT_EQ(sim.macro_step(), 1);
   EXPECT_DOUBLE_EQ(sim.time(), 1e-3);
   const std::vector<double> accepted = sim.get_state("gas");
-  const std::size_t cells = exact_cell_count<kNativeDimension>(n);
+  // get_state returns compact local storage, including an empty vector on
+  // ranks that do not own the fixture's single patch.
+  ASSERT_EQ(accepted.size() % kGasComponents, 0u);
+  const std::size_t cells = accepted.size() / kGasComponents;
+  EXPECT_EQ(all_reduce_sum(static_cast<long>(cells), sim.prepared_boundary_execution_lane()),
+            static_cast<long>(exact_cell_count<kNativeDimension>(n)));
   for (std::size_t cell = 0; cell < cells; ++cell) {
     EXPECT_DOUBLE_EQ(accepted[cell], 2.0);
     for (int component = 1; component < kNativeDimension + 2; ++component) {
@@ -2221,9 +2227,11 @@ TEST(ProgramRuntime, ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPub
   (void)consume_solve_outcome(sim.solve_fields());
   sim.register_history("gas.guard_candidate", 1, kGasComponents);
   sim.set_program_block_map({0});
+  const auto accepted_before = sim.get_state("gas");
 
   int consumed_solves = 0;
   auto ctx = runtime::program::make_program_execution_provider(&sim);
+  ctx->configure_primary_clock("test.project-recheck-reject");
   ASSERT_EQ(ctx->runtime_state().hist_.slot_exchanges.at("gas.guard_candidate").size(), 2u);
   sim.register_history("gas.guard_candidate", 2, kGasComponents);
   ASSERT_EQ(ctx->runtime_state().hist_.slot_exchanges.at("gas.guard_candidate").size(), 3u);
@@ -2259,7 +2267,7 @@ TEST(ProgramRuntime, ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPub
   EXPECT_EQ(consumed_solves, 1);
   EXPECT_EQ(sim.macro_step(), 0);
   EXPECT_DOUBLE_EQ(sim.time(), 0.0);
-  EXPECT_EQ(sim.get_state("gas"), initial);
+  EXPECT_EQ(sim.get_state("gas"), accepted_before);
   EXPECT_FALSE(sim.history_initialized("gas.guard_candidate"));
   EXPECT_FALSE(sim.program_cache().has(666002));
   EXPECT_TRUE(sim.program_diagnostics().empty());

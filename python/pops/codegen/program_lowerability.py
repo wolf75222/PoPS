@@ -85,8 +85,10 @@ def _check_amr_flux_weights(program: Any) -> None:
     """Prove every conservative contribution reaches a commit as exact ``weight * dt * flux``."""
     from pops.codegen.program_emit_kernels import _coeff_metadata_terms
     from pops.codegen.program_emit_diffusion import diffusive_flux_basis_count
+    from .program_structural_flux import field_projection_sources, field_region_origins
 
     values = list(all_ops(program))
+    region_origins = field_region_origins(values)
     stored_histories: dict[str, list[Any]] = {}
     folded_carries: dict[int, tuple[Any, Any]] = {}
     for value in values:
@@ -147,9 +149,11 @@ def _check_amr_flux_weights(program: Any) -> None:
                     powers.get(source.id, frozenset())
                     for source in stored_histories.get(value.attrs["history"], ())
                 ])
-            elif value.op == "product_get" and value.vtype in {"state", "rhs", "scalar_field"}:
-                from .program_structural_flux import field_projection_sources
-                sources = field_projection_sources(value)
+            elif (value.vtype in {"state", "rhs", "scalar_field"}
+                  and (value.op in {"product_get", "result_success", "result_payload",
+                                    "variant_payload", "variant_require_success"}
+                       or value.op == "region_argument" and value.id in region_origins)):
+                sources = field_projection_sources(value, region_origins=region_origins)
                 current = (unknown if sources is None else merged([
                     powers.get(source.id, frozenset()) for source in sources]))
             elif value.op == "linear_combine":

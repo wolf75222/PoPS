@@ -74,13 +74,9 @@ def open_typed_capture(program, value, available, var, model, lines, prelude, bl
     from .program_emit_structured_control import (
         _assign_output, _variant_tag, _uniform_int, _require_success,
     )
-    from .program_emit_typed_failure import _nodes
-
     scoped = bool(value.attrs.get("continuation_scope"))
-    errors = value.attrs["error_signature"]
-    if any(node["vtype"] in {"state", "scalar_field", "rhs"} for node in _nodes(errors)):
-        raise NotImplementedError("typed hierarchy Field requires exact producer support")
     signature, success = value.attrs["signature"], value.attrs["success_signature"]
+    errors = dict(signature["members"])["err"]
     if scoped and success["vtype"] != "continuation_accepted":
         raise ValueError("continuation scope must return the complete accepted provisional")
     members = ["typename std::remove_cvref_t<decltype(ctx)>::hierarchy_typed_failure recovered;",
@@ -147,12 +143,9 @@ def open_typed_iterate(program, value, available, var, model, lines, prelude, bl
     from .program_emit_structured_control import (
         _copy, _uniform_int, _storage_width, _variant_tag, _require_success,
     )
-    from .program_emit_typed_failure import _nodes
     from pops.time.value_signatures import value_signature
 
     errors = value.attrs["error_signature"]
-    if any(node["vtype"] in {"state", "scalar_field", "rhs"} for node in _nodes(errors)):
-        raise NotImplementedError("typed hierarchy Field requires exact producer support")
     signature, state_signature = value_signature(value), value.attrs["state_signature"]
     frame_type, frame, output = _heap_slots(signature, value.id, "hierarchy_typed_iterate", lines,
         carry=True, extra_members=("typename std::remove_cvref_t<decltype(ctx)>::hierarchy_typed_failure recovered;",

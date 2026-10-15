@@ -41,6 +41,8 @@ def validate_boolean_operation(inputs, attrs, signature):
 
 def new_typed(program, signature, op, inputs, attrs, *, point=None, name=None) -> ProgramValue:
     attrs = dict(attrs)
+    if signature.get("field_authority") is not None:
+        attrs["field_authority"] = signature["field_authority"]
     if signature["vtype"] in ("product", "variant", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted", "field_topology"):
         attrs["signature"] = signature
         if point is None:
@@ -146,9 +148,14 @@ class _ProgramStructuredControl(_ProgramBase):
     @atomic_authoring
     def variant(self, variant_type, tag, payload):
         """Inject a typed native payload into a closed, case-authored tagged sum."""
-        from pops.time.variant_types import instantiate
+        from pops.time.variant_types import instantiate_variant_payload
+        from pops.time.points import TimePoint
         require_owned(self, payload, "variant payload")
-        signature = instantiate(variant_type, payload.point).signature
+        # The envelope is structural; infer unbound scalar parameters from leaves,
+        # never from a nested sum envelope or by changing an exact authority.
+        point = TimePoint(self.clock)
+        signature = instantiate_variant_payload(
+            variant_type, tag, value_signature(payload), point).signature
         if signature["vtype"] != "variant":
             raise TypeError("variant requires a Variant type")
         members = dict(signature["members"])
@@ -157,7 +164,8 @@ class _ProgramStructuredControl(_ProgramBase):
         require_owned(self, payload, "variant payload")
         if not same_signature(members[tag], value_signature(payload)):
             raise TypeError("variant payload must have the tag's exact structural type and authority")
-        return new_typed(self, signature, "variant_construct", (payload,), {"tag": tag})
+        return new_typed(self, signature, "variant_construct", (payload,), {"tag": tag},
+                         point=point)
 
     def _match_variant(self, value, arms):
         members = dict(value_signature(value)["members"])

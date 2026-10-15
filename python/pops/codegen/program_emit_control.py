@@ -683,6 +683,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         post_sync_lines.extend(["if (ctx.level() == 0) {"])
         post_sync_lines.extend(integral_transfers)
         post_sync_lines.append("}")
+    from .program_field_provider_catalog import emit_field_provider_catalog
+    prelude.extend(emit_field_provider_catalog(program, target=target))
     prelude.extend(value_authority.cpp_install())
     prelude_src = "\n".join("  " + ln for ln in prelude)
     # Host diagnostic effects outlive the current frame when a map suspends it.

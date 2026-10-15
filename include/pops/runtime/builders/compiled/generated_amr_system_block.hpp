@@ -593,10 +593,11 @@ class PreparedGeneratedAmrLevelBlock {
                                  Evaluator flux_evaluator, Evaluator core_evaluator,
                                  Evaluator flux_core_evaluator, Evaluator boundary_evaluator,
                                  BoundaryJvp boundary_jvp, SourceEvaluator source_evaluator,
-                                 ImplicitSourceSolver implicit_source_solver, Speed maximum_speed,
-                                 PoissonRhs poisson_rhs, PointwiseProjection pointwise_projection,
-                                 Speed source_frequency, std::optional<Real> parabolic_frequency,
-                                 Speed stability_dt, std::string path_operator_identity = {})
+                                 ImplicitSourceSolver implicit_source_solver,
+                                 std::optional<Speed> maximum_speed, PoissonRhs poisson_rhs,
+                                 PointwiseProjection pointwise_projection, Speed source_frequency,
+                                 std::optional<Real> parabolic_frequency, Speed stability_dt,
+                                 std::string path_operator_identity = {})
       : runtime_(&runtime),
         level_(level),
         state_(&state),
@@ -627,8 +628,14 @@ class PreparedGeneratedAmrLevelBlock {
         state_identity_.empty() || provider_identity_.empty() || collective_contract_.empty() ||
         !prepare_state_ || !prepare_physical_ || !evaluator_ || !flux_evaluator_ ||
         !core_evaluator_ || !flux_core_evaluator_ || !boundary_evaluator_ || !boundary_jvp_ ||
-        !source_evaluator_ || !implicit_source_solver_ || !maximum_speed_ || !poisson_rhs_)
+        !source_evaluator_ || !implicit_source_solver_ || (maximum_speed_ && !*maximum_speed_) ||
+        !poisson_rhs_)
       throw std::invalid_argument("generated AMR level block preparation is incomplete");
+    ExactContractBuilder capabilities;
+    capabilities.bytes(collective_contract_)
+        .text("pops.prepared-amr-level.stability-capabilities.v1")
+        .presence(maximum_speed_.has_value());
+    collective_contract_ = std::move(capabilities).release();
   }
 
   static constexpr int dimension = Dim;
@@ -783,7 +790,8 @@ class PreparedGeneratedAmrLevelBlock {
     return static_cast<bool>(pointwise_projection_);
   }
 
-  Real maximum_speed(const field_type& state) const {
+  /// Absence is an explicit capability; a present but empty/invalid provider is never absence.
+  std::optional<Real> transport_speed(const field_type& state) const {
     generated_amr_detail::collective_phase(
         *lane_,
         [&] {
@@ -791,7 +799,24 @@ class PreparedGeneratedAmrLevelBlock {
           require_state_contract_(state);
         },
         "generated AMR maximum-speed preflight failed collectively");
-    return maximum_speed_(state);
+    const long available = maximum_speed_.has_value() ? 1L : 0L;
+    if (all_reduce_min(available, *lane_) != all_reduce_max(available, *lane_))
+      throw std::runtime_error("generated AMR transport-speed availability differs between ranks");
+    if (!maximum_speed_)
+      return std::nullopt;
+    const Real speed = (*maximum_speed_)(state);
+    if (all_reduce_max(!std::isfinite(speed) || speed < Real(0) ? 1L : 0L, *lane_) != 0)
+      throw std::runtime_error("generated AMR transport-speed provider returned an invalid bound");
+    return speed;
+  }
+
+  std::optional<Real> transport_speed() const { return transport_speed(*state_); }
+
+  Real maximum_speed(const field_type& state) const {
+    const auto speed = transport_speed(state);
+    if (!speed)
+      throw std::logic_error("AMR state storage has no hyperbolic wave-speed provider");
+    return *speed;
   }
 
   Real maximum_speed() const { return maximum_speed(*state_); }
@@ -942,7 +967,7 @@ class PreparedGeneratedAmrLevelBlock {
   BoundaryJvp boundary_jvp_;
   SourceEvaluator source_evaluator_;
   ImplicitSourceSolver implicit_source_solver_;
-  Speed maximum_speed_;
+  std::optional<Speed> maximum_speed_;
   PoissonRhs poisson_rhs_;
   PointwiseProjection pointwise_projection_;
   Speed source_frequency_;
@@ -1838,7 +1863,8 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
         std::move(contract), *lane, std::move(prepare_state), std::move(prepare_physical),
         std::move(evaluator), std::move(flux_evaluator), std::move(core_evaluator),
         std::move(flux_core_evaluator), std::move(boundary_evaluator), std::move(boundary_jvp),
-        std::move(source_evaluator), std::move(implicit_source_solver), std::move(speed),
+        std::move(source_evaluator), std::move(implicit_source_solver),
+        typename PreparedGeneratedAmrLevelBlock<Dim>::Speed(std::move(speed)),
         std::move(poisson_rhs), std::move(pointwise_projection), std::move(source_frequency_bound),
         std::move(parabolic_frequency_bound), std::move(stability_dt_bound),
         path_operator_identity);
@@ -2145,9 +2171,6 @@ PreparedAmrSystemBlock<Dim> materialize_state_block(Request request) {
         [lane](const auto&, auto&, Real, const NewtonOptions&) {
           return SolveOutcome::collective_lane(SolveReport::capability_failure(), *lane);
         };
-    typename LevelBlock::Speed unavailable_speed = [](const auto&) -> Real {
-      throw std::logic_error("AMR state storage has no hyperbolic wave-speed provider");
-    };
     typename LevelBlock::PoissonRhs unavailable_poisson = [](const auto&, auto&) {
       throw std::logic_error("AMR state storage has no implicit default Poisson source");
     };
@@ -2157,8 +2180,8 @@ PreparedAmrSystemBlock<Dim> materialize_state_block(Request request) {
                       std::move(prepare_physical), unavailable_evaluation, unavailable_evaluation,
                       unavailable_evaluation, unavailable_evaluation, unavailable_evaluation,
                       std::move(unavailable_boundary_jvp), std::move(unavailable_source),
-                      std::move(unavailable_implicit), std::move(unavailable_speed),
-                      std::move(unavailable_poisson), {}, {}, std::nullopt, {});
+                      std::move(unavailable_implicit), std::nullopt, std::move(unavailable_poisson),
+                      {}, {}, std::nullopt, {});
   };
   result.primitive_to_conservative = [model](const double* primitive, double* conservative) {
     generated_system_detail::publish_conservative_state(model, primitive, conservative);

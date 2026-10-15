@@ -30,14 +30,25 @@ template <class Prepare>
         result->producer_attempt = resource_attempt();
         result->epoch = runtime_->topology_epoch();
         result->generation = runtime_->materialization_generation();
-        // Field support is not inferred from the consuming level. Its separate
-        // producer-support extension must be complete before lifting this guard.
+        // Opaque transport keeps each Field's own producer support. The capsule
+        // producer need not be its numerical reader or its original author.
         continuation_detail::walk_value<Dim>(
             result->value, byte_capacity,
-            [](const auto& leaf) {
-              if (leaf.kind() == ContinuationKind::Field)
-                throw std::invalid_argument(
-                    "typed hierarchy Field requires exact producer support");
+            [&](const auto& leaf) {
+              if (leaf.kind() == ContinuationKind::Field) {
+                const auto authority = continuation_field_storage_authority_(leaf.field());
+                const auto& support = leaf.field_support();
+                if (!authority || !support || !authority->support ||
+                    *support != *authority->support ||
+                    authority->runtime_owner !=
+                        (leaf.field_provider().empty() ? sys_block(leaf.field_owner()) : -1) ||
+                    support->field_provider != leaf.field_provider() ||
+                    authority->level != support->producer_level ||
+                    authority->epoch != runtime_->topology_epoch() ||
+                    authority->generation != runtime_->materialization_generation())
+                  throw std::invalid_argument(
+                      "typed hierarchy Field has no exact retained producer support");
+              }
               return true;
             },
             [](const auto&) {});
@@ -70,8 +81,11 @@ template <class Prepare>
       [&] {
         ContinuationCodec<Dim> codec(
             prepared->type, prepared->schema, byte_capacity,
-            [](int) -> const field_type& {
-              throw std::logic_error("field-free typed failure has no Field prototype");
+            [&](const ContinuationType& type,
+                const ContinuationFieldSupport::Ref& support) -> const field_type& {
+              if (!support)
+                throw std::invalid_argument("typed hierarchy Field omitted its producer support");
+              return continuation_field_prototype_(type, prepared->producer_level, support);
             },
             &prepared_execution_lane(), live.distributed.get(), prepared->closure.get());
         return codec.collective_identity(prepared->value, 0);

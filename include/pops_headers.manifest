@@ -359,6 +359,7 @@ sdk-support pops/runtime/program/continuation_codec_extended.inc
 sdk-support pops/runtime/program/continuation_closure.hpp
 sdk-support pops/runtime/program/continuation_authority.hpp
 sdk-support pops/runtime/program/program_context_continuation.inc
+sdk-support pops/runtime/program/program_context_continuation_fields.inc
 sdk-support pops/runtime/program/history_sample_identity_codec.hpp
 sdk-support pops/runtime/program/cell_temporal_partition.hpp
 sdk-support pops/runtime/program/cell_temporal_partition_executor.hpp
@@ -456,6 +457,7 @@ sdk-support pops/runtime/program/amr_program_context_continuation_regrid.inc
 sdk-support pops/runtime/program/amr_program_context_continuation_regrid_child.inc
 sdk-support pops/runtime/program/amr_program_context_field_allocation.inc
 sdk-support pops/runtime/program/amr_program_context_continuation_field_storage.inc
+sdk-support pops/runtime/program/amr_program_context_continuation_field_provider.inc
 sdk-support pops/runtime/program/field_bundle_port.hpp
 sdk-support pops/runtime/program/amr_program_context_field_bundle.inc
 sdk-support pops/runtime/program/continuation_archive_codec.inc
@@ -467,6 +469,7 @@ sdk-support pops/runtime/program/amr_program_context_hierarchy_failure.inc
 sdk-support pops/runtime/program/amr_program_context_hierarchy_promotion.inc
 sdk-support pops/runtime/program/amr_program_context_hierarchy_typed_failure.inc
 sdk-support pops/runtime/program/continuation_field_support.hpp
+sdk-support pops/runtime/program/field_representation_obligation.hpp
 
 sdk-support pops/runtime/program/field_exchange_expression_codec.inc
 

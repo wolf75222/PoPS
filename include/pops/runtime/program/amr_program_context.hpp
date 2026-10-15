@@ -555,6 +555,7 @@ class AmrProgramContext {
 #include <pops/runtime/program/amr_program_context_continuation_regrid_child.inc>
 #include <pops/runtime/program/amr_program_context_field_bundle.inc>
 #include <pops/runtime/program/amr_program_context_field_allocation.inc>
+#include <pops/runtime/program/amr_program_context_continuation_field_provider.inc>
 #include <pops/runtime/program/amr_program_context_continuation_field_storage.inc>
 #include <pops/runtime/program/amr_program_context_continuation_checkpoint.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_definitions.inc>

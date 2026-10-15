@@ -62,7 +62,7 @@ void copied_field(const Observer& observer, const Field& source, const Field& de
                                     const ContinuationFieldMetadata&>)
     observer(source, destination, lifetime, metadata);
   else {
-    if (metadata.support)
+    if (metadata.support || metadata.representation)
       throw std::invalid_argument("Field copy observer cannot preserve retained producer support");
     if constexpr (std::is_invocable_v<Observer, const Field&, const Field&, const Lifetime&,
                                       const FieldExchangeExpressions::Ref&>)
@@ -224,9 +224,10 @@ inline void domain(const distributed::DomainRef& value, const ContinuationType& 
   value->require_live();
 }
 
-template <int Dim, class FieldCopy>
+template <int Dim, class FieldCopy, class FieldPreflight>
 ContinuationValueRef<Dim> pack_leaf(const ContinuationType& type, const std::any& source,
-                                    Budget& input, Budget& output, const FieldCopy& on_field_copy) {
+                                    Budget& input, Budget& output, const FieldCopy& on_field_copy,
+                                    const FieldPreflight& preflight) {
   using Value = ContinuationValue<Dim>;
   switch (type.kind) {
     case ContinuationKind::Boolean:
@@ -279,8 +280,10 @@ ContinuationValueRef<Dim> pack_leaf(const ContinuationType& type, const std::any
                               : std::any_cast<const std::shared_ptr<MultiFab<Dim>>&>(source).get();
       if (!value || value->ncomp() != type.field_components)
         throw std::invalid_argument("finite structural Field component count differs");
+      preflight(*value, type);
       field_storage(*value, input, output);
-      auto copied = Value::field(*value, type.field_owner, type.scientific_contract);
+      auto copied = Value::field(*value, type.field_owner, type.scientific_contract, {}, {},
+                                 type.field_provider);
       auto metadata =
           copied_field(on_field_copy, *value, copied->field(), copied->field_storage_owner(), type);
       return Value::with_field_metadata(copied, std::move(metadata));
@@ -296,9 +299,18 @@ struct IgnoreFieldCopy {
   void operator()(const Field&, const Field&) const noexcept {}
 };
 
-template <int Dim, class FieldCopy = IgnoreFieldCopy>
+struct LegacyFieldPreflight {
+  template <class Field, class... Metadata>
+  void operator()(const Field&, const ContinuationType& type, const Metadata&...) const {
+    if (!type.field_provider.empty())
+      throw std::invalid_argument("independent Field requires a live source preflight");
+  }
+};
+
+template <int Dim, class FieldCopy = IgnoreFieldCopy, class FieldPreflight = LegacyFieldPreflight>
 ContinuationValueRef<Dim> pack(const ContinuationType& type, const std::any& source, Limits limits,
-                               const FieldCopy& on_field_copy = {}) {
+                               const FieldCopy& on_field_copy = {},
+                               const FieldPreflight& preflight = {}) {
   using Ref = ContinuationValueRef<Dim>;
   using Value = ContinuationValue<Dim>;
   type.validate(limits.workspace_bytes);
@@ -351,7 +363,8 @@ ContinuationValueRef<Dim> pack(const ContinuationType& type, const std::any& sou
         frame.count = frame.array->values->size();
         input.charge(frame.count, sizeof(std::any));
       } else
-        frame.leaf = detail::pack_leaf<Dim>(schema, *frame.source, input, output, on_field_copy);
+        frame.leaf =
+            detail::pack_leaf<Dim>(schema, *frame.source, input, output, on_field_copy, preflight);
     }
     output.charge(frame.count, sizeof(Ref));
     frame.children.reserve(frame.count);
@@ -388,9 +401,10 @@ ContinuationValueRef<Dim> pack(const ContinuationType& type, const std::any& sou
   }
 }
 
-template <int Dim, class FieldCopy = IgnoreFieldCopy>
+template <int Dim, class FieldCopy = IgnoreFieldCopy, class FieldPreflight = LegacyFieldPreflight>
 std::any unpack(const ContinuationType& type, const ContinuationValueRef<Dim>& source,
-                Limits limits, const FieldCopy& on_field_copy = {}) {
+                Limits limits, const FieldCopy& on_field_copy = {},
+                const FieldPreflight& preflight = {}) {
   using Ref = ContinuationValueRef<Dim>;
   using Value = ContinuationValue<Dim>;
   type.validate(limits.workspace_bytes);
@@ -491,9 +505,11 @@ std::any unpack(const ContinuationType& type, const ContinuationValueRef<Dim>& s
         // Authoring projections carry the original capability's exact role.
         // A different schema cannot turn copying storage into relabelling authority.
         if (value->field_owner() != schema.field_owner ||
+            value->field_provider() != schema.field_provider ||
             value->scientific_contract() != schema.scientific_contract ||
             value->field().ncomp() != schema.field_components)
           throw std::invalid_argument("finite structural Field contract differs");
+        preflight(value->field(), schema, value->field_metadata());
         detail::field_storage(value->field(), input, output);
         destination = std::make_shared<MultiFab<Dim>>(value->field());
         detail::copied_field(on_field_copy, value->field(),

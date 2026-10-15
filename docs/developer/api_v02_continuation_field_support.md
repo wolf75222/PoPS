@@ -40,3 +40,25 @@ These cases require the official native reception before being reported as execu
 The separate complete RuntimeInstance migration remains under investigation after
 SDK012 rejected post-requalification validation on MPI1→MPI2; this document does not
 claim that end-to-end receiver has passed.
+
+## Invocation level and typed recovery
+
+`p.level()` produces a native Int64 describing the authenticated current
+invocation. Uniform execution returns zero. AMR execution returns the active
+hierarchy level, with the same value on all MPI ranks executing that level. The
+native context refuses evaluation without a prepared invocation. This value is
+introspection, not permission to read a Field; a branch selecting the producer
+level still passes through the exact Field access check. Branches that request
+incompatible collective barriers on different levels remain invalid.
+
+A typed error may retain a Field from its producer and carry it opaquely to other
+levels. Packing validates the live source before copying; unpacking requires the
+exact retained instance or an authenticated Store leaf and preserves its metadata.
+A structural `Variant` uses the invocation point for its envelope while each
+contained Field keeps its exact declared historical point. An `Accepted` leaf
+keeps its scope authority; this envelope rule cannot make foreign scopes valid.
+
+The source015 receivers `test_api_v02_field_error_capsule_native.py` and
+`test_api_v02_independent_field_continuation_native.py` exercise this contract,
+including foreign-level reads, complete rollback, and a retained old observation
+consumed after restart. Their presence is not a native pass receipt.

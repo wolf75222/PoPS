@@ -966,7 +966,7 @@ def emit_distributed_op(program, v, var, model, lines, prelude, block_idx, field
             from .program_emit_distributed_kokkos import emit as emit_kokkos
 
             accelerated = emit_kokkos(
-                v, var, lines, token=token, registry=registry, session=session
+                v, var, lines, token=token, registry=registry, session=session, lane=lane
             )
         if not accelerated:
             body = []

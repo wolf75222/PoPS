@@ -186,6 +186,11 @@ Real sum_component(const field_type& field, int component) const {
   return static_cast<Real>(
       all_reduce_sum(pops::reduce_sum_local(field, component), prepared_execution_lane()));
 }
+Real abs_sum_component(const field_type& field, int component) const {
+  prepare_spatial_collectively([&] { require_program_field_access(field); });
+  return static_cast<Real>(
+      all_reduce_sum(pops::reduce_abs_sum_local(field, component), prepared_execution_lane()));
+}
 Real max_component(const field_type& field, int component) const {
   prepare_spatial_collectively([&] { require_program_field_access(field); });
   return static_cast<Real>(

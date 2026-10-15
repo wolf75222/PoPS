@@ -81,7 +81,7 @@ void reconcile_spatial_hierarchy_previous(int identity) const {
           parent, resource.previous_flux[parent], resource.previous_flux[parent + 1]);
   });
   for (std::size_t level = 0; level < levels; ++level)
-    with_program_attempt_level(static_cast<int>(level), [&] {
+    with_program_attempt_level_or_current(static_cast<int>(level), [&] {
       const auto* candidate = active_attempt_states_[block];
       materialize_active_flux_expression_(block, *candidate, &resource.previous_flux[level]);
       staged[level] = {active_outgoing_flux_[block], active_subcycling_window_, candidate};

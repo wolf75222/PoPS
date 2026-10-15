@@ -276,6 +276,14 @@ int level() const noexcept {
   return active_level_;
 }
 
+std::int64_t invocation_level() const {
+  require_facade_execution_();
+  if (!resource_attempt().visible() || !std::isfinite(current_dt_) || !(current_dt_ > 0.0) ||
+      active_level_ < 0 || active_level_ >= nlev())
+    throw std::logic_error("invocation level requires an exact prepared AMR level");
+  return active_level_;
+}
+
 ProgramResourceTopology program_resource_topology() const {
   refresh_resources_();
   return {nlev(), runtime_->topology_epoch(), runtime_->materialization_generation()};

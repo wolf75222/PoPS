@@ -7,6 +7,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 
 #include <array>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <string>
@@ -26,6 +27,7 @@ struct Model : pops::nd::ScalarAdvection<Dim> {
 struct Evidence {
   int mode = 0;
   int gathered = 0, continued = 0, solves = 0, publications = 0, completed = 0, recovered = 0;
+  std::function<void()> spatial_gather, spatial_solve;
 };
 struct Fixture {
   std::unique_ptr<System> system;
@@ -40,7 +42,7 @@ void expect_value(const Field& field, pops::Real value) {
   }
 }
 
-Fixture prepare_fixture() {
+Fixture prepare_fixture(bool refined = true) {
   pops::comm_init();
   pops::AmrSystemConfig<Dim> config;
   config.explicit_bootstrap = true;
@@ -84,6 +86,8 @@ Fixture prepare_fixture() {
                   throw pops::runtime::program::hierarchy_control_failure(
                       std::numeric_limits<std::int64_t>::min(), 1);
                 context->set_stage_time(1, 2);
+                if (evidence->spatial_gather)
+                  evidence->spatial_gather();
                 const auto rank = context->prepared_execution_lane().rank();
                 auto kind = evidence->mode == 6 ? Context::HierarchyBarrierKind::nonlinear_solve
                                                 : Context::HierarchyBarrierKind::linear_solve;
@@ -103,6 +107,8 @@ Fixture prepare_fixture() {
                       EXPECT_EQ(context->level(), 0);
                       EXPECT_EQ(evidence->gathered, facade->n_levels());
                       EXPECT_EQ(facade->time(), 0.0);
+                      if (evidence->spatial_solve)
+                        evidence->spatial_solve();
                       if (evidence->mode == 6)
                         for (int level = 0; level < facade->n_levels(); ++level)
                           context->with_program_attempt_level_or_current(level, [&] {
@@ -171,6 +177,9 @@ Fixture prepare_fixture() {
   system->set_program_block_map({0});
   using Budget = System::PreparedAmrProgramFluxExpressionBlockBudget;
   system->install_prepared_amr_program_flux_expression_budget(kProgram, {Budget{0, 0}}, 0, 0);
+
+  if (!refined)
+    return {std::move(system), std::move(context), std::move(evidence)};
 
   const auto& parent = system->engine()->hierarchy().layout(0);
   pops::Index<Dim> upper{};
@@ -260,6 +269,54 @@ TEST(AmrHierarchyBarrierContinuation, NonlinearCallbackBorrowsRootAndVisitsOther
   fixture.evidence->mode = 6;
   fixture.system->step(0.125);
   expect_success(fixture);
+}
+
+TEST(AmrHierarchyBarrierContinuation, CompositeResidualBorrowsCheckedOutRootForPredictorAndJvp) {
+  // The spatial residual and predictor visit the same checked-out root as the
+  // CPS once callback. No-interface geometry isolates authority from flux laws;
+  // the Python convergence matrix separately exercises true diffusion faces.
+  auto fixture = prepare_fixture(false);
+  auto* context = fixture.context.get();
+  fixture.evidence->mode = 6;
+  ASSERT_EQ(fixture.system->n_levels(), 1);
+  EXPECT_THROW(context->with_program_attempt_level_or_current(0, [] {}), std::logic_error);
+  pops::FieldNewtonOptions options;
+  options.tolerance = 1e-12;
+  auto workspace = context->prepare_spatial_hierarchy(901, 0, options, pops::Real(1e-6));
+  auto* coordinates = &context->scratch_state(902, 0, context->state(0));
+  workspace->mappings[0] = [coordinates](const Field& q) {
+    pops::PureFieldAlgebra::copy(*coordinates, q);
+    return coordinates;
+  };
+  workspace->evaluations[0] = [](Field& q, const Field& previous, Field& residual, const Field*) {
+    pops::lincomb(residual, pops::Real(1), q, pops::Real(-1), previous);
+    return &q;
+  };
+  fixture.evidence->spatial_gather = [context] {
+    context->stage_spatial_hierarchy_previous(901, 0, context->state(0), nullptr);
+  };
+  fixture.evidence->spatial_solve = [context, workspace] {
+    context->reconcile_spatial_hierarchy_previous(901);
+    const auto report = context->solve_spatial_hierarchy(*workspace);
+    EXPECT_EQ(report.status, pops::SolveStatus::kSolved);
+    EXPECT_GT(workspace->derivative_evaluations(), 0);
+    EXPECT_GT(workspace->residual_evaluations(), 1);
+    if (workspace->candidate(0).local_size() != 0) {
+      EXPECT_NEAR(pops::reduce_min_local(workspace->candidate(0)), 7., 1e-11);
+      EXPECT_NEAR(pops::reduce_max_local(workspace->candidate(0)), 7., 1e-11);
+    }
+    EXPECT_EQ(context->level(), 0);
+    expect_value(context->state(0), pops::Real(7));
+  };
+  fixture.system->step(0.125);
+  EXPECT_EQ(fixture.evidence->solves, 1);
+  EXPECT_EQ(fixture.evidence->publications, 1);
+  EXPECT_EQ(fixture.evidence->completed, 1);
+  EXPECT_EQ(fixture.evidence->gathered, 1);
+  EXPECT_EQ(fixture.evidence->continued, 1);
+  EXPECT_DOUBLE_EQ(fixture.system->time(), 0.125);
+  expect_value(fixture.system->engine()->hierarchy().state(0), pops::Real(11));
+  EXPECT_THROW(context->with_program_attempt_level_or_current(0, [] {}), std::logic_error);
 }
 
 TEST(AmrHierarchyBarrierContinuation, RecoverableOnceAndLaterLevelFailuresResumeEveryExactHandler) {

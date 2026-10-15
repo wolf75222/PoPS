@@ -21,6 +21,14 @@ def test_distributed_native_receivers_have_closed_device_maps(kind,ranks):
     assert 'distributed::map<pops::kNativeDimension>' in cpp
     assert 'pops_finite_kokkos_launch_count' in cpp
     assert '::host_mirror_type' in cpp and '::HostMirror' not in cpp
+    # Every accelerated region uses its authenticated SSA-local execution lane,
+    # including allocation consensus, host staging and the device rank capture.
+    assert 'distributed_lane' not in cpp
+    for row in rows:
+        lane = f"distributed_{row['ssa']}_lane"
+        assert f"const auto& {lane} = distributed_{row['ssa']}_registry.lane();" in cpp
+        assert f"distributed::phase({lane}," in cpp
+        assert f"= {lane}.rank();" in cpp
     assert source_map(cpp)['inventories'][0]['program_hash']==p._ir_hash()
     regions = cpp.split('KOKKOS_FUNCTION void operator()(')[1:]
     assert regions

@@ -22,7 +22,12 @@ from .continuation_forest_amr import _accepted
 from .models_M01_M14 import _domain, _fv, _initial
 
 
-def build_continuation_capture_amr(*, cells=(16, 8), dt=.002, steps=2, recover=False):
+def build_continuation_capture_amr(*, cells=(16, 8), dt=.002, steps=2, recover=False,
+                                   field_payload=False, illegal_read=False, independent_field=False):
+    if independent_field and not field_payload:
+        raise ValueError("independent retained observation requires the typed Field payload")
+    if illegal_read and not field_payload:
+        raise ValueError("foreign read witness requires the typed Field payload")
     frame, _ = _domain("captured_continuation_box", cells)
     model = pops.Model("captured_continuation_equations", frame=frame)
     state = model.state("amount", components=("u",))
@@ -48,24 +53,50 @@ def build_continuation_capture_amr(*, cells=(16, 8), dt=.002, steps=2, recover=F
         finite_difference_step=1e-6), boundaries=(), solver=solver))
     p = pops.Program("captured_children_with_full_parent")
     q = p.state(block[state])
-    initial = p.product(state=q.n, time=p.float64(0), step=p.int64(0), counter=p.int64(0))
+    seed = q.n
+    if independent_field:
+        seed_request = field.bind_program_inputs(program=p,
+            values={block[state]: q.n}, at=q.n.point, solver=solver)
+        seed = field.observe(p.solve(seed_request, solver=solver).consume(action=FailRun()))[field[potential]]
+    retained = {"retained": seed} if field_payload else {}
+    initial = p.product(state=q.n, time=p.float64(0), step=p.int64(0), counter=p.int64(0),
+                        **({"previous": p.float64(0)} if independent_field else {}), **retained)
     schema = ContinuationSchema(initial, fields=((q.next, ("state",)),),
+                                retained_fields=(("retained",),) if field_payload else (),
                                 time=("time",), step=("step",))
     base = p.continuation_open(initial, schema)
     current = p.continuation_read(base)
     proposal = p.product(h=p.requested_dt())
+    previous_sample = (p.branch(p.level() == 1,
+        lambda b: b.sum(current["retained"]), lambda b: b.float64(0)) if independent_field else None)
 
-    def continuation(b, count):
+    def continuation(b, count, sample=None):
+        retained = {"retained": current["retained"] if sample is None else sample} if field_payload else {}
         return b.product(state=b.value("same_amount", current["state"], at=q.next.point),
             time=current["time"]+proposal["h"], step=current["step"]+b.int64(1),
-            counter=current["counter"]+b.int64(count))
+            counter=current["counter"]+b.int64(count),
+            **({"previous": previous_sample} if independent_field else {}), **retained)
 
     def trial(b):
+        input_state = current["state"]
+        if independent_field:
+            input_state = b.value("scaled_nonlinear_source",
+                                  current["state"]*(1+50*current["time"]), at=q.n.point)
         request = field.bind_program_inputs(program=b,
-            values={block[state]: current["state"]}, at=q.n.point, solver=solver)
+            values={block[state]: input_state}, at=q.n.point, solver=solver)
         observation = field.observe(b.solve(request, solver=solver).consume(action=FailRun()))
         maximum = b.max(observation[field[potential]])
         approved = _accepted(b, base, proposal, continuation(b, 1), b.product(maximum=maximum))
+        if field_payload:
+            from pops.time.variant_types import Result, Variant, type_of
+            payload = b.product(sample=observation[field[potential]] if independent_field else current["state"],
+                                producer=b.level())
+            errors = Variant(sample=type_of(payload))
+            result = Result(type_of(approved), errors)
+            selected = b.branch(b.level() == 1,
+                lambda child: child.variant(result, "err", child.variant(errors, "sample", payload)),
+                lambda child: child.variant(result, "ok", approved))
+            return b.require_success(selected)
         if recover:
             # A recoverable authored failure after assessment must revoke the
             # provisional child instead of publishing its complete image.
@@ -73,28 +104,53 @@ def build_continuation_capture_amr(*, cells=(16, 8), dt=.002, steps=2, recover=F
         return approved
 
     captured = p.continuation_capture(trial)
-    approved = p.match(captured, ok=lambda b, value: value,
-        err=lambda b, error: _accepted(b, base, proposal, continuation(b, 10),
-                                      b.product(maximum=b.float64(-1))))
+    def recover_field(b, payload):
+        # Structural transport and checkpointing do not numerically read the
+        # fine sample on coarse. Only its producer level may reduce it.
+        def read(child):
+            child.record_scalar("capsule_sample", child.sum(payload["sample"]))
+            return child.int64(1)
+        read_here = (read(b) if illegal_read else
+            b.branch(b.level() == payload["producer"], read, lambda child: child.int64(0)))
+        return _accepted(b, base, proposal, continuation(b, 10, payload["sample"]),
+                          b.product(maximum=b.float64(read_here)))
+
+    def recovery(b, error):
+        if field_payload:
+            def unexpected(child, payload):
+                return _accepted(child, base, proposal, continuation(child, 100),
+                                 child.product(maximum=child.float64(-99)))
+            return b.match(error, sample=recover_field,
+                           assessment_rejected=unexpected, runtime=unexpected)
+        return _accepted(b, base, proposal, continuation(b, 10), b.product(maximum=b.float64(-1)))
+
+    approved = p.match(captured, ok=lambda b, value: value, err=recovery)
 
     def synchronize(b, base, proposal):
         entry = b.continuation_read(base)
         old = proposal["candidate"]
         result = b.product(state=proposal["synchronized"]["field_0"],
             time=proposal["interval"]["end"], step=entry["step"]+b.int64(1),
-            counter=old["counter"])
-        return _accepted(b, base, proposal, result, b.product(counter=old["counter"]))
+            counter=old["counter"], **({"previous": old["previous"]} if independent_field else {}),
+            **({"retained": old["retained"]} if field_payload else {}))
+        return _accepted(b, base, proposal, result, b.product(counter=old["counter"],
+            **({"previous": old["previous"]} if independent_field else {})))
 
     def initialize(b):
-        image = b.product(time=b.float64(0), step=b.int64(0), counter=b.int64(0))
+        image = b.product(time=b.float64(0), step=b.int64(0), counter=b.int64(0),
+                          **({"previous": b.float64(0)} if independent_field else {}))
         return image, ContinuationSchema(image, time=("time",), step=("step",))
 
     def parent(b, base, proposal):
         entry = b.continuation_read(base)
         counters = b.reduce(proposal["children"], b.int64(0),
             lambda child, total, row: total+row["counter"], order="ascending")
+        previous = (b.reduce(proposal["children"], b.float64(0),
+            lambda child, total, row: total+row["previous"], order="ascending")
+            if independent_field else None)
         image = b.product(time=proposal["interval"]["end"],
-            step=entry["step"]+b.int64(1), counter=counters)
+            step=entry["step"]+b.int64(1), counter=counters,
+            **({"previous": previous} if independent_field else {}))
         return _accepted(b, base, proposal, image, b.product())
 
     p.continuation_forest(approved, synchronize=synchronize, initialize=initialize,

@@ -28,11 +28,14 @@ STRUCTURED_OPS = frozenset((
 _REGION_SAFE_OPS = FIELD_REPRESENTATION_OPS | STRUCTURED_OPS | FINITE_OPS | (VERSIONED_OPS - {'continuation_open', 'continuation_publish'}) | frozenset((
     "state", "linear_combine", "pointwise_expression", "scalar_op", "compare", "reduce",
     "cfl", "hmin", "branch", "scalar_field", "where", "cell_compare",
-    "field_component", "vector_field", "requested_dt",
+    "field_component", "vector_field", "requested_dt", "invocation_level",
     "scalar_isfinite", "scalar_expression", "provenance_bind",
     # PreparedStencilFlux converges allocation, halo, kernel and validity failures;
     # guarded capture retains its exchanges across the region's lexical lifetime.
     "stencil_flux_divergence", "acceptance_guard",
+    # Root-issued sidecars remain lexical captures. Every delivery rechecks the
+    # exact context/point/live attempt and converges failure before leaving the loop.
+    "interval_end", "interval_check",
 ))
 
 

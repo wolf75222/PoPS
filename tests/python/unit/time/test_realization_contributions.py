@@ -243,7 +243,8 @@ def test_requested_interval_cannot_be_published_as_reached():
 
 def test_interval_replace_and_scale_cannot_relabel_runtime_endpoints():
     _,p,q,_=fixture()
-    first=p.interval(); second=p.interval(duration=p.requested_dt()*2)
+    first=p.interval()
+    second=p.interval(duration=p.requested_dt()*2)
     old=Contribution("old",p.value("old",q.n),first)
     new=Contribution("new",p.value("new",q.n),second)
     inc=Increment((old,),(identity_delivery(old,q.n),))
@@ -253,13 +254,17 @@ def test_interval_replace_and_scale_cannot_relabel_runtime_endpoints():
         inc.scale(p,1,name="relabel",interval=second)
 
 
-def test_interval_fold_capture_requires_qualified_invocation():
+def test_interval_fold_capture_rechecks_the_exact_native_invocation():
     model,p,q,_=fixture()
     window=p.interval()
-    result=p.fold(q.n,1,lambda inner,carried,index:window.bind(inner,carried,name="bad"))
+    result=p.fold(q.n,3,lambda inner,carried,index:window.bind(inner,carried,name="delivery"))
     p.commit(q.next,p.value("candidate",result,at=q.next.point))
-    with pytest.raises((NotImplementedError,ValueError),match="effect|Interval|qualified|unsupported"):
-        p.validate()
+    assert p.validate()
+    source = emit(model, p)
+    assert "interval_owner_" in source and ".same_attempt(ctx.resource_attempt())" in source
+    assert "ctx.boundary_evaluation_point(0)" in source
+    assert "interval_checked_" in source and "pops::all_reduce_max(" in source
+    assert source.index("interval_owner_") < source.index("interval_valid_")
 
 
 def test_amr_interval_issuance_authenticates_live_clock_and_attempt_collectively():
@@ -283,11 +288,13 @@ def test_amr_interval_issuance_authenticates_live_clock_and_attempt_collectively
 def test_computed_interval_requires_exact_published_duration_ssa():
     model,p,q,_=fixture()
     from pops.time import ComputedDt
-    duration=p.requested_dt();window=p.interval(duration=duration)
+    duration=p.requested_dt()
+    window=p.interval(duration=duration)
     item=Contribution("J",p.value("J",q.n),window)
     inc=Increment((item,),(identity_delivery(item,q.n),))
     p.commit(q.next,inc.apply(p,q.n,name="delivered",at=q.next.point))
-    p.reached_duration(duration*.5);p.step_strategy(ComputedDt(.1))
+    p.reached_duration(duration*.5)
+    p.step_strategy(ComputedDt(.1))
     with pytest.raises(ValueError,match="exact ComputedDt frontier SSA"):
         emit(model,p)
 
@@ -408,9 +415,11 @@ def test_delivery_between_blocks_with_different_components_uses_explicit_finite_
     assert any(value is shared.value for value in b.inputs[0].inputs)
     assert a.inputs[0].attrs["finite_support_v1"][1] == a.space.components
     assert b.inputs[0].attrs["finite_support_v1"][1] == b.space.components
-    inc.require_application(a); inc.require_application(b)
+    inc.require_application(a)
+    inc.require_application(b)
     p.commit_many({left.next: a, right.next: b})
-    p.step_strategy(pops.time.FixedDt(.1)); case.program(p)
+    p.step_strategy(pops.time.FixedDt(.1))
+    case.program(p)
     resolved = pops.resolve(pops.validate(case), layout=layout)
     cpp = emit_cpp_program(resolved.time,
                           model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks))

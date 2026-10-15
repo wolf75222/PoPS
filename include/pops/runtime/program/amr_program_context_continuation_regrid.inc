@@ -197,10 +197,14 @@ bool begin_continuation_regrid() const {
           continuation_detail::walk_value<Dim>(
               store.read(), store.configuration().byte_capacity,
               [&](const ContinuationValue<Dim>& value) {
-                if (value.kind() == ContinuationKind::Field)
+                if (value.kind() == ContinuationKind::Field) {
+                  const auto& support = value.field_support();
                   frame.source_fields.emplace(
-                      &value.field(), RegridFieldQualification{value.field_owner(), level,
-                                                               FieldTopology::Side::Source});
+                      &value.field(),
+                      RegridFieldQualification{value.field_owner(),
+                                               support ? support->producer_level : level,
+                                               FieldTopology::Side::Source});
+                }
                 return true;
               },
               [](const ContinuationValue<Dim>&) {});

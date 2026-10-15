@@ -67,7 +67,7 @@ def admission(value):
     return None, (result, raw, block, formal, tuple(captures[key] for key in sorted(captures)))
 
 
-def emit(value, var, lines, *, token, registry, session):
+def emit(value, var, lines, *, token, registry, session, lane):
     reason, plan = admission(value)
     lines.append(
         "// pops-distributed-map-placement@1 "
@@ -94,7 +94,7 @@ def emit(value, var, lines, *, token, registry, session):
     body = ["try {"]
 
     def phase(statement):
-        body.append(_DN + "phase(distributed_lane,[&]{ " + statement + " });")
+        body.append(_DN + "phase(" + lane + ",[&]{ " + statement + " });")
 
     def allocate(expression, name):
         phase(name + " = " + expression + ";")
@@ -174,7 +174,7 @@ def emit(value, var, lines, *, token, registry, session):
             )
             for _, col in _leaves(sig["element"], columns):
                 allocate("Kokkos::create_mirror_view(%s)" % col, col + "_host")
-            body.append(_DN + "phase(distributed_lane,[&]{")
+            body.append(_DN + "phase(" + lane + ",[&]{")
             k = name + "_i"
             body.append("for(std::int64_t %s=0;%s<%s;++%s) {" % (k, k, length, k))
             decoded = unpack(
@@ -199,7 +199,7 @@ def emit(value, var, lines, *, token, registry, session):
             )
             constants[node.id] = literal
     rank = token + "_rank"
-    body.append("const std::int64_t %s = distributed_lane.rank();" % rank)
+    body.append("const std::int64_t %s = %s.rank();" % (rank, lane))
     env[("rank",)] = rank
     outputs = _tree(element, lambda s, path: column(s, path, token + "_output", count))
     for _, col in _leaves(element, outputs):
@@ -208,7 +208,7 @@ def emit(value, var, lines, *, token, registry, session):
     body.append("%sView<unsigned char> %s;" % (_NS, failure))
     allocate('%sallocate<unsigned char>(%s,"%s")' % (_NS, count, failure), failure)
     body.append("decltype(%s)::host_mirror_type %s_host;" % (failure, failure))
-    phase_open = _DN + "phase(distributed_lane,[&]{ if (%s>0) {" % count
+    phase_open = _DN + "phase(" + lane + ",[&]{ if (%s>0) {" % count
     body.append(phase_open)
     from .program_kernel_registry import DeviceKernel, device_environment
 

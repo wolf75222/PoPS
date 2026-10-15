@@ -73,17 +73,24 @@ class ContinuationFieldArchive {
             "continuation archive owner is outside its source communicator");
   }
 
-  const Field& prototype(int owner, const ContinuationFieldSupport::Ref& support = {}) const {
-    const auto found = fields_.find(key_(owner, support));
+  const Field& prototype(const ContinuationType& type,
+                         const ContinuationFieldSupport::Ref& support = {}) const {
+    require_support_(type, support);
+    const auto found = fields_.find(key_(type.field_owner, support));
     if (found == fields_.end())
       throw std::invalid_argument("continuation archive Field was not decoded under its authority");
     return *found->second.field;
   }
 
+  const Field& prototype(int owner, const ContinuationFieldSupport::Ref& support = {}) const {
+    ContinuationType type(ContinuationKind::Field);
+    type.field_owner = owner;
+    return prototype(type, support);
+  }
+
   const Field& resolve(const ContinuationType& type, std::span<const std::uint8_t> bytes,
                        const ContinuationFieldSupport::Ref& support = {}) {
-    if (support && support->program_owner != type.field_owner)
-      throw std::invalid_argument("continuation archive Field support names a foreign owner");
+    require_support_(type, support);
     if (support && !source_supports_)
       throw std::invalid_argument("continuation archive requires authenticated producer topology");
     const auto topology =
@@ -95,7 +102,7 @@ class ContinuationFieldArchive {
     for (int owner : source_owners)
       if (owner < 0 || owner >= source_ranks_)
         throw std::invalid_argument("continuation producer topology names a foreign rank");
-    const Field& target = targets_(type.field_owner, support);
+    const Field& target = targets_(type, support);
     continuation_detail::Reader in(bytes);
     if (in.word() != static_cast<std::uint64_t>(type.field_components))
       throw std::invalid_argument("continuation archive Field components differ from its schema");
@@ -187,16 +194,24 @@ class ContinuationFieldArchive {
   }
 
  private:
-  using Key = std::tuple<int, bool, std::string_view, std::string_view, int, int, std::uint64_t,
-                         std::uint64_t>;
+  static void require_support_(const ContinuationType& type,
+                               const ContinuationFieldSupport::Ref& support) {
+    if ((!type.field_provider.empty() && !support) ||
+        (support && (support->program_owner != type.field_owner ||
+                     support->field_provider != type.field_provider)))
+      throw std::invalid_argument("continuation archive Field support names a foreign authority");
+  }
+  using Key = std::tuple<int, bool, std::string_view, std::string_view, std::string_view, int, int,
+                         std::uint64_t, std::uint64_t>;
   static Key key_(int owner, const ContinuationFieldSupport::Ref& support) {
     if (!support)
-      return {owner, false, {}, {}, -1, -1, 0, 0};
+      return {owner, false, {}, {}, {}, -1, -1, 0, 0};
     support->validate();
     return {owner,
             true,
             support->program_identity,
             support->origin_point,
+            support->field_provider,
             support->program_owner,
             support->producer_level,
             support->topology_epoch,
@@ -319,20 +334,35 @@ ContinuationValueRef<Dim> rematerialize_continuation_fields(
         result = Value::variant(first.arm(), std::move(frame.children.at(0)));
         break;
       case ContinuationKind::Field: {
-        const Field& target = targets(first.field_owner(), first.field_support());
-        const auto count = target.layout().size();
-        budget.charge(count, sizeof(std::pair<const Field*, std::size_t>));
-        std::vector<std::pair<const Field*, std::size_t>> patches(count, {nullptr, 0});
+        budget.charge(first.scientific_contract().size() + first.field_provider().size());
+        const ContinuationType type(ContinuationKind::Field, {}, {}, -1, 0, first.field_owner(),
+                                    first.field().ncomp(), first.scientific_contract(), {}, false,
+                                    first.field_provider());
+        // Validate every source before a prototype callback can allocate target storage.
         for (const auto* source : frame.sources) {
-          const Field& old = source->field();
           const auto& support = source->field_support();
           const auto& expected = first.field_support();
           if (bool(support) != bool(expected) || (support && *support != *expected))
             throw std::invalid_argument(
                 "continuation Field producer support differs between ranks");
+          const auto& representation = source->field_representation();
+          const auto& expected_representation = first.field_representation();
+          if (bool(representation) != bool(expected_representation) ||
+              (representation && *representation != *expected_representation))
+            throw std::invalid_argument("Field representation differs between source ranks");
           if (source->field_owner() != first.field_owner() ||
-              source->scientific_contract() != first.scientific_contract() ||
-              old.layout() != target.layout() || old.ghosts() != first.field().ghosts() ||
+              source->field_provider() != first.field_provider() ||
+              source->scientific_contract() != first.scientific_contract())
+            throw std::invalid_argument(
+                "continuation Field scientific authority differs between ranks");
+        }
+        const Field& target = targets(type, first.field_support());
+        const auto count = target.layout().size();
+        budget.charge(count, sizeof(std::pair<const Field*, std::size_t>));
+        std::vector<std::pair<const Field*, std::size_t>> patches(count, {nullptr, 0});
+        for (const auto* source : frame.sources) {
+          const Field& old = source->field();
+          if (old.layout() != target.layout() || old.ghosts() != first.field().ghosts() ||
               old.ncomp() != first.field().ncomp() ||
               old.distribution().replicated() != target.distribution().replicated())
             throw std::invalid_argument(
@@ -419,7 +449,8 @@ ContinuationValueRef<Dim> rematerialize_continuation_fields(
               &field_expression_cache);
         }
         result = Value::field(next, first.field_owner(), first.scientific_contract(),
-                              std::move(expression), first.field_support());
+                              std::move(expression), first.field_support(), first.field_provider(),
+                              first.field_representation());
         break;
       }
       case ContinuationKind::DistributedDomain:

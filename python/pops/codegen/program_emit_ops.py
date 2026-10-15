@@ -1001,6 +1001,11 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                   "history_interval_duration", "history_interval_check"}:
         from .program_emit_intervals import emit_interval
         emit_interval(program, v, var, lines, target=target, block_idx=block_idx)
+    elif v.op == "invocation_level":
+        if v.vtype != "int64" or v.inputs or v.attrs.get("schema_version") != 1:
+            raise ValueError("invocation level requires its closed Int64 contract")
+        var[v.id] = "invocation_level_%d" % v.id
+        lines.append("const std::int64_t %s = ctx.invocation_level();" % var[v.id])
     elif v.op == "requested_dt":
         var[v.id] = "requested_dt_%d" % v.id
         lines.append("const pops::Real %s = static_cast<pops::Real>(dt);" % var[v.id])

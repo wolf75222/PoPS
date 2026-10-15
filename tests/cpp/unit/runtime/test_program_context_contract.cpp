@@ -568,6 +568,19 @@ TEST(ProgramContextContract, ProviderFreeViewDoesNotRequireAPlanOrStorageCarrier
   EXPECT_TRUE(providers.storage_components.empty());
 }
 
+TEST(ProgramContextContract, InvocationLevelRequiresAnAttemptAndIsZeroForUniform) {
+  ensure_kokkos();
+  NativeSystem sim(native_config(2));
+  install_execution_lane(sim, "pops.test.program-context.invocation-level");
+  NativeProgramContext context(&sim);
+  EXPECT_THROW((void)context.invocation_level(), std::logic_error);
+  context.begin_step(.1);
+  EXPECT_EQ(context.invocation_level(), 0);
+  const auto& lane = context.prepared_execution_lane();
+  EXPECT_EQ(pops::all_reduce_min(static_cast<long>(context.invocation_level()), lane), 0);
+  EXPECT_EQ(pops::all_reduce_max(static_cast<long>(context.invocation_level()), lane), 0);
+}
+
 TEST(ProgramContextContract, LocalLinearConsumerPublishesStagedInputAndRejectsNanAtomically) {
   using namespace runtime::system;
   ensure_kokkos();
@@ -3470,11 +3483,8 @@ TEST(ProgramContextContract, StructuralFieldCannotEraseForeignSupportDuringResto
   auto source = ctx.scratch_state_like(ctx.state(0));
   source.set_val(Real(5));
   auto target = ctx.own_structural_field(source);
-  auto support = std::make_shared<runtime::program::ContinuationFieldSupport>();
-  support->program_identity = "other.program";
-  support->origin_point = "fine.accepted";
-  support->program_owner = 0;
-  support->producer_level = 1;
+  auto support = std::make_shared<const runtime::program::ContinuationFieldSupport>(
+      runtime::program::ContinuationFieldSupport{"other.program", "fine.accepted", 0, 1, 0, 0, {}});
   const runtime::program::ContinuationFieldMetadata metadata{{}, support};
   EXPECT_THROW(ctx.continuation_bind_field_provenance(source, *target, target, metadata),
                std::invalid_argument);
@@ -3574,4 +3584,90 @@ TEST(ProgramContextContract, DiffusiveRateCaptureDefersExactFacesUntilAffineDeli
   const auto delivered_count = delivered.size();
   ctx.publish_stencil_exchanges(0, accepted);
   EXPECT_EQ(ctx.runtime_state().accepted_exchanges_.records().size(), delivered_count);
+}
+
+TEST(ProgramContextContract, IndependentFieldProviderRequiresItsExactLiveAllocation) {
+  using namespace runtime::program;
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.independent-fields");
+  add_gas_block(sim, "gas");
+  sim.set_state("gas", ic(4));
+  sim.set_program_block_map({0});
+  NativeProgramContext ctx(&sim);
+  // The fixture installs a genuine immutable continuation schema identity. Generated
+  // artifacts use their installed Program hash instead of this direct native context.
+  ContinuationType type(ContinuationKind::Field);
+  type.field_owner = -1;
+  type.field_provider = "problem-a/unknown-u";
+  type.field_components = 1;
+  type.scientific_contract = "test.independent-field.value";
+  ContinuationConfiguration configuration;
+  configuration.type = ContinuationType(ContinuationKind::Product);
+  configuration.type.names = {"time", "step", "field"};
+  configuration.type.children = {ContinuationType(ContinuationKind::Float64),
+                                 ContinuationType(ContinuationKind::Int64), type};
+  configuration.identity = "test.independent-fields.schema";
+  configuration.byte_capacity = 1 << 20;
+  configuration.time_path = {0};
+  configuration.step_path = {1};
+  ctx.runtime_state().continuation_.configure(configuration);
+  ctx.configure_continuation_field_provider("problem-a/unknown-u", 1, 1);
+  ctx.configure_continuation_field_provider("problem-b/unknown-u", 1, 1);
+  EXPECT_THROW(ctx.allocate_continuation_field_observation("problem-a/unknown-u", 1 << 20),
+               std::logic_error);
+  ctx.begin_step(0.125);
+  auto field = ctx.allocate_continuation_field_observation(type.field_provider, 1 << 20);
+  field->set_val(Real(7));
+  EXPECT_THROW(ctx.continuation_preflight_field(*field, type), std::invalid_argument);
+  ctx.seal_continuation_field_observation(type.field_provider, 3, field);
+  EXPECT_NO_THROW(ctx.continuation_preflight_field(*field, type));
+  EXPECT_ANY_THROW(ctx.seal_continuation_field_observation(type.field_provider, 3, field));
+  auto other_type = type;
+  other_type.field_provider = "problem-b/unknown-u";
+  EXPECT_THROW(ctx.continuation_preflight_field(*field, other_type), std::invalid_argument);
+  NativeField lookalike(*field);
+  EXPECT_THROW(ctx.continuation_preflight_field(lookalike, type), std::invalid_argument);
+  auto owned = ctx.own_structural_field(*field);
+  const auto metadata = ctx.continuation_bind_field_provenance(*field, *owned, owned, type);
+  EXPECT_EQ(metadata.support->field_provider, type.field_provider);
+  EXPECT_EQ(metadata.support->program_owner, -1);
+  EXPECT_NO_THROW(ctx.continuation_preflight_field(*owned, type, metadata));
+  field.reset();
+  EXPECT_NO_THROW(ctx.continuation_preflight_field(*owned, type, metadata));
+  expect_owned_first_value(*owned, Real(7));
+  EXPECT_THROW(ctx.continuation_preflight_field(lookalike, type, metadata), std::invalid_argument);
+  EXPECT_ANY_THROW(ctx.continuation_local_phase(
+      [&] { return ctx.allocate_continuation_field_observation(type.field_provider, 0); },
+      "independent Field observation byte budget"));
+  EXPECT_THROW(ctx.configure_continuation_field_provider(type.field_provider, 2, 1),
+               std::invalid_argument);
+  using Value = ContinuationValue<kTestDimension>;
+  auto accepted = Value::field(*owned, -1, type.scientific_contract, metadata.expression,
+                               metadata.support, type.field_provider);
+  ctx.continuation_bind_field_provenance(*owned, accepted->field(), accepted->field_storage_owner(),
+                                         metadata);
+  auto& store = ctx.runtime_state().continuation_;
+  // The actual Store, rather than the support metadata, reauthorizes accepted
+  // storage when its producer attempt is revoked by the next step.
+  const auto prototypes = [&](const ContinuationType&,
+                              const ContinuationFieldSupport::Ref&) -> const NativeField& {
+    return *owned;
+  };
+  store.publish(store.prepare(Value::product({Value::real(0), Value::integer(0), accepted}),
+                              prototypes, true));
+  auto unreplaced = ctx.own_structural_field(*owned);
+  *owned = NativeField(lookalike);
+  EXPECT_THROW(ctx.continuation_preflight_field(*owned, type), std::invalid_argument);
+  ctx.begin_step(0.0625);
+  EXPECT_NO_THROW(ctx.continuation_preflight_field(accepted->field(), type, metadata));
+  expect_owned_first_value(accepted->field(), Real(7));
+  EXPECT_THROW(ctx.continuation_preflight_field(*unreplaced, type), std::invalid_argument);
+  store.publish(store.prepare(
+      Value::product({Value::real(.0625), Value::integer(1),
+                      Value::field(*unreplaced, -1, type.scientific_contract, metadata.expression,
+                                   metadata.support, type.field_provider)}),
+      prototypes));
+  EXPECT_THROW(ctx.continuation_preflight_field(accepted->field(), type), std::invalid_argument);
 }

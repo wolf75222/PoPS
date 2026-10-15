@@ -1,7 +1,7 @@
 """Issued runtime intervals with authenticated native clock and attempt authority.
 
 Endpoints are real SSA, with a native attempt/clock sidecar. Immutable root
-intervals may be read in collective branches. Historical windows are reconstructed
+intervals may be read in collective lexical regions. Historical windows are reconstructed
 from the actual retained publication on uniform or AMR layouts. An independent
 post-synchronization phase can coexist with these reads; its invocation cannot
 capture their native sidecars. Arbitrary continuation transport remains unsupported.
@@ -164,6 +164,13 @@ def issue_interval(program, *, duration=None, role="reached"):
 
 
 def validate_intervals(program):
+    invocation_regions = {
+        ("branch", "true_block"), ("branch", "false_block"),
+        ("result_match", "true_block"), ("result_match", "false_block"),
+        ("structured_fold", "body_block"),
+        ("structured_iterate", "body_block"), ("structured_iterate", "cond_block"),
+        ("capture_result", "body_block"),
+    }
     def walk(values,ancestry=()):
         for value in values:
             yield value,ancestry
@@ -198,8 +205,8 @@ def validate_intervals(program):
         if value.op in interval_ops or any(v.id in dependent for v in value.inputs):
             if value.vtype in {"scalar", "bool", "int64", "product"}:
                 dependent.add(value.id)
-            if value.region and not all(op=="branch" and key in ("true_block","false_block") for op,key in ancestry):
-                raise NotImplementedError("Interval capture is qualified only for collective branches")
+            if value.region and not all(item in invocation_regions for item in ancestry):
+                raise NotImplementedError("Interval capture requires the same qualified native invocation")
             if value.op in {"product", "cache", "synchronize"}:
                 raise NotImplementedError("Interval persistence/transport is not qualified")
     # The post-synchronization body has its own invocation and native locals.

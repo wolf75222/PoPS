@@ -13,16 +13,16 @@ template <class Function>
 decltype(auto) continuation_checkpoint_at_level_(int level, Function&& function) const {
   using Prototypes = typename ContinuationCodec<Dim>::Prototypes;
   if (level == -1) {
-    Prototypes fields = [this](int block,
+    Prototypes fields = [this](const ContinuationType& type,
                                const ContinuationFieldSupport::Ref& support) -> const field_type& {
-      return continuation_field_prototype_(block, -1, support);
+      return continuation_field_prototype_(type, -1, support);
     };
     return std::forward<Function>(function)(std::move(fields));
   }
   return with_program_resource_level(level, [&]() -> decltype(auto) {
-    Prototypes fields = [this](int block,
+    Prototypes fields = [this](const ContinuationType& type,
                                const ContinuationFieldSupport::Ref& support) -> const field_type& {
-      return continuation_field_prototype_(block, active_level_, support);
+      return continuation_field_prototype_(type, active_level_, support);
     };
     return std::forward<Function>(function)(std::move(fields));
   });
@@ -271,9 +271,9 @@ void install_continuation_checkpoint_preflight_(std::shared_ptr<AmrProgramContex
           }
           targets = [owner](int level) -> Prototypes {
             return
-                [owner, level](int block,
+                [owner, level](const ContinuationType& type,
                                const ContinuationFieldSupport::Ref& support) -> const field_type& {
-                  return owner->continuation_field_prototype_(block, level, support);
+                  return owner->continuation_field_prototype_(type, level, support);
                 };
           };
         });

@@ -25,6 +25,7 @@ class Census {
   std::map<const A*, Count> arrays_;
   std::map<const V*, ValueNode> values_;
   std::uint64_t remaining_, capacity_;
+  std::uint64_t inspected_values_ = 0, scalar_values_ = 0;
   std::array<std::uint64_t, 2> issuer_;
   void charge_() {
     local_require(remaining_ > 0, Code::capacity);
@@ -73,8 +74,17 @@ class Census {
         if (frame.array->index_domain)
           domain_edge_(frame.array->index_domain);
         push({nullptr, frame.array, true});
-        for (auto i = frame.array->values.size(); i != 0; --i)
-          push({&frame.array->values[i - 1], nullptr, false});
+        for (auto i = frame.array->values.size(); i != 0; --i) {
+          const auto& value = frame.array->values[i - 1];
+          ++inspected_values_;
+          local_require(bool(value), Code::domain);
+          if (value->is_scalar_structure()) {
+            charge_();
+            ++scalar_values_;
+            continue;
+          }
+          push({&value, nullptr, false});
+        }
         continue;
       }
       const auto& handle = *frame.value;
@@ -84,6 +94,10 @@ class Census {
       }
       charge_();
       local_require(bool(handle), Code::domain);
+      if (handle->is_scalar_structure()) {
+        ++scalar_values_;
+        continue;
+      }
       auto [found, created] = values_.try_emplace(handle.get());
       auto& count = found->second;
       if (created) {
@@ -125,6 +139,9 @@ class Census {
   // edge/node consumes one unit, less than its charged transport representation.
   Census(std::uint64_t bytes, std::array<std::uint64_t, 2> issuer)
       : remaining_(bytes), capacity_(bytes), issuer_(issuer) {}
+  std::uint64_t inspected_array_values() const noexcept { return inspected_values_; }
+  std::uint64_t scalar_values() const noexcept { return scalar_values_; }
+  std::size_t ownership_value_nodes() const noexcept { return values_.size(); }
   void register_domain(std::uint64_t ordinal, const DomainRef& domain) {
     charge_();
     local_require(domain && domain->visible() && domain->identity().ordinal == ordinal,

@@ -1,6 +1,6 @@
 // An observation is a value, not a later lookup into a mutable solver workspace.
-// Only observations with composite consumers retain a tower; ordinary local reads
-// keep their existing scalar scratch. No collective reduction is moved in time.
+// The exact tower also supplies the producer authority of persistent local leaves.
+// No collective reduction is moved in time.
 class HierarchyFieldObservationSnapshot {
  public:
   const field_type& local_field() const {
@@ -16,8 +16,9 @@ class HierarchyFieldObservationSnapshot {
   PreparedResourceAttempt attempt_;
   std::uint64_t epoch_ = 0, generation_ = 0, retained_bytes_ = 0;
   std::int64_t solve_ = -1, observation_ = -1;
-  int origin_level_ = -1;
+  int origin_level_ = -1, component_ = -1;
   bool retains_halo_ = false;
+  ContinuationFieldSupport::Ref support_;
   std::vector<field_type> fields_, active_;
 };
 
@@ -54,7 +55,7 @@ bool recognizes_hierarchy_field_observation(const field_type& field) const {
 
 std::shared_ptr<const HierarchyFieldObservationSnapshot> capture_hierarchy_field_observation(
     std::int64_t solve, std::int64_t observation, int component, std::uint64_t byte_capacity,
-    bool retain_halo = false) const {
+    bool retain_halo = false, std::string_view field_provider = {}) const {
   auto& provider = configured_hierarchy_field_solver_(solve);
   const auto& lane = prepared_execution_lane();
   std::uint64_t bytes = sizeof(HierarchyFieldObservationSnapshot) +
@@ -72,6 +73,18 @@ std::shared_ptr<const HierarchyFieldObservationSnapshot> capture_hierarchy_field
     if (observation < 0 || component < 0 || !resource_attempt().visible() || active_level_ < 0 ||
         active_level_ >= nlev() || provider.level_count() != nlev())
       throw std::invalid_argument("field observation requires an exact live solve and level");
+    if (!field_provider.empty()) {
+      const auto& scientific = continuation_field_provider_(field_provider);
+      if (!scientific.routes.contains({solve, component}) ||
+          scientific.prototypes.at(active_level_).ncomp() != 1)
+        throw std::invalid_argument(
+            "field observation differs from its installed scientific route");
+    }
+    if (!field_provider.empty()) {
+      charge(1, sizeof(ContinuationFieldSupport));
+      charge(field_provider.size(), 1);
+      charge(facade_->installed_program_hash().size() + 112, 1);
+    }
     charge(static_cast<std::uint64_t>(nlev()), 2 * sizeof(field_type));
     for (int level = 0; level < nlev(); ++level) {
       const auto& source = provider.solution(level);
@@ -109,6 +122,7 @@ std::shared_ptr<const HierarchyFieldObservationSnapshot> capture_hierarchy_field
         .scalar(runtime_->topology_epoch())
         .scalar(runtime_->materialization_generation())
         .scalar(resource_attempt().ordinal());
+    contract.text(field_provider);
     identity = std::move(contract).release();
   });
   const std::array<std::pair<std::string_view, std::string_view>, 1> authorities{
@@ -126,8 +140,25 @@ std::shared_ptr<const HierarchyFieldObservationSnapshot> capture_hierarchy_field
     pending->retained_bytes_ = bytes;
     pending->solve_ = solve;
     pending->observation_ = observation;
+    pending->component_ = component;
     pending->origin_level_ = active_level_;
     pending->retains_halo_ = retain_halo;
+    if (!field_provider.empty()) {
+      ExactContractBuilder point;
+      point.text("pops.field-observation.point@1")
+          .scalar(observation)
+          .scalar(current_interval_start_time_)
+          .scalar(current_dt_)
+          .scalar(stage_time_.numerator)
+          .scalar(stage_time_.denominator);
+      const auto point_bytes = std::move(point).release();
+      const std::vector<std::uint8_t> point_data(point_bytes.begin(), point_bytes.end());
+      const auto origin =
+          std::string("pops.field-observation.point@1:sha256:") + identity::sha256_hex(point_data);
+      pending->support_ = std::make_shared<const ContinuationFieldSupport>(ContinuationFieldSupport{
+          facade_->installed_program_hash(), origin, -1, active_level_, pending->epoch_,
+          pending->generation_, std::string(field_provider)});
+    }
     pending->fields_.reserve(static_cast<std::size_t>(nlev()));
     pending->active_.reserve(static_cast<std::size_t>(nlev()));
     for (int level = 0; level < nlev(); ++level) {

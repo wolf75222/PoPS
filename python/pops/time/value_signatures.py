@@ -166,8 +166,11 @@ def value_signature(value) -> ValueSignature:
                 "point": value.point})
     if value.vtype not in _LEAVES:
         raise TypeError("structured control cannot carry value type %r" % value.vtype)
-    return cast("ValueSignature", dict(vtype=value.vtype, block=value.block, space=value.space,
-                state_ref=value.state_ref, field_context=value.field_context, point=value.point))
+    signature = dict(vtype=value.vtype, block=value.block, space=value.space,
+                     state_ref=value.state_ref, field_context=value.field_context, point=value.point)
+    if value.attrs.get("field_authority") is not None:
+        signature["field_authority"] = value.attrs["field_authority"]
+    return cast("ValueSignature", signature)
 
 
 def same_signature(left, right):

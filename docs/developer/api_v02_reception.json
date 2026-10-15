@@ -1074,7 +1074,7 @@
         }
       ],
       "assumptions": [
-        "Stationary periodic planar magnetic geometry with b\u00b7curl(b)=0, J=B and actual three-dimensional spatial operators.",
+        "Stationary periodic planar magnetic geometry with b·curl(b)=0, J=B and actual three-dimensional spatial operators.",
         "Declared FV/Euler, finite zero-flux velocity box and explicit collision moment projection."
       ],
       "unestablished_properties": [
@@ -1783,7 +1783,7 @@
             "symbol": "examples.api_v02.methods_T01_T12:build_t06",
             "parameters": []
           },
-          "scope": "Local F(a,b)=a*b versus b\u00b2 distinction."
+          "scope": "Local F(a,b)=a*b versus b² distinction."
         }
       ],
       "companion_profiles": [],
@@ -4023,6 +4023,219 @@
           1
         ],
         "qualified": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/build-0015-dim2/receipt.json",
+      "sha256": "dd558611a8b5ad92d760687e8610db737c236e4520f28e9d815ab0575c6892ca",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Official source015 Dim2/MPI incremental build; immutable source and installed identity checked separately",
+        "exit_code": 0,
+        "seconds": 255.18504666595254,
+        "source_unchanged": true,
+        "native_execution_claim": false
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-fields-regions-0015/receipt.json",
+      "sha256": "88eda90b7adca0b192aeab6886fbfcda3f6b9361fe3c541765c75f7140ce3d8d",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Eight Python-authored Field/error/region receivers executed by the installed real PoPS source015 C++ runtime",
+        "exit_code": 0,
+        "seconds": 630.9480752089876,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "listed_cases_qualified": true,
+        "tests": [
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_field_error_capsule_native",
+            "name": "test_fine_field_error_is_retained_opaque_on_coarse_and_survives_restart",
+            "outcome": "passed",
+            "seconds": "117.118"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_field_error_capsule_native",
+            "name": "test_foreign_field_error_numeric_read_rejects_and_restores_whole_macro_image",
+            "outcome": "passed",
+            "seconds": "115.810"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_field_continuation_native",
+            "name": "test_independent_field_retains_old_sample_through_capture_and_restart",
+            "outcome": "passed",
+            "seconds": "133.947"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_field_continuation_native",
+            "name": "test_independent_field_foreign_read_restores_every_accepted_leaf",
+            "outcome": "passed",
+            "seconds": "131.562"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_interval_regions_native",
+            "name": "test_interval_captures_execute_all_regions_and_restart[False]",
+            "outcome": "passed",
+            "seconds": "20.482"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_interval_regions_native",
+            "name": "test_interval_captures_execute_all_regions_and_restart[True]",
+            "outcome": "passed",
+            "seconds": "44.919"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_interval_regions_native",
+            "name": "test_interval_rejection_inside_fold_restores_all_accepted_fields[False]",
+            "outcome": "passed",
+            "seconds": "19.506"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_interval_regions_native",
+            "name": "test_interval_rejection_inside_fold_restores_all_accepted_fields[True]",
+            "outcome": "passed",
+            "seconds": "44.410"
+          }
+        ]
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-temporal-implicit-0015/receipt.json",
+      "sha256": "ab49ff09d89947b6a408778e2aa4bf8dd4f161df721ce30506e91b66b117129f",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Four temporal hierarchy receivers pass; nested Path then fails exact scratch ownership. Unexecuted cases have no qualification.",
+        "exit_code": 1,
+        "seconds": 339.61789579101605,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "listed_cases_qualified": false,
+        "tests": [
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_temporal_hierarchy_native",
+            "name": "test_temporal_reconstruction_and_hierarchy_barrier_preserve_fields_and_restart[False]",
+            "outcome": "passed",
+            "seconds": "69.511"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_temporal_hierarchy_native",
+            "name": "test_temporal_reconstruction_and_hierarchy_barrier_preserve_fields_and_restart[True]",
+            "outcome": "passed",
+            "seconds": "64.939"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_temporal_hierarchy_native",
+            "name": "test_rejection_after_mixed_field_barriers_restores_both_histories_and_sources",
+            "outcome": "passed",
+            "seconds": "62.956"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_temporal_hierarchy_native",
+            "name": "test_composite_observation_budget_rejects_before_state_or_history_publication",
+            "outcome": "passed",
+            "seconds": "66.325"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_path_hierarchy_native",
+            "name": "test_nested_path_matches_explicit_composition_and_accepted_face_integrals[branch-straight]",
+            "outcome": "failure",
+            "seconds": "72.418"
+          }
+        ]
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-implicit-typed-0015/receipt.json",
+      "sha256": "cb1fb3e35e2024af3bd1d4a951aa8959c4fe4a4251caccb99ae195ea70f4a357",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Typed-recovery capture fails exact level-layout validation; no pass is claimed for its correction or remaining cases.",
+        "exit_code": 1,
+        "seconds": 124.08145829098066,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "listed_cases_qualified": false,
+        "tests": [
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_original_field_typed_recovery_native",
+            "name": "test_original_typed_recovery_keeps_array_values_code_and_restart[capture_typed-3.45]",
+            "outcome": "failure",
+            "seconds": "120.454"
+          }
+        ]
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-source015-reception/receipt.json",
+      "sha256": "c506c05e1fdae6f935fe51ad2db95cacf52161515046b5b61ddbe3cc08b79ddb",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Ten selected contracts pass MPI1/2/3 against immutable real PoPS source015. Other groups fail and the overall receipt is incomplete.",
+        "sources_unchanged": true,
+        "binaries_unchanged": true,
+        "selected_cases_passed": 10,
+        "rank_observations": 60,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "selected_case_names": [
+          "AmrHierarchyBarrierContinuation.CompositeResidualBorrowsCheckedOutRootForPredictorAndJvp",
+          "AmrHierarchyFieldScratch.AssemblyReadRequiresExactLiveProviderLevelAndAllocation",
+          "AmrHierarchyFieldScratch.IndependentProviderAuthenticatesIssuedObservationAndDerivedStorage",
+          "ContinuationFieldMigration.IndependentFieldRejectsCrossRankProviderAndClosedCaptureChanges",
+          "ContinuationFieldMigration.IndependentProviderAndClosedRepresentationSurviveOneTwoThreeOne",
+          "ContinuationImage.IndependentFieldStructuralPreflightPrecedesCopyPublication",
+          "ContinuationImage.IndependentProviderAndRepresentationHaveExactCONT6Authority",
+          "ContinuationImage.RepresentationWithoutFluxSurvivesCopyVariantAndCodec",
+          "test_amr_synthetic_program_loader_transaction.CounterRestoreQualifiesCompleteCarrierBeforeProgramRematerialization",
+          "test_temporal_partition_restart.PendingRemapKeepsOriginAcrossTwoUnchangedQualifications"
+        ],
+        "overall_receipt_passed": false
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-fixtures015-r2/receipt.json",
+      "sha256": "651280028d9a27d7411f0678e4ca4512bb6a7114dd34119b85261f108c9476f8",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Six corrected CFL, ProjectAndRecheck and all-component dot receivers pass MPI1/2/3 against unchanged source015 core; independent Uniform Field still exposes empty-rank storage reincarnation.",
+        "passed": false,
+        "sources_unchanged": true,
+        "fixtures_unchanged": true,
+        "core_inputs_unchanged": true,
+        "binaries_unchanged": true,
+        "selected_cases_passed": 6,
+        "rank_observations": 36,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "selected_case_names": [
+          "GeneratedAmrSystemBlock.CflComposesTransportWithProgramOnlyStorage",
+          "GeneratedAmrSystemBlock.CflProgramStorageRequiresAnActualFiniteBound",
+          "ProgramRuntime.ExplicitVectorPairingIncludesEveryComponentAndKeepsLegacyDotZero",
+          "ProgramRuntime.ExplicitVectorPairingUsesNativeAmrCoverageAndIgnoresCoveredNaN",
+          "ProgramRuntime.ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate",
+          "ProgramRuntime.ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPublication"
+        ],
+        "overall_receipt_passed": false
+      }
+    },
+    {
+      "archive_key": "completion-v02/backend/romeo009n-gc/pilot-terminal-0002/receipt.json",
+      "sha256": "fa2d7496cec08de37846e28c8c41084be1e69593559e67cd523ddcd40065ad2e",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Bounded instrumented CPU/CUDA pilot; two complete oracle/checkpoint repetitions each, third interrupted by unchanged 2400s watchdog. Not scaling qualification.",
+        "cpu_job": 747939,
+        "cuda_job": 747940,
+        "terminal_exit_code": 124,
+        "repetitions_completed_per_backend": 2,
+        "scaling_qualified": false
       }
     }
   ],

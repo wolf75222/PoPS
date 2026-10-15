@@ -346,8 +346,9 @@ TEST(ContinuationFieldMigration, ProducerSupportSurvivesOneTwoThreeOneWithoutTim
   EXPECT_EQ(one.at(0), initial);
   EXPECT_THROW(migrate_images({initial}, 2), std::invalid_argument);
   EXPECT_THROW(migrate_images({initial}, 2, 1, false, 1, support), std::length_error);
-  auto foreign = std::make_shared<ContinuationFieldSupport>(*support);
-  foreign->producer_level = 1;
+  auto foreign = std::make_shared<const ContinuationFieldSupport>(ContinuationFieldSupport{
+      support->program_identity, support->origin_point, support->program_owner, 1,
+      support->topology_epoch, support->materialization_generation, support->field_provider});
   EXPECT_THROW(migrate_images({initial}, 2, 1ULL << 26, false, 1, foreign), std::invalid_argument);
   EXPECT_EQ(codec.encode(root, 7), initial);
 }
@@ -402,4 +403,129 @@ TEST(ContinuationFieldMigration, SameOwnerDistinctProducerDescriptorsNeverAliasA
   *(found + original.size() - 1) = '6';
   EXPECT_THROW(target.decode(forged), std::invalid_argument);
   EXPECT_EQ(target.encode(decoded.root, 9), bytes);
+}
+
+TEST(ContinuationFieldMigration, IndependentProviderAndClosedRepresentationSurviveOneTwoThreeOne) {
+  auto type = migration_type().children[0];
+  type.field_owner = -1;
+  type.field_provider = "problem:A/unknown:potential/components:1";
+  auto support = std::make_shared<const ContinuationFieldSupport>(ContinuationFieldSupport{
+      "program", "history/time=0.125/invocation=4", -1, 2, 7, 19, type.field_provider});
+  auto obligation = std::make_shared<const FieldRepresentationObligation>(
+      FieldRepresentationObligation{"transform:T/closed:a=1", "evaluation:4"});
+  auto initial_field = migration_field(1, 0);
+  auto prototypes = [&](const ContinuationType& selected,
+                        const ContinuationFieldSupport::Ref& origin) -> const MultiFab<D>& {
+    if (selected != type || !origin || *origin != *support)
+      throw std::invalid_argument("foreign independent field authority");
+    return initial_field;
+  };
+  Codec initial_codec(type, "migration/provider", 1ULL << 20, prototypes);
+  const auto value = V::field(initial_field, -1, type.scientific_contract, {}, support,
+                              type.field_provider, obligation);
+  const auto initial = initial_codec.encode(value, 7);
+  auto migrate = [&](const std::vector<std::vector<std::uint8_t>>& images, int ranks) {
+    std::vector<std::vector<std::uint8_t>> result;
+    for (int rank = 0; rank < ranks; ++rank) {
+      auto target = migration_field(ranks, rank);
+      Codec::Prototypes targets =
+          [&](const ContinuationType& selected,
+              const ContinuationFieldSupport::Ref& origin) -> const MultiFab<D>& {
+        if (selected != type || !origin || *origin != *support)
+          throw std::invalid_argument("foreign independent field target");
+        return target;
+      };
+      std::vector<int> owners;
+      for (std::size_t patch = 0; patch < target.layout().size(); ++patch)
+        owners.push_back(static_cast<int>(patch % images.size()));
+      ContinuationMigrationBudget budget(1ULL << 26);
+      std::vector<R> values;
+      for (std::size_t source = 0; source < images.size(); ++source) {
+        ContinuationFieldArchive<D> archive(
+            targets, owners, false, static_cast<int>(images.size()), static_cast<int>(source),
+            budget, [&](const ContinuationFieldSupport::Ref& origin) {
+              if (!origin || *origin != *support)
+                throw std::invalid_argument("foreign source topology");
+              return ContinuationFieldArchive<D>::SourceTopology{owners, false};
+            });
+        Codec codec(
+            type, "migration/provider", 1ULL << 20,
+            [&](const ContinuationType& selected, const ContinuationFieldSupport::Ref& origin)
+                -> const MultiFab<D>& { return archive.prototype(selected, origin); },
+            nullptr, nullptr, nullptr, nullptr,
+            [&](const ContinuationType& selected, std::span<const std::uint8_t> bytes,
+                const ContinuationFieldSupport::Ref& origin) -> const MultiFab<D>& {
+              return archive.resolve(selected, bytes, origin);
+            });
+        auto decoded = codec.decode(images[source]);
+        EXPECT_EQ(codec.encode(decoded.root, 7), images[source]);
+        values.push_back(decoded.root);
+      }
+      auto moved = rematerialize_continuation_fields<D>(values, targets, budget);
+      EXPECT_EQ(moved->field_provider(), type.field_provider);
+      EXPECT_TRUE(moved->field_representation());
+      EXPECT_EQ(*moved->field_representation(), *obligation);
+      EXPECT_EQ(*moved->field_support(), *support);
+      auto expected = V::field(target, -1, type.scientific_contract, {}, support,
+                               type.field_provider, obligation);
+      Codec output(type, "migration/provider", 1ULL << 20, targets);
+      EXPECT_EQ(output.encode(moved, 7), output.encode(expected, 7));
+      result.push_back(output.encode(moved, 7));
+    }
+    return result;
+  };
+  const auto two = migrate({initial}, 2), three = migrate(two, 3), one = migrate(three, 1);
+  EXPECT_EQ(one.at(0), initial);
+  EXPECT_EQ(initial_codec.encode(value, 7), initial);
+}
+
+TEST(ContinuationFieldMigration, IndependentFieldRejectsCrossRankProviderAndClosedCaptureChanges) {
+  auto type = migration_type().children[0];
+  type.field_owner = -1;
+  type.field_provider = "problem:A/unknown:potential";
+  const auto support = std::make_shared<const ContinuationFieldSupport>(ContinuationFieldSupport{
+      "program", "historical-evaluation:7", -1, 1, 2, 3, type.field_provider});
+  const auto representation = std::make_shared<const FieldRepresentationObligation>(
+      FieldRepresentationObligation{"transform:T/capture:a=1", "producer:7"});
+  auto first = migration_field(2, 0), second = migration_field(2, 1),
+       target = migration_field(3, 0);
+  const auto a = V::field(first, -1, type.scientific_contract, {}, support, type.field_provider,
+                          representation);
+  const auto b = V::field(second, -1, type.scientific_contract, {}, support, type.field_provider,
+                          representation);
+  int prototype_calls = 0;
+  Codec::Prototypes targets =
+      [&](const ContinuationType& selected,
+          const ContinuationFieldSupport::Ref& origin) -> const MultiFab<D>& {
+    ++prototype_calls;
+    if (selected != type || !origin || *origin != *support)
+      throw std::invalid_argument("foreign target field authority");
+    return target;
+  };
+  const auto changed = V::with_field_representation(
+      b, std::make_shared<const FieldRepresentationObligation>(
+             FieldRepresentationObligation{"transform:T/capture:a=2", "producer:7"}));
+  std::vector<R> mismatch{a, changed};
+  ContinuationMigrationBudget first_budget(1ULL << 26);
+  EXPECT_THROW(rematerialize_continuation_fields<D>(mismatch, targets, first_budget),
+               std::invalid_argument);
+  EXPECT_EQ(prototype_calls, 0);
+  EXPECT_EQ(a->field_representation(), representation);
+  EXPECT_EQ(b->field_representation(), representation);
+  for (const std::string provider : {"problem:B/unknown:potential", "problem:A/unknown:other"}) {
+    auto foreign_support =
+        std::make_shared<const ContinuationFieldSupport>(ContinuationFieldSupport{
+            support->program_identity, support->origin_point, -1, support->producer_level,
+            support->topology_epoch, support->materialization_generation, provider});
+    mismatch[1] = V::field(second, -1, type.scientific_contract, {}, foreign_support, provider,
+                           representation);
+    ContinuationMigrationBudget budget(1ULL << 26);
+    EXPECT_THROW(rematerialize_continuation_fields<D>(mismatch, targets, budget),
+                 std::invalid_argument);
+    EXPECT_EQ(prototype_calls, 0);
+  }
+  std::vector<R> valid{a, b};
+  ContinuationMigrationBudget valid_budget(1ULL << 26);
+  EXPECT_NO_THROW(rematerialize_continuation_fields<D>(valid, targets, valid_budget));
+  EXPECT_EQ(prototype_calls, 1);
 }

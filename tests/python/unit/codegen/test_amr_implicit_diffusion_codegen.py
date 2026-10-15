@@ -13,7 +13,8 @@ def test_one_composite_temporal_solve_preserves_current_parent_and_consumed_publ
         plan.time, model=lower_and_validate(plan.blocks[0].model)[0], target="amr_system"
     )
     assert source.count("ctx.solve_spatial_hierarchy(") == 1
-    assert "ctx.advance_synchronized_hierarchy" in source
+    assert "ctx.advance_mapping_hierarchy" in source
+    assert "ctx.suspend_hierarchy_barrier(" in source
     assert "with_spatial_parent(0,parent" in source
     assert "stage_spatial_hierarchy_previous" in source
     assert source.count("ctx.reconcile_spatial_hierarchy_previous(") == 1
@@ -127,7 +128,8 @@ def test_nonlinear_coordinate_maps_preserve_bootstrap_and_refresh_phase_contract
     assert "refusing pre-reflux execution" not in install
     assert "temperature_to_energy" in source
     assert source.count("ctx.solve_spatial_hierarchy(") == 1
-    assert "ctx.advance_synchronized_hierarchy" in install
+    assert "ctx.advance_mapping_hierarchy" in install
+    assert "HierarchyBarrierKind::nonlinear_solve" in install
 
 
 @pytest.mark.parametrize("imex", [False, True])
@@ -167,7 +169,7 @@ def test_spatial_scratch_producers_retain_exact_block_level_and_node_ownership(k
 
 @pytest.mark.parametrize("imex", [False, True])
 @pytest.mark.parametrize("kind", ["constant", "nonlinear_accumulation"])
-def test_hierarchy_solve_releases_level_envelopes_before_its_internal_traversals(kind, imex):
+def test_hierarchy_solve_resumes_publication_after_one_prepared_composite_barrier(kind, imex):
     import pops
     from tests.python.integration.runtime.test_amr_implicit_diffusion import build
 
@@ -176,24 +178,21 @@ def test_hierarchy_solve_releases_level_envelopes_before_its_internal_traversals
     source = emit_cpp_program(
         plan.time, model=lower_and_validate(plan.blocks[0].model)[0], target="amr_system"
     )
-    driver = source.split("auto _advance_hierarchy =", 1)[1].split(
-        "ctx.advance_synchronized_hierarchy", 1
-    )[0]
-    scopes = []
-    phases = []
-    for line in driver.splitlines():
-        code = line.split("//", 1)[0]
-        for phase in ("gather", "solve", "publish"):
-            if ".%s(hierarchy_dt)" % phase in code:
-                phases.append(phase)
-                # Reconciliation and residual/JVP callbacks each select all levels.
-                # Only gather/publication may retain an outer level checkout.
-                assert any("with_program_attempt_level" in scope for scope in scopes) == (
-                    phase != "solve"
-                )
-        for char in code:
-            if char == "{":
-                scopes.append(code)
-            elif char == "}":
-                scopes.pop()
-    assert phases == ["gather", "solve", "publish"]
+    # The CPS scheduler owns the root envelope during the unique callback.
+    # The composite runtime borrows it for predictor/residual/JVP traversals;
+    # publication is resumed only after the collective solve outcome succeeds.
+    at = source.index("ctx.suspend_hierarchy_barrier(")
+    gathered = source[:at]
+    once, resumed = source[at:].split("}, [", 1)
+    assert "HierarchyBarrierKind::nonlinear_solve" in once
+    assert "ctx.stage_spatial_hierarchy_previous(" in gathered
+    assert "->mappings.at(ctx.level()) =" in gathered
+    assert "->evaluations.at(ctx.level()) =" in gathered
+    reconcile = once.index("ctx.reconcile_spatial_hierarchy_previous(")
+    solve = once.index("ctx.solve_spatial_hierarchy(")
+    consensus = once.index("pops::SolveOutcome::collective_lane(")
+    assert reconcile < solve < consensus
+    assert "->accepted.at(ctx.level())();" not in once
+    assert "->accepted.at(ctx.level())();" in resumed
+    assert "ctx.advance_mapping_hierarchy(" in resumed
+    assert source.count("ctx.solve_spatial_hierarchy(") == 1
