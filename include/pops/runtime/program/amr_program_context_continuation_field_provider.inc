@@ -1,5 +1,18 @@
 // Scientific FieldProblem identity is separate from native solve invocation IDs.
 private:
+struct ContinuationFieldAllocations {
+  using local_storage_type = typename field_type::fab_type::storage_type::const_type;
+  std::shared_ptr<const void> incarnation;
+  std::vector<local_storage_type> local;
+  bool matches(const field_type& field) const noexcept {
+    if (incarnation != field.storage_identity() || local.size() != field.local_size())
+      return false;
+    for (std::size_t i = 0; i < local.size(); ++i)
+      if (local[i].data() != field.fab(i).storage().data())
+        return false;
+    return true;
+  }
+};
 struct ContinuationFieldProvider {
   std::set<std::pair<std::int64_t, int>> routes;
   std::vector<field_type> prototypes;
@@ -13,10 +26,38 @@ struct ContinuationFieldObservationAllocation {
   PreparedResourceAttempt attempt;
   int level;
   std::uint64_t epoch, generation;
-  std::vector<const void*> allocations;
+  ContinuationFieldAllocations allocations;
+  std::uint64_t byte_capacity = 0;
 };
 mutable std::map<const field_type*, ContinuationFieldObservationAllocation>
     continuation_field_observation_allocations_;
+
+void require_hierarchy_field_observation_storage_(const field_type& prototype,
+                                                  std::string_view contract,
+                                                  std::size_t origin_bytes,
+                                                  std::uint64_t capacity) const {
+  const auto charge = [&](std::uint64_t count, std::uint64_t width = 1) {
+    if (width && count > capacity / width)
+      throw std::length_error("FieldProblem observation exceeds its byte capacity");
+    capacity -= count * width;
+  };
+  charge(sizeof(field_type) + field_type::storage_identity_payload_bytes());
+  // The pending and sealed map records coexist until collective publication.
+  // Tree/control-block allocator bookkeeping is outside this declared-storage budget.
+  charge(sizeof(std::pair<const field_type* const, ContinuationFieldObservationAllocation>));
+  charge(sizeof(std::pair<const field_type* const, ContinuationFieldStorageAuthority>));
+  charge(sizeof(ContinuationFieldSupport));
+  charge(2, contract.size());
+  charge(facade_->installed_program_hash().size());
+  charge(origin_bytes);
+  charge(prototype.layout().size(), 2 * sizeof(Box<Dim>) + sizeof(std::size_t));
+  charge(prototype.distribution().owners().size(), sizeof(Index<Dim>));
+  charge(prototype.local_size(),
+         sizeof(typename field_type::fab_type) + sizeof(std::size_t) +
+             2 * sizeof(typename ContinuationFieldAllocations::local_storage_type));
+  for (std::size_t patch = 0; patch < prototype.local_size(); ++patch)
+    charge(prototype.fab(patch).size(), sizeof(Real));
+}
 
 const ContinuationFieldProvider& continuation_field_provider_(std::string_view contract) const {
   const auto found = continuation_field_providers_.find(contract);
@@ -132,18 +173,7 @@ std::shared_ptr<field_type> allocate_hierarchy_continuation_field_observation(
           throw std::invalid_argument(
               "FieldProblem observation allocation requires an exact attempt");
         prototype = &provider.prototypes.at(active_level_);
-        std::uint64_t bytes = sizeof(field_type) + sizeof(ContinuationFieldSupport);
-        const auto charge = [&](std::uint64_t count, std::uint64_t width) {
-          if (!byte_capacity || bytes > byte_capacity ||
-              (width && count > (byte_capacity - bytes) / width))
-            throw std::length_error("FieldProblem observation exceeds its byte capacity");
-          bytes += count * width;
-        };
-        charge(contract.size(), 2);
-        charge(prototype->layout().size(), sizeof(Box<Dim>) + sizeof(std::size_t));
-        charge(prototype->local_size(), sizeof(typename field_type::fab_type));
-        for (std::size_t patch = 0; patch < prototype->local_size(); ++patch)
-          charge(prototype->fab(patch).grown_box().numPts(), sizeof(Real) * prototype->ncomp());
+        require_hierarchy_field_observation_storage_(*prototype, contract, 0, byte_capacity);
       },
       "FieldProblem observation capacity");
   std::shared_ptr<field_type> result;
@@ -155,7 +185,7 @@ std::shared_ptr<field_type> allocate_hierarchy_continuation_field_observation(
                        ContinuationFieldObservationAllocation{
                            result, std::string(contract), resource_attempt(), active_level_,
                            runtime_->topology_epoch(), runtime_->materialization_generation(),
-                           continuation_field_allocations_(*result)});
+                           continuation_field_allocations_(*result), byte_capacity});
       },
       "FieldProblem observation allocation");
   std::erase_if(continuation_field_observation_allocations_,
@@ -181,13 +211,17 @@ void seal_hierarchy_continuation_field_observation(
             !allocation.attempt.visible() || !allocation.attempt.same_attempt(resource_attempt()) ||
             allocation.level != active_level_ || allocation.epoch != runtime_->topology_epoch() ||
             allocation.generation != runtime_->materialization_generation() ||
-            allocation.allocations != continuation_field_allocations_(*field))
+            !allocation.allocations.matches(*field))
           throw std::invalid_argument(
               "derived FieldProblem observation replaced its issued allocation");
         const auto& provider = continuation_field_provider_(contract);
         if (!provider.routes.contains({source->solve_, source->component_}))
           throw std::invalid_argument(
               "derived FieldProblem observation has a foreign source route");
+        // The source origin is only known at seal. Charge its exact bytes before
+        // constructing support or the second allocation-reference vector.
+        require_hierarchy_field_observation_storage_(
+            *field, contract, source->support_->origin_point.size(), allocation.byte_capacity);
         require_same_field_contract_(*field, provider.prototypes.at(active_level_),
                                      "derived FieldProblem observation prototype");
         auto support = std::make_shared<const ContinuationFieldSupport>(ContinuationFieldSupport{

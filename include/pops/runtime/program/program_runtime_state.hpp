@@ -61,7 +61,7 @@
 #include <pops/math/exact_weight.hpp>
 #include <pops/mesh/storage/multifab.hpp>  // MultiFab (history ring element)
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
-#include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams, kMaxRuntimeParams
+#include <pops/runtime/config/runtime_params.hpp>  // owned immutable RuntimeParams
 #include <pops/runtime/program/accepted_exchange.hpp>
 #include <pops/runtime/program/moving_interval_geometry.hpp>
 #include <pops/runtime/program/collective_step_rejection.hpp>
@@ -1945,25 +1945,28 @@ struct ProgramRuntimeState {
     return result;
   }
 
-  /// Seed a program block's RuntimeParams to its declaration defaults (ADC-510 / ADC-508). Idempotent
-  /// (re-seeding resets to the baseline). Called by install. DEFENCE IN DEPTH (ADC-610): a block with
-  /// more than kMaxRuntimeParams params is REJECTED here with a user-facing error instead of being
-  /// SILENTLY TRUNCATED into the fixed-size device carrier -- the Python codegen enforces the same bound
-  /// upstream, so this only fires for a hand-built .so with bogus pops_program_param_* metadata.
-  void seed_params(int prog_block, const std::vector<double>& defaults) {
-    const int count = static_cast<int>(defaults.size());
-    if (count > kMaxRuntimeParams)
-      throw std::runtime_error(
-          "install_program: program block " + std::to_string(prog_block) + " declares " +
-          std::to_string(count) +
-          " runtime parameters > kMaxRuntimeParams=" + std::to_string(kMaxRuntimeParams) +
-          " (include/pops/runtime/config/runtime_params.hpp); the fixed-size device carrier "
-          "RuntimeParams cannot hold them. Regenerate the problem.so with the current headers.");
-    RuntimeParams rp;
-    rp.count = count;
-    for (int k = 0; k < rp.count; ++k)
-      rp.values[k] = static_cast<Real>(defaults[static_cast<std::size_t>(k)]);
-    block_params_[prog_block] = rp;
+  /// Seed one exact Program block with an immutable parameter incarnation.
+  /// The complete cardinality and storage charge are checked before allocation.
+  /// Facade callers perform their collective preparation vote before publication.
+  void seed_params(int prog_block, const std::vector<double>& defaults,
+                   std::optional<std::uint64_t> byte_capacity = {}) {
+    if (prog_block < 0)
+      throw std::invalid_argument("runtime parameters require a non-negative Program block");
+    auto candidate = RuntimeParams::from_host(
+        defaults, byte_capacity.value_or(RuntimeParams::checked_storage_bytes(defaults.size())));
+    block_params_.insert_or_assign(prog_block, std::move(candidate));
+  }
+
+  RuntimeParams prepare_params(int prog_block, const std::vector<double>& values,
+                               const std::string& runtime) const {
+    const auto it = block_params_.find(prog_block);
+    if (it == block_params_.end())
+      throw std::out_of_range(runtime + "::set_program_params: unknown parameter block");
+    const auto& previous = it->second;
+    previous.require_bound();
+    if (values.size() != static_cast<std::size_t>(previous.count))
+      throw std::runtime_error(runtime + "::set_program_params: parameter cardinality differs");
+    return RuntimeParams::from_host(values, previous.byte_capacity());
   }
 
   /// Overwrite a program block's runtime parameter values (the no-recompile contract). @p runtime
@@ -1971,27 +1974,20 @@ struct ProgramRuntimeState {
   /// block was never seeded (the Program declares no runtime param for it), std::runtime_error on a
   /// value-count mismatch.
   void set_params(int prog_block, const std::vector<double>& values, const std::string& runtime) {
-    auto it = block_params_.find(prog_block);
-    if (it == block_params_.end())
-      throw std::out_of_range(
-          runtime + "::set_program_params: program block " + std::to_string(prog_block) +
-          " has no runtime parameter (the installed compiled Program declares none for it; declare "
-          "dsl.Param(..., kind='runtime') in the model the Program lowers, or omit params=)");
-    RuntimeParams& rp = it->second;
-    if (static_cast<int>(values.size()) != rp.count)
-      throw std::runtime_error(runtime + "::set_program_params: program block " +
-                               std::to_string(prog_block) + " expects " + std::to_string(rp.count) +
-                               " runtime parameters, received " + std::to_string(values.size()));
-    for (int k = 0; k < rp.count; ++k)
-      rp.values[k] = static_cast<Real>(values[static_cast<std::size_t>(k)]);
+    auto candidate = prepare_params(prog_block, values, runtime);
+    block_params_.at(prog_block) = std::move(candidate);
   }
 
-  /// Read a program block's current RuntimeParams. An unseeded block (no runtime param) returns a
-  /// default RuntimeParams (count 0) -- a kernel that reads no param is unaffected. By value:
-  /// device-clean, trivially copyable.
+  /// Read a program block's current RuntimeParams. An unseeded block (no
+  /// runtime param) returns a default RuntimeParams (count 0) -- a kernel that
+  /// reads no param is unaffected. By value: device-callable owned views;
+  /// shallow copies keep the immutable incarnation alive.
   RuntimeParams params(int prog_block) const {
     auto it = block_params_.find(prog_block);
-    return it == block_params_.end() ? RuntimeParams{} : it->second;
+    if (it == block_params_.end())
+      return RuntimeParams{};
+    it->second.require_bound();
+    return it->second;
   }
 };
 

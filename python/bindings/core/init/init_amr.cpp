@@ -1,14 +1,14 @@
 #include "../bindings_detail.hpp"
-#include <pops/parallel/execution_lane.hpp>
-#include <pops/parallel/world_communicator.hpp>
 #include "boundary_component_install.hpp"
 #include "checkpoint_spatial_binding.hpp"
 #include "output_geometry_binding.hpp"
 
+#include <pops/parallel/execution_lane.hpp>
+#include <pops/parallel/world_communicator.hpp>
+
+#include "amr_layout_transfer_binding.hpp"
 #include <pops/runtime/amr/prepared_tagging_execution.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
-#include "amr_layout_transfer_binding.hpp"
-
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -1944,6 +1944,8 @@ void init_amr(py::module_& m) {
       .def_readonly("dt", &pops::AcceptedHaloTestFailureReceipt::dt);
   py::class_<NativeAmrSystemConfig>(m, "AmrSystemConfig")
       .def(py::init<>())
+      .def_readwrite("runtime_parameter_byte_capacity",
+                     &NativeAmrSystemConfig::runtime_parameter_byte_capacity)
       .def_property(
           "shape",
           [](const NativeAmrSystemConfig& config) { return ranked_extent_to_python(config.shape); },

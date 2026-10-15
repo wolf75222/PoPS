@@ -927,7 +927,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale
       SHARD_INDEX: ${{ matrix.shard }}
-      SHARD_TOTAL: "121"
+      SHARD_TOTAL: "125"
       # ADC-548 (b): pin the DSL .so cache to a KNOWN dir and keep the generated source so a codegen
       # failure in a shard's DSL tests leaves the ADC-536 provenance sidecars (<so>.cpp + <so>.cachekey)
       # on disk for the on-failure upload. Setting POPS_CACHE_DIR here just relocates the default cache
@@ -1580,7 +1580,7 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo apt-get install -y \
             ccache libeigen3-dev libhdf5-openmpi-dev libopenmpi-dev ninja-build openmpi-bin \
             pybind11-dev python3-dev python3-h5py python3-venv python3-pip python3-packaging \
             python3-numpy python3-pytest python3-vtk9 python3-mpmath python3-scipy

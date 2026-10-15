@@ -112,7 +112,7 @@ def bind_field_problem(program: Any, field: Handle, registration: Any, *, values
     """Freeze explicit equation inputs; field storage never borrows a species owner."""
     from pops.linalg import LinearProblem
     from pops.time import DerivativeStrategy, SolveRequest, SolveUnknown
-    from pops.time._program.value_validation import require_top_level
+    from pops.time._program.value_validation import validate_input_regions
     from pops.identity.scalar import scalar_literal
     from ._program_expression import encode_field_expression, field_expression_dependencies
     from .methods import CellCenteredGeneralCoupled, CellCenteredSecondOrder
@@ -151,7 +151,7 @@ def bind_field_problem(program: Any, field: Handle, registration: Any, *, values
         value = getattr(value, "_value", value)
         if not isinstance(value, ProgramValue) or value.vtype != "state":
             raise TypeError("field equation inputs must be Program state values")
-        require_top_level(program, value, "field solve input")
+        validate_input_regions(program, (value,), program._current_region(), "field solve input")
         if value.state_ref is None or _identity(value.state_ref) != _identity(key):
             raise FieldProblemError("field.native.input", "field input binding changes its exact state owner")
         states.append(value)

@@ -61,9 +61,10 @@ def test_numerical_defaults_report_classifies_every_constant():
     assert all(v in allowed for v in classification.values())
     # The native (C++) classification and the Python fallback map must be identical (single truth).
     assert dict(classification) == dict(_CONSTANT_CLASSIFICATION)
-    assert d["runtime"]["max_runtime_params"] == 32
+    assert d["runtime"]["max_runtime_params"] is None
     assert d["diagnostics"]["fft_direct_dft_fallback_count"] == 0
-    assert classification["kMaxRuntimeParams"] == "hard_limit"
+    # The bind-time resource budget is not a native constexpr default.
+    assert "runtime_parameter_byte_capacity" not in classification
     assert classification["kNewtonDefaultFdEps"] == "public_knob"
     # ADC-644/645: the newly wired knobs are public.
     assert classification["kMGDefaultCoarseThreshold"] == "public_knob"

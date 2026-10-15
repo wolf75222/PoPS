@@ -123,7 +123,8 @@ class _ProgramClocks(_ProgramBase):
         from .affine_history import history_contract
         rows = history_contract(self, histories)
         attrs = {"schema_version": 1, "interval_rule": "affine_macro_publication"}
-        if rows: attrs["histories"] = rows
+        if rows:
+            attrs["histories"] = rows
         return self._new("scalar", "accept_increment", (scale, duration), attrs,
                          "accepted_duration", duration.block)
 

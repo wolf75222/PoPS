@@ -575,8 +575,8 @@ template <int Dim, class Model, class Metric, class Reconstruction = NoSlope,
 class PreparedCartesianOperator {
  public:
   static_assert(stencil_envelope_fits_storage<Reconstruction>);
-  static_assert(std::is_trivially_copyable_v<Reconstruction>);
-  static_assert(std::is_trivially_copyable_v<NumericalFlux>);
+  static_assert(device_capture_v<Reconstruction>);
+  static_assert(device_capture_v<NumericalFlux>);
 
   using State = typename Model::State;
   static constexpr int dimension = Dim;

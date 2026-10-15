@@ -602,6 +602,7 @@ class AmrProgramContext {
     int block;
     std::shared_ptr<PreparedAmrSpatialResidual<Dim>> workspace;
     std::vector<FluxExpression> previous_flux;
+    std::vector<PreparedResourceAttempt> previous_attempts;
   };
   friend struct AmrSpatialReconciliationTestAccess;
   mutable std::map<int, SpatialHierarchyResource> spatial_hierarchy_resources_;
@@ -620,7 +621,11 @@ class AmrProgramContext {
       closed_original_sources_;
   mutable std::map<std::int64_t, std::shared_ptr<const ClosedInteractionTower>>
       closed_interactions_;
-  mutable std::map<std::string, std::vector<ProgramFieldLevel>> staged_field_publications_;
+  struct StagedFieldPublication {
+    std::vector<ProgramFieldLevel> levels;
+    std::vector<std::shared_ptr<const void>> retained;
+  };
+  mutable std::map<std::string, StagedFieldPublication> staged_field_publications_;
   mutable std::unique_ptr<hierarchy_tensor_solver_type> hierarchy_tensor_solver_;
   mutable std::vector<HierarchyTensorLevelBoundary> hierarchy_tensor_boundaries_;
   mutable std::uint64_t hierarchy_tensor_topology_epoch_ =

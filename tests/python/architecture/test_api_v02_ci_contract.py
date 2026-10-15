@@ -177,7 +177,7 @@ def test_v10_receivers_have_exact_cardinality_and_ranked_pytest_entrypoints():
     completion = {path: row for path, row in rows.items()
                   if row.get("registration") == "completion_20261015"
                   and row["kind"] == "native_profile"}
-    assert len(completion) == 45
+    assert len(completion) == 48
     assert set(found) == set(native) | mixed | set(completion)
     for path, row in completion.items():
         assert sum(_test_case_count(path).values()) == row["declared_cases"], path

@@ -3,6 +3,7 @@
 
 #include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
 
+#include <set>
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
@@ -56,7 +57,8 @@ void require_collective_exact_layout(const MultiFab<Dim>& value, const mesh::Box
 template <int Dim>
 void System<Dim>::set_clock(double t, int macro_step) {
   if (p_->program_.continuation_.initialized() && !p_->external_restart_transaction_)
-    throw std::logic_error("clock is an authoritative Continuation frontier; publish a Candidate instead");
+    throw std::logic_error(
+        "clock is an authoritative Continuation frontier; publish a Candidate instead");
   try {
     if (macro_step < 0)
       throw std::runtime_error("System::set_clock : macro_step >= 0 (restart)");
@@ -802,7 +804,9 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
   // count 0, the lowered kernels read no param). Built BEFORE install() so the step closure (which
   // captures a ProgramContext) reads the seeded value on its first run.
   std::map<int, std::vector<double>> program_param_defaults;
-  {
+  std::map<int, RuntimeParams> prepared_params, installed_params;
+  std::exception_ptr parameter_preparation_error;
+  try {
     using count_t = int (*)();
     using ival_t = int (*)(int);
     using dval_t = double (*)(int);
@@ -810,17 +814,43 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
     auto pblock = reinterpret_cast<ival_t>(pops::dynlib::sym(h, "pops_program_param_block"));
     auto pindex = reinterpret_cast<ival_t>(pops::dynlib::sym(h, "pops_program_param_index"));
     auto pdef = reinterpret_cast<dval_t>(pops::dynlib::sym(h, "pops_program_param_default"));
-    if (pcount && pblock && pindex && pdef) {
+    if (pcount || pblock || pindex || pdef) {
+      if (!pcount || !pblock || !pindex || !pdef)
+        throw std::runtime_error("System Program parameter table is incomplete");
       const int np = pcount();
+      if (np < 0)
+        throw std::runtime_error("System Program parameter count is negative");
+      std::map<int, std::set<int>> seen;
       for (int i = 0; i < np; ++i) {
         const int blk = pblock(i);
         const int idx = pindex(i);
+        if (blk < 0 || static_cast<std::size_t>(blk) >= program_block_map.size() || idx < 0 ||
+            idx >= np)
+          throw std::runtime_error("System Program parameter route is out of range");
+        runtime_parameter_byte_capacity(static_cast<std::size_t>(idx) + 1);
+        if (!seen[blk].insert(idx).second)
+          throw std::runtime_error("System Program parameter route is duplicated");
         std::vector<double>& d = program_param_defaults[blk];
         if (static_cast<int>(d.size()) <= idx)
           d.resize(static_cast<std::size_t>(idx) + 1, 0.0);
         d[static_cast<std::size_t>(idx)] = pdef(i);
       }
+      for (const auto& [block, values] : program_param_defaults) {
+        if (seen.at(block).size() != values.size())
+          throw std::runtime_error("System Program parameter route has a hole");
+        prepared_params.emplace(block, RuntimeParams::from_host(
+                                           values, runtime_parameter_byte_capacity(values.size())));
+      }
     }
+    installed_params = prepared_params;  // shallow owned views, no duplicate payload
+  } catch (...) {
+    parameter_preparation_error = std::current_exception();
+  }
+  if (all_reduce_max(parameter_preparation_error ? 1L : 0L) != 0) {
+    pops::dynlib::close(h);
+    if (n_ranks() == 1 && parameter_preparation_error)
+      std::rethrow_exception(parameter_preparation_error);
+    throw std::runtime_error("System Program parameter preparation failed collectively");
   }
 
   // Program-owned dynamic boundary launchers are an overlay on the static field-plan registry.
@@ -848,7 +878,8 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
     if (p_->program_.artifact_field_boundary_stage_)
       throw std::logic_error(
           "System::install_program: a field-boundary artifact transaction is already active");
-    candidate_auxiliary_clocks = runtime::program::read_program_owned_clock_manifest(h, installed_hash);
+    candidate_auxiliary_clocks =
+        runtime::program::read_program_owned_clock_manifest(h, installed_hash);
     auto capture_authorities = [](const field_plan_registry& plans) {
       boundary_registry result;
       for (const auto& [slot, plan] : plans)
@@ -960,8 +991,10 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
         .scalar(static_cast<std::uint32_t>(candidate_auxiliary_clocks.contract_version))
         .text(candidate_auxiliary_clocks.owner_identity)
         .text(candidate_auxiliary_clocks.primary_clock_identity)
-        .scalar(static_cast<std::uint64_t>(candidate_auxiliary_clocks.logical_clock_identities.size()));
-    for (const auto& clock : candidate_auxiliary_clocks.logical_clock_identities) contract.text(clock);
+        .scalar(
+            static_cast<std::uint64_t>(candidate_auxiliary_clocks.logical_clock_identities.size()));
+    for (const auto& clock : candidate_auxiliary_clocks.logical_clock_identities)
+      contract.text(clock);
     candidate_boundary_contract = std::move(contract).release();
 
     // Pre-copy both materialization images while failure is still harmless.  After the plan-registry
@@ -1027,29 +1060,31 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
 
     p_->program_.reset_artifact_candidate_state();
     p_->program_.checkpoint_metadata_.uniform_auxiliary_clocks = candidate_auxiliary_clocks;
-    p_->program_.checkpoint_metadata_.logical_clock_identities = candidate_auxiliary_clocks.logical_clock_identities;
-    p_->program_.checkpoint_metadata_.primary_clock_identity = candidate_auxiliary_clocks.primary_clock_identity;
+    p_->program_.checkpoint_metadata_.logical_clock_identities =
+        candidate_auxiliary_clocks.logical_clock_identities;
+    p_->program_.checkpoint_metadata_.primary_clock_identity =
+        candidate_auxiliary_clocks.primary_clock_identity;
     // The generated prelude may resolve blocks and parameters before ctx.install() publishes the
     // closure. Install the candidate image first; install_unverified_step then revokes it, and the
     // authenticated image is republished only after the exact one-step witness succeeds.
     p_->program_.block_map_ = program_block_map;
-    p_->program_.block_params_.clear();
-    for (const auto& [block, defaults] : program_param_defaults)
-      seed_program_params(block, defaults);
+    p_->program_.block_params_.swap(prepared_params);
     p_->program_.operator_authorities_ = operator_authorities;
     install(this);
     p_->program_.require_exact_artifact_step_install(*previous_install, "System::install_program:");
 
     p_->program_.block_map_ = std::move(program_block_map);
-    for (const auto& [block, defaults] : program_param_defaults)
-      seed_program_params(block, defaults);
+    p_->program_.block_params_.swap(installed_params);
     p_->program_.operator_authorities_ = std::move(operator_authorities);
     p_->program_.history_replay_authorities_ = std::move(history_replay_authorities);
     p_->program_.installed_hash_ = installed_hash;
     candidate_auxiliary_clocks.installation_generation = p_->program_.step_install_generation_;
-    p_->program_.checkpoint_metadata_.logical_clock_identities = candidate_auxiliary_clocks.logical_clock_identities;
-    p_->program_.checkpoint_metadata_.primary_clock_identity = candidate_auxiliary_clocks.primary_clock_identity;
-    p_->program_.checkpoint_metadata_.uniform_auxiliary_clocks = std::move(candidate_auxiliary_clocks);
+    p_->program_.checkpoint_metadata_.logical_clock_identities =
+        candidate_auxiliary_clocks.logical_clock_identities;
+    p_->program_.checkpoint_metadata_.primary_clock_identity =
+        candidate_auxiliary_clocks.primary_clock_identity;
+    p_->program_.checkpoint_metadata_.uniform_auxiliary_clocks =
+        std::move(candidate_auxiliary_clocks);
     if (program_has_dt_bound) {
       System<Dim>* self = this;
       p_->program_.dt_bound_ = [self, dt_bound](Real cfl) -> Real { return dt_bound(self, cfl); };

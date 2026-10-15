@@ -245,10 +245,12 @@ C = 0.7
 N = 16
 
 
-def make_sim(name):
+# All four Programs use the same physical equations and compiled model brick.
+# Their distinct time graphs still compile independently and retain every oracle.
+def make_sim():
     sim = System(n=N, L=1.0, periodicity=(True, True))
     try:
-        compiled_model = advect_model("adv_block_%s" % name, A, C).compile(backend="production")
+        compiled_model = advect_model("adv_rhs_native", A, C).compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible
         _skip("model compile could not build the .so: %s" % str(exc)[:160])
     sim.add_equation(
@@ -268,14 +270,14 @@ def run_one_step(sources, flux):
     """Compile + install a one-step program, step once, return (out, rho0)."""
     tag = "%s_%s" % ("flux" if flux else "noflux", "_".join(sources) or "empty")
     try:
-        program_model = advect_model("adv_%s" % tag, A, C)
+        program_model = advect_model("adv_rhs_native", A, C)
         program = one_step_program("p_%s" % tag, sources, flux=flux, model=program_model)
         compiled = compile_drivers.compile_problem(
             model=program_model, time=program, field_plans=codegen_field_plans(program)
         )
     except RuntimeError as exc:  # no compiler / no Kokkos / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
-    sim, rho0 = make_sim(tag)
+    sim, rho0 = make_sim()
     sim.install_program(compiled.so_path)
     sim.step(DT)
     return np.array(sim.get_state("plasma"))[0], rho0
@@ -319,14 +321,14 @@ def lie_split_program(name, model=None):
 
 
 try:
-    lie_model = advect_model("adv_lie", A, C)
+    lie_model = advect_model("adv_rhs_native", A, C)
     lie_program = lie_split_program("lie", model=lie_model)
     compiled_lie = compile_drivers.compile_problem(
         model=lie_model, time=lie_program, field_plans=codegen_field_plans(lie_program)
     )
 except RuntimeError as exc:
     _skip("compile_problem (lie) could not build the .so: %s" % str(exc)[:160])
-sim_lie, rho0l = make_sim("lie")
+sim_lie, rho0l = make_sim()
 sim_lie.install_program(compiled_lie.so_path)
 sim_lie.step(DT)
 out_lie = np.array(sim_lie.get_state("plasma"))[0]

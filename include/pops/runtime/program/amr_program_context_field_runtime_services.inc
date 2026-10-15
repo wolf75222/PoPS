@@ -502,6 +502,17 @@ int scratch_prototype_owner_(const field_type& prototype, bool include_continuat
   for (const auto& [key, scratch] : scratches_)
     if (&prototype == &scratch && std::get<1>(key) == active_level_)
       record(std::get<2>(key));
+  // The nonlinear residual owns a copied previous stage, distinct from SSA
+  // scratches. Its exact instance is readable only in the level attempt that
+  // successfully staged it.
+  for (const auto& [identity, resource] : spatial_hierarchy_resources_)
+    if (!active_attempt_states_.empty() && resource.epoch == runtime_->topology_epoch() &&
+        resource.generation == runtime_->materialization_generation() && active_level_ >= 0 &&
+        static_cast<std::size_t>(active_level_) < resource.previous_attempts.size() &&
+        resource.previous_attempts[active_level_].visible() &&
+        resource.previous_attempts[active_level_].same_attempt(resource_attempt()) &&
+        &prototype == &resource.workspace->previous(active_level_))
+      record(sys_block(resource.block));
   // This prepared tensor request explicitly binds its solution to one Program block. Its
   // backend allocation is not an SSA scratch, but it is an exact owned allocation prototype.
   // Independent hierarchy fields have no contributing block owner and retain their solve-key API.

@@ -12,7 +12,7 @@ from typed_program_support import typed_state
 def _fixture(name="finite_arrays"):
     p = Program(name)
     q = typed_state(p, "left", state_name="U")
-    q.n
+    _ = q.n
     return p, q
 
 
@@ -41,7 +41,8 @@ def test_arrays_map_scan_reduce_and_loop_carry_are_native_and_body_is_recorded_o
     source = _source(p, q)
     assert "std::int64_t(9007199254740995)" in source
     assert "std::bit_cast<std::int64_t>" in source
-    assert "pops_algebra_finite::make_values" in source
+    assert "finite_collective::allocate_values(" in source
+    assert "finite_collective::assign_any(" in source
     assert "pops/runtime/program/finite_structural_storage.hpp" in source
     assert "finite array allocation capacity exhausted" in source
     assert "for (std::int64_t finite_" in source
@@ -151,7 +152,7 @@ def test_domain_index_and_array_reads_check_the_native_realm_before_collectives(
     # Independent public paths must retain the native guard, including direct array indexing.
     assert "->visible()" in source
     assert ".domain->visible()" in source
-    assert "finite domain instance" in source
+    assert "finite_collective::require_domain(" in source
     assert "same live domain instance" in source
 
 

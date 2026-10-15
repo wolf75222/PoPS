@@ -103,7 +103,8 @@ def emit_user_reconstruction_policy(emitter: Any) -> str:
     lines = [
         "namespace pops_generated {",
         "struct UserReconstructionPolicy {",
-        *(["  pops::RuntimeParams params{};"] if options["runtime_captures"] else []),
+        *(["  using pops_device_capture_members = pops::DeviceCaptureMembers<pops::RuntimeParams>;",
+            "  pops::RuntimeParams params{};"] if options["runtime_captures"] else []),
         "  static constexpr int formal_order = %d;" % options["formal_order"],
         "  static constexpr int n_ghost = %d;" % options["ghost_depth"],
         "  static constexpr int stencil_min_offset = %d;" % options["stencil_min_offset"],
@@ -161,7 +162,8 @@ def _emit_joint_policy(impl, descriptor):
     lines = [
         "namespace pops_generated {",
         "struct UserReconstructionPolicy {",
-        *(["  pops::RuntimeParams params{};"] if options["runtime_captures"] else []),
+        *(["  using pops_device_capture_members = pops::DeviceCaptureMembers<pops::RuntimeParams>;",
+            "  pops::RuntimeParams params{};"] if options["runtime_captures"] else []),
         "  static constexpr int n_components = %d;" % counts[0],
         "  static constexpr int formal_order = %d;" % options["formal_order"],
         "  static constexpr int n_ghost = %d;" % options["ghost_depth"],

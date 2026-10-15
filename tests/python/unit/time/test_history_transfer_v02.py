@@ -61,7 +61,7 @@ def test_interval_authority_cannot_escape_into_post_synchronization():
         builder._new("scalar","add",(window.begin,window.duration),{},
                      "captured_interval",None)
     program.after_synchronization(after_sync)
-    with pytest.raises(NotImplementedError,match="capture.*collective branches"):
+    with pytest.raises(NotImplementedError,match="Interval capture requires the same qualified native invocation"):
         validate_intervals(program)
 
 
@@ -129,7 +129,14 @@ def test_rhs_store_transfer_survives_canonical_freeze_and_rebuild():
         model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
     assert "ctx.register_history_transfer(" in source
     assert "ctx.history_storage_key(" in source
-    assert "ctx.copy_with_provenance(x" in source
+    # Native history storage owns the captured field and its flux expression.
+    # Reads retain that immutable carrier after exact interval authentication;
+    # no separate generated pointwise copy is required by this route.
+    assert 'ctx.store_history("retained_rhs", r1, 0);' in source
+    for lag in (1, 2):
+        assert 'ctx.history("retained_rhs", %d)' % lag in source
+        assert '.validated_samples(history_interval_storage_' in source
+    assert "HistoryInterval has no matching live clock/attempt" in source
     assert "pops::PureFieldAlgebra::copy(x" not in source
 
 

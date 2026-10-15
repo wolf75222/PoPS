@@ -1,22 +1,8 @@
-"""Fixed-capacity limits are SURFACED and overflow is refused EARLY (ADC-610).
+"""Runtime parameter cardinality is dynamic; carrier bytes are bounded at bind.
 
-The runtime library carries several FIXED, device-copyable capacities that were previously hidden C++
-constants: kMaxRuntimeParams (RuntimeParams::values[]), and the coupled-source kCsMax* bounds. This suite
-proves the three ADC-610 guarantees for the RUNTIME-PARAM bound (the poster child) plus the coupled-source
-bounds:
-
-  1. OVERFLOW REJECTED EARLY, at codegen, with a USER-FACING error that NAMES the limit, the count and the
-     offending params -- before any .so is emitted or any device array is read out of bounds. Pure Python
-     (the guard fires in assign_runtime_indices), so no compiled _pops is required.
-  2. The kMaxRuntimeParams bound is MIRRORED from the single C++ source: the installed extension and
-     Python literal (physics.aux) agree on _pops.__max_runtime_params__ -- they cannot silently drift.
-  3. The capacity is SURFACED in the reports/manifest: the ModuleManifest params_utilization row and the
-     runtime-param report row carry {count, limit}.
-  4. The coupled-source kCsMax* overflow still errors with the exact messages, and CompiledCoupledSource
-     exposes a utilization() view of the bounds.
-
-pops is never faked: the real Model / manifest / CoupledSource and installed _pops module are used.
-Missing native exports fail this release gate instead of being treated as compatibility skips.
+Coupled-source legacy capacities remain covered separately. Native report tests
+require the installed SDK of this change; source-only receipts select authoring
+and manifest tests explicitly rather than pretending to qualify an older SDK.
 """
 import pytest
 
@@ -62,37 +48,25 @@ def _limit():
     return max_runtime_params()
 
 
-def test_runtime_param_limit_is_a_positive_int():
-    assert isinstance(_limit(), int) and _limit() >= 1
+def test_runtime_param_storage_has_no_fixed_model_count_limit():
+    assert _limit() is None
 
 
-def test_thirty_three_runtime_params_raise_at_codegen_naming_the_limit():
-    limit = _limit()
-    model = _model_with_runtime_params(limit + 1)  # one over the fixed bound
-    impl = _impl(model)
-    with pytest.raises(ValueError) as exc:
-        impl.assign_runtime_indices()
-    msg = str(exc.value)
-    # The error NAMES the limit, the count, and the model, and points at the C++ header.
-    assert "kMaxRuntimeParams" in msg
-    assert str(limit) in msg
-    assert str(limit + 1) in msg
-    assert "runtime_params.hpp" in msg
-    # It NAMES the offending params (at least one of the declared names).
-    assert "'p_0'" in msg
+@pytest.mark.parametrize("count", [33, 65, 129])
+def test_finite_runtime_parameter_families_are_accepted(count):
+    nodes = _impl(_model_with_runtime_params(count)).assign_runtime_indices()
+    assert len(nodes) == count
+    assert [node.to_cpp() for node in nodes] == [f"params.get({index})" for index in range(count)]
 
 
-def test_exactly_the_limit_is_accepted():
-    model = _model_with_runtime_params(_limit())
-    nodes = _impl(model).assign_runtime_indices()
-    assert len(nodes) == _limit()
-
-
-def test_python_limit_matches_cpp_constant():
+def test_python_capacity_contract_matches_native_owned_carrier():
     from pops import _pops
 
-    assert hasattr(_pops, "__max_runtime_params__")
-    assert _limit() == int(_pops.__max_runtime_params__)
+    assert _pops.__max_runtime_params__ is None
+    first = _pops.runtime_parameter_storage_bytes(65)
+    assert first > 2 * 65 * 8
+    assert _pops.runtime_parameter_storage_bytes(129) - first == 2 * (129 - 65) * 8
+    assert _pops.runtime_parameter_storage_bytes(0) == 0
 
 
 def test_module_manifest_surfaces_runtime_param_utilization():
@@ -104,7 +78,7 @@ def test_module_manifest_surfaces_runtime_param_utilization():
     assert util["limit"] == _limit()
     # count = the runtime params surfaced (>= 0); the limit and status are always present.
     assert util["count"] >= 0
-    assert util["status"] in ("ok", "at_limit", "exceeded")
+    assert util["status"] == "dynamic"
     # It round-trips into the JSON dict view.
     assert manifest.to_dict()["params_utilization"]["limit"] == _limit()
 
@@ -121,12 +95,12 @@ def test_params_utilization_helper_computes_count_limit_status():
         ConstParam("c", 3.0),
     )
     util = module.manifest().params_utilization
-    assert util == {"count": 2, "limit": limit, "status": "ok"}
-    at_limit = Module("at-limit")
-    at_limit.parameters(*(
-        RuntimeParam("p%d" % k, default=float(k)) for k in range(limit)
+    assert util == {"count": 2, "limit": limit, "status": "dynamic"}
+    large = Module("large-family")
+    large.parameters(*(
+        RuntimeParam("p%d" % k, default=float(k)) for k in range(65)
     ))
-    assert at_limit.manifest().params_utilization["status"] == "at_limit"
+    assert large.manifest().params_utilization == {"count": 65, "limit": None, "status": "dynamic"}
 
 
 def test_coupled_source_overflow_errors_are_exact():

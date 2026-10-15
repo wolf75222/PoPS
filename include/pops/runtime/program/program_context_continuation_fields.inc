@@ -1,9 +1,24 @@
 // Independent Uniform Field producers. Scientific support is persisted; live access
 // requires the exact allocation and lifetime issued by this context or its accepted Store.
 private:
+struct ContinuationFieldAllocations {
+  using local_storage_type = typename field_type::fab_type::storage_type::const_type;
+  std::shared_ptr<const void> incarnation;
+  // Pin the exact allocations, not only their addresses: a mutable Fab can be
+  // replaced independently of its MultiFab and must not regain authority by ABA.
+  std::vector<local_storage_type> local;
+  bool matches(const field_type& field) const noexcept {
+    if (incarnation != field.storage_identity() || local.size() != field.local_size())
+      return false;
+    for (std::size_t i = 0; i < local.size(); ++i)
+      if (local[i].data() != field.fab(i).storage().data())
+        return false;
+    return true;
+  }
+};
 struct ContinuationFieldInstance {
   std::weak_ptr<const void> lifetime;
-  std::vector<const void*> allocations;
+  ContinuationFieldAllocations allocations;
   ContinuationFieldMetadata metadata;
   std::optional<PreparedResourceAttempt> attempt;
   bool sealed = false;
@@ -16,10 +31,11 @@ std::shared_ptr<ContinuationFieldInstances> continuation_field_instances_ =
 mutable std::map<std::string, std::shared_ptr<field_type>, std::less<>>
     continuation_field_providers_;
 
-static std::vector<const void*> continuation_field_allocations_(const field_type& value) {
-  std::vector<const void*> allocations;
+static ContinuationFieldAllocations continuation_field_allocations_(const field_type& value) {
+  ContinuationFieldAllocations allocations{value.storage_identity(), {}};
+  allocations.local.reserve(value.local_size());
   for (std::size_t i = 0; i < value.local_size(); ++i)
-    allocations.push_back(value.fab(i).storage().data());
+    allocations.local.push_back(value.fab(i).storage());
   return allocations;
 }
 std::string continuation_field_program_identity_() const {
@@ -73,7 +89,7 @@ std::optional<ContinuationFieldInstance> continuation_field_instance_(
       values.erase(found);
     } else {
       const auto& instance = found->second;
-      if (!instance.sealed || instance.allocations != continuation_field_allocations_(value))
+      if (!instance.sealed || !instance.allocations.matches(value))
         throw std::invalid_argument("Continuation Field allocation is unsealed or replaced");
       revoked = instance.attempt && !instance.attempt->visible();
       if (!revoked)
@@ -151,17 +167,21 @@ std::shared_ptr<field_type> allocate_continuation_field_observation(
   // Charge declared storage and metadata before any candidate allocation. As with
   // ContinuationCodec budgets this excludes allocator-specific bookkeeping.
   charge(sizeof(field_type));
-  charge(sizeof(ContinuationFieldInstance));
-  charge(sizeof(ContinuationFieldSupport));
-  charge(contract.size());
-  charge(program.size());
-  charge(64);  // maximum signed step/value and uint64 attempt decimal origin
+  charge(field_type::storage_identity_payload_bytes());
+  charge(sizeof(std::pair<const field_type* const, ContinuationFieldInstance>));
+  // Pending and sealed support coexist during the failure-atomic seal prepare.
+  charge(2, sizeof(ContinuationFieldSupport));
+  charge(2, contract.size());
+  charge(2, program.size());
+  charge(sizeof("pending") - 1);
+  charge(sizeof("pops.uniform-field-observation.point@1:sha256:") - 1 + 64);
   // MultiFab owns both its layout and Distribution's layout, an owner table,
   // global/local index maps, Fab objects and the registry's allocation addresses.
   charge(prototype.layout().size(), 2 * sizeof(Box<Dim>) + sizeof(std::size_t));
   charge(prototype.distribution().owners().size(), sizeof(Index<Dim>));
   charge(prototype.local_size(),
-         sizeof(typename field_type::fab_type) + sizeof(std::size_t) + sizeof(const void*));
+         sizeof(typename field_type::fab_type) + sizeof(std::size_t) +
+             sizeof(typename ContinuationFieldAllocations::local_storage_type));
   for (std::size_t i = 0; i < prototype.local_size(); ++i) {
     charge(prototype.fab(i).size(), sizeof(Real));
   }
@@ -196,13 +216,30 @@ void seal_continuation_field_observation(std::string_view contract, std::int64_t
         if (found == entries.end() || found->second.lifetime.expired() || found->second.sealed ||
             !found->second.metadata.support ||
             found->second.metadata.support->field_provider != contract ||
-            found->second.allocations != continuation_field_allocations_(*value) ||
-            !found->second.attempt || !found->second.attempt->visible())
+            !found->second.allocations.matches(*value) || !found->second.attempt ||
+            !found->second.attempt->visible())
           throw std::invalid_argument("Independent Field observation is not its issued allocation");
         require_same_field_contract_(*value, continuation_field_provider_(contract),
                                      "Field observation");
-        const auto origin = std::to_string(macro_step()) + ":" + std::to_string(value_id) + ":" +
-                            std::to_string(found->second.attempt->ordinal());
+        // Persistent scientific identity must survive restart. The attempt's
+        // private revocation capability belongs only to the live registry above.
+        ExactContractBuilder point;
+        point.text("pops.uniform-field-observation.point@1")
+            .text(primary_clock_)
+            .scalar(value_id)
+            .scalar(static_cast<std::int64_t>(macro_step()))
+            .scalar(physical_time() + logical_physical_time_offset_)
+            .scalar(current_dt_)
+            .scalar(logical_phase_begin_.numerator)
+            .scalar(logical_phase_begin_.denominator)
+            .scalar(logical_phase_span_.numerator)
+            .scalar(logical_phase_span_.denominator)
+            .scalar(stage_time_.numerator)
+            .scalar(stage_time_.denominator);
+        const auto point_bytes = std::move(point).release();
+        const std::vector<std::uint8_t> point_data(point_bytes.begin(), point_bytes.end());
+        const auto origin = std::string("pops.uniform-field-observation.point@1:sha256:") +
+                            identity::sha256_hex(point_data);
         auto support = std::make_shared<const ContinuationFieldSupport>(ContinuationFieldSupport{
             continuation_field_program_identity_(), origin, -1, 0, 0, 0, std::string(contract)});
         return std::make_pair(&found->second, std::move(support));

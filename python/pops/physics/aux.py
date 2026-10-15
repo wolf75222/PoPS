@@ -6,28 +6,17 @@ from __future__ import annotations
 
 from typing import Any
 
-# Bound on the number of RUNTIME parameters per block (P7-b). MIRROR of kMaxRuntimeParams
-# (include/pops/runtime/config/runtime_params.hpp): the C++ carrier RuntimeParams has an array of this
-# FIXED size (device-copiable without allocation), so a model exceeding the bound is rejected at codegen.
-# This module stays stdlib-only (no _pops import), so the value is a literal; _pops exposes the same
-from pops._native_facts import NATIVE_MAX_RUNTIME_PARAMS
-
-__all__ = [
-    "max_runtime_params",
-    "role_of",
-    "roles_for",
-]
-
-_K_MAX_RUNTIME_PARAMS = NATIVE_MAX_RUNTIME_PARAMS
+__all__ = ["max_runtime_params", "role_of", "roles_for"]
 
 
-def max_runtime_params() -> int:
-    """Return the declared release-provider capacity without loading a native runtime.
+def max_runtime_params() -> None:
+    """There is no model-specific parameter-count ceiling.
 
-    The installed-extension conformance gate independently proves that this generated/declared
-    fact equals ``pops::kMaxRuntimeParams``. Authoring and validation therefore stay pure Python.
+    Bind authenticates exact cardinality and an explicit configurable byte
+    capacity for owned host/device storage. Native index representation remains
+    checked independently when emitting package metadata.
     """
-    return _K_MAX_RUNTIME_PARAMS
+    return None
 
 
 # --- Physical roles: variable name -> exact structured token ---------------

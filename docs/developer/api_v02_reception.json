@@ -4237,6 +4237,487 @@
         "repetitions_completed_per_backend": 2,
         "scaling_qualified": false
       }
+    },
+    {
+      "archive_key": "completion-v02/native-temporal-ci-0015/receipt.json",
+      "sha256": "d95482cf37665d9a5da9aefa9c065441f6415a67c585a83943c828bbabfdb58f",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Corrected predictor/corrector and exact child-clock history/restart receivers on unchanged installed source015",
+        "exit_code": 0,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "listed_cases_qualified": true,
+        "seconds": 130.43020324996905,
+        "tests": [
+          {
+            "classname": "tests.python.unit.runtime.test_predictor_corrector",
+            "name": "test_predictor_corrector.py",
+            "outcome": "passed",
+            "seconds": "87.100"
+          },
+          {
+            "classname": "tests.python.unit.runtime.test_temporal_restart_state",
+            "name": "test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart",
+            "outcome": "passed",
+            "seconds": "40.922"
+          }
+        ]
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-implicit-remaining-0015/receipt.json",
+      "sha256": "8b5de4903f39c0e85fd2958a1106dcf0184c2ca9413883b284120a0ccb8b5a40",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Implicit convergence first receiver fails scratch authority; remaining cases unexecuted",
+        "exit_code": 1,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "listed_cases_qualified": false,
+        "seconds": 73.43652799999109,
+        "tests": [
+          {
+            "classname": "tests.python.integration.runtime.test_amr_implicit_diffusion_convergence",
+            "name": "test_composite_implicit_matches_conservative_reference_and_converges[constant-False]",
+            "outcome": "failure",
+            "seconds": "70.087"
+          }
+        ]
+      }
+    },
+    {
+      "archive_key": "completion-v02/build-0016-dim2/receipt.json",
+      "sha256": "b6f80e835d0d9f2ad3fb46cc62d7520e11cc3265f631a5feda414917d9dc67ba",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Official incremental Dim2/MPI build; its own source manifest identifies the attempt.",
+        "exit_code": 1,
+        "seconds": 6.616894333041273,
+        "source_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/build-0016-r3-dim2/receipt.json",
+      "sha256": "421d6cd81d5ce46b404d1cfe153847556a4d1d941b03671f7029839daf618374",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Official incremental Dim2/MPI build; its own source manifest identifies the attempt.",
+        "exit_code": 1,
+        "seconds": 152.7907744590193,
+        "source_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/build-0016-r4-dim2/receipt.json",
+      "sha256": "be5a0d2010e36154c3cd7409149227a7da56dd1595830441894626a51cd43129",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Official incremental Dim2/MPI build; its own source manifest identifies the attempt.",
+        "exit_code": 0,
+        "seconds": 290.7698992919759,
+        "source_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/build-0016-r4-dim2/identity.json",
+      "sha256": "ffdc7c0f9d67165ff920c012d1fe744f5362466efa4f30f90b6ae74d5e7a9612",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Installed source016d extension identity after official packaging.",
+        "dimension": 2,
+        "has_kokkos": true,
+        "has_mpi": true,
+        "has_parallel_hdf5": true,
+        "sha256": "045af2070db59eb1ec67057c3eba633ec9245c81ae144859c51e2e3eb8b5af16"
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-source016-reception/receipt.json",
+      "sha256": "f8cd205a6532e1f67a77c65abfb504c14dea9869519a08909d1d7a1310c25be7",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Failed or stopped pre-execution C++ build; no native pass is inferred.",
+        "configure": {
+          "command": [
+            "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/envs/pops/bin/cmake",
+            "-S",
+            "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/receiver-source016a",
+            "-B",
+            "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/cpp-source016",
+            "-G",
+            "Ninja",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
+            "-DCMAKE_C_COMPILER=/usr/bin/cc",
+            "-DCMAKE_PREFIX_PATH=/Users/romaindespoulain/Library/Caches/PoPS-api-v02/envs/pops",
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+            "-DPOPS_BUILD_TESTS=ON",
+            "-DPOPS_BUILD_PYTHON=OFF",
+            "-DPOPS_USE_KOKKOS=ON",
+            "-DPOPS_USE_MPI=ON",
+            "-DPOPS_USE_HDF5=ON",
+            "-DPOPS_NATIVE_DIM=2",
+            "-DPOPS_TESTS_FAST_O0=ON",
+            "-DPOPS_ENABLE_WARNINGS=OFF",
+            "-DPOPS_USE_CCACHE=ON",
+            "-DFETCHCONTENT_SOURCE_DIR_GOOGLETEST=/Users/romaindespoulain/Library/Caches/PoPS-api-v02/cpp-v10/_deps/googletest-src"
+          ],
+          "exit_code": 0,
+          "seconds": 13.705206041981
+        },
+        "build": {
+          "command": [
+            "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/envs/pops/bin/cmake",
+            "--build",
+            "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/cpp-source016",
+            "--target",
+            "test_multifab",
+            "test_program_context_contract",
+            "test_amr_hierarchy_field_scratch",
+            "test_amr_hierarchy_barrier_continuation",
+            "test_continuation_image",
+            "test_distributed_gc_v14",
+            "test_native_loader_param_overflow",
+            "-j1"
+          ],
+          "exit_code": -15,
+          "seconds": 60.792865584022366
+        },
+        "sources_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-source016c-reception/receipt.json",
+      "sha256": "86314313734821f1e4af68c9a352002b2b2f7f79de06ca3dc6076e294cdcec4c",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Failed or stopped pre-execution C++ build; no native pass is inferred.",
+        "configure": {
+          "command": [
+            "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/envs/pops/bin/cmake",
+            "-S",
+            "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/receiver-source016c",
+            "-B",
+            "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/cpp-source016c",
+            "-G",
+            "Ninja",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
+            "-DCMAKE_C_COMPILER=/usr/bin/cc",
+            "-DCMAKE_PREFIX_PATH=/Users/romaindespoulain/Library/Caches/PoPS-api-v02/envs/pops",
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+            "-DPOPS_BUILD_TESTS=ON",
+            "-DPOPS_BUILD_PYTHON=OFF",
+            "-DPOPS_USE_KOKKOS=ON",
+            "-DPOPS_USE_MPI=ON",
+            "-DPOPS_USE_HDF5=ON",
+            "-DPOPS_NATIVE_DIM=2",
+            "-DPOPS_TESTS_FAST_O0=ON",
+            "-DPOPS_ENABLE_WARNINGS=OFF",
+            "-DPOPS_USE_CCACHE=ON",
+            "-DFETCHCONTENT_SOURCE_DIR_GOOGLETEST=/Users/romaindespoulain/Library/Caches/PoPS-api-v02/cpp-v10/_deps/googletest-src"
+          ],
+          "exit_code": 0,
+          "seconds": 14.513767833996098
+        },
+        "build": {
+          "command": [
+            "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/envs/pops/bin/cmake",
+            "--build",
+            "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/cpp-source016c",
+            "--target",
+            "test_multifab",
+            "test_program_context_contract",
+            "test_amr_hierarchy_field_scratch",
+            "test_amr_hierarchy_barrier_continuation",
+            "test_continuation_image",
+            "test_distributed_gc_v14",
+            "test_native_loader_param_overflow",
+            "-j1"
+          ],
+          "exit_code": 1,
+          "seconds": 145.52428041701205
+        },
+        "sources_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-source016d-reception/receipt.json",
+      "sha256": "bc767e039ddd421f32d556cf0c7aeaf5bac2b54463bcf0be9aac72f7a2357d69",
+      "availability": "local_archive",
+      "result": {
+        "scope": "26 exact C++ cases pass MPI1/2/3. Overall campaign fails three fixture groups; failed groups are not qualified.",
+        "configure": {
+          "command": [
+            "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/envs/pops/bin/cmake",
+            "-S",
+            "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/receiver-source016d",
+            "-B",
+            "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/cpp-source016d",
+            "-G",
+            "Ninja",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
+            "-DCMAKE_C_COMPILER=/usr/bin/cc",
+            "-DCMAKE_PREFIX_PATH=/Users/romaindespoulain/Library/Caches/PoPS-api-v02/envs/pops",
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+            "-DPOPS_BUILD_TESTS=ON",
+            "-DPOPS_BUILD_PYTHON=OFF",
+            "-DPOPS_USE_KOKKOS=ON",
+            "-DPOPS_USE_MPI=ON",
+            "-DPOPS_USE_HDF5=ON",
+            "-DPOPS_NATIVE_DIM=2",
+            "-DPOPS_TESTS_FAST_O0=ON",
+            "-DPOPS_ENABLE_WARNINGS=OFF",
+            "-DPOPS_USE_CCACHE=ON",
+            "-DFETCHCONTENT_SOURCE_DIR_GOOGLETEST=/Users/romaindespoulain/Library/Caches/PoPS-api-v02/cpp-v10/_deps/googletest-src"
+          ],
+          "exit_code": 0,
+          "seconds": 16.186838541994803
+        },
+        "build": {
+          "command": [
+            "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/envs/pops/bin/cmake",
+            "--build",
+            "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/cpp-source016d",
+            "--target",
+            "test_multifab",
+            "test_program_context_contract",
+            "test_amr_hierarchy_field_scratch",
+            "test_amr_hierarchy_barrier_continuation",
+            "test_continuation_image",
+            "test_distributed_gc_v14",
+            "test_native_loader_param_overflow",
+            "test_generated_amr_system_block",
+            "-j1"
+          ],
+          "exit_code": 0,
+          "seconds": 339.53690229100175
+        },
+        "sources_unchanged": true,
+        "binaries_unchanged": true,
+        "selected_cases_passed": 26,
+        "rank_observations": 156,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "selected_case_names": [
+          "AmrHierarchyBarrierContinuation.CompositeResidualBorrowsCheckedOutRootForPredictorAndJvp",
+          "AmrHierarchyBarrierContinuation.PreviousStageAuthorityIsExactLevelAttemptAndRollsBack",
+          "AmrHierarchyFieldScratch.AssemblyReadRequiresExactLiveProviderLevelAndAllocation",
+          "AmrHierarchyFieldScratch.IndependentProviderAuthenticatesIssuedObservationAndDerivedStorage",
+          "AmrHierarchyFieldScratch.StagedPublicationRetainsExactSnapshotsAfterTheirSegmentsReturn",
+          "DistributedGcV14.CorruptNativeCycleIsRejectedBeforeAnySweep",
+          "DistributedGcV14.DeepRemoteRootAndSharedEdgesSurviveClosureAndCollectExactly",
+          "DistributedGcV14.LeafTraversalPreservesCallbacksWithoutFrameStorage",
+          "DistributedGcV14.OneRankPreparationFailureLeavesEveryVaultUnchanged",
+          "DistributedGcV14.RemoteOnlyRootAndFailureRetainEveryShard",
+          "DistributedGcV14.RepeatedStepsReuseBudgetAndProtectRollbackAndFailure",
+          "DistributedGcV14.RequestsKeepIndexOwnershipAndRemoteRootsWithoutLeafFrames",
+          "DistributedGcV14.ScalarProductCensusScalesWithElementsWithoutOwnershipNodes",
+          "DistributedGcV14.ScalarProofIsClosedOverActualValuesAndKeepsOpaqueKinds",
+          "DistributedGcV14.SharedIndexDagFitsUniqueEdgeBudgetAndRechecksRevocation",
+          "DistributedGcV14.SharedProductEdgesAreCountedOncePerOwnershipEdge",
+          "DistributedGcV14.StructuralMemoChecksRequestedBytesBeforeAllocation",
+          "GeneratedAmrSystemBlock.RuntimeParameterStorageBudgetAndReplacementAreCollective",
+          "RuntimeParameterCarrier.BudgetAndDeclarationFailBeforeReplacingLiveValues",
+          "RuntimeParameterCarrier.OwnedViewsExecuteBeyond32AndKeepOldIncarnations",
+          "RuntimeParameterCarrier.ProgramReplacementIsCollectiveAndSnapshotsAreImmutable",
+          "test_multifab.communication_is_explicitly_unavailable_and_fails_closed",
+          "test_multifab.empty_rank_storage_identity_survives_values_but_not_replacement",
+          "test_multifab.exact_metadata_and_local_global_index_spaces_are_explicit",
+          "test_multifab.face_publication_is_host_accessible_and_detached_on_every_axis",
+          "test_multifab.set_val_copy_and_move_preserve_deep_1d_and_3d_ownership"
+        ],
+        "overall_receipt_passed": false
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-schur-0016/receipt.json",
+      "sha256": "0ee2c211e320ac4c8da6c51affc5f4479922c34d43dcea32f6decbeca6cc177a",
+      "availability": "local_archive",
+      "result": {
+        "scope": "T04 nonsymmetric global Schur executes in installed PoPS source016d and passes the unchanged complete-state oracle.",
+        "exit_code": 0,
+        "seconds": 211.4223927920102,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "listed_cases_qualified": true,
+        "tests": [
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_coupled_methods_native",
+            "name": "test_native_global_nonsymmetric_schur",
+            "outcome": "passed",
+            "seconds": "208.585"
+          }
+        ]
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-parameters-fields-0016/receipt.json",
+      "sha256": "d7efbf6149478ed7587164837753c4f865be8307d6e6fd9e953d4be367791dde",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Two AMR input-field receivers pass. Three runtime-parameter receivers fail bind resource classification; two independent Uniform Field receivers fail checkpoint provider prototypes. Corrections require separate reception.",
+        "exit_code": 1,
+        "seconds": 282.0735302909743,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "listed_cases_qualified": false,
+        "tests": [
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_runtime_parameter_family_native",
+            "name": "test_runtime_parameter_family_executes_bind_overrides_and_restart[33]",
+            "outcome": "failure",
+            "seconds": "23.016"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_runtime_parameter_family_native",
+            "name": "test_runtime_parameter_family_executes_bind_overrides_and_restart[65]",
+            "outcome": "failure",
+            "seconds": "29.891"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_runtime_parameter_family_native",
+            "name": "test_runtime_parameter_family_executes_bind_overrides_and_restart[129]",
+            "outcome": "failure",
+            "seconds": "48.276"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_uniform_continuation_native",
+            "name": "test_uniform_field_and_gradient_keep_prior_observation_and_restart",
+            "outcome": "failure",
+            "seconds": "41.403"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_uniform_continuation_native",
+            "name": "test_uniform_rejected_assessment_restores_complete_provider_image",
+            "outcome": "failure",
+            "seconds": "42.237"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_amr_input_fields_native",
+            "name": "test_refined_input_values_refresh_and_restart_with_the_discrete_equation",
+            "outcome": "passed",
+            "seconds": "50.320"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_amr_input_fields_native",
+            "name": "test_rejected_refined_input_preserves_all_state_and_can_retry",
+            "outcome": "passed",
+            "seconds": "44.197"
+          }
+        ]
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-fixture016-names/receipt.json",
+      "sha256": "7a0bd85f0bf4b846be5cd71923804a2fe95f1d42ec8f9cb0629d9849fd416e7d",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Four corrected C++ fixtures pass MPI1/2/3 against the unchanged source016d native core. Loader fixture still fails MPI2/3 in this receipt.",
+        "selected_cases_passed": 4,
+        "rank_observations": 24,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "selected_case_names": [
+          "FiniteCollectiveExecution.AllocationFailuresConvergeWithoutChangingTheirClassification",
+          "FiniteCollectiveExecution.DomainChecksRetainCapacityFamilyRevocationAndReplication",
+          "FiniteCollectiveExecution.TypedAllocationsAndMirrorCopiesPreserveActualValues",
+          "ProgramContextContract.IndependentFieldProviderRequiresItsExactLiveAllocation"
+        ],
+        "overall_receipt_passed": false,
+        "sources_unchanged": true,
+        "fixtures_unchanged": true,
+        "core_inputs_unchanged": true,
+        "binaries_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-loader016-mpi-init/receipt.json",
+      "sha256": "9d48a566985bddfe457f907378e5e275c4da022541c821d9dd83202ac60e4c00",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Corrected loader fixture initializes MPI before constructing System and passes its unchanged package cardinality rejection oracle against source016d.",
+        "selected_cases_passed": 1,
+        "rank_observations": 6,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "passed": true,
+        "sources_unchanged": true,
+        "fixtures_unchanged": true,
+        "core_inputs_unchanged": true,
+        "binaries_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/backend/ci017-fixtures/receipt.json",
+      "sha256": "605a78a7a472b30204e0a0c649b0065d0b5bb5667a9187e888fbbf5afa295674",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Source-only CI fixture or planning reception; not native execution or GitHub CI.",
+        "details": {
+          "source_tests": {
+            "metadata_platform_and_bundle": 62,
+            "history_transfer": 25,
+            "wire_readers_with_8_new_counterexamples": 20,
+            "fail": 0,
+            "skip": 0
+          },
+          "tests_total_distinct": 107,
+          "native_execution": false,
+          "future_native_CI_pending": true,
+          "changed_files": {
+            "tests/python/integration/runtime/test_amr_transport_diffusion_qualification.py": "562c7ed7b655d71daf3e9bdcb23691efdcd13ca903dbfb71f89ffcd3e13e3e6e",
+            "tests/python/unit/codegen/test_native_toolchain_metadata.py": "fc463ac59a69b4b34376681eda7bb41568ce16c4b2934d4fa1a2aaf48bbd833a",
+            "tests/python/unit/runtime/test_relaxed_flux_receipt_weight.py": "15c2bfbd0b7ee5d0543fb3105cb21ac5295c1e0a64f30eb68c268c1c5b276c7c",
+            "tests/python/unit/time/test_history_transfer_v02.py": "0e1fb3de3e3af50a8f48156a2d830b056e8dce826d45c2683206993aa2b81ddb"
+          },
+          "patch_sha256": "07417966785faad519e1ab5ef1623d74a555457e0491073eb03a91679ba93361",
+          "contracts_preserved": [
+            "metadata revalidation before publication",
+            "undeclared SDK neighbors rejected",
+            "exact EW1 weight and finite metric",
+            "authenticated committed attempt",
+            "post-sync interval capture rejected",
+            "conservation tolerances unchanged"
+          ]
+        }
+      }
+    },
+    {
+      "archive_key": "completion-v02/backend/ci017-sharding/receipt.json",
+      "sha256": "976476e7c15f4b8ab5e67aeab66e13078ba3e3099b4e2d361a035a061999f99a",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Source-only CI fixture or planning reception; not native execution or GitHub CI.",
+        "details": {
+          "shards": 125,
+          "files": 1166,
+          "exact_cover": true,
+          "max_multi_file_seconds": 2085.0,
+          "watchdogs_changed": false,
+          "updated": {
+            "tests/python/integration/runtime/test_api_v02_hyqmom_orders_native.py": 720,
+            "tests/python/integration/runtime/test_amr_gather_object_bytes_runtime.py": 960,
+            "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py": 1320
+          },
+          "placements": {
+            "tests/python/integration/runtime/test_api_v02_hyqmom_orders_native.py": 104,
+            "tests/python/integration/runtime/test_amr_gather_object_bytes_runtime.py": 76,
+            "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py": 12
+          }
+        }
+      }
     }
   ],
   "final_head_or_ci_qualified": false

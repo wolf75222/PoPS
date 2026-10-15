@@ -6,6 +6,7 @@
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/program/distributed_array.hpp>
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/identity/sha256.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/geometry/swept_interval.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>

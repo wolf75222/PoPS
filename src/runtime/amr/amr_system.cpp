@@ -210,7 +210,7 @@ NativeAmrPackageMetadata inspect_native_amr_package(pops::dynlib::handle handle,
 
   const int parameter_count = pops::dynlib::invoke_with_host_exception([count] { return count(); },
                                                                        "pops_compiled_nparams");
-  if (parameter_count < 0 || parameter_count > kMaxRuntimeParams ||
+  if (parameter_count < 0 ||
       native_amr_parameter_name_count(parameter_names.c_str()) != parameter_count ||
       parameters.size() != static_cast<std::size_t>(parameter_count))
     throw std::runtime_error(std::string(context) +
@@ -19677,13 +19677,13 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::rematerialize_fields_after
         for (const auto& [block, expected] : block_params) {
           const auto found = owner->program.block_params_.find(block);
           if (found == owner->program.block_params_.end() ||
-              found->second.count != expected.count || expected.count < 0 ||
-              expected.count > kMaxRuntimeParams)
+              found->second.count != expected.count || expected.count < 0)
             throw std::logic_error("AMR accepted auxiliary runtime parameter shape changed");
+          found->second.require_bound();
+          expected.require_bound();
           for (int parameter = 0; parameter < expected.count; ++parameter)
-            if (std::bit_cast<std::array<std::byte, sizeof(Real)>>(
-                    found->second.values[parameter]) !=
-                std::bit_cast<std::array<std::byte, sizeof(Real)>>(expected.values[parameter]))
+            if (std::bit_cast<std::array<std::byte, sizeof(Real)>>(found->second.get(parameter)) !=
+                std::bit_cast<std::array<std::byte, sizeof(Real)>>(expected.get(parameter)))
               throw std::logic_error("AMR accepted auxiliary runtime parameter value changed");
         }
         if (owner->field_plans.size() != bindings.size())
@@ -22944,22 +22944,58 @@ std::string AmrSystem<Dim>::installed_program_hash() const {
 }
 
 template <int Dim>
+std::uint64_t AmrSystem<Dim>::runtime_parameter_byte_capacity(std::size_t count) const {
+  const auto required = RuntimeParams::checked_storage_bytes(count);
+  const auto capacity = p_->cfg.runtime_parameter_byte_capacity.value_or(required);
+  if (required > capacity)
+    throw std::length_error("AMR runtime parameter carrier exceeds the bound byte capacity");
+  return capacity;
+}
+
+template <int Dim>
 void AmrSystem<Dim>::seed_program_params(int block, const std::vector<double>& defaults) {
-  if (p_->active_accepted_auxiliary_point)
-    throw std::logic_error("AMR runtime parameters are borrowed by accepted auxiliary preparation");
-  p_->require_no_native_package_callback("seed_program_params");
-  p_->program.seed_params(block, defaults);
+  const auto& lane = p_->require_package_assembly_lane();
+  std::map<int, RuntimeParams> candidate;
+  std::exception_ptr error;
+  try {
+    if (p_->active_accepted_auxiliary_point)
+      throw std::logic_error(
+          "AMR runtime parameters are borrowed by accepted auxiliary preparation");
+    p_->require_no_native_package_callback("seed_program_params");
+    if (block < 0)
+      throw std::invalid_argument("runtime parameters require a non-negative Program block");
+    candidate = p_->program.block_params_;
+    auto carrier =
+        RuntimeParams::from_host(defaults, runtime_parameter_byte_capacity(defaults.size()));
+    candidate.insert_or_assign(block, std::move(carrier));
+  } catch (...) {
+    error = std::current_exception();
+  }
+  collectively_rethrow_exception(error, lane, "AMR runtime parameter preparation");
+  p_->program.block_params_.swap(candidate);
   p_->field_candidate_observations.clear();
   p_->staged_field_candidate_observations.clear();
 }
 
 template <int Dim>
 void AmrSystem<Dim>::set_program_params(int block, const std::vector<double>& values) {
-  if (p_->active_accepted_auxiliary_point)
-    throw std::logic_error("AMR runtime parameters are borrowed by accepted auxiliary preparation");
+  const auto& lane = p_->require_package_assembly_lane();
+  std::map<int, RuntimeParams> candidate;
+  std::exception_ptr error;
+  try {
+    if (p_->active_accepted_auxiliary_point)
+      throw std::logic_error(
+          "AMR runtime parameters are borrowed by accepted auxiliary preparation");
+    p_->require_no_native_package_callback("set_program_params");
+    candidate = p_->program.block_params_;
+    auto carrier = p_->program.prepare_params(block, values, "AmrSystem");
+    candidate.at(block) = std::move(carrier);
+  } catch (...) {
+    error = std::current_exception();
+  }
+  collectively_rethrow_exception(error, lane, "AMR runtime parameter preparation");
   p_->invalidate_checkpoint_capture();
-  p_->require_no_native_package_callback("set_program_params");
-  p_->program.set_params(block, values, "AmrSystem");
+  p_->program.block_params_.swap(candidate);
   p_->field_candidate_observations.clear();
   p_->staged_field_candidate_observations.clear();
 }
@@ -26839,6 +26875,8 @@ template void AmrSystem<kNativeDimension>::restore_program_cadence_window(double
 template void AmrSystem<kNativeDimension>::set_program_block_map(const std::vector<int>&);
 template const std::vector<int>& AmrSystem<kNativeDimension>::program_block_map() const;
 template std::string AmrSystem<kNativeDimension>::installed_program_hash() const;
+template std::uint64_t AmrSystem<kNativeDimension>::runtime_parameter_byte_capacity(
+    std::size_t) const;
 template void AmrSystem<kNativeDimension>::seed_program_params(int, const std::vector<double>&);
 template void AmrSystem<kNativeDimension>::set_program_params(int, const std::vector<double>&);
 template RuntimeParams AmrSystem<kNativeDimension>::program_params(int) const;

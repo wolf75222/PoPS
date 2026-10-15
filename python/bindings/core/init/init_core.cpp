@@ -10,8 +10,8 @@
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/world_communicator.hpp>
-#include <pops/runtime/config/runtime_params.hpp>  // ADC-610: kMaxRuntimeParams (mirrored to Python)
-#include <pops/runtime/config/platform_manifest.hpp>  // ADC-683: explicit launch contracts
+#include <pops/runtime/config/platform_manifest.hpp>
+#include <pops/runtime/config/runtime_params.hpp>  // ADC-683: explicit launch contracts
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/module_capabilities.hpp>  // ADC-479 (#36/#37): authoritative static capability facts
 #include <pops/runtime/runtime_environment.hpp>  // ADC-609: runtime environment/precision/communicator report
@@ -814,10 +814,11 @@ void init_core(py::module_& m) {
   m.def("reset_fallback_diagnostics", &pops::reset_fallback_diagnostics_counters,
         "Reset process-local fallback/degraded-route diagnostic counters.");
 
-  // Runtime-param capacity (ADC-610): the SINGLE C++ source of kMaxRuntimeParams
-  // (pops/runtime/config/runtime_params.hpp). The codegen guard reads this so the Python literal
-  // fallback (physics/aux.py) cannot SILENTLY drift from the fixed-size device array bound.
-  m.attr("__max_runtime_params__") = static_cast<int>(pops::kMaxRuntimeParams);
+  // Exact cardinality is authenticated by BindSchema; storage is bounded in
+  // bytes for each immutable host/device incarnation, without a fixed count cap.
+  m.attr("__max_runtime_params__") = py::none();
+  m.def("runtime_parameter_storage_bytes", &pops::RuntimeParams::checked_storage_bytes,
+        py::arg("count"), "Complete immutable carrier bytes; performs no allocation.");
   // REAL state of the Kokkos init (lazy: first Fab allocation, through ANY path --
   // System, AmrSystem, DSL .so...). Internal environment diagnostics rely on this rather than on a
   // Python flag that only saw System/AmrSystem, so a "too late" report remains reliable.
@@ -836,6 +837,8 @@ void init_core(py::module_& m) {
   using NativeSystemConfig = SystemConfig<kNativeDimension>;
   py::class_<NativeSystemConfig>(m, "SystemConfig")
       .def(py::init<>())
+      .def_readwrite("runtime_parameter_byte_capacity",
+                     &NativeSystemConfig::runtime_parameter_byte_capacity)
       .def_property(
           "shape",
           [](const NativeSystemConfig& config) { return ranked_extent_to_python(config.shape); },

@@ -225,7 +225,12 @@ def test_actual_diffusion_producer_intersects_coverage_and_embedded_boundary(tmp
     header = (root / "include/pops/numerics/diffusion/prepared_diffusion.hpp").read_text()
     start = header.index("  template <class Context>\n  void stage_accepted_exchanges(")
     end = header.index("\n  const auto& faces()", start)
-    producer = header[start:end].replace("Index<Dim>", "pops::Index<2>")
+    stage_end = header.index("\n  /// Retain the evaluated rate", start)
+    helper_start = header.index("\n private:\n  template <class Context, class Consumer>", stage_end)
+    # Compile exactly the exercised stage producer and its production helper.
+    # capture_exchanges has a separate storage-authority contract and receiver.
+    producer = (header[start:stage_end] + header[helper_start:end]).replace(
+        "Index<Dim>", "pops::Index<2>")
     scaffold = HOST.split("void emit(Context& ctx,double dt)")[0]
     # Transport faces store spatial integrals; prepared diffusion faces store flux density.
     scaffold = scaffold.replace("field<0>(),hy", "field<0>(),1").replace("field<1>(),.5", "field<1>(),1")
@@ -236,6 +241,7 @@ using pops::FieldView;
 using pops::sync_host;
 using pops::all_reduce_max;
 using pops::runtime::program::accepted_exchange_contributes;
+using pops::runtime::program::ExchangeRecord;
 using pops::runtime::program::HostFacePublication;
 using pops::runtime::program::HostFabPublication;
 enum class DiffusiveBoundaryKind { periodic, prescribed };

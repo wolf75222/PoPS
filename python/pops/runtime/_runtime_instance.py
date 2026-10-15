@@ -1029,6 +1029,10 @@ class RuntimeInstance:
                     layout_id: row.to_data()
                     for layout_id, row in self._install_plan.artifact.native_layouts.items()
                 },
+                "runtime_parameter_storage": {
+                    key: dict(value) if isinstance(value, Mapping) else value
+                    for key, value in self._install_plan.runtime_parameter_storage.items()
+                },
                 "execution_context": self._execution_context.to_data(),
                 "runtime_plan": self._runtime_plan.to_data(),
                 "installed_components": [

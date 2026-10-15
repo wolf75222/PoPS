@@ -1,5 +1,6 @@
 """Typed global reads enter the common Program IR, never a uniform circuit field."""
 import pytest
+import re
 import pops
 from pops._ir.quantity import PhysicalDimension
 from pops.codegen.program_codegen import emit_cpp_program
@@ -13,10 +14,12 @@ from pops.numerics import DiscretizationPlan, StateStorage, reconstruction, riem
 from pops.numerics.spatial import FiniteVolume
 from pops.time import FixedDt
 
+_DIMENSIONLESS = PhysicalDimension()
 
-def build_feedback(*, gamma=.3, initial=.7, units=PhysicalDimension(), cells=8,
+
+def build_feedback(*, gamma=.3, initial=.7, units=_DIMENSIONLESS, cells=8,
                    periodic=True, proposed_dt=.01, selected_axis=0, initial_condition=False,
-                   physical_global=False, components=("mass",)):
+                   physical_global=False, components=("mass",), repeat_capture=False):
     frame = Rectangle("feedback", lower=(0.,0.), upper=(1.,1.)).frame(Cartesian2D())
     model = pops.Model("feedback_physics", frame=frame)
     state = model.state("density", components=components)
@@ -60,6 +63,10 @@ def build_feedback(*, gamma=.3, initial=.7, units=PhysicalDimension(), cells=8,
     reacted = program.value("reaction_candidate",
         tuple(temporal.n[c]+program.dt*(source[c] if physical_global else q*source[c])
               for c in range(len(components))),at=temporal.n.point)
+    if repeat_capture:
+        reacted = program.value("reaction_candidate_again",
+            tuple(reacted[c]+program.dt*q*source[c] for c in range(len(components))),
+            at=temporal.n.point)
     rate = transport(reacted)
     accepted = program.value("accepted",reacted+program.dt*rate,at=temporal.next.point)
     program.commit(temporal.next, accepted)
@@ -92,8 +99,30 @@ def test_typed_integral_capture_is_a_true_scalar_pod_in_native_cell_kernel(targe
     assert source.index("pops::for_each_cell",checked)>checked
     assert "integral_capture_1A" not in source
     assert "global_value_" in source and "ctx.set_stage_time(0, 1)" in source
+    assert not re.search(r"const pops::Real \w+ = integral_capture_\d+;", source)
+    # One exact host read feeds both the numerical equation and its affine face proof.
+    pod = re.search(r"const pops::Real (global_value_\d+_\d+) = ctx.integral_candidate_value", source)
+    assert pod is not None
+    assert source.count("= %s;" % pod.group(1)) >= 2
     assert resolved.time._integral_units==program._integral_units
     assert "integral_units_v2" in program._serialize()
+
+
+@pytest.mark.parametrize("target", ("system", "amr_system"))
+def test_one_capability_has_distinct_checked_pod_bindings_for_repeated_equation_uses(target):
+    case, layout, *_ = build_feedback(repeat_capture=True)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    source = emit_cpp_program(resolved.time,
+        model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks), target=target)
+    captures = re.findall(
+        r"const pops::Real (global_value_\d+_\d+) = ctx.integral_candidate_value\((integral_capture_\d+),",
+        source)
+    assert len(captures) == 2
+    assert len({alias for alias, _ in captures}) == 2
+    assert len({capability for _, capability in captures}) == 1
+    assert not re.search(r"const pops::Real \w+ = integral_capture_\d+;", source)
+    for alias, _ in captures:
+        assert source.count("= %s;" % alias) >= 2
 
 
 def test_typed_capture_metadata_mutation_is_refused_by_emitter():

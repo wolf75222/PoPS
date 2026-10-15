@@ -246,7 +246,7 @@ def _assert_physical_linear_profile(runtime, level, *, n):
 def _accepted_frame(runtime):
     """Read only the bounded prefix of the actual native A image, never fabricate one."""
     image = bytes(runtime._executor.program_accepted_state())
-    assert image[:8] in (b"POPSANDA", b"POPSANDB", b"POPSANDC", b"POPSANDD", b"POPSANDE") and len(image) >= 32
+    assert image[:8] in (b"POPSANDA", b"POPSANDB", b"POPSANDC", b"POPSANDD", b"POPSANDE", b"POPSANDF") and len(image) >= 32
     assert int.from_bytes(image[8:16], "little") == 2
     size = int.from_bytes(image[16:24], "little")
     assert 0 < size <= len(image) - 40
@@ -365,7 +365,7 @@ def _composite_boundary_exchanges(runtime, n, support):
 
 def _accepted_face_fragments(image):
     """Inspect actual scalar A fragments using the native writer's bounded layout."""
-    assert image[:8] in (b"POPSANDA", b"POPSANDB", b"POPSANDC", b"POPSANDD", b"POPSANDE") and int.from_bytes(image[8:16], "little") == 2
+    assert image[:8] in (b"POPSANDA", b"POPSANDB", b"POPSANDC", b"POPSANDD", b"POPSANDE", b"POPSANDF") and int.from_bytes(image[8:16], "little") == 2
     tagging, offset = accepted_tagging_hysteresis_span(image, dimension=2)
     cursor = offset + len(tagging)
 
@@ -394,6 +394,12 @@ def _accepted_face_fragments(image):
         assert (value.numerator, value.denominator) == (numerator, denominator)
         return value
 
+    def weight():
+        if image[:8] in (b"POPSANDE", b"POPSANDF"):
+            from tests.python.support.relaxed_flux_receipts import exact_weight
+            return exact_weight(take(word()))
+        return rational()
+
     assert text() and text()  # exact native flux-budget and coupling contracts
     start = cursor
     fragments = []
@@ -416,8 +422,15 @@ def _accepted_face_fragments(image):
             phase, physical_time = rational(), real()
             family, stage, attempt = text(), text(), word()
             role, contribution = word(), word()
-            weight, begin, end = rational(), rational(), rational()
+            stage_weight, begin, end = weight(), rational(), rational()
             duration, measure = real(), real()
+            if image[:8] in (b"POPSANDC", b"POPSANDD", b"POPSANDE", b"POPSANDF"):
+                affine = word()
+                publication = tuple(real() for _ in range(4))
+                # This qualification authors no affine finalization. Its wire
+                # still contains the canonical absent publication descriptor.
+                assert affine == 0
+                assert all(struct.pack("<d", value) == bytes(8) for value in publication)
             assert family and stage and attempt > 0 and role in (0, 1) and contribution == 0
             assert family.startswith("pops.program-flux-family.v1:sha256:")
             family_digest = family.rsplit(":", 1)[1]
@@ -425,14 +438,14 @@ def _accepted_face_fragments(image):
             assert stage.startswith(tuple("pops.program-flux-expression.v1/provider/%d/rhs/" % provider
                                           for provider in (1, 4)))
             assert clock_level == levels[role] and macro_step >= 0 and 0 <= phase <= 1
-            assert weight > 0 and 0 <= begin < end <= 1 and duration > 0 and measure > 0
+            assert stage_weight > 0 and 0 <= begin < end <= 1 and duration > 0 and measure > 0
             assert word() == 1  # this authored state has one real scalar component
             flux = real()
             fragments.append({"owner": owner, "state": state, "levels": levels, "axis": axis,
                 "face": face, "coarse_face": coarse_face, "macro_step": macro_step,
                 "family": family, "stage": stage, "attempt": attempt, "role": role,
                 "clock_level": clock_level, "phase": phase, "physical_time": physical_time,
-                "weight": weight, "begin": begin, "end": end,
+                "weight": stage_weight, "begin": begin, "end": end,
                 "duration": duration, "measure": measure, "flux": flux})
     identities = [tuple(row[name] for name in ("owner", "state", "levels", "axis", "face", "coarse_face",
                   "clock_level", "macro_step", "phase", "physical_time", "family", "stage", "attempt", "role"))

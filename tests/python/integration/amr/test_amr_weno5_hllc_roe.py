@@ -125,15 +125,17 @@ chk(np.all(np.isfinite(np.asarray(s.density("a")))),
 # --- 3. ISOTHERME : la structure de contact physique est maintenant supportee --------------------
 print("== isotherme 3-var : weno5 + hllc avec la structure de contact physique ==")
 s = AmrSystem(n=n, L=1.0, periodicity=(True, True))
-_install_state_routes(s, ("iso",), ("rho", "mx", "my"))
+# Reuse the single-block Program identity: its geometry/flux calls are generic
+# and the installed block supplies its own exact three-component schema.
+_install_state_routes(s, ("gas",), ("rho", "mx", "my"))
 s.set_temporal_relations([2], [1], ["integral_only"])
-s.add_equation("iso", iso_spec(),
+s.add_equation("gas", iso_spec(),
                spatial=engine.Spatial(limiter=WENO5(), flux=HLLC()), time=engine.Explicit())
-s.set_density("iso", rho.copy())
+s.set_density("gas", rho.copy())
 install_forward_euler_program(s)
 s.mark_bound()
 s.step(1e-4)
-chk(np.isfinite(np.asarray(s.density("iso"))).all(), "WENO5 + HLLC isotherme reste fini")
+chk(np.isfinite(np.asarray(s.density("gas"))).all(), "WENO5 + HLLC isotherme reste fini")
 
 # --- 4. GARDE INTACTE : un scalaire sans structure de contact est refuse --------------------------
 print("== transport scalaire : weno5 + hllc rejete par la CAPABILITE ==")

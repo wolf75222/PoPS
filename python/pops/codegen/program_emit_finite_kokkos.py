@@ -332,7 +332,7 @@ def emit_map(value, var, lines):
     if reason is not None:
         return False
     from .program_emit_finite_arrays import (
-        _allocate,
+        _collective_call,
         _check_domain,
         _uniform_element,
         _packed,
@@ -432,7 +432,7 @@ def emit_map(value, var, lines):
     )
     failure = prefix + "_failure"
     lines.append("%sView<unsigned char> %s;" % (_NS, failure))
-    _allocate('%sallocate<unsigned char>(%s, "%s")' % (_NS, count, failure), failure, lines)
+    _collective_call("allocate_view", (failure, count, json.dumps(failure)), lines)
     lines.append("std::exception_ptr %s_kernel_error;" % prefix)
     lines.append("try { if (%s > 0) {" % count)
     index = prefix + "_index"
@@ -489,11 +489,7 @@ def emit_map(value, var, lines):
         )
     )
     lines.append("decltype(%s)::host_mirror_type %s_host;" % (failure, failure))
-    _allocate(
-        "Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, %s)" % failure,
-        failure + "_host",
-        lines,
-    )
+    _collective_call("mirror_copy", (failure + "_host", failure), lines)
     bad = prefix + "_first_failure"
     lines.append("std::int64_t %s = %s;" % (bad, count))
     lines.append(
@@ -513,14 +509,10 @@ def emit_map(value, var, lines):
         "finite Kokkos map failed checked arithmetic or index validation",
     )
     for _, col in _leaves(element, outputs):
-        _allocate(
-            "Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, %s)" % col,
-            col + "_host",
-            lines,
-        )
+        _collective_call("mirror_copy", (col + "_host", col), lines)
     buffer = prefix + "_buffer"
     lines.append("std::shared_ptr<std::vector<std::any>> %s;" % buffer)
-    _allocate("pops_algebra_finite::make_values(std::size_t(%s))" % count, buffer, lines)
+    _collective_call("allocate_values", (buffer, "std::size_t(%s)" % count), lines)
     lines.append("for (std::int64_t %s=0;%s<%s;++%s) {" % (index, index, count, index))
     projected = _tree(element, lambda _s, path: _path(outputs, path) + "_host(" + index + ")")
     publication = []
@@ -536,7 +528,8 @@ def emit_map(value, var, lines):
         "return %s{%s,std::move(%s)};" % (finite_cpp_type(signature), domain_token, buffer)
     )
     body = lines[start:]
-    lines[start:] = ["const auto %s = [&]() -> %s {" % (output, finite_cpp_type(signature))]
+    lines[start:] = ["const auto %s = [&]() POPS_FINITE_HOST_NOINLINE -> %s {"
+                     % (output, finite_cpp_type(signature))]
     lines.extend("  " + line for line in body)
     lines.append("}();")
     var[value.id] = output
@@ -544,15 +537,15 @@ def emit_map(value, var, lines):
 
 
 def _column(signature, path, prefix, count, lines, staging):
-    from .program_emit_finite_arrays import _allocate
+    from .program_emit_finite_arrays import _collective_call
 
     token = prefix + "_" + str(len(staging))
     staging.append(token)
     dtype = "unsigned char" if signature["vtype"] == "bool" else _TYPES[signature["vtype"]]
     lines.append("%sView<%s> %s;" % (_NS, dtype, token))
-    _allocate('%sallocate<%s>(%s,"%s")' % (_NS, dtype, count, token), token, lines)
+    _collective_call("allocate_view", (token, count, json.dumps(token)), lines)
     lines.append("decltype(%s)::host_mirror_type %s_host;" % (token, token))
-    _allocate("Kokkos::create_mirror_view(%s)" % token, token + "_host", lines)
+    _collective_call("mirror", (token + "_host", token), lines)
     return token
 
 

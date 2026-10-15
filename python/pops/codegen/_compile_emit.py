@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from .cpp_strings import cpp_string_literal, cpp_string_expression, cpp_string_view_expression
 
-import json
+from .cpp_symbols import printer_scope
 from collections.abc import Mapping
 import math
 from typing import Any, cast
@@ -910,8 +910,6 @@ def _emit_auxiliary_route_registration(
 # ---------------------------------------------------------------------------
 
 
-from .cpp_symbols import printer_scope
-
 @printer_scope
 def emit_cpp_native_loader(
     model: Any,
@@ -1296,7 +1294,8 @@ def emit_cpp_native_loader(
             "  using Installer = pops::runtime::system::PreparedNativeBlockInstaller<pops::kNativeDimension>;\n"
             "  auto* s = static_cast<Installer*>(sys);\n"
             "  auto model = pops::compiled_model::bind_runtime_params(\n"
-            "      pops_generated::ProdModel{}, params, nparams);\n"
+            "      pops_generated::ProdModel{}, params, nparams,\n"
+            "      s->runtime_parameter_byte_capacity(static_cast<std::size_t>(nparams)));\n"
             + system_elliptic_prepare_lines
             + "  pops::runtime::system::PreparedNativeSystemPackage<pops::kNativeDimension> package;\n"
             "  package.consumer_qid = "
@@ -1329,7 +1328,8 @@ def emit_cpp_native_loader(
             "  using NativeAmrSystem = pops::AmrSystem<pops::kNativeDimension>;\n"
             "  auto* s = reinterpret_cast<NativeAmrSystem*>(sys);\n"
             "  auto model = pops::compiled_model::bind_runtime_params(\n"
-            "      pops_generated::ProdModel{}, params, nparams);\n"
+            "      pops_generated::ProdModel{}, params, nparams,\n"
+            "      s->runtime_parameter_byte_capacity(static_cast<std::size_t>(nparams)));\n"
             + ("  auto user_reconstruction = pops_generated::UserReconstructionPolicy{\n"
                "      pops::compiled_model::declaration_runtime_params(model)};\n"
                if user_reconstruction_captures else

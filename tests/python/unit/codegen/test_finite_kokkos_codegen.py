@@ -14,7 +14,8 @@ from typed_program_support import typed_state
 
 def _case(body):
     p = Program("portable_finite_map")
-    q = typed_state(p, "material", state_name="U"); q.n
+    q = typed_state(p, "material", state_name="U")
+    _ = q.n
     domain = p.range_set(7, capacity=2**63-1, ownership="replicated")
     output = p.map(domain, lambda b,i:body(b,i,domain))
     p.commit(q.next,p.value("accepted",q.n,at=q.next.point))
@@ -52,13 +53,15 @@ def test_captured_gather_stages_values_and_retains_instance_comparisons():
         return b.index_value(b.index(d,6-b.index_value(i)))
     _, cpp = _case(body)
     assert 'identity' in cpp and 'index validation' in cpp
-    assert 'finite_kokkos::allocate<' in cpp
+    assert 'finite_collective::allocate_view(' in cpp
+    assert 'finite_kokkos::View<' in cpp
 
 
 @pytest.mark.parametrize("product", (False, True))
 def test_direct_captured_branch_exit_is_a_device_capture(product):
     p = Program("captured_branch_exit")
-    q = typed_state(p, "material", state_name="U"); q.n
+    q = typed_state(p, "material", state_name="U")
+    _ = q.n
     domain = p.range_set(3, capacity=3, ownership="replicated")
     external = p.product(x=p.float64(7), flag=p.boolean(True)) if product else p.float64(7)
     output = p.map(domain, lambda b, i: b.branch(b.index_value(i) == 0,
@@ -75,7 +78,8 @@ def test_direct_captured_branch_exit_is_a_device_capture(product):
 
 def test_float64_construction_on_amr_is_scalar_algebra_without_array_storage():
     p = Program("amr_scalar_construction")
-    q = typed_state(p, "material", state_name="U"); q.n
+    q = typed_state(p, "material", state_name="U")
+    _ = q.n
     factor = p.float64(1.)
     p.commit(q.next, p.value("accepted", factor*q.n, at=q.next.point))
     cpp = emit_cpp_program(p, target="amr_system")
@@ -87,8 +91,10 @@ def test_float64_construction_on_amr_is_scalar_algebra_without_array_storage():
 @pytest.mark.parametrize('unsupported',('nested_array','domain_creation','ordered_scan'))
 def test_unsupported_effect_or_layout_has_explicit_host_placement(unsupported):
     def body(b,i,d):
-        if unsupported=='nested_array': return b.map(d,lambda c,j:c.index_value(j))
-        if unsupported=='domain_creation': return b.size(b.range_set(2,capacity=2,ownership='replicated'))
+        if unsupported=='nested_array':
+            return b.map(d,lambda c,j:c.index_value(j))
+        if unsupported=='domain_creation':
+            return b.size(b.range_set(2,capacity=2,ownership='replicated'))
         return b.scan(d,b.int64(0),lambda c,s,j:c.product(state=s+1,value=c.index_value(j)),order='ascending')['state']
     output, cpp = _case(body)
     reason, _ = admission(output)
@@ -100,7 +106,7 @@ def test_unsupported_effect_or_layout_has_explicit_host_placement(unsupported):
 
 def test_host_literal_fault_injection_stays_outside_kernel_captures():
     _, cpp = _case(lambda b,i,d:b.float64(970113.125))
-    literal='pops::Real('+float(970113.125).hex()+')'
+    literal='pops::Real('+(970113.125).hex()+')'
     assert cpp.count(literal)==1
     assert cpp.index(literal)<cpp.index('Kokkos::parallel_for("pops_finite_map_')
 
@@ -109,7 +115,7 @@ def test_empty_domain_keeps_kernel_launch_guard_and_no_partial_publication():
     _, cpp = _case(lambda b,i,d:b.float64(b.index_value(i)))
     launch=cpp.index('Kokkos::parallel_for("pops_finite_map_')
     check=cpp.index('finite Kokkos map failed checked arithmetic')
-    publication=cpp.index('_buffer = pops_algebra_finite::make_values',launch)
+    publication=cpp.index('finite_collective::allocate_values(',launch)
     assert cpp.rfind(' > 0)',0,launch)>0
     assert launch<check<publication
 
@@ -126,7 +132,17 @@ def test_native_receivers_build_closed_device_maps_before_compilation(kind):
     helper_declarations=re.findall(r'bool (finite_\w+_exhausted) = false;',cpp)
     scoped_declarations=re.findall(r'\{\s+bool (finite_\w+_exhausted) = false;',cpp)
     assert helper_declarations == scoped_declarations
-    assert len(helper_declarations)>len(set(helper_declarations))
+    # Reusable host helpers own their exception/vote temporaries. Every output
+    # mirror is still allocated before dispatch and refreshed into the SAME
+    # destination after the kernel completes, without redeclaring auxiliaries.
+    mirrors = re.findall(r'finite_collective::mirror\((finite_\d+_output_\d+_host), (\w+),', cpp)
+    refreshed = re.findall(r'finite_collective::mirror_copy\((\w+), (\w+),', cpp)
+    assert mirrors and set(mirrors) <= set(refreshed)
+    for host, device in mirrors:
+        allocation = cpp.index('finite_collective::mirror(%s, %s,' % (host, device))
+        launch = cpp.index('Kokkos::parallel_for("pops_finite_map_', allocation)
+        refresh = cpp.index('finite_collective::mirror_copy(%s, %s,' % (host, device), launch)
+        assert allocation < launch < refresh
     rows=[json.loads(line.split('@1 ',1)[1]) for line in cpp.splitlines()
           if '// pops-finite-map-placement@1 ' in line]
     assert rows and all(row['backend']=='Kokkos::DefaultExecutionSpace' for row in rows)

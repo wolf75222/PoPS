@@ -638,16 +638,16 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         operator = self._canonical_value(operator)
         if not (isinstance(operator, ProgramValue) and operator.vtype == "matrix_free_op"):
             raise ValueError("set_apply: operator must be a matrix_free_operator value")
-        require_top_level(self, operator, "set_apply")
+        from pops.time._program.value_validation import validate_input_regions
+        validate_input_regions(self, (operator,), self._current_region(), "set_apply")
         if operator.attrs["apply_block"] is not None:
             raise ValueError("set_apply: operator '%s' already has an apply" % operator.name)
-        if self._recording:
-            raise NotImplementedError(
-                "set_apply: recording an apply inside another sub-block (apply / while body) is a "
-                "later phase")
         # The apply ops (the in/out placeholders + the body) live in the operator's OWN sub-block, NOT
         # the flat SSA list: they are re-emitted as the C++ apply lambda, never walked at the top level.
         sub = []
+        apply_region = self._region_for_block(sub)
+        for parent in self._recording:
+            self._allow_region_capture(self._region_for_block(parent), apply_region)
         self._recording.append(sub)
         # The in/out buffers carry the operator's component count: a vector / state operator applies on
         # an ncomp buffer (scalar -> ncomp == 1). The apply body sees ncomp-component in / out fields.

@@ -474,3 +474,5 @@ sdk-support pops/runtime/program/field_representation_obligation.hpp
 sdk-support pops/runtime/program/field_exchange_expression_codec.inc
 
 sdk-support pops/runtime/program/uniform_history_exchange_checkpoint.hpp
+sdk-support pops/core/foundation/device_capture.hpp
+sdk-support pops/runtime/program/finite_collective_execution.hpp

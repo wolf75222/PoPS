@@ -15,9 +15,9 @@ from pathlib import Path
 import time
 
 ORDINARY_BUDGET_SECONDS = 35 * 60
-# The full 2026-10-15 catalog needs at least 120 LPT bins at the unchanged
-# 35-minute ordinary budget. One additional bin preserves scheduling margin.
-SHARD_TOTAL = 121
+# The complete 2026-10-16 catalog retains the 35-minute ordinary budget.
+# 125 bins preserve margin with the three new native composition receivers.
+SHARD_TOTAL = 125
 
 
 def selected_budget(paths: list[str], durations: dict[str, float]) -> int:

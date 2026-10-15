@@ -51,8 +51,8 @@ inline int runtime_param_count(const Model& model = Model{}) {
   if ((hyp != 0 && hyp != expected) || (src != 0 && src != expected) ||
       (ell != 0 && ell != expected))
     throw std::runtime_error("compiled model bricks disagree on the runtime parameter layout");
-  if (expected < 0 || expected > kMaxRuntimeParams)
-    throw std::runtime_error("compiled model runtime parameter count exceeds exact capacity");
+  if (expected < 0)
+    throw std::runtime_error("compiled model runtime parameter cardinality is negative");
   return expected;
 }
 
@@ -60,22 +60,21 @@ template <class Model>
 inline void declaration_runtime_param_defaults(double* output) {
   const RuntimeParams params = declaration_runtime_params(Model{});
   for (int index = 0; index < params.count; ++index)
-    output[index] = static_cast<double>(params.values[index]);
+    output[index] = params.bound() ? static_cast<double>(params.get(index)) : 0.0;
 }
 
 /// Inject one complete BindSchema vector before native closures are constructed.
 template <class Model>
-inline Model bind_runtime_params(Model model, const double* values, int count) {
+inline Model bind_runtime_params(Model model, const double* values, int count,
+                                 std::uint64_t byte_capacity) {
   const int expected = runtime_param_count(model);
   if (count != expected)
     throw std::runtime_error("native block parameter vector has " + std::to_string(count) +
                              " values but the compiled model requires " + std::to_string(expected));
   if (count > 0 && values == nullptr)
     throw std::runtime_error("native block parameter vector is null");
-  RuntimeParams params{};
-  params.count = count;
-  for (int index = 0; index < count; ++index)
-    params.values[index] = static_cast<Real>(values[index]);
+  const auto params = RuntimeParams ::from_host(
+      std::span<const double>(values, static_cast<std::size_t>(count)), byte_capacity);
   apply_runtime_params(model.hyp, params);
   apply_runtime_params(model.src, params);
   apply_runtime_params(model.ell, params);

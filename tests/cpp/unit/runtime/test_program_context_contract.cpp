@@ -3605,9 +3605,9 @@ TEST(ProgramContextContract, IndependentFieldProviderRequiresItsExactLiveAllocat
   type.scientific_contract = "test.independent-field.value";
   ContinuationConfiguration configuration;
   configuration.type = ContinuationType(ContinuationKind::Product);
-  configuration.type.names = {"time", "step", "field"};
   configuration.type.children = {ContinuationType(ContinuationKind::Float64),
                                  ContinuationType(ContinuationKind::Int64), type};
+  configuration.type.names = {"time", "step", "field"};
   configuration.identity = "test.independent-fields.schema";
   configuration.byte_capacity = 1 << 20;
   configuration.time_path = {0};
@@ -3618,6 +3618,23 @@ TEST(ProgramContextContract, IndependentFieldProviderRequiresItsExactLiveAllocat
   EXPECT_THROW(ctx.allocate_continuation_field_observation("problem-a/unknown-u", 1 << 20),
                std::logic_error);
   ctx.begin_step(0.125);
+  auto replaced_fab = ctx.allocate_continuation_field_observation(type.field_provider, 1 << 20);
+  for (std::size_t local = 0; local < replaced_fab->local_size(); ++local) {
+    auto& fab = replaced_fab->fab(local);
+    const auto box = fab.box();
+    const auto ghosts = fab.ghosts();
+    const auto components = fab.ncomp();
+    const auto allocation = fab.storage();
+    EXPECT_GE(allocation.use_count(), 3);  // Fab + issued registry + this observer
+    fab = NativeField::fab_type{};
+    EXPECT_GE(allocation.use_count(), 2);  // registry pins the old allocation after replacement
+    fab = NativeField::fab_type(box, components, ghosts);
+    EXPECT_NE(fab.storage().data(), allocation.data());
+  }
+  // An empty rank still has a distinct whole-storage incarnation.
+  if (replaced_fab->local_size() == 0)
+    *replaced_fab = NativeField(*replaced_fab);
+  EXPECT_ANY_THROW(ctx.seal_continuation_field_observation(type.field_provider, 93, replaced_fab));
   auto field = ctx.allocate_continuation_field_observation(type.field_provider, 1 << 20);
   field->set_val(Real(7));
   EXPECT_THROW(ctx.continuation_preflight_field(*field, type), std::invalid_argument);
@@ -3671,3 +3688,86 @@ TEST(ProgramContextContract, IndependentFieldProviderRequiresItsExactLiveAllocat
       prototypes));
   EXPECT_THROW(ctx.continuation_preflight_field(accepted->field(), type), std::invalid_argument);
 }
+TEST(RuntimeParameterCarrier, OwnedViewsExecuteBeyond32AndKeepOldIncarnations) {
+  constexpr int count = 129;
+  std::vector<double> values(count);
+  for (int i = 0; i < count; ++i)
+    values[i] = double(i + 1) / 8;
+  auto params = RuntimeParams::from_host(values, RuntimeParams::checked_storage_bytes(count));
+  const auto old = params;
+  std::fill(values.begin(), values.end(), -4.0);
+  params = RuntimeParams::from_host(values, RuntimeParams::checked_storage_bytes(count));
+  values.clear();  // neither carrier borrows the input storage
+  Kokkos::View<Real*> output("runtime_parameter_output", count);
+  Kokkos::parallel_for(
+      "runtime_parameter_129", Kokkos::RangePolicy<>(0, count),
+      KOKKOS_LAMBDA(int i) { output(i) = old.get(i) + params.get(i); });
+  auto host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, output);
+  for (int i = 0; i < count; ++i) {
+    EXPECT_EQ(old.get(i), Real(i + 1) / 8);
+    EXPECT_EQ(params.get(i), Real(-4));
+    EXPECT_EQ(host(i), Real(i + 1) / 8 - 4);
+  }
+}
+
+TEST(RuntimeParameterCarrier, BudgetAndDeclarationFailBeforeReplacingLiveValues) {
+  const std::vector<double> values(65, 3.0);
+  const auto required = RuntimeParams::checked_storage_bytes(values.size());
+  auto current = RuntimeParams::from_host(values, required);
+  EXPECT_THROW(current = RuntimeParams::from_host(values, required - 1), std::length_error);
+  EXPECT_EQ(current.count, 65);
+  for (int i = 0; i < current.count; ++i)
+    EXPECT_EQ(current.get(i), Real(3));
+  auto declared = RuntimeParams::declaration(65);
+  EXPECT_FALSE(declared.bound());
+  EXPECT_THROW(declared.require_bound(), std::invalid_argument);
+  EXPECT_THROW(RuntimeParams::declaration(-1), std::invalid_argument);
+  EXPECT_THROW(
+      RuntimeParams::checked_storage_bytes(std::size_t(std::numeric_limits<int>::max()) + 1),
+      std::length_error);
+  EXPECT_EQ(RuntimeParams::from_host({}, 0).storage_bytes(), 0U);
+}
+
+TEST(RuntimeParameterCarrier, ProgramReplacementIsCollectiveAndSnapshotsAreImmutable) {
+  NativeSystemConfig config;
+  for (int axis = 0; axis < pops::kNativeDimension; ++axis)
+    config.shape[axis] = 4;
+  config.runtime_parameter_byte_capacity = RuntimeParams::checked_storage_bytes(65);
+  NativeSystem system(config);
+  install_execution_lane(system, "runtime-params-65");
+  const auto& lane = system.prepared_boundary_execution_lane();
+  system.seed_program_params(0, std::vector<double>(65, 2.0));
+  const auto accepted = system.program_params(0);
+  system.set_program_params(0, std::vector<double>(65, 7.0));
+  for (int i = 0; i < 65; ++i) {
+    EXPECT_EQ(accepted.get(i), Real(2));
+    EXPECT_EQ(system.program_params(0).get(i), Real(7));
+  }
+  expect_collective_exception<std::runtime_error>(lane, [&] {
+    system.set_program_params(0, std::vector<double>(lane.rank() == 0 ? 64 : 65, 8.0));
+  });
+  for (int i = 0; i < 65; ++i)
+    EXPECT_EQ(system.program_params(0).get(i), Real(7));
+  expect_collective_exception<std::length_error>(
+      lane, [&] { system.seed_program_params(1, std::vector<double>(66, 9.0)); });
+  EXPECT_EQ(system.program_params(1).count, 0);
+}
+
+namespace {
+struct RuntimeParameterCaptureAggregate {
+  using pops_device_capture_members = DeviceCaptureMembers<RuntimeParams>;
+  RuntimeParams params;
+};
+struct UnownedHostCapture {
+  std::vector<Real> values;
+};
+struct DeclaredHostCapture {
+  using pops_device_capture_members = DeviceCaptureMembers<std::vector<Real>>;
+  std::vector<Real> values;
+};
+static_assert(device_capture_v<RuntimeParams>);
+static_assert(!device_capture_v<Kokkos::View<Real*, Kokkos::MemoryTraits<Kokkos::Unmanaged>>>);
+static_assert(device_capture_v<RuntimeParameterCaptureAggregate>);
+static_assert(!device_capture_v<UnownedHostCapture>);
+static_assert(!device_capture_v<DeclaredHostCapture>);
+}  // namespace

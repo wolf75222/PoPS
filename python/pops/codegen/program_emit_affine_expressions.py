@@ -23,10 +23,15 @@ def emit_affine_expression(value, var, lines, *, block_index, explicit):
     terms = affine_field_terms(value)
     if terms is None:
         return
-    tokens = emit_uniform_coefficients(tuple(tree for _, tree in terms), var, lines,
+    from pops.codegen.program_emit_expressions import pointwise_scalar_aliases
+    # Use the same authenticated primitive reads as the numerical kernel. A scalar
+    # SSA may denote a PreparedIntegralCapture or host structural projection;
+    # neither is a coefficient until its exact consumer boundary has read it.
+    coefficients = {**var, **pointwise_scalar_aliases(value)}
+    tokens = emit_uniform_coefficients(tuple(tree for _, tree in terms), coefficients, lines,
                                        name="affine_coefficients_%d" % value.id)
     if explicit and value.id not in var.get(("authored_stability_updates",), ()):
-        emit_runtime_affine_stability(value, tuple(zip((x[0] for x in terms), tokens)),
+        emit_runtime_affine_stability(value, tuple(zip((x[0] for x in terms), tokens, strict=True)),
                                       var, lines, block_index=block_index)
     alias = "affine_term_%d" % value.id
     lines.append("using %s = typename std::remove_reference_t<decltype(ctx)>::UniformAffineTerm;" % alias)

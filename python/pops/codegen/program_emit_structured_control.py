@@ -9,6 +9,7 @@ from pops.time._program.versioned_values import VERSIONED_OPS
 from pops.time._program.field_representation import FIELD_REPRESENTATION_OPS
 from pops.time._program.distributed_arrays import GLOBAL_OPS as _DISTRIBUTED, local_effects
 from .program_emit_finite_arrays import FINITE_OPS
+from pops.graph_functions import _NATIVE_FIELD_ALGEBRA
 
 
 STRUCTURED_OPS = frozenset((
@@ -25,7 +26,7 @@ STRUCTURED_OPS = frozenset((
 # A checked execution-effect profile, not a model/solver catalog. These operations have either
 # no recoverable failure or lane-uniform native status handling. Extend only after checking the
 # emitter's failure rendezvous, never simply because an operation is numerically useful.
-_REGION_SAFE_OPS = FIELD_REPRESENTATION_OPS | STRUCTURED_OPS | FINITE_OPS | (VERSIONED_OPS - {'continuation_open', 'continuation_publish'}) | frozenset((
+_REGION_SAFE_OPS = _NATIVE_FIELD_ALGEBRA | FIELD_REPRESENTATION_OPS | STRUCTURED_OPS | FINITE_OPS | (VERSIONED_OPS - {'continuation_open', 'continuation_publish'}) | frozenset((
     "state", "linear_combine", "pointwise_expression", "scalar_op", "compare", "reduce",
     "cfl", "hmin", "branch", "scalar_field", "where", "cell_compare",
     "field_component", "vector_field", "requested_dt", "invocation_level",

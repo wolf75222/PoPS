@@ -20,7 +20,7 @@ def _freeze(value):
     def describe(node):
         if isinstance(node, Mapping):
             keys = tuple(node)
-            return tuple(node.values()), lambda children: MappingProxyType(dict(zip(keys, children)))
+            return tuple(node.values()), lambda children: MappingProxyType(dict(zip(keys, children, strict=True)))
         if isinstance(node, (list, tuple)):
             return node, tuple
         return None, node
@@ -69,7 +69,7 @@ class ValueType:
                 rows = sorted(members) if kind == "variant" else members
                 keys = tuple(key for key, _ in rows)
                 return tuple(child for _, child in rows), lambda children: {
-                    "vtype": kind, "members": tuple(zip(keys, children))}
+                    "vtype": kind, "members": tuple(zip(keys, children, strict=True))}
             raise ValueError("dependent type data requires authenticated authority reconstruction")
         return cls(transform(data, describe))
 
@@ -113,7 +113,7 @@ def instantiate(value_type, point):
             members = result["members"]
             keys = tuple(key for key, _ in members)
             def build(children):
-                result["members"] = tuple(zip(keys, children))
+                result["members"] = tuple(zip(keys, children, strict=True))
                 return result
             return tuple(child for _, child in members), build
         return None, result

@@ -137,10 +137,7 @@ class ProgramRuntimeReport:
 
 
 def _params(sim: Any) -> Any:
-    """Per-program-block runtime-param COUNT + the kMaxRuntimeParams limit (never the values -- inert
-    metadata). Derived from the block map (or, absent it, block 0): a block with no runtime param reports
-    count 0. The limit (ADC-610) surfaces the previously-hidden fixed-array capacity so a block's headroom
-    is introspectable."""
+    """Exact parameter counts; capacity is a configurable native storage resource."""
     from pops.physics.aux import max_runtime_params  # lazy: keep the report import-light
 
     limit = max_runtime_params()

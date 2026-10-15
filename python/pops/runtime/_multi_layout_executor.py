@@ -1901,6 +1901,7 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
             # Validate every ranked Uniform tiling before materializing any child.
             # Adaptive layouts are lowered by their exact LayoutInstallProjection.
             configs[layout_id] = system_config_from_layout(native_layouts[layout_id])
+            configs[layout_id].runtime_parameter_byte_capacity = plan.runtime_parameter_storage["byte_capacity"]
         elif execution_target != "amr_system":
             raise NotImplementedError("multi-layout native execution target is unsupported")
     if any(value != strategies[0] for value in strategies[1:]) or any(

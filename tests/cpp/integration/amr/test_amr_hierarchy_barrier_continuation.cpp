@@ -288,7 +288,10 @@ TEST(AmrHierarchyBarrierContinuation, CompositeResidualBorrowsCheckedOutRootForP
     pops::PureFieldAlgebra::copy(*coordinates, q);
     return coordinates;
   };
-  workspace->evaluations[0] = [](Field& q, const Field& previous, Field& residual, const Field*) {
+  workspace->evaluations[0] = [context](Field& q, const Field& previous, Field& residual,
+                                        const Field*) {
+    context->require_program_field_access(q);
+    context->require_program_field_access(previous);
     pops::lincomb(residual, pops::Real(1), q, pops::Real(-1), previous);
     return &q;
   };
@@ -345,4 +348,52 @@ TEST(AmrHierarchyBarrierContinuation, TerminalFailureDoesNotInvokeRecoveryAndRol
   EXPECT_DOUBLE_EQ(fixture.system->time(), 0);
   for (int level = 0; level < fixture.system->n_levels(); ++level)
     expect_value(fixture.system->engine()->hierarchy().state(level), pops::Real(7));
+}
+
+TEST(AmrHierarchyBarrierContinuation, PreviousStageAuthorityIsExactLevelAttemptAndRollsBack) {
+  auto fixture = prepare_fixture();
+  auto* context = fixture.context.get();
+  fixture.evidence->mode = 6;
+  ASSERT_EQ(fixture.system->n_levels(), 2);
+  pops::FieldNewtonOptions options;
+  auto workspace = context->prepare_spatial_hierarchy(911, 0, options, pops::Real(1e-6));
+  EXPECT_THROW(context->require_program_field_access(workspace->previous(0)),
+               std::invalid_argument);
+  int visits = 0;
+  fixture.evidence->spatial_gather = [context, workspace, &visits] {
+    const int level = context->level();
+    EXPECT_THROW(context->require_program_field_access(workspace->previous(level)),
+                 std::invalid_argument);
+    Field lookalike(context->state(0));
+    EXPECT_THROW(context->require_program_field_access(lookalike), std::invalid_argument);
+    context->stage_spatial_hierarchy_previous(911, 0, context->state(0), nullptr);
+    EXPECT_NO_THROW(context->require_program_field_access(workspace->previous(level)));
+    EXPECT_THROW(context->require_program_field_access(workspace->previous(1 - level)),
+                 std::invalid_argument);
+    ++visits;
+  };
+  bool reject = true;
+  fixture.evidence->spatial_solve = [context, workspace, &reject] {
+    for (int level = 0; level < 2; ++level)
+      context->with_program_attempt_level_or_current(level, [&] {
+        EXPECT_NO_THROW(context->require_program_field_access(workspace->previous(level)));
+        expect_value(workspace->previous(level), pops::Real(7));
+      });
+    if (reject)
+      throw std::runtime_error("late previous-stage authority rollback witness");
+  };
+  const auto accepted = fixture.system->program_accepted_state();
+  EXPECT_THROW(fixture.system->step(0.125), std::runtime_error);
+  EXPECT_EQ(fixture.system->program_accepted_state(), accepted);
+  EXPECT_DOUBLE_EQ(fixture.system->time(), 0.0);
+  EXPECT_THROW(context->require_program_field_access(workspace->previous(0)),
+               std::invalid_argument);
+  EXPECT_EQ(visits, 2);
+  reject = false;
+  fixture.evidence->gathered = fixture.evidence->solves = 0;
+  fixture.system->step(0.125);
+  EXPECT_EQ(visits, 4);
+  EXPECT_DOUBLE_EQ(fixture.system->time(), 0.125);
+  EXPECT_THROW(context->require_program_field_access(workspace->previous(0)),
+               std::invalid_argument);
 }

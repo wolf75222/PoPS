@@ -45,7 +45,7 @@ def test_named_field_only_runtime_param_uses_the_shared_bind_carrier() -> None:
     named_start = loader.index("struct NamedFieldRuntimeParamGenEll_potential {")
     named_end = loader.index("}  // namespace pops_generated", named_start)
     named_brick = loader[named_start:named_end]
-    assert "pops::RuntimeParams params{1," in named_brick
+    assert "pops::RuntimeParams params = pops::RuntimeParams::declaration(1);" in named_brick
     assert "params.get(0)" in named_brick
     assert 'pops_compiled_param_names() { return "named_rhs_scale"; }' in loader
     assert "pops::compiled_model::bind_runtime_params(" in loader

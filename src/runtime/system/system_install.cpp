@@ -2166,6 +2166,7 @@ void System<Dim>::finalize_native_packages() {
         state.require(runtime::system::NativeCapabilityPhase::routes_closed,
                       "begin native package install");
         state.geometry.emplace(p_->geom);
+        state.runtime_parameter_byte_capacity = p_->cfg.runtime_parameter_byte_capacity;
         state.periodicity = p_->periodicity;
         state.provider_storage_owner = published_carrier_owner;
         state.phase = runtime::system::NativeCapabilityPhase::install_open;

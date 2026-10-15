@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory_resource>
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
@@ -31,6 +32,39 @@ class StructuralBudget {
   std::uint64_t capacity_;
 };
 
+// Account for the bytes requested by a temporary container (both nodes and
+// buckets), before each upstream allocation. Allocator implementation overhead
+// is outside this requested-byte budget, as for the other native containers.
+class StructuralWorkspaceResource final : public std::pmr::memory_resource {
+ public:
+  explicit StructuralWorkspaceResource(std::uint64_t capacity, std::pmr::memory_resource* upstream =
+                                                                   std::pmr::get_default_resource())
+      : capacity_(capacity), upstream_(upstream) {
+    if (!upstream_)
+      throw std::invalid_argument("structural workspace needs an allocator");
+  }
+  std::uint64_t used() const noexcept { return used_; }
+
+ private:
+  void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+    if (bytes > capacity_ - used_)
+      throw std::length_error("structural workspace exceeds its byte capacity");
+    void* storage = upstream_->allocate(bytes, alignment);
+    used_ += bytes;
+    return storage;
+  }
+  void do_deallocate(void* storage, std::size_t bytes, std::size_t alignment) override {
+    upstream_->deallocate(storage, bytes, alignment);
+    used_ -= bytes;
+  }
+  bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+    return this == &other;
+  }
+  std::uint64_t capacity_;
+  std::uint64_t used_ = 0;
+  std::pmr::memory_resource* upstream_;
+};
+
 // Borrow every node. In particular no shared_ptr copy may perturb a GC census.
 // enter=false prunes an already authenticated alias; active-path cycles always
 // fail. Children and exit retain the recursive traversal's exact ordinal order.
@@ -50,6 +84,13 @@ void walk_structure(const Node* root, Count count, Child child, Enter enter, Exi
     if (active.contains(node))
       throw std::invalid_argument("structural value graph is cyclic");
     if (!enter(*node)) {
+      exit(*node);
+      return;
+    }
+    // A leaf cannot lead back to an active ancestor. Preserve both callbacks
+    // and the actual child/lifetime check without allocating a DFS frame or
+    // an active-set node for every Index in a large Requests Array.
+    if (count(*node) == 0) {
       exit(*node);
       return;
     }

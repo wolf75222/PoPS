@@ -41,6 +41,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <optional>
 
 /// @file
 /// @brief Runtime multi-species composition: one coupled system, block by block.
@@ -180,6 +181,12 @@ class ExecutionLane;
 template <int Dim>
 struct SystemConfig : RuntimeSpatialDomain<Dim> {
   static_assert(Dim >= 1 && Dim <= 3, "SystemConfig only supports dimensions 1, 2, and 3");
+
+  /// Maximum bytes per immutable runtime-parameter incarnation (host/device
+  /// payloads + descriptor). nullopt derives the exact minimum from each
+  /// authenticated cardinality. This is not a global bound on arbitrarily many
+  /// retained snapshots; copies share their original incarnation.
+  std::optional<std::uint64_t> runtime_parameter_byte_capacity;
 
   std::string load_balance_route = "round_robin";
   std::string load_balance_identity = "pops.system.default.round-robin@1";
@@ -1421,11 +1428,14 @@ class System {
   /// reach it across the dlopen boundary (the runtime set comes from Python today). Effect on the next
   /// step.
   POPS_EXPORT void set_program_params(int prog_block, const std::vector<double>& values);
-  /// Block @p prog_block's CURRENT RuntimeParams (a device-clean by-value copy: trivially copyable,
-  /// readable in a kernel). An UNSEEDED block (no runtime param declared) returns a default-constructed
+  /// Block @p prog_block's CURRENT RuntimeParams (a device-capturable by-value copy of immutable
+  /// managed host/device views). An UNSEEDED block (no runtime param declared) returns a default-constructed
   /// RuntimeParams (count 0), so a kernel that reads no param is unaffected. Read by ProgramContext for
   /// the lowered per-cell source / linear-source kernels.
   POPS_EXPORT RuntimeParams program_params(int prog_block) const;
+  /// Return the configured per-incarnation storage capacity, after checking that
+  /// the exact authenticated cardinality fits; nullopt selects its exact charge.
+  POPS_EXPORT std::uint64_t runtime_parameter_byte_capacity(std::size_t count) const;
   /// Seed block @p prog_block's RuntimeParams to its DECLARATION defaults (@p count values, the .so
   /// pops_program_param_default metadata), establishing the no-set baseline. Called by install_program
   /// once per runtime-param Program block; a later set_program_params overwrites only the supplied

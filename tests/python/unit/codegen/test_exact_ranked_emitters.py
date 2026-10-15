@@ -144,8 +144,8 @@ def test_runtime_parameter_values_are_part_of_the_emitted_exact_contract() -> No
     authored.conservative_from([state])
 
     source, _ = _emit_cpp_brick(authored, name="ExactRuntimeParameter")
-    assert "params.count < 0 || params.count > pops::kMaxRuntimeParams" in source
-    assert "contract.scalar(params.values[index]);" in source
+    assert "params.require_bound();" in source
+    assert "contract.scalar(params.get(index));" in source
     assert '.text("%s")' % authored._m._model_hash() in source
 
 

@@ -1,6 +1,11 @@
 """Host execution of authentic dot_all kernels/providers; storage and MPI are substitutes.
 
 No installed native provider or collective execution is qualified by this fixture.
+The real providers and MPI are covered independently by test_program_runtime,
+ProgramRuntime.ExplicitVectorPairingIncludesEveryComponentAndKeepsLegacyDotZero
+and ProgramRuntime.ExplicitVectorPairingUsesNativeAmrCoverageAndIgnoresCoveredNaN.
+The small AMR ownership fixture admits only the exact, live State objects it owns;
+it does not emulate the production History/Continuation authority machinery.
 """
 from pathlib import Path
 import shutil
@@ -59,7 +64,7 @@ def test_authentic_dot_all_finite_coverage_and_collective_control_flow(tmp_path)
     assert build.returncode == 0, build.stderr
     result = subprocess.run([str(binary)], text=True, capture_output=True, timeout=10)
     assert result.returncode == 0, result.stderr
-    assert "checks=24" in result.stdout
+    assert "checks=27" in result.stdout
 
 
 SCAFFOLD = r'''
@@ -151,7 +156,15 @@ struct Facade {
  const Field& prepared_amr_block_level_coverage_mask(int,int l){++coverage_queries;return coverage.at(l);}
 };
 struct AMR:Base {
- Facade* facade_;Identity selected;explicit AMR(Facade&f):facade_(&f){}
+ Facade* facade_;Identity selected;const Field* revoked=nullptr;
+ explicit AMR(Facade&f):facade_(&f){}
+ // Unit-only issuance: all admitted fields are exact State objects held by this
+ // facade. Matching shape/owner integers cannot authorize an unrelated copy.
+ void require_program_field_access(const Field& field)const {
+   if(&field==revoked)throw std::invalid_argument("revoked unit State");
+   for(const auto& owned:facade_->levels)if(&field==&owned)return;
+   throw std::invalid_argument("field was not issued by this unit facade");
+ }
  void refresh_resources_()const{}
  int sys_block(int b)const{if(b!=7)throw std::invalid_argument("owner");return b;}
  int nlev()const{return static_cast<int>(facade_->levels.size());}
@@ -205,6 +218,14 @@ int main(){
  for(auto& mask:f.coverage)mask.distribution_id.replica=true;a.lane={1,2};
  ok(a.dot_all(7,f.levels[0],f.levels[0])==0);
  a.lane.r=0;ok(a.dot_all(7,f.levels[0],f.levels[0])==13);
+ // These negatives must fail before the simulated sum. Removing the access
+ // guard would let classify/resolve silently substitute the real State instead.
+ Field same_contract=f.levels[0];
+ refuses([&]{a.dot_all(7,same_contract,f.levels[0]);},"V");
+ refuses([&]{a.dot_all(7,f.levels[0],same_contract);},"V");
+ a.revoked=&f.levels[0];
+ refuses([&]{a.dot_all(7,f.levels[0],f.levels[0]);},"V");
+ a.revoked=nullptr;
  std::cout<<"checks="<<checks<<"\n";
 }
 '''

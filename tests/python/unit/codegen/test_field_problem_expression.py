@@ -107,6 +107,7 @@ def test_native_load_emits_collective_preflight_and_domain_refusal_before_use():
 
 def test_component_emission_requires_its_consumed_exact_unknown_and_native_problem():
     from pops.time._graph.base import CanonicalData
+    from pops.fields._observation_contract import field_provider_authority
     from pops.time.stencil import StencilAccess
 
     unknown = Handle("potential", kind="field", owner=OwnerPath.case("field-owner"))
@@ -132,7 +133,9 @@ def test_component_emission_requires_its_consumed_exact_unknown_and_native_probl
                           {"ncomp": 1}, "packed", None)
     observed = program._new("scalar_field", "field_component", (packed,), {
         "ncomp": 1, "component": 0, "field_problem_identity": identity,
-        "field_unknown": unknown.canonical_identity()}, "observation", None)
+        "field_unknown": unknown.canonical_identity(),
+        "field_authority": field_provider_authority(identity, unknown.canonical_identity(), None)},
+        "observation", None)
     var, lines = {packed.id: "packed"}, []
     emit_field_problem_value(observed, var, lines, [], target="system")
     assert any("input0(index, 0)" in line for line in lines)

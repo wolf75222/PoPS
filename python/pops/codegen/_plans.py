@@ -21,7 +21,7 @@ from pops.identity import Identity, canonical_bytes, make_identity
 
 
 _TARGETS = frozenset({"system", "amr_system"})
-_BIND_RESOURCE_KEYS = frozenset({"execution_context"})
+_BIND_RESOURCE_KEYS = frozenset({"execution_context", "runtime_parameter_byte_capacity"})
 _SEMANTIC_OVERRIDE_KEYS = frozenset({
     "solver", "solvers", "cadence", "layout", "target", "backend", "spatial",
     "outputs", "diagnostics", "program", "algorithm",
@@ -903,6 +903,9 @@ class BindInputs:
         if any(not isinstance(key, Handle) or not key.is_resolved for key in self.initial_values):
             raise TypeError("BindInputs.initial_values keys must be canonical owner-qualified Handles")
         object.__setattr__(self, "initial_values", _deep_freeze(self.initial_values))
+        from pops.runtime._runtime_parameter_storage import validate_parameter_byte_capacity
+        if "runtime_parameter_byte_capacity" in self.resources:
+            validate_parameter_byte_capacity(self.resources["runtime_parameter_byte_capacity"])
         forbidden = set(self.resources) & _SEMANTIC_OVERRIDE_KEYS
         unknown = set(self.resources) - _BIND_RESOURCE_KEYS
         if forbidden:
@@ -946,6 +949,7 @@ class InstallPlan:
     resources: Mapping[str, Any] = field(default_factory=dict)
     components: Mapping[str, Any] = field(default_factory=dict)
     execution_context: Any = None
+    runtime_parameter_storage: Mapping[str, Any] = field(init=False)
     bind_identity: Identity = field(init=False)
 
     def __post_init__(self) -> None:
@@ -1029,6 +1033,9 @@ class InstallPlan:
         if _evidence(self.resources, where="InstallPlan.resources") != _evidence(
                 self.bind_inputs.resources, where="BindInputs.resources"):
             raise ValueError("InstallPlan resources must come from BindInputs")
+        from pops.runtime._runtime_parameter_storage import resolve_runtime_parameter_storage
+        object.__setattr__(self, "runtime_parameter_storage", _deep_freeze(
+            resolve_runtime_parameter_storage(self.artifact, self.resources)))
         object.__setattr__(self, "bind_identity", make_identity("bind", self._payload()))
 
     @property
@@ -1117,6 +1124,8 @@ class InstallPlan:
             "params": _evidence(self.params, where="install.params"),
             "aux": _evidence(self.aux, where="install.aux"),
             "resources": _evidence(self.resources, where="install.resources"),
+            "runtime_parameter_storage": _evidence(
+                self.runtime_parameter_storage, where="install.runtime_parameter_storage"),
             "components": _evidence(self.components, where="install.components"),
             "initial_values": _evidence(
                 self.initial_values, where="install.initial_values"

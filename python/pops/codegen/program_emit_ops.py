@@ -1766,7 +1766,8 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             program, v, base, var, model, lines, prelude, block_idx, field_plans,
             target=target)
     elif v.op == "pointwise_expression":
-        from pops.codegen.program_emit_expressions import emit_pointwise_kernel, pointwise_output_template
+        from pops.codegen.program_emit_expressions import (
+            emit_pointwise_kernel, pointwise_output_template, pointwise_scalar_bindings)
         if "global_template_index" in v.attrs:
             from pops.time._evaluation_point import evaluation_stage_fraction
             template = pointwise_output_template(v)
@@ -1790,10 +1791,16 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                          % (var[v.id], v.id, template_var))
         output_setup_end = len(lines)
+        # Lift authenticated scalar reads into the shared consumer scope, before
+        # either the device kernel or its affine provenance reconstruction. Field
+        # seeds evaluate their kernel inside a local failure scope; their scalar
+        # PODs must remain visible after its converged completion as well.
+        lines += pointwise_scalar_bindings(v, var)
         status = "expression_status_%d" % v.id
         if "field_product_seed" in v.attrs:
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *seed_status_%d;" % (status, v.id))
-            kernel = emit_pointwise_kernel(v, var, var[v.id], block_index=bidx, status=status)
+            kernel = emit_pointwise_kernel(v, var, var[v.id], block_index=bidx, status=status,
+                                          scalars_prepared=True)
             lines += ["const pops::MultiFab<pops::kNativeDimension>* expression_active_%d = nullptr;" % v.id,
                       "std::exception_ptr seed_kernel_error_%d;" % v.id, "try {"]
             lines += [kernel[0].replace("const auto* ", "", 1), *kernel[1:]]
@@ -1803,7 +1810,8 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         else:
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 1, %s, 1, 0);"
                          % (status, v.id, template_var))
-            lines += emit_pointwise_kernel(v, var, var[v.id], block_index=bidx, status=status)
+            lines += emit_pointwise_kernel(v, var, var[v.id], block_index=bidx, status=status,
+                                           scalars_prepared=True)
         reduction = "pointwise_level_status_max" if target == "amr_system" else "pointwise_status_max"
         lines.append("if (ctx.%s(%d, %s, expression_active_%d, ctx.prepared_execution_lane()) != pops::Real(0)) {"
                      % (reduction, bidx, status, v.id))

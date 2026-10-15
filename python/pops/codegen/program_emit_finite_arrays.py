@@ -21,6 +21,7 @@ def finite_cpp_helpers():
 #include <atomic>
 #include <pops/runtime/program/continuation_authority.hpp>
 #include <pops/runtime/program/finite_kokkos.hpp>
+#include <pops/runtime/program/finite_collective_execution.hpp>
 #include <pops/runtime/program/finite_structural_storage.hpp>
 namespace {
 std::atomic<std::uint64_t> pops_finite_kernel_launches{0};
@@ -104,7 +105,7 @@ def _unpacked_cell(signature, token):
 
 def _store_cell(value, destination, lines, prefix):
     lines.append("std::any %s;" % prefix)
-    _allocate("std::any(%s)" % value, prefix, lines)
+    _collective_call("assign_any", (prefix, value), lines)
     lines.append("%s = std::move(%s);" % (destination, prefix))
 
 
@@ -128,15 +129,16 @@ def _allocate(expression, token, lines):
     lines.append("}")
 
 
+def _collective_call(operation, arguments, lines):
+    lines.append("pops::runtime::program::finite_collective::%s(%s, ctx.prepared_execution_lane());"
+                 % (operation, ", ".join(arguments)))
+
+
 def _check_domain(signature, token, lines):
-    from .program_emit_structured_control import _reject_if, _uniform_int
     if signature["ownership"] != "replicated":
         raise NotImplementedError("finite array ownership must be replicated")
-    _reject_if("!(%s) || !(%s)->visible() || (%s)->size < 0 || (%s)->size > %d || (%s)->capacity != %d || (%s)->family != %d"
-               % (token,token,token,token,signature["capacity"],token,signature["capacity"],token,signature["family"]),
-               lines,"invalid finite domain instance")
-    for expression in ("(%s)->size"%token,"(%s)->version"%token):
-        _uniform_int(expression,lines,"replicated finite domain differs across execution ranks")
+    _collective_call("require_domain", (token, str(signature["capacity"]),
+                                      str(signature["family"])), lines)
 
 
 def _emit_array_region(program,value,var,model,lines,prelude,block_idx,field_plans,target):
@@ -155,7 +157,7 @@ def _emit_array_region(program,value,var,model,lines,prelude,block_idx,field_pla
     prefix = "finite_%d"%value.id
     buffer = prefix+"_buffer"
     lines.append("std::shared_ptr<std::vector<std::any>> %s;" % buffer)
-    _allocate("pops_algebra_finite::make_values(std::size_t((%s)->size))" % domain_token,buffer,lines)
+    _collective_call("allocate_values", (buffer, "std::size_t((%s)->size)" % domain_token), lines)
     if scan:
         initial = value.inputs[0]
         state_signature = value_signature(initial)

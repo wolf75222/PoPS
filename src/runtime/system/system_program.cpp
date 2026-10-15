@@ -1563,13 +1563,54 @@ std::vector<std::string> System<Dim>::consume_step_projections() {
 }
 
 template <int Dim>
-void System<Dim>::seed_program_params(int program_block, const std::vector<double>& defaults) {
-  p_->program_.seed_params(program_block, defaults);
+std::uint64_t System<Dim>::runtime_parameter_byte_capacity(std::size_t count) const {
+  const auto required = RuntimeParams::checked_storage_bytes(count);
+  const auto capacity = p_->cfg.runtime_parameter_byte_capacity.value_or(required);
+  if (required > capacity)
+    throw std::length_error("runtime parameter carrier exceeds the bound byte capacity");
+  return capacity;
 }
 
 template <int Dim>
-void System<Dim>::set_program_params(int program_block, const std::vector<double>& values) {
-  p_->program_.set_params(program_block, values, "System");
+void System<Dim>::seed_program_params(int block, const std::vector<double>& values) {
+  const auto& lane = prepared_boundary_execution_lane();
+  std::map<int, RuntimeParams> candidate;
+  std::exception_ptr error;
+  try {
+    candidate = p_->program_.block_params_;
+    if (block < 0)
+      throw std::invalid_argument("runtime parameters require a non-negative Program block");
+    auto carrier = RuntimeParams::from_host(values, runtime_parameter_byte_capacity(values.size()));
+    candidate.insert_or_assign(block, std::move(carrier));
+  } catch (...) {
+    error = std::current_exception();
+  }
+  if (all_reduce_max(error ? 1L : 0L, lane)) {
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
+    throw std::runtime_error("System runtime parameter preparation failed collectively");
+  }
+  p_->program_.block_params_.swap(candidate);
+}
+
+template <int Dim>
+void System<Dim>::set_program_params(int block, const std::vector<double>& values) {
+  const auto& lane = prepared_boundary_execution_lane();
+  std::map<int, RuntimeParams> candidate;
+  std::exception_ptr error;
+  try {
+    candidate = p_->program_.block_params_;
+    auto carrier = p_->program_.prepare_params(block, values, "System");
+    candidate.at(block) = std::move(carrier);
+  } catch (...) {
+    error = std::current_exception();
+  }
+  if (all_reduce_max(error ? 1L : 0L, lane)) {
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
+    throw std::runtime_error("System runtime parameter preparation failed collectively");
+  }
+  p_->program_.block_params_.swap(candidate);
 }
 
 template <int Dim>
@@ -1704,6 +1745,7 @@ template std::map<std::string, Real> System<kNativeDimension>::selected_accepted
 template void System<kNativeDimension>::begin_step_projection_report();
 template void System<kNativeDimension>::note_step_projection(const std::string&);
 template std::vector<std::string> System<kNativeDimension>::consume_step_projections();
+template std::uint64_t System<kNativeDimension>::runtime_parameter_byte_capacity(std::size_t) const;
 template void System<kNativeDimension>::seed_program_params(int, const std::vector<double>&);
 template void System<kNativeDimension>::set_program_params(int, const std::vector<double>&);
 template RuntimeParams System<kNativeDimension>::program_params(int) const;

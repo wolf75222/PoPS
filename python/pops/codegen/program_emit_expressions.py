@@ -105,7 +105,24 @@ def checked_expression_dag(expressions, nodes, inputs):
     return lines, values, " || ".join("!Kokkos::isfinite(%s)" % name for name in names) or "false"
 
 
-def emit_pointwise_kernel(value, variables, output, *, block_index, status):
+def pointwise_scalar_aliases(value):
+    """The exact POD names shared by numerical equations and their affine proof."""
+    return {
+        item.id: ("global_value_%d_%d" if item.op == "integral_candidate"
+                  else "expression_scalar_%d_%d") % (value.id, item.id)
+        for item in value.inputs if item.vtype == "scalar"
+    }
+
+
+def pointwise_scalar_bindings(value, variables):
+    aliases = pointwise_scalar_aliases(value)
+    return [
+        "const pops::Real %s = %s;" % (aliases[item.id], prepared_scalar_input(item, variables))
+        for item in value.inputs if item.vtype == "scalar"
+    ]
+
+
+def emit_pointwise_kernel(value, variables, output, *, block_index, status, scalars_prepared=False):
     from pops.codegen.program_emit_kernels import _kernel_open, _kernel_close
     from pops.time.expressions import component_names
 
@@ -146,14 +163,13 @@ def emit_pointwise_kernel(value, variables, output, *, block_index, status):
     # A scalar binding can project from host-only structural storage (std::any,
     # vector, or an authenticated native capability). Resolve that binding on
     # the host; device closures capture only the resulting primitive value.
-    scalar_captures = {}
-    for item, name in zip(value.inputs, names, strict=True):
-        if item.vtype == "scalar" and item.op != "integral_candidate":
-            scalar_captures[item.id] = ("expression_scalar_%d_%d" % (value.id, item.id), name)
+    scalar_aliases = pointwise_scalar_aliases(value)
+    scalar_captures = {
+        item.id: (scalar_aliases[item.id], prepared_scalar_input(item, variables))
+        for item in value.inputs if item.vtype == "scalar"
+    }
     rows = [
-        ["global_value_%d" % item.id]
-        if item.op == "integral_candidate"
-        else [scalar_captures[item.id][0]]
+        [scalar_captures[item.id][0]]
         if item.vtype == "scalar"
         else ["%sA(index, %d)" % (name, c) for c in range(len(component_names(item)))]
         for item, name in zip(value.inputs, names, strict=True)
@@ -187,23 +203,7 @@ def emit_pointwise_kernel(value, variables, output, *, block_index, status):
             '  throw std::runtime_error("finite materialization requires co-located layouts, distributions and ranks");',
         ]
         body = vote + ["}"] + body
-    captures = [
-        "const pops::Real %s = %s;" % (alias, source) for alias, source in scalar_captures.values()
-    ]
-    for item, name in zip(value.inputs, names, strict=True):
-        if item.op == "integral_candidate":
-            import json
-            from pops.codegen.program_integral_transfers import integral_identity
-
-            captures.append(
-                "const pops::Real global_value_%d = ctx.integral_candidate_value(%s,%s,%s);"
-                % (
-                    item.id,
-                    name,
-                    json.dumps(integral_identity(item.prog, item.attrs["integral"])),
-                    json.dumps(item.attrs["units"]),
-                )
-            )
+    captures = [] if scalars_prepared else pointwise_scalar_bindings(value, variables)
     return references + captures + body + _kernel_close()
 
 

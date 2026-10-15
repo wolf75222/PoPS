@@ -185,10 +185,26 @@ void stage_field_components(int evaluation_id, const std::string& identity,
                             std::initializer_list<ProgramFieldComponent> components) const {
   std::exception_ptr error;
   try {
-    auto& levels = staged_field_publications_[identity];
+    auto& publication = staged_field_publications_[identity];
+    auto& levels = publication.levels;
     if (identity.empty() || levels.size() != static_cast<std::size_t>(active_level_))
       throw std::invalid_argument(
           "hierarchy field publication levels must be staged once in order");
+    for (const auto& component : components) {
+      if (!component.values)
+        throw std::invalid_argument("hierarchy field publication has an empty source");
+      require_program_field_access(*component.values);
+      // A CPS segment may end immediately after staging. Retain the exact producer
+      // storage, not just the raw pointer in the publication descriptor.
+      if (const auto snapshot = hierarchy_field_observation_source(*component.values))
+        publication.retained.push_back(snapshot);
+      else if (const auto authority = continuation_field_storage_authority_(*component.values)) {
+        auto owner = authority->lifetime.lock();
+        if (!owner)
+          throw std::invalid_argument("hierarchy field publication lost its immutable source");
+        publication.retained.push_back(std::move(owner));
+      }
+    }
     levels.push_back(
         {boundary_evaluation_point(evaluation_id), std::vector<ProgramFieldComponent>(components)});
   } catch (...) {
@@ -208,8 +224,8 @@ void publish_staged_field_components() const {
     try {
       ExactContractBuilder contract;
       contract.text("pops.hierarchy.field-publications");
-      for (const auto& [identity, levels] : staged_field_publications_)
-        contract.text(identity).scalar(static_cast<std::uint64_t>(levels.size()));
+      for (const auto& [identity, publication] : staged_field_publications_)
+        contract.text(identity).scalar(static_cast<std::uint64_t>(publication.levels.size()));
       bytes = std::move(contract).release();
     } catch (...) {
       error = std::current_exception();
@@ -222,8 +238,8 @@ void publish_staged_field_components() const {
     if (!all_ranks_agree_exact_ordered_byte_pairs({{"hierarchy-field-publications", bytes}},
                                                   prepared_execution_lane()))
       throw std::invalid_argument("hierarchy field publication identities differ between ranks");
-    for (const auto& [identity, levels] : staged_field_publications_)
-      facade_->publish_program_field_components(identity, levels);
+    for (const auto& [identity, publication] : staged_field_publications_)
+      facade_->publish_program_field_components(identity, publication.levels);
     staged_field_publications_.clear();
   } catch (...) {
     staged_field_publications_.clear();

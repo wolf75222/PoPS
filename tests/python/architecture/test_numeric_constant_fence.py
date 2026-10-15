@@ -214,7 +214,6 @@ _REPORT_VALUE_TO_CONSTANT = {
     ("amr", "max_levels"): "kAmrDefaultMaxLevels",
     ("amr", "refinement_disabled_threshold"): "kAmrRefinementDisabledThreshold",
     ("amr", "phi_refinement_disabled_threshold"): "kAmrPhiRefinementDisabledThreshold",
-    ("runtime", "max_runtime_params"): "kMaxRuntimeParams",
     ("physical", "B0"): "kPhysicalDefaultB0",
     ("physical", "gamma"): "kPhysicalDefaultGamma",
     ("physical", "fluid_state_cs2"): "kPhysicalDefaultFluidStateCs2",
@@ -228,6 +227,12 @@ _REPORT_VALUE_TO_CONSTANT = {
     ("physical", "four_pi_G"): "kPhysicalDefaultFourPiG",
     ("physical", "gravity_rho0"): "kPhysicalDefaultGravityRho0",
 }
+
+
+def test_runtime_parameter_storage_is_dynamic_and_reports_its_budget_scope():
+    report = _load_static_report()
+    assert report["runtime"]["max_runtime_params"] is None
+    assert report["runtime"]["runtime_parameter_budget_scope"] == "immutable_incarnation"
 
 
 def test_static_report_values_match_parsed_constants():

@@ -673,9 +673,49 @@ TEST(AmrHierarchyFieldScratch, IndependentProviderAuthenticatesIssuedObservation
   auto lookalike = std::make_shared<Field>(*retained);
   EXPECT_THROW(context.continuation_preflight_field(*lookalike, component), std::invalid_argument);
 
+  auto replaced = context.own_structural_field(*retained);
+  EXPECT_NO_THROW(context.continuation_preflight_field(*replaced, component));
+  *replaced = Field(*retained);
+  EXPECT_THROW(context.continuation_preflight_field(*replaced, component), std::invalid_argument);
+
   auto gradient = context.allocate_hierarchy_continuation_field_observation(gradient_key, 1 << 20);
+  // The former estimate omitted the second layout, owner/index maps and both
+  // pending/sealed allocation records. That amount must fail before allocation,
+  // including on a rank without a local patch.
+  std::uint64_t incomplete_budget =
+      sizeof(Field) + sizeof(ContinuationFieldSupport) + 2 * gradient_key.size() +
+      gradient->layout().size() * (sizeof(pops::Box<Dim>) + sizeof(std::size_t)) +
+      gradient->local_size() * sizeof(Field::fab_type);
+  for (std::size_t patch = 0; patch < gradient->local_size(); ++patch)
+    incomplete_budget += gradient->fab(patch).size() * sizeof(pops::Real);
+  EXPECT_ANY_THROW(
+      context.allocate_hierarchy_continuation_field_observation(gradient_key, incomplete_budget));
+  auto replaced_fab =
+      context.allocate_hierarchy_continuation_field_observation(gradient_key, 1 << 20);
+  for (std::size_t patch = 0; patch < replaced_fab->local_size(); ++patch) {
+    auto& fab = replaced_fab->fab(patch);
+    const auto box = fab.box();
+    const auto ghosts = fab.ghosts();
+    const auto components = fab.ncomp();
+    const auto allocation = fab.storage();
+    EXPECT_GE(allocation.use_count(), 3);
+    fab = Field::fab_type{};
+    EXPECT_GE(allocation.use_count(), 2);
+    fab = Field::fab_type(box, components, ghosts);
+    EXPECT_NE(fab.storage().data(), allocation.data());
+  }
+  if (replaced_fab->local_size() == 0)
+    *replaced_fab = Field(*replaced_fab);
+  EXPECT_ANY_THROW(context.seal_hierarchy_continuation_field_observation(gradient_key, 944,
+                                                                         replaced_fab, first));
   context.observe_hierarchy_field_gradient(first, *gradient);
   expect_value(*gradient, pops::Real(1));
+  auto replaced_unsealed =
+      context.allocate_hierarchy_continuation_field_observation(gradient_key, 1 << 20);
+  *replaced_unsealed = Field(*gradient);
+  EXPECT_THROW(context.seal_hierarchy_continuation_field_observation(gradient_key, 943,
+                                                                     replaced_unsealed, first),
+               std::exception);
   auto unissued = std::make_shared<Field>(*gradient);
   EXPECT_THROW(
       context.seal_hierarchy_continuation_field_observation(gradient_key, 943, unissued, first),
@@ -704,4 +744,46 @@ TEST(AmrHierarchyFieldScratch, IndependentProviderAuthenticatesIssuedObservation
   EXPECT_THROW(context.own_structural_field(*gradient), std::invalid_argument);
   std::remove(source.c_str());
   std::remove(library.c_str());
+}
+
+TEST(AmrHierarchyFieldScratch, StagedPublicationRetainsExactSnapshotsAfterTheirSegmentsReturn) {
+  auto fixture = prepare_fixture();
+  auto& context = *fixture.context;
+  context.begin_step(0.125);
+  context.begin_staged_field_publications();
+  std::vector<std::weak_ptr<const Context::HierarchyFieldObservationSnapshot>> snapshots;
+  context.for_each_program_resource_level([&](int level) {
+    context.hierarchy_field_solution(701).set_val(pops::Real(31 + level));
+    auto observation = context.capture_hierarchy_field_observation(701, 951, 0, 1 << 20);
+    snapshots.push_back(observation);
+    Context::ProgramFieldComponent component{};
+    component.values = &observation->local_field();
+    component.component = 0;
+    context.stage_field_components(952, "tests.staged-snapshot-retention", {component});
+  });
+  // No shared_ptr from the producing segment remains: only the staged native
+  // transaction may keep these exact leaves alive until publication or abort.
+  for (std::size_t level = 0; level < snapshots.size(); ++level) {
+    auto observed = snapshots[level].lock();
+    ASSERT_NE(observed, nullptr);
+    expect_value(observed->local_field(), pops::Real(31 + level));
+  }
+  context.begin_staged_field_publications();
+  for (const auto& snapshot : snapshots)
+    EXPECT_TRUE(snapshot.expired());
+
+  std::weak_ptr<const Context::HierarchyFieldObservationSnapshot> abandoned;
+  {
+    auto observation = context.capture_hierarchy_field_observation(701, 953, 0, 1 << 20);
+    abandoned = observation;
+    Context::ProgramFieldComponent component{};
+    component.values = &observation->local_field();
+    component.component = 0;
+    context.stage_field_components(954, "tests.staged-snapshot-abort", {component});
+  }
+  ASSERT_FALSE(abandoned.expired());
+  // Repeated level zero is invalid on every rank and must drop every retained leaf.
+  EXPECT_THROW(context.stage_field_components(954, "tests.staged-snapshot-abort", {}),
+               std::invalid_argument);
+  EXPECT_TRUE(abandoned.expired());
 }

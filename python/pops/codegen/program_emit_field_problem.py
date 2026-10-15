@@ -195,8 +195,7 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
         "  if (pops::all_reduce_max(field_layout_invalid, ctx.prepared_execution_lane()) != 0)",
         '    throw std::invalid_argument("field expression inputs require exact layout/distribution identity");',
     ])
-    if original_hierarchy:
-        lines += ["  pops::Real field_value_invalid = 0;", "  ctx.prepare_spatial_collectively([&] {"]
+    lines += ["  pops::Real field_value_invalid = 0;", "  ctx.continuation_local_phase([&] {"]
     lines.extend([
         "  for (std::size_t li = 0; li < %s.local_size(); ++li) {" % destination,
         "    auto output = %s.fab(li).view();" % destination,
@@ -216,10 +215,9 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
         "    });",
         "  }",
     ])
-    if original_hierarchy:
-        lines += ["    field_value_invalid = std::max(pops::Real(0), pops::reduce_max_local(*%s_status));" % token,
-                  "    Kokkos::fence();", "  });"]
-    local_invalid = "field_value_invalid" if original_hierarchy else "pops::reduce_max_local(*%s_status)" % token
+    lines += ["    field_value_invalid = std::max(pops::Real(0), pops::reduce_max_local(*%s_status));" % token,
+              "    Kokkos::fence();", '  }, "field equation kernel");']
+    local_invalid = "field_value_invalid"
     lines.extend([
         "  if (pops::all_reduce_max(%s, ctx.prepared_execution_lane()) > 0)" % local_invalid,
         "    throw pops::runtime::program::StepAttemptRejected("

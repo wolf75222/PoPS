@@ -134,9 +134,10 @@ std::shared_ptr<PreparedAmrSpatialResidual<Dim>> prepare_spatial_hierarchy(
   // Publish the provisional cache node without allocating or copying its prepared resource.
   decltype(spatial_hierarchy_resources_) pending;
   prepare_spatial_collectively([&] {
-    pending.emplace(identity,
-                    SpatialHierarchyResource{epoch, generation, program_block, workspace,
-                                             std::vector<FluxExpression>(workspace->levels())});
+    pending.emplace(identity, SpatialHierarchyResource{
+                                  epoch, generation, program_block, workspace,
+                                  std::vector<FluxExpression>(workspace->levels()),
+                                  std::vector<PreparedResourceAttempt>(workspace->levels())});
   });
   auto node = pending.extract(identity);
   if (found == spatial_hierarchy_resources_.end())

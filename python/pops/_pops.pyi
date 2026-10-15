@@ -26,6 +26,7 @@ __all__ = (
     "__native_loader_contract__",
     "__mpi_contract__",
     "__max_runtime_params__",
+    "runtime_parameter_storage_bytes",
     "abi_key",
     "my_rank",
     "n_ranks",
@@ -59,7 +60,9 @@ __has_mpi__: bool
 __has_parallel_hdf5__: bool
 __native_loader_contract__: dict[str, object]
 __mpi_contract__: dict[str, object] | None
-__max_runtime_params__: int
+__max_runtime_params__: None
+
+def runtime_parameter_storage_bytes(count: int) -> int: ...
 
 class StepAttemptRejected(RuntimeError):
     status: Literal[
@@ -200,6 +203,7 @@ class _SolveReport:
 # Internal bootstrap seam: these data PODs are re-exported from pops.runtime,
 # not from the private native module's supported direct API.
 class SystemConfig:
+    runtime_parameter_byte_capacity: int | None
     shape: tuple[int, ...]
     lower: tuple[float, ...]
     upper: tuple[float, ...]
@@ -209,6 +213,7 @@ class SystemConfig:
     def __init__(self) -> None: ...
 
 class AmrSystemConfig:
+    runtime_parameter_byte_capacity: int | None
     shape: tuple[int, ...]
     lower: tuple[float, ...]
     upper: tuple[float, ...]

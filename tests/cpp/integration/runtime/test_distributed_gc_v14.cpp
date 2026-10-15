@@ -1,6 +1,6 @@
-#include <pops/runtime/program/distributed_array.hpp>
-#include <gtest/gtest.h>
 #include <chrono>
+#include <gtest/gtest.h>
+#include <pops/runtime/program/distributed_array.hpp>
 
 namespace {
 namespace d = pops::runtime::program::distributed;
@@ -23,6 +23,39 @@ AR make(d::Registry& registry, const d::DomainRef& domain, std::int64_t shift = 
                           [&](d::Index i) { return V::variant(1, V::integer(shift + i.gid)); });
   d::phase(registry.lane(), [&] { d::local_require(result.ok(), d::Code::internal); });
   return std::move(result.value);
+}
+
+TEST(DistributedGcV14, StructuralMemoChecksRequestedBytesBeforeAllocation) {
+  struct Upstream final : std::pmr::memory_resource {
+    int allocations = 0;
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+      ++allocations;
+      return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+    void do_deallocate(void* data, std::size_t bytes, std::size_t alignment) override {
+      std::pmr::new_delete_resource()->deallocate(data, bytes, alignment);
+    }
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+      return this == &other;
+    }
+  } upstream;
+  p::continuation_detail::StructuralWorkspaceResource workspace(16, &upstream);
+  EXPECT_THROW((void)workspace.allocate(17), std::length_error);
+  EXPECT_EQ(upstream.allocations, 0);
+  EXPECT_EQ(workspace.used(), 0);
+  auto* data = workspace.allocate(16);
+  EXPECT_EQ(workspace.used(), 16);
+  EXPECT_THROW((void)workspace.allocate(1), std::length_error);
+  EXPECT_EQ(upstream.allocations, 1);
+  EXPECT_EQ(workspace.used(), 16);
+  workspace.deallocate(data, 16);
+  EXPECT_EQ(workspace.used(), 0);
+  {
+    std::pmr::unordered_set<const void*> memo(&workspace);
+    EXPECT_THROW(memo.insert(&upstream), std::length_error);
+    EXPECT_TRUE(memo.empty());
+  }
+  EXPECT_EQ(workspace.used(), 0);
 }
 
 TEST(DistributedGcV14, RepeatedStepsReuseBudgetAndProtectRollbackAndFailure) {
@@ -158,6 +191,9 @@ TEST(DistributedGcV14, CorruptNativeCycleIsRejectedBeforeAnySweep) {
   for (auto gid = domain->begin(); gid < domain->end(); ++gid)
     pending->values.push_back(V::integer(gid));
   auto published = d::publish_array<2>(registry, pending, 4096, nullptr);
+  // A prior successful closure must never cache a verdict into this collection.
+  auto root = V::distributed_array(published);
+  EXPECT_NO_THROW(p::continuation_collective_closure<2>(root, &registry, lane, 65536));
   // Only raw C++ can mutate a published object into a recursive graph. The
   // finite typed frontend cannot construct this; collection still fails closed.
   if (!pending->values.empty())
@@ -170,6 +206,7 @@ TEST(DistributedGcV14, CorruptNativeCycleIsRejectedBeforeAnySweep) {
     pending->values[0] = V::integer(domain->begin());
   pending.reset();
   published.reset();
+  root.reset();
   d::collect_garbage<2>(registry);
   EXPECT_EQ(registry.retained_values(), 0);
 }
@@ -286,7 +323,8 @@ TEST(DistributedGcV14, ScalarProductCensusScalesWithElementsWithoutOwnershipNode
       d::gc_detail::Census<2> census(registry.storage_bytes(), registry.issuer());
       // These are exactly the one Domain and four Arrays published above.
       // This census measures visited edges only; real root discovery/sweep is
-      // exercised below by collect_garbage, with the registry's borrowed handles.
+      // exercised below by collect_garbage, with the registry's borrowed
+      // handles.
       census.register_domain(domain->identity().ordinal, domain);
       for (const auto& array : retained)
         census.register_array(array->version.ordinal, array, d::array_type_tag<2>());
@@ -334,6 +372,103 @@ TEST(DistributedGcV14, ScalarProofIsClosedOverActualValuesAndKeepsOpaqueKinds) {
   EXPECT_FALSE(V::index(domain, 0)->is_scalar_structure());
   EXPECT_FALSE(V::array(domain, {scalar})->is_scalar_structure());
   EXPECT_FALSE(V::product({scalar, V::index(domain, 0)})->is_scalar_structure());
+}
+
+TEST(DistributedGcV14, LeafTraversalPreservesCallbacksWithoutFrameStorage) {
+  const int leaf = 7;
+  std::size_t entered = 0, exited = 0, counted = 0;
+  p::continuation_detail::StructuralBudget one_node(1);
+  p::continuation_detail::walk_structure(
+      &leaf,
+      [&](const int&) {
+        ++counted;
+        return std::size_t(0);
+      },
+      [](const int&, std::size_t) -> const int* { throw std::logic_error("leaf child"); },
+      [&](const int&) {
+        ++entered;
+        return true;
+      },
+      [&](const int&) { ++exited; }, one_node);
+  EXPECT_EQ(entered, 1u);
+  EXPECT_EQ(exited, 1u);
+  EXPECT_EQ(counted, 1u);
+  p::continuation_detail::StructuralBudget no_work(0);
+  EXPECT_THROW(p::continuation_detail::walk_structure(
+                   &leaf, [](const int&) { return std::size_t(0); },
+                   [](const int&, std::size_t) { return static_cast<const int*>(nullptr); },
+                   [](const int&) { return true; }, [](const int&) {}, no_work),
+               std::length_error);
+}
+
+TEST(DistributedGcV14, SharedIndexDagFitsUniqueEdgeBudgetAndRechecksRevocation) {
+  auto lane = pops::ExecutionLane::world();
+  d::Registry registry(lane);
+  registry.configure(65536, 8);
+  auto domain = registry.issue(948, 4, offsets(lane));
+  auto index = V::distributed_index(domain, 3);
+  auto row = V::product(std::vector<Ref>(256, index));
+  auto root = V::product(std::vector<Ref>(256, row));
+  // 513 unique pointer edges fit; expanding the repeated Product takes 65793
+  // visits and fails this unchanged 4096-unit traversal budget.
+  const auto closure = p::continuation_collective_closure<2>(root, &registry, lane, 4096);
+  ASSERT_EQ(closure->domains.size(), 1u);
+  EXPECT_EQ(closure->domains[0], domain);
+  EXPECT_TRUE(closure->arrays.empty());
+  registry.revoke();
+  EXPECT_THROW(p::continuation_collective_closure<2>(root, &registry, lane, 4096), d::Failure);
+}
+
+TEST(DistributedGcV14, RequestsKeepIndexOwnershipAndRemoteRootsWithoutLeafFrames) {
+  auto lane = pops::ExecutionLane::world();
+  constexpr std::uint64_t storage = 64 * 1024 * 1024;
+  constexpr int versions = 4;
+  for (const std::int64_t count : {4096, 8192}) {
+    d::Registry registry(lane);
+    registry.configure(storage, versions + 1);
+    auto domain = registry.issue_balanced(949, count, count);
+    std::vector<d::Requests> retained;
+    for (int version = 0; version < versions; ++version) {
+      auto requests = d::requests(registry, domain, domain, [&](d::Index index) {
+        return d::index(domain, (index.gid + version) % count);
+      });
+      d::publish_requests<2>(registry, requests, storage, nullptr);
+      retained.push_back(std::move(requests));
+    }
+    d::phase(lane, [&] {
+      d::gc_detail::Census<2> census(storage, registry.issuer());
+      census.register_domain(domain->identity().ordinal, domain);
+      for (const auto& requests : retained) {
+        const auto array = d::requests_array<2>(requests);
+        census.register_array(array->version.ordinal, array, d::array_type_tag<2>());
+      }
+      census.complete();
+      const auto expected = static_cast<std::uint64_t>(domain->local_size()) * versions;
+      EXPECT_EQ(census.inspected_array_values(), expected);
+      EXPECT_EQ(census.scalar_values(), 0u);
+      EXPECT_EQ(census.ownership_value_nodes(), expected);
+    });
+    const auto bytes = registry.retained_bytes();
+    const auto begin = std::chrono::steady_clock::now();
+    for (int repeat = 0; repeat < 4; ++repeat)
+      d::collect_garbage<2>(registry);
+    RecordProperty(
+        "requests_gc_seconds_n" + std::to_string(count),
+        std::to_string(
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count()));
+    EXPECT_EQ(registry.retained_values(), versions);
+    EXPECT_EQ(registry.retained_bytes(), bytes);
+    if (lane.rank() != 0)
+      retained.clear();
+    d::collect_garbage<2>(registry);
+    EXPECT_EQ(registry.retained_values(), versions);
+    retained.clear();
+    d::collect_garbage<2>(registry);
+    EXPECT_EQ(registry.retained_values(), 0u);
+    domain.reset();
+    d::collect_garbage<2>(registry);
+    EXPECT_EQ(registry.retained_bytes(), 0u);
+  }
 }
 
 }  // namespace

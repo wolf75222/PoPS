@@ -1519,3 +1519,80 @@ TEST(ContinuationImage, IndependentFieldStructuralPreflightPrecedesCopyPublicati
   EXPECT_EQ(copies, 2);
   EXPECT_TRUE(std::any_cast<std::shared_ptr<MultiFab<D>>>(accepted));
 }
+
+#include <pops/runtime/program/finite_collective_execution.hpp>
+
+namespace {
+namespace finite_protocol_v16 = pops::runtime::program::finite_collective;
+
+TEST(FiniteCollectiveExecution, DomainChecksRetainCapacityFamilyRevocationAndReplication) {
+  using namespace pops::runtime::program;
+  auto lane = pops::ExecutionLane::world();
+  FiniteDomainRegistry registry;
+  auto domain = registry.issue(3, 5, 7);
+  EXPECT_NO_THROW(finite_protocol_v16::require_domain(domain, 5, 7, lane));
+  EXPECT_THROW(finite_protocol_v16::require_domain(domain, 4, 7, lane), StepAttemptRejected);
+  EXPECT_THROW(finite_protocol_v16::require_domain(domain, 5, 8, lane), StepAttemptRejected);
+  FiniteDomainRef absent = lane.rank() == 0 ? FiniteDomainRef{} : domain;
+  EXPECT_THROW(finite_protocol_v16::require_domain(absent, 5, 7, lane), StepAttemptRejected);
+  if (lane.size() > 1) {
+    auto divergent = registry.issue(lane.rank() == 0 ? 2 : 3, 5, 7);
+    EXPECT_THROW(finite_protocol_v16::require_domain(divergent, 5, 7, lane), StepAttemptRejected);
+  }
+  if (lane.rank() == 0)
+    registry.revoke_on_restart();
+  EXPECT_THROW(finite_protocol_v16::require_domain(domain, 5, 7, lane), StepAttemptRejected);
+}
+
+TEST(FiniteCollectiveExecution, TypedAllocationsAndMirrorCopiesPreserveActualValues) {
+  static Kokkos::ScopeGuard kokkos;
+  using namespace pops::runtime::program;
+  auto lane = pops::ExecutionLane::world();
+  finite_kokkos::View<pops::Real> device;
+  finite_protocol_v16::allocate_view(device, 7, "finite_protocol_values", lane);
+  decltype(device)::host_mirror_type host;
+  finite_protocol_v16::mirror(host, device, lane);
+  for (int i = 0; i < 7; ++i)
+    host(i) = 2 * i - 3;
+  Kokkos::deep_copy(device, host);
+  finite_protocol_v16::mirror_copy(host, device, lane);
+  std::shared_ptr<std::vector<std::any>> values;
+  finite_protocol_v16::allocate_values(values, 7, lane);
+  for (int i = 0; i < 7; ++i) {
+    std::any pending;
+    finite_protocol_v16::assign_any(pending, host(i), lane);
+    (*values)[i] = std::move(pending);
+    EXPECT_EQ(std::any_cast<pops::Real>((*values)[i]), 2 * i - 3);
+  }
+  EXPECT_THROW(
+      finite_protocol_v16::allocate_view(device, lane.rank() == 0 ? -1 : 1, "invalid_count", lane),
+      StepAttemptRejected);
+}
+
+TEST(FiniteCollectiveExecution, AllocationFailuresConvergeWithoutChangingTheirClassification) {
+  using namespace pops::runtime::program;
+  auto lane = pops::ExecutionLane::world();
+  EXPECT_THROW(finite_protocol_v16::allocation_phase(
+                   [&] {
+                     if (lane.rank() == 0)
+                       throw std::bad_alloc();
+                   },
+                   lane),
+               StepAttemptRejected);
+  EXPECT_THROW(finite_protocol_v16::allocation_phase(
+                   [&] {
+                     if (lane.rank() == 0)
+                       throw std::length_error("capacity");
+                   },
+                   lane),
+               StepAttemptRejected);
+  EXPECT_THROW(finite_protocol_v16::allocation_phase(
+                   [&] {
+                     if (lane.rank() == 0)
+                       throw std::runtime_error("other allocation failure");
+                   },
+                   lane),
+               std::runtime_error);
+  EXPECT_NO_THROW(finite_protocol_v16::allocation_phase([] {}, lane));
+}
+}  // namespace

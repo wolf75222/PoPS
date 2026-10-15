@@ -7,18 +7,18 @@ struct ContinuationFieldStorageAuthority {
   int runtime_owner, level;
   std::uint64_t epoch, generation;
   ContinuationFieldSupport::Ref support;
-  std::vector<const void*> allocations;
+  ContinuationFieldAllocations allocations;
   bool revoked = false;
   std::optional<PreparedResourceAttempt> producer_attempt;
   FieldRepresentationObligation::Ref representation;
 };
 mutable std::map<const field_type*, ContinuationFieldStorageAuthority> continuation_field_storage_;
 
-std::vector<const void*> continuation_field_allocations_(const field_type& field) const {
-  std::vector<const void*> result;
-  result.reserve(field.local_size());
+ContinuationFieldAllocations continuation_field_allocations_(const field_type& field) const {
+  ContinuationFieldAllocations result{field.storage_identity(), {}};
+  result.local.reserve(field.local_size());
   for (std::size_t local = 0; local < field.local_size(); ++local)
-    result.push_back(field.fab(local).storage().data());
+    result.local.push_back(field.fab(local).storage());
   return result;
 }
 
@@ -31,11 +31,8 @@ std::optional<ContinuationFieldStorageAuthority> continuation_field_storage_auth
     } else {
       const auto& authority = found->second;
 
-      if (authority.allocations.size() != field.local_size())
-        throw std::invalid_argument("Continuation Field storage replaced its exact allocation set");
-      for (std::size_t local = 0; local < field.local_size(); ++local)
-        if (authority.allocations[local] != field.fab(local).storage().data())
-          throw std::invalid_argument("Continuation Field storage allocation was reincarnated");
+      if (!authority.allocations.matches(field))
+        throw std::invalid_argument("Continuation Field storage allocation was reincarnated");
       // A successfully retained immutable Store may now own this exact leaf.
       // Only that fallback can survive expiration of its producing attempt.
       if (!authority.revoked &&

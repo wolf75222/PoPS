@@ -81,7 +81,7 @@ def params_utilization(params: Any) -> Any:
 
     limit = max_runtime_params()
     count = sum(1 for row in params.values() if row.get("kind") == "runtime")
-    status = "ok" if count < limit else ("at_limit" if count == limit else "exceeded")
+    status = "dynamic" if limit is None else ("ok" if count < limit else ("at_limit" if count == limit else "exceeded"))
     return {"count": count, "limit": limit, "status": status}
 
 

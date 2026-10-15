@@ -67,10 +67,8 @@ inline void verify_runtime_params(pops::dynlib::handle handle, const std::vector
                                                                 "pops_compiled_nparams");
   const char* raw_names = pops::dynlib::invoke_with_host_exception([names] { return names(); },
                                                                    "pops_compiled_param_names");
-  if (expected < 0 || expected > kMaxRuntimeParams)
-    throw std::runtime_error(
-        std::string(context) + ": artifact declares " + std::to_string(expected) +
-        " runtime parameters; supported range is 0.." + std::to_string(kMaxRuntimeParams));
+  if (expected < 0)
+    throw std::runtime_error(std::string(context) + ": runtime parameter count is negative");
   if (raw_names == nullptr || csv_field_count(raw_names) != expected)
     throw std::runtime_error(std::string(context) +
                              ": compiled parameter names disagree with nparams");
@@ -168,6 +166,7 @@ void register_native_package(System<Dim>* system, const std::string& name,
                              ": incompatible System native package protocol");
   const std::string manifest = verify_block_route_manifest(handle, context);
   verify_runtime_params(handle, params, context);
+  system->runtime_parameter_byte_capacity(params.size());
   auto model_identity = reinterpret_cast<const char* (*)()>(
       pops::dynlib::sym(handle, "pops_compiled_model_identity"));
   if (model_identity == nullptr)
@@ -215,9 +214,9 @@ void register_native_package(System<Dim>* system, const std::string& name,
     capability->close_routes();
   };
 
-  using install_fn = void (*)(void*, const char*, const char*, const char*, const char*,
-                              const char*, double, int, int, int, const double*, int, double, int,
-                              double, double, double, double, int);
+  using install_fn =
+      void (*)(void*, const char*, const char*, const char*, const char*, const char*, double, int,
+               int, int, const double*, int, double, int, double, double, double, double, int);
   auto install = reinterpret_cast<install_fn>(pops::dynlib::sym(handle, "pops_install_native"));
   if (install == nullptr) {
     throw std::runtime_error(std::string(context) +

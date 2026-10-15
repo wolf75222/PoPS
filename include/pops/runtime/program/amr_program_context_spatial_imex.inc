@@ -8,13 +8,28 @@ struct SpatialConsumedFlux {
 // wrappers. Therefore its previous-stage affine weights are already final here.
 void stage_spatial_hierarchy_previous(int identity, int program_block, const field_type& previous,
                                       const field_type* seed) const {
+  SpatialHierarchyResource* staged = nullptr;
+  PreparedResourceAttempt attempt;
+  const auto level = active_level_;
   prepare_spatial_collectively([&] {
     auto& resource = spatial_hierarchy_resources_.at(identity);
-    if (resource.block != program_block)
-      throw std::logic_error("composite implicit previous stage changed its block owner");
-    resource.workspace->stage(active_level_, previous, seed);
-    resource.previous_flux.at(active_level_) = active_flux_expression_(previous);
+    resource.previous_attempts.at(level) = {};
+    if (resource.block != program_block || resource.epoch != runtime_->topology_epoch() ||
+        resource.generation != runtime_->materialization_generation())
+      throw std::logic_error("composite implicit previous stage changed its owner or topology");
+    attempt = resource_attempt();
+    if (!attempt.visible() || active_attempt_states_.empty() ||
+        scratch_prototype_owner_(previous) != sys_block(program_block) ||
+        (seed && scratch_prototype_owner_(*seed) != sys_block(program_block)))
+      throw std::invalid_argument("composite implicit previous stage lacks exact source authority");
+    auto flux = active_flux_expression_(previous);
+    resource.workspace->stage(level, previous, seed);
+    resource.previous_flux.at(level) = std::move(flux);
+    staged = &resource;
   });
+  // A failed copy or rank-local preflight cannot publish a readable previous
+  // snapshot.
+  staged->previous_attempts[level] = std::move(attempt);
 }
 
 // Derive each interface's expected temporal measure from the immutable affine

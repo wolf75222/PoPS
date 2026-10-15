@@ -1,10 +1,11 @@
 #pragma once
-#include <set>
 #include <pops/runtime/program/continuation_image.hpp>
+#include <set>
 
 namespace pops::runtime::program {
-// Collective graph closure before rank-local codecs. This retains every rank's shard of
-// every reachable immutable Array, including a reference occurring on only one rank.
+// Collective graph closure before rank-local codecs. This retains every rank's
+// shard of every reachable immutable Array, including a reference occurring on
+// only one rank.
 template <int Dim>
 std::shared_ptr<const ContinuationClosure<Dim>> continuation_collective_closure(
     const ContinuationValueRef<Dim>& root, distributed::Registry* registry,
@@ -18,6 +19,17 @@ std::shared_ptr<const ContinuationClosure<Dim>> continuation_collective_closure(
   auto identity = [](const Key& k) { return distributed::Identity{{k[0], k[1]}, k[2]}; };
   std::map<Key, distributed::DomainRef> domains;
   std::map<Key, A> arrays;
+  // Per-closure completed structural DAG nodes only. Their immutable child
+  // lists are retained by root or authenticated published Arrays throughout
+  // this quiescent traversal. Temporary distributed-array wrappers are never
+  // cached, and no cache survives into a subsequent collection.
+  continuation_detail::StructuralWorkspaceResource memo_workspace(capacity);
+  std::pmr::unordered_set<const ContinuationValue<Dim>*> completed(&memo_workspace);
+  const auto memoizable = [](const ContinuationValue<Dim>& node) {
+    const auto kind = node.kind();
+    return kind == ContinuationKind::Product || kind == ContinuationKind::Variant ||
+           kind == ContinuationKind::Array;
+  };
   using Issuer = std::array<std::uint64_t, 2>;
   std::map<Issuer, distributed::Registry*> authorities;
   std::map<Issuer, std::shared_ptr<distributed::Registry>> owners;
@@ -52,13 +64,16 @@ std::shared_ptr<const ContinuationClosure<Dim>> continuation_collective_closure(
           // therefore still exposes its actual distributed edges and cycles.
           if (node.is_scalar_structure())
             return false;
+          if (memoizable(node) && completed.contains(&node))
+            return false;
           if (const auto& d = node.distributed_domain_ref()) {
             // A registry-local GC census treats other issuers as external
-            // ownership edges. Full checkpoint/transport closure never uses this mode.
+            // ownership edges. Full checkpoint/transport closure never uses
+            // this mode.
             if (registry_local_gc && registry && d->identity().issuer != registry->issuer())
               return false;
             resolve(d->identity()).authenticate(d);
-            domains.emplace(key(d->identity()), d);
+            domains.try_emplace(key(d->identity()), d);
           }
           if (const auto& a = node.distributed_array_ref()) {
             if (active_arrays.contains(a.get()))
@@ -70,7 +85,7 @@ std::shared_ptr<const ContinuationClosure<Dim>> continuation_collective_closure(
             if (a->index_domain && (!registry_local_gc || !registry ||
                                     a->index_domain->identity().issuer == registry->issuer())) {
               resolve(a->index_domain->identity()).authenticate(a->index_domain);
-              domains.emplace(key(a->index_domain->identity()), a->index_domain);
+              domains.try_emplace(key(a->index_domain->identity()), a->index_domain);
             }
             if (!arrays.emplace(key(a->version), a).second)
               return false;
@@ -81,6 +96,9 @@ std::shared_ptr<const ContinuationClosure<Dim>> continuation_collective_closure(
         [&](const ContinuationValue<Dim>& node) {
           if (const auto& array = node.distributed_array_ref())
             active_arrays.erase(array.get());
+          if (!node.is_scalar_structure() && memoizable(node) && !completed.contains(&node)) {
+            completed.insert(&node);
+          }
         });
   };
   distributed::phase(lane, [&] { collect(root); });

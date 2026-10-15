@@ -153,3 +153,37 @@ TEST(test_multifab, communication_is_explicitly_unavailable_and_fails_closed) {
               std::string::npos);
   }
 }
+
+TEST(test_multifab, empty_rank_storage_identity_survives_values_but_not_replacement) {
+  using Field = MultiFab<2, Kokkos::HostSpace>;
+  const auto layout =
+      BoxArray<2>::from_domain(Box<2>{Index<2>{0, 0}, Index<2>{3, 3}}, Extent<2>{4, 4});
+  const RankSpace<2> ranks{Index<2>{0, 0}, Extent<2>{2, 1}};
+  const auto distribution = Distribution<2>::partitioned(layout, ranks, {Index<2>{0, 0}});
+  Field empty(layout, distribution, Index<2>{1, 0}, 1, Extent<2>{1, 1});
+  ASSERT_EQ(empty.local_size(), 0U);
+  EXPECT_EQ(empty.local_global_indices().capacity(), 0U);
+  EXPECT_EQ(distribution.local_box_indices(Index<2>{1, 0}).capacity(), 0U);
+  const auto issued = empty.storage_identity();
+  ASSERT_TRUE(issued);
+  empty.set_val(7);
+  EXPECT_EQ(empty.storage_identity(), issued);
+  Field copied(empty);
+  EXPECT_NE(copied.storage_identity(), issued);
+  const auto copy_identity = copied.storage_identity();
+  Field moved(std::move(copied));
+  EXPECT_EQ(moved.storage_identity(), copy_identity);
+  EXPECT_FALSE(copied.storage_identity());
+  empty = moved;
+  EXPECT_NE(empty.storage_identity(), issued);
+  EXPECT_NE(empty.storage_identity(), moved.storage_identity());
+  empty = std::move(moved);
+  EXPECT_EQ(empty.storage_identity(), copy_identity);
+  EXPECT_FALSE(moved.storage_identity());
+  EXPECT_NE(empty.storage_identity(), issued);
+  Field default_field;
+  ASSERT_TRUE(default_field.storage_identity());
+  EXPECT_NE(default_field.storage_identity(), issued);
+  static_assert(std::is_nothrow_move_constructible_v<Field>);
+  static_assert(std::is_nothrow_move_assignable_v<Field>);
+}

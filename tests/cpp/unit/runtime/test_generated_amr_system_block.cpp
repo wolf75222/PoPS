@@ -4538,3 +4538,30 @@ TEST(GeneratedAmrSystemBlock, FluxHistoryWideWeightsRetainCanonicalBytes) {
     EXPECT_EQ(Access::serialize_flux_registry(*context), bytes);
   }
 }
+
+TEST(GeneratedAmrSystemBlock, RuntimeParameterStorageBudgetAndReplacementAreCollective) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 4;
+  config.runtime_parameter_byte_capacity = pops::RuntimeParams::checked_storage_bytes(65);
+  pops::AmrSystem<Dim> system(config);
+  const auto lane = install_amr_authority_with_lane(system, "tests.amr-runtime-params-65");
+  EXPECT_EQ(system.runtime_parameter_byte_capacity(65), *config.runtime_parameter_byte_capacity);
+  system.seed_program_params(0, std::vector<double>(65, 2.0));
+  const auto previous = system.program_params(0);
+  system.set_program_params(0, std::vector<double>(65, 7.0));
+  expect_collective_exception<std::runtime_error>(
+      *lane,
+      [&] { system.set_program_params(0, std::vector<double>(lane->rank() == 0 ? 64 : 65, 8.0)); },
+      "AMR runtime parameter preparation");
+  for (int i = 0; i < 65; ++i) {
+    EXPECT_EQ(previous.get(i), pops::Real(2));
+    EXPECT_EQ(system.program_params(0).get(i), pops::Real(7));
+  }
+  expect_collective_exception<std::length_error>(
+      *lane,
+      [&] { system.seed_program_params(1, std::vector<double>(lane->rank() == 0 ? 66 : 65, 9.0)); },
+      "AMR runtime parameter preparation");
+  EXPECT_EQ(system.program_params(1).count, 0);
+}

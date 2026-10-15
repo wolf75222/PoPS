@@ -74,6 +74,43 @@ the third. Jobs 747939 and 747940 exit124. Instrumented stacks still identify
 distributed continuation collection. These partial diagnostic runs establish
 neither final-source GPU qualification nor a scaling improvement.
 
+## Source016 checkpoint
+
+The official source016d Dim2/MPI build passes in 290.77 seconds with unchanged
+source inputs and authenticated installed module/SDK identities. Earlier attempts
+fail packaging or a missing AMR method definition; their receipts remain failed.
+The source016d nonsymmetric global Schur receiver executes in 208.59 seconds and
+passes its unchanged complete-state and original-system oracle. The 25 device
+kernels retain the same definitions; the compiler change factors generic host
+allocation protocols and bounds host inlining. This local duration is not a
+controlled speedup comparison with the earlier GitHub timeout.
+
+Twenty-six selected C++ cases pass on MPI1/2/3 (156 rank observations), including
+owned dynamic parameter carriers, collective AMR replacement, empty-rank storage
+incarnations, retained observations and distributed collection. The overall C++
+campaign fails three fixture groups and remains recorded as failed. Separate
+replays against the unchanged source016d native core pass four cases after
+fixing their Product schema and Kokkos initialization (24 rank observations),
+then the package-cardinality case after initializing MPI before constructing
+System (six rank observations). No native rejection or numerical assertion is
+relaxed by these fixture repairs.
+
+Both Python-authored AMR input-field receivers pass, including value refresh,
+checkpoint/restart and rejected-attempt rollback. The 33/65/129-parameter cases
+fail because bind classifies their byte budget as a competing execution context;
+the adapter correction has 20 source tests but awaits new installed reception.
+Both independent Uniform Field receivers execute their first step and then fail
+checkpoint serialization because the exact provider prototype is not supplied.
+That composition is still open. Final-source reception, the remaining histories
+and representation compositions, ROMEO performance, and GitHub CI remain open.
+
+CI setup now installs the same MPI packages and recommendation policy in the
+SDK producer and its consumers. Exact header authentication remains enabled.
+The source registration review passes 165 cases and finds one stale duration
+mirror; that metadata correction passes the unchanged failing assertion in a
+separate replay. The 125 Python groups cover all 1166 selected files exactly
+once, with unchanged watchdogs. These source checks are not GitHub results.
+
 ## Contract of the language
 
 The fixed engine understands values, regions, supports, ownership, effects,

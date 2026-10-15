@@ -39,7 +39,13 @@ _PURE = frozenset({"provenance_bind",
     "finite_range_set", "finite_size", "finite_domain", "finite_same_domain", "finite_index", "finite_index_value",
     "finite_index_argument", "finite_at", "finite_map", "finite_scan",
 })
-_COLLECTIVE = frozenset({"reduce", "stencil_flux_divergence", "acceptance_guard"})
+# Native field algebra allocates invocation-owned temporaries, converges kernel
+# failures before collectives, and exposes consumed solver status. Its ordinary
+# source/provider/linear-operator validators still authenticate every operand.
+_NATIVE_FIELD_ALGEBRA = frozenset({"field_problem_load", "field_problem_coefficients",
+    "matrix_free_operator", "apply_in", "apply_out", "field_problem_apply", "solve_linear",
+    "solve_outcome", "solve_outcome_component", "field_gradient"})
+_COLLECTIVE = frozenset({"reduce", "stencil_flux_divergence", "acceptance_guard"}) | _NATIVE_FIELD_ALGEBRA
 _RENDEZVOUS = frozenset({"scalar_op", "scalar_expression", "finite_real", "int64_op", "int64_cast", "branch",
                         "structured_fold", "structured_iterate", "iteration_success",
                         "result_success", "variant_require_success", "variant_is", "result_match"})
@@ -53,7 +59,7 @@ _PURE = _PURE | _SCOPED_CAPABILITIES
 _PURE = _PURE | _LOCAL
 _COLLECTIVE = _COLLECTIVE | _DISTRIBUTED
 _PARTIAL = _PARTIAL | _SCOPED_CAPABILITIES
-_PARTIAL = _PARTIAL | _DISTRIBUTED
+_PARTIAL = _PARTIAL | _DISTRIBUTED | _NATIVE_FIELD_ALGEBRA
 _RENDEZVOUS = _RENDEZVOUS | _SCOPED_CAPABILITIES
 _SCALARS = frozenset({"scalar", "int64", "bool"})
 

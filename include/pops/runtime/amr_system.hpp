@@ -177,6 +177,8 @@ template <int Dim>
 struct AmrSystemConfig : RuntimeSpatialDomain<Dim> {
   static_assert(Dim >= 1 && Dim <= 3, "AmrSystemConfig only supports dimensions 1, 2, and 3");
 
+  std::optional<std::uint64_t> runtime_parameter_byte_capacity;
+
   AmrSystemConfig() { this->shape = runtime_config_detail::filled_extent<Dim>(128); }
 
   int regrid_every = 20;  ///< re-refinement every N steps (0 = never after init)
@@ -1339,6 +1341,9 @@ class AmrSystem {
   /// Block @p prog_block's CURRENT RuntimeParams (a device-clean by-value copy). An UNSEEDED block
   /// returns a default-constructed RuntimeParams (count 0). Read by the AmrProgramContext.
   POPS_EXPORT RuntimeParams program_params(int prog_block) const;
+  /// Return the configured per-incarnation storage capacity, after checking that
+  /// the exact authenticated cardinality fits; nullopt selects its exact charge.
+  POPS_EXPORT std::uint64_t runtime_parameter_byte_capacity(std::size_t count) const;
   /// Seed block @p prog_block's RuntimeParams to its DECLARATION defaults (@p count values, the .so
   /// pops_program_param_default metadata). Called by install_program once per runtime-param Program
   /// block; a later set_program_params overwrites only the supplied values. Idempotent.
