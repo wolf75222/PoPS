@@ -173,6 +173,8 @@ SolveOutcome solve_hierarchy_field(std::int64_t key, Real relative, Real absolut
       HierarchyTensorSolveControls{relative, absolute, maximum}, prepared_execution_lane());
 }
 
+#include <pops/runtime/program/amr_program_context_field_observation.inc>
+
 using ProgramFieldComponent = typename facade_type::ProgramFieldComponent;
 using ProgramFieldLevel = typename facade_type::ProgramFieldLevel;
 
@@ -231,6 +233,11 @@ void publish_staged_field_components() const {
 
 void observe_hierarchy_field_gradient(std::int64_t key, field_type& output, int component) const {
   const auto& input = configured_hierarchy_field_solver_(key).solution(active_level_);
+  observe_hierarchy_field_gradient_(input, output, component);
+}
+
+void observe_hierarchy_field_gradient_(const field_type& input, field_type& output,
+                                       int component) const {
   long invalid = component < 0 || component >= input.ncomp() || output.ncomp() != Dim ||
                  output.layout() != input.layout() ||
                  output.distribution() != input.distribution() ||

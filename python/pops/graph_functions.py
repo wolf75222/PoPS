@@ -28,7 +28,7 @@ _BLOCKS = ("body_block", "cond_block", "true_block", "false_block")
 # This is a language-effect profile, not a list of physical models. In particular, creation of
 # state/history resources, publication and implicit reads of an ambient timestep are not calls.
 _PURE = frozenset({"provenance_bind",
-    "product", "product_get", "scalar_op", "scalar_expression", "compare", "bool_constant", "int64_constant",
+    "product", "product_get", "scalar_op", "scalar_expression", "compare", "bool_constant", "bool_op", "int64_constant",
     "int64_op", "int64_cast", "int64_compare", "finite_real", "scalar_isfinite",
     "region_argument", "region_index", "linear_combine",
     "pointwise_expression", "field_component", "vector_field", "cell_compare", "where",
@@ -428,6 +428,9 @@ def _validate_operation(op, inputs, attrs, signature):
     elif op in ('int64_op', 'int64_compare'):
         expect(len(inputs) == 2 and all(v.vtype == 'int64' for v in inputs)
                and signature['vtype'] == ('bool' if op == 'int64_compare' else 'int64'))
+    elif op == 'bool_op':
+        from pops.time._program.structured_control import validate_boolean_operation
+        validate_boolean_operation(inputs, attrs, signature)
     elif op in ('bool_constant', 'int64_constant'):
         kind = bool if op == 'bool_constant' else int
         expect(not inputs and type(attrs.get('value')) is kind

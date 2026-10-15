@@ -21,6 +21,17 @@ std::vector<AmrProgramContinuationLevel> rematerialize_continuation_forest(
   using Codec = ContinuationCodec<Dim>;
   using Ref = ContinuationValueRef<Dim>;
   using Archive = ContinuationFieldArchive<Dim>;
+  auto source_supports =
+      [source_owners, source_modes](
+          const ContinuationFieldSupport::Ref& support) -> typename Archive::SourceTopology {
+    support->validate();
+    const auto level = static_cast<std::size_t>(support->producer_level);
+    if (level >= source_owners.size() || level >= source_modes.size())
+      throw std::invalid_argument("continuation Field producer level is absent from source forest");
+    if (source_modes[level] != "replicated" && source_modes[level] != "partitioned")
+      throw std::invalid_argument("continuation Field producer distribution is unknown");
+    return {source_owners[level], source_modes[level] == "replicated"};
+  };
   using Image = typename Codec::ArchiveImage;
   using Plan = ContinuationDistributedMigration<Dim>;
   struct Source {
@@ -82,14 +93,17 @@ std::vector<AmrProgramContinuationLevel> rematerialize_continuation_forest(
         auto& source = sources.back();
         source.fields = std::make_unique<Archive>(targets(level), owners, replicated,
                                                   static_cast<int>(ranked.size()),
-                                                  static_cast<int>(rank), budget);
+                                                  static_cast<int>(rank), budget, source_supports);
         auto* archive = source.fields.get();
         source.codec = std::make_unique<Codec>(
             configuration.type, configuration.identity, configuration.byte_capacity,
-            [archive](int owner) -> const MultiFab<Dim>& { return archive->prototype(owner); },
+            [archive](int owner, const ContinuationFieldSupport::Ref& support)
+                -> const MultiFab<Dim>& { return archive->prototype(owner, support); },
             nullptr, nullptr, nullptr, &authorities,
-            [archive](const ContinuationType& type, std::span<const std::uint8_t> bytes)
-                -> const MultiFab<Dim>& { return archive->resolve(type, bytes); });
+            [archive](const ContinuationType& type, std::span<const std::uint8_t> bytes,
+                      const ContinuationFieldSupport::Ref& support) -> const MultiFab<Dim>& {
+              return archive->resolve(type, bytes, support);
+            });
         source.image = source.codec->decode_archive(
             record.image, static_cast<int>(rank), static_cast<int>(ranked.size()),
             [&](std::uint64_t bytes) { budget.charge(bytes); });

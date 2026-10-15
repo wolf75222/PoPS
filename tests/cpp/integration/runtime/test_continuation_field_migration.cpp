@@ -72,11 +72,15 @@ R migration_root(const MultiFab<D>& field, FiniteDomainRef domain) {
 
 std::vector<std::vector<std::uint8_t>> migrate_images(
     const std::vector<std::vector<std::uint8_t>>& images, int target_ranks,
-    std::uint64_t workspace = 1ULL << 26, bool corrupt_owner = false, int components = 1) {
+    std::uint64_t workspace = 1ULL << 26, bool corrupt_owner = false, int components = 1,
+    ContinuationFieldSupport::Ref expected_support = {}) {
   std::vector<std::vector<std::uint8_t>> result;
   for (int rank = 0; rank < target_ranks; ++rank) {
     auto target = migration_field(target_ranks, rank);
-    Codec::Prototypes target_fields = [&](int owner) -> const MultiFab<D>& {
+    Codec::Prototypes target_fields =
+        [&](int owner, const ContinuationFieldSupport::Ref& support) -> const MultiFab<D>& {
+      if (bool(support) != bool(expected_support) || (support && *support != *expected_support))
+        throw std::invalid_argument("foreign producer support");
       if (owner != 0)
         throw std::invalid_argument("foreign owner");
       return target;
@@ -90,15 +94,23 @@ std::vector<std::vector<std::uint8_t>> migrate_images(
       owners.at(0) = 1;
     std::vector<R> values;
     for (std::size_t source = 0; source < images.size(); ++source) {
-      ContinuationFieldArchive<D> archive(target_fields, owners, false,
-                                          static_cast<int>(images.size()), static_cast<int>(source),
-                                          budget);
+      ContinuationFieldArchive<D> archive(
+          target_fields, owners, false, static_cast<int>(images.size()), static_cast<int>(source),
+          budget, [&](const ContinuationFieldSupport::Ref& support) {
+            if (!expected_support || *support != *expected_support)
+              throw std::invalid_argument("producer topology is not in authenticated table");
+            return ContinuationFieldArchive<D>::SourceTopology{owners, false};
+          });
       Codec codec(
           migration_type(components), "migration/native", 1ULL << 20,
-          [&](int owner) -> const MultiFab<D>& { return archive.prototype(owner); }, nullptr,
-          nullptr, nullptr, &aliases,
-          [&](const ContinuationType& type, std::span<const std::uint8_t> bytes)
-              -> const MultiFab<D>& { return archive.resolve(type, bytes); });
+          [&](int owner, const ContinuationFieldSupport::Ref& support) -> const MultiFab<D>& {
+            return archive.prototype(owner, support);
+          },
+          nullptr, nullptr, nullptr, &aliases,
+          [&](const ContinuationType& type, std::span<const std::uint8_t> bytes,
+              const ContinuationFieldSupport::Ref& support) -> const MultiFab<D>& {
+            return archive.resolve(type, bytes, support);
+          });
       auto decoded = codec.decode(images[source]);
       EXPECT_EQ(decoded.publication, 7U);
       EXPECT_EQ(codec.encode(decoded.root, decoded.publication), images[source]);
@@ -112,6 +124,12 @@ std::vector<std::vector<std::uint8_t>> migrate_images(
     auto expected_field =
         migration_field(target_ranks, rank, moved->members()[0]->field().ghosts()[0], components);
     auto expected = migration_root(expected_field, moved->members()[1]->domain_ref());
+    if (expected_support) {
+      auto members = expected->members();
+      members[0] = V::with_field_metadata(members[0], {{}, expected_support});
+      expected = V::product(std::move(members));
+      EXPECT_EQ(*moved->members()[0]->field_support(), *expected_support);
+    }
     EXPECT_EQ(target_codec.encode(moved, 7), target_codec.encode(expected, 7));
     result.push_back(target_codec.encode(moved, 7));
   }
@@ -302,4 +320,86 @@ TEST(ContinuationFieldMigration, RetainedFaceExpressionsRepartitionWithOwningCel
   EXPECT_EQ(
       sources[0]->members()[0]->field_exchange_expression()->terms.at(0).basis->records.size(),
       basis->records.size());
+}
+
+TEST(ContinuationFieldMigration, ProducerSupportSurvivesOneTwoThreeOneWithoutTimeRelabelling) {
+  FiniteDomainRegistry registry;
+  registry.synchronize_identity(registry.realm(), {721, 192});
+  const auto domain = registry.issue(2, 4, 19);
+  auto field = migration_field(1, 0);
+  auto support = std::make_shared<const ContinuationFieldSupport>(
+      ContinuationFieldSupport{"same-program", "history/time=0.125/point=stage-2", 0, 2, 7, 19});
+  auto root = migration_root(field, domain);
+  auto members = root->members();
+  members[0] = V::with_field_metadata(members[0], {{}, support});
+  root = V::product(std::move(members));
+  Codec codec(migration_type(), "migration/native", 1ULL << 20,
+              [&](int owner, const ContinuationFieldSupport::Ref& origin) -> const MultiFab<D>& {
+                if (owner != 0 || !origin || *origin != *support)
+                  throw std::invalid_argument("foreign producer support");
+                return field;
+              });
+  const auto initial = codec.encode(root, 7);
+  auto two = migrate_images({initial}, 2, 1ULL << 26, false, 1, support);
+  auto three = migrate_images(two, 3, 1ULL << 26, false, 1, support);
+  const auto one = migrate_images(three, 1, 1ULL << 26, false, 1, support);
+  EXPECT_EQ(one.at(0), initial);
+  EXPECT_THROW(migrate_images({initial}, 2), std::invalid_argument);
+  EXPECT_THROW(migrate_images({initial}, 2, 1, false, 1, support), std::length_error);
+  auto foreign = std::make_shared<ContinuationFieldSupport>(*support);
+  foreign->producer_level = 1;
+  EXPECT_THROW(migrate_images({initial}, 2, 1ULL << 26, false, 1, foreign), std::invalid_argument);
+  EXPECT_EQ(codec.encode(root, 7), initial);
+}
+
+TEST(ContinuationFieldMigration, SameOwnerDistinctProducerDescriptorsNeverAliasArchivePrototypes) {
+  auto field = migration_field(1, 0);
+  auto a = std::make_shared<const ContinuationFieldSupport>(
+      ContinuationFieldSupport{"program", "point/time=0.125", 0, 0, 7, 19});
+  auto b = std::make_shared<const ContinuationFieldSupport>(
+      ContinuationFieldSupport{"program", "point/time=0.25", 0, 1, 7, 19});
+  auto type = migration_type().children[0];
+  ContinuationType schema;
+  schema.kind = ContinuationKind::Product;
+  schema.names = {"old", "other-level"};
+  schema.children = {type, type};
+  auto fields = [&](int owner, const ContinuationFieldSupport::Ref& support) -> const MultiFab<D>& {
+    if (owner != 0 || !support || (*support != *a && *support != *b))
+      throw std::invalid_argument("unauthenticated producer descriptor");
+    return field;
+  };
+  Codec source(schema, "two-producers", 1ULL << 20, fields);
+  auto root = V::product({V::field(field, 0, type.scientific_contract, {}, a),
+                          V::field(field, 0, type.scientific_contract, {}, b)});
+  const auto bytes = source.encode(root, 9);
+  ContinuationMigrationBudget budget(1ULL << 24);
+  std::vector<int> owners(field.layout().size(), 0);
+  ContinuationFieldArchive<D> archive(
+      fields, owners, false, 1, 0, budget, [&](const ContinuationFieldSupport::Ref& support) {
+        if (*support != *a && *support != *b)
+          throw std::invalid_argument("producer absent from source forest");
+        return ContinuationFieldArchive<D>::SourceTopology{owners, false};
+      });
+  Codec target(
+      schema, "two-producers", 1ULL << 20,
+      [&](int owner, const ContinuationFieldSupport::Ref& support) -> const MultiFab<D>& {
+        return archive.prototype(owner, support);
+      },
+      nullptr, nullptr, nullptr, nullptr,
+      [&](const ContinuationType& item, std::span<const std::uint8_t> payload,
+          const ContinuationFieldSupport::Ref& support) -> const MultiFab<D>& {
+        return archive.resolve(item, payload, support);
+      });
+  const auto decoded = target.decode(bytes);
+  EXPECT_NE(&archive.prototype(0, a), &archive.prototype(0, b));
+  EXPECT_EQ(*decoded.root->members()[0]->field_support(), *a);
+  EXPECT_EQ(*decoded.root->members()[1]->field_support(), *b);
+  EXPECT_EQ(target.encode(decoded.root, 9), bytes);
+  auto forged = bytes;
+  const std::string original = "point/time=0.25";
+  const auto found = std::search(forged.begin(), forged.end(), original.begin(), original.end());
+  ASSERT_NE(found, forged.end());
+  *(found + original.size() - 1) = '6';
+  EXPECT_THROW(target.decode(forged), std::invalid_argument);
+  EXPECT_EQ(target.encode(decoded.root, 9), bytes);
 }

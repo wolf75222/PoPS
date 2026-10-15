@@ -12,20 +12,21 @@ from pops.time._program.structured_control import value_signature
 
 
 def has_suspension(value: Any) -> bool:
+    from .program_emit_hierarchy_operations import is_operation_barrier
     stack = [value]
     while stack:
         item = stack.pop()
-        if item.op == "solve_spatial_field":
+        if item.op == "solve_spatial_field" or is_operation_barrier(item):
             return True
         for key in ("body_block", "true_block", "false_block", "cond_block"):
             stack.extend(item.attrs.get(key, ()))
     return False
 
 
-def _heap_slots(signature, node_id, prefix, lines, *, carry=False, slot_offset=0):
-    """Own scalar/finite leaves, and point to exact context-owned Field storage."""
+def _heap_slots(signature, node_id, prefix, lines, *, carry=False, slot_offset=0, extra_members=()):
+    """Own all leaves, including Field copies surviving suspended regions."""
     from .program_emit_finite_arrays import finite_cpp_type, _allocate
-    from .program_emit_structured_control import _DeferredField
+    from .program_structural_control import _OwnedFieldSlot
 
     frame_type, frame = "%s_%d_Frame" % (prefix, node_id), "%s_%d" % (prefix, node_id)
     declarations = ["struct %s {" % frame_type]
@@ -55,15 +56,16 @@ def _heap_slots(signature, node_id, prefix, lines, *, carry=False, slot_offset=0
             parent[key] = output
             stack.append((sig["success"], output, "value"))
         elif kind in ("state", "rhs", "scalar_field"):
-            declarations.append("pops::MultiFab<pops::kNativeDimension>* %s = nullptr;" % member)
-            parent[key] = (_DeferredField("(*%s)" % token, node_id, field_slot) if carry
-                           else "(*%s)" % token)
+            declarations.append(
+                "std::shared_ptr<pops::MultiFab<pops::kNativeDimension>> %s_owner;" % member)
+            parent[key] = _OwnedFieldSlot(token + "_owner")
             field_slot += 1
         else:
             declarations.append("%s %s{};" % (finite_cpp_type(sig), member))
             parent[key] = token
     if carry:
         declarations.extend(("std::int64_t iteration = 0;", "std::function<void()> repeat;"))
+    declarations.extend(extra_members)
     declarations.append("};")
     lines.extend(declarations)
     lines.append("std::shared_ptr<%s> %s;" % (frame_type, frame))
@@ -98,6 +100,7 @@ def _check_control_effects(block):
     from .program_emit_structured_control import _check_region_effects
     from .program_emit_amr_original_field import original_field_consumer
     from pops.fields._program_nonlinear_problem import validate_nonlinear_field_request
+    from .program_emit_hierarchy_operations import is_operation_barrier, validate_operation_barrier
 
     pending = list(block)
     while pending:
@@ -107,6 +110,8 @@ def _check_control_effects(block):
                 pending.extend(value.attrs.get(key, ()))
         elif value.op == "solve_spatial_field":
             validate_nonlinear_field_request(value.prog, value)
+        elif is_operation_barrier(value):
+            validate_operation_barrier(value.prog, value)
         elif value.op == "field_problem_coefficients" and original_field_consumer(value) is not None:
             # The established coefficient emitter converges allocation and kernel failures.
             pass
@@ -114,7 +119,9 @@ def _check_control_effects(block):
             source = value.inputs[0]
             while source.op in ("solve_outcome", "solve_outcome_component"):
                 source = source.inputs[0]
-            if source.op != "solve_spatial_field":
+            if source.op == "solve_spatial_nonlinear":
+                validate_operation_barrier(source.prog, source)
+            elif source.op != "solve_spatial_field":
                 _check_region_effects((value,))
             else:
                 # This is an alias only after the native barrier consumed its SolveReport.
@@ -129,6 +136,7 @@ def emit_region(program, block, var, model, lines, prelude, block_idx, field_pla
     from .program_emit_ops import _emit_op
     from .program_emit_hierarchy_regions import open_hierarchy_continuation
     from .program_emit_amr_original_field import emit_amr_original_field
+    from .program_emit_hierarchy_operations import is_operation_barrier, emit_operation_barrier
     from .program_source_map import operation
 
     completed = list(available)
@@ -142,6 +150,12 @@ def emit_region(program, block, var, model, lines, prelude, block_idx, field_pla
                 close = open_control(program, value, completed, var, model, lines, prelude,
                                      block_idx, field_plans)
             closers.append(close)
+        elif is_operation_barrier(value):
+            with operation(value, lines, prelude, environment=var):
+                emit_operation_barrier(program, value, base, completed, var, model, lines,
+                    prelude, block_idx, field_plans,
+                    shared_interface_jvp=var.get(("hierarchy_shared_interface_jvp",), False))
+            closers.append(_normal_close)
         elif value.op == "solve_spatial_field":
             var[("original_field_hierarchy_phase",)] = "gather"
             _emit_op(program, value, base, frozenset(), var, model, lines, prelude,

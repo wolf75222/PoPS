@@ -415,7 +415,7 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
     if v.op in STRUCTURED_OPS:
         emit_structured_op(program, v, var, model, lines, prelude, block_idx, field_plans, target)
         return
-    from pops.time.field_representation import FIELD_REPRESENTATION_OPS
+    from pops.time._program.field_representation import FIELD_REPRESENTATION_OPS
     if v.op in FIELD_REPRESENTATION_OPS:
         from .program_emit_field_representation import emit_field_representation
         emit_field_representation(program, v, var, model, lines, prelude, block_idx, field_plans, target)
@@ -428,6 +428,20 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
     if v.op in FINITE_OPS:
         emit_finite_op(program, v, var, model, lines, prelude, block_idx, field_plans, target)
         return
+    if target == "amr_system" and v.op not in {
+            "branch", "while", "range", "subcycle", "synchronize", "provenance_bind",
+            "solve_outcome", "solve_outcome_component", "layout_map_export", "layout_map_import"}:
+        # Structural carriers may retain a producer-level Field opaquely. A
+        # mathematical consumer must authenticate its instance before allocating
+        # outputs or launching any numerical kernel; matching shape is not a port.
+        reads = [item for item in v.inputs
+                 if item.vtype in {"state", "rhs", "scalar_field"}
+                 and item.id in var
+                 and ("field_observation_snapshot", item.id) not in var]
+        if reads:
+            lines.append("ctx.prepare_spatial_collectively([&]() {")
+            lines.extend("  ctx.require_program_field_access(%s);" % var[item.id] for item in reads)
+            lines.append("}); // Program numerical Field input authority")
     bidx = (_required_block_index(block_idx, v.block, "emit op %r" % v.name)
             if v.block is not None else None)
     if v.id in var.get(("moving_deferred_rates",), ()):
@@ -1077,8 +1091,7 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         from .program_value_authority import delegated_output_boundaries
         output_setup_end, delegated_before_write = delegated_output_boundaries(
             v, var, lines, _profile_start, bidx, publications[0])
-        var[("partition_frequency", v.id)] = "diffusion_frequency_%d" % v.id
-        if defer_bound:
+        if defer_bound and ("partition_frequency", v.id) in var:
             key = ("partition_stability_deferred",)
             var[key] = var.get(key, frozenset()) | frozenset((v.id,))
     elif v.op == "rhs" and v.attrs.get("path_conservative", False):

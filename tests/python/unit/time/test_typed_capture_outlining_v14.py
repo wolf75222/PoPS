@@ -36,6 +36,14 @@ def strip_outlining(source):
     return ''.join(output)
 
 
+def test_multiline_schema_entries_keep_each_physical_line_and_blank_byte():
+    entries = ["const auto schema = [&] {\n  int value = 7;\n\n  return value;\n}();", "use(schema);"]
+    before = "".join("  " + line + "\n" for line in entries)
+    original._outline_capture_region(entries, 0, 19)
+    after = "".join("  " + line + "\n" for line in entries)
+    assert strip_outlining(after) == before
+
+
 def check_goto_boundaries(source):
     scopes=[];labels={};jumps=[]
     for line in source.splitlines():

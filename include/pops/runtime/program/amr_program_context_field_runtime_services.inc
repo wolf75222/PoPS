@@ -478,7 +478,7 @@ field_type& persistent_scratch_(ScratchKind kind, std::int64_t value_id, int sub
   return result;
 }
 
-int scratch_prototype_owner_(const field_type& prototype) const {
+int scratch_prototype_owner_(const field_type& prototype, bool include_continuation = true) const {
   std::optional<int> owner;
   const auto record = [&](int candidate) {
     if (candidate < 0 || candidate >= n_blocks())
@@ -487,8 +487,11 @@ int scratch_prototype_owner_(const field_type& prototype) const {
       throw std::logic_error("AMR Program scratch prototype aliases multiple runtime owners");
     owner = candidate;
   };
-  if (const auto stored = continuation_field_storage_owner_(prototype))
-    record(*stored);
+  if (include_continuation)
+    if (const auto stored = continuation_field_storage_owner_(prototype))
+      record(*stored);
+  if (const auto snapshot = affine_field_owner_(prototype))
+    record(*snapshot);
   for (int runtime_block = 0; runtime_block < n_blocks(); ++runtime_block) {
     const field_type* const active = live_attempt_state_(runtime_block, active_level_);
     const field_type* const accepted =

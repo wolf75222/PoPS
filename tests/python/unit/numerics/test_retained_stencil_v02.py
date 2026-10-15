@@ -13,8 +13,9 @@ from pops.model.stencil_codec import decode_stencil, encode_stencil
 
 
 @pytest.mark.parametrize("retention", ("history", "continuation"))
-def test_retained_face_equations_emit_complete_native_contract(retention):
-    spec = build_retained_stencil(retention=retention)
+@pytest.mark.parametrize("reject_after", (None, 1))
+def test_retained_face_equations_emit_complete_native_contract(retention, reject_after):
+    spec = build_retained_stencil(retention=retention, reject_after=reject_after)
     resolved = pops.resolve(pops.validate(spec.case), layout=spec.layout)
     source = emit_cpp_program(resolved.time,
         model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks))

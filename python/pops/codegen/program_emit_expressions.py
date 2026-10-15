@@ -1,32 +1,16 @@
 """Lower closed Program mathematical expressions to native cell kernels."""
 
-from pops.identity.scalar import ScalarLiteral
-
-
 def expression_cpp(node, inputs):
     """Revalidate a leaf against its exact captured components or scalar metadata."""
-    if not isinstance(node, (list, tuple)) or not node:
-        raise TypeError("pointwise expression requires a closed AST")
-    op = node[0]
-    if op == "input" and len(node) == 3:
-        index, component = node[1:]
-        if type(index) is not int or not 0 <= index < len(inputs):
-            raise ValueError("pointwise input outside captured values")
-        if type(component) is not int or not 0 <= component < len(inputs[index]):
-            raise ValueError("pointwise component outside its exact Space")
-        return inputs[index][component]
-    if op == "literal" and len(node) == 2 and type(node[1]) is ScalarLiteral:
-        if node[1].kind not in ("integer", "rational", "decimal", "binary64"):
-            raise TypeError("pointwise literal requires an exact numeric scalar")
-        return "static_cast<pops::Real>(%s)" % node[1].to_cpp()
-    if op == "coefficient" and len(node) == 2:
-        from pops.codegen.program_emit_kernels import _coeff_cpp
-        from pops.time.value_metadata import CoeffPolynomial
+    from pops.time.expression_dag import validate_expression_leaf
 
-        if type(node[1]) is not CoeffPolynomial:
-            raise TypeError("pointwise method coefficient requires an exact polynomial")
-        return "(%s)" % _coeff_cpp(node[1])
-    raise ValueError("pointwise expression has an unsupported leaf or arity")
+    value = validate_expression_leaf(node, inputs)
+    if node[0] == "input":
+        return value
+    if node[0] == "literal":
+        return "static_cast<pops::Real>(%s)" % value.to_cpp()
+    from pops.codegen.program_emit_kernels import _coeff_cpp
+    return "(%s)" % _coeff_cpp(value)
 
 
 def pointwise_output_template(value):
@@ -106,88 +90,12 @@ def checked_pointwise_rows(value, inputs):
 
 def checked_expression_dag(expressions, nodes, inputs):
     """One checked, lazy evaluation policy for scalar fields and local products."""
-    from pops._ir import expr as ir
-    from pops._ir.control_expr import Where, Rounded
+    from pops.time.expression_dag import restore_expression_dag
     from pops.codegen.cpp_writer import _cse_emit
 
-    binary = {
-        "add": ir.Add,
-        "sub": ir.Sub,
-        "mul": ir.Mul,
-        "div": ir.Div,
-        "pow": ir.Pow,
-        "minimum": ir.Minimum,
-        "maximum": ir.Maximum,
-        "and": ir.BooleanAnd,
-        "or": ir.BooleanOr,
-    }
-    unary = {
-        "neg": ir.Neg,
-        "abs": ir.Abs,
-        "sqrt": ir.Sqrt,
-        "exp": ir.Exp,
-        "sin": ir.Sin,
-        "cos": ir.Cos,
-        "log": ir.Log,
-        "expm1": ir.Expm1,
-        "sign": ir.Sign,
-        "not": ir.BooleanNot,
-        "rounded": Rounded,
-    }
-    restored, bindings = [], {}
-    for index, node in enumerate(nodes):
-        if not isinstance(node, (tuple, list)) or not node:
-            raise TypeError("pointwise expression requires a closed DAG")
-        operation = node[0]
-        if operation in ("input", "literal", "coefficient"):
-            name = "expression_leaf_%d_" % index
-            bindings[name] = expression_cpp(node, inputs)
-            restored.append(ir.Var(name, "program_expression"))
-            continue
-        if operation in ("finite_linear_v1", "finite_projection_v1"):
-            from pops._ir.finite_linear import FiniteApplication, FiniteProjection
-
-            if operation == "finite_linear_v1" and len(node) == 6:
-                children = node[5]
-                if any(type(child) is not int or not 0 <= child < index for child in children):
-                    raise ValueError("finite map DAG must reference earlier inputs")
-                restored.append(FiniteApplication(*node[1:5], tuple(restored[c] for c in children)))
-            elif operation == "finite_projection_v1" and len(node) == 3:
-                if type(node[1]) is not int or not 0 <= node[1] < index:
-                    raise ValueError("finite projection must reference an earlier map")
-                restored.append(FiniteProjection(restored[node[1]], node[2]))
-            else:
-                raise ValueError("invalid finite map DAG arity")
-            continue
-        children = node[2:] if operation == "compare" else node[1:]
-        arity = (
-            3
-            if operation == "where"
-            else 2
-            if operation == "compare" or operation in binary
-            else 1
-            if operation in unary
-            else None
-        )
-        if arity is None or len(children) != arity:
-            raise ValueError("pointwise expression has unsupported operation or arity")
-        if any(type(child) is not int or not 0 <= child < index for child in children):
-            raise ValueError("pointwise expression DAG must reference earlier nodes")
-        arguments = tuple(restored[child] for child in children)
-        if operation == "compare":
-            result = ir.Compare(node[1], *arguments)
-        else:
-            constructor = (
-                Where if operation == "where" else binary.get(operation, unary.get(operation))
-            )
-            if constructor is None:
-                raise ValueError("pointwise expression has unsupported operation or arity")
-            result = constructor(*arguments)
-        restored.append(result)
-    if any(type(root) is not int or not 0 <= root < len(restored) for root in expressions):
-        raise ValueError("pointwise expression output is outside its closed DAG")
+    restored, bindings = restore_expression_dag(expressions, nodes, inputs, bind_leaf=expression_cpp)
     lines, values, names = _cse_emit(
-        [restored[root] for root in expressions],
+        restored,
         "pops::Real",
         "",
         materialize_all=True,

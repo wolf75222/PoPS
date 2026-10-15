@@ -1,7 +1,7 @@
 """Lower Field representation ports to the authenticated native topology adapter."""
 from __future__ import annotations
 
-from pops.time.field_representation import validate_field_representation
+from pops.time._program.field_representation import validate_field_representation
 from pops.time.value_signatures import value_signature
 
 from .program_emit_versioned import pack_owned, unpack_owned, schema_cpp

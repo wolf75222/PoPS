@@ -84,7 +84,9 @@ def test_evolved_stage_amr_source_and_closed_load(cells, width):
     cpp = emit_cpp_program(resolved.time, model=ProgramModelGraph.from_resolved_blocks(resolved.blocks), target="amr_system")
     assert "AmrFieldRightPreconditioner::kFullResidualBasisLU" in cpp
     assert "PreparedAmrFieldResidual" in cpp
-    assert cpp.count("ctx.store_global_field_history(") == 2*(width+(width == 2))
+    # The continuation body is shared across levels; a second flat fallback body
+    # would duplicate every publication in the generated translation unit.
+    assert cpp.count("ctx.store_global_field_history(") == width+(width == 2)
     assert resolved.time._serialize()["version"] == 16
     assert cpp.count("evolved_accumulation") >= width
     initial, target, q0, load = closed_data(width)
@@ -197,21 +199,21 @@ def test_public_evolved_stage_amr_checkpoint_and_composite_Q(isolated_native_cac
         restart_authority = None
         if phase == "replay":
             owner = collective_call(world, bind)
-            restart_authority = collective_call(world, lambda: checkpoint_restart_authority(owner))
+            restart_authority = collective_call(world, lambda owner=owner: checkpoint_restart_authority(owner))
             collective_call(world, lambda owner=owner: owner.restart(paths["accepted"]))
             restart_authority["restored_source_run"] = collective_call(world,
-                lambda: owner.last_run_identity.token)
+                lambda owner=owner: owner.last_run_identity.token)
             reloaded = capture(world, owner, width)
             with collective_check(world):
                 same_images(reloaded, phases["accepted"])
             phases["reloaded"] = reloaded
             registry_phases["reloaded"] = {"rows_by_rank": collective_call(world,
-                lambda: world_allgather(world, reloaded[1][1]))}
+                lambda reloaded=reloaded: world_allgather(world, reloaded[1][1]))}
         end = DT if phase == "accepted" else 2*DT
         collective_call(world, lambda owner=owner, end=end: pops.run(owner, t_end=end, max_steps=1, console=False))
         path = collective_call(world, lambda owner=owner, phase=phase: owner.checkpoint(directory/(phase+"-checkpoint")))
         seals[phase] = collective_call(world, lambda path=path: hashlib.sha256(bounded_bytes(path)).hexdigest())
-        authorities[phase] = collective_call(world, lambda owner=owner, path=path:
+        authorities[phase] = collective_call(world, lambda owner=owner, path=path, restart_authority=restart_authority:
             checkpoint_provenance(owner, path, restart_authority=restart_authority))
         paths[phase] = path
         phases[phase] = capture(world, owner, width)

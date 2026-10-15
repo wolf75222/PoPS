@@ -6,7 +6,7 @@ from pops.time import Program
 from pops.time._program.distributed_arrays import Distributed
 from pops.time._program.detach import detach_compiled_program
 from pops.time._program.structured_control import new_typed
-from pops.time.field_representation import (
+from pops.time._program.field_representation import (
     validate_field_representation,
     validate_field_representation_program,
 )
@@ -214,7 +214,7 @@ def test_topology_copies_through_product_branch_fold_capture_and_iteration():
 
 
 def test_structural_copy_cannot_change_issued_topology_type():
-    from pops.time.field_representation import validate_topology_origin
+    from pops.time._program.field_representation import validate_topology_origin
 
     p, field, source = fixture()
     wrong = {**value_signature(source), "dimension": 3}

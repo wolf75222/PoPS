@@ -81,7 +81,8 @@ def test_real_public_nonconstant_case_resolve_and_emit_without_compilation():
     assert resolved.time._serialize()["version"] == 16
     assert "AmrFieldRightPreconditioner::kFullResidualBasisLU" in cpp
     assert "PreparedAmrFieldResidual" in cpp
-    assert cpp.count("ctx.store_global_field_history(") == 6
+    # One continuation body, invoked for each level, stores the three unknowns.
+    assert cpp.count("ctx.store_global_field_history(") == 3
     assert cpp.count("evolved_accumulation") >= 2
     assert DENSE_BYTES == 256*1024**2 and DT == .01 and ACCEPTANCE == 3e-8
     from tests.python.support.captured_diffusion_mms import CONTROLS as original_controls, FD_STEP as original_fd

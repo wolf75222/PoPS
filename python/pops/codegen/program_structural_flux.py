@@ -38,6 +38,11 @@ def field_projection_sources(value: ProgramValue):
             pending.append((node.inputs[1], path))
         elif op == "variant_require_success":
             pending.append((node.inputs[0], ("@variant", "ok", *path)))
+        elif op == "variant_payload":
+            pending.append((node.inputs[0], ("@variant", node.attrs["tag"], *path)))
+        elif op == "variant_unreachable":
+            # The exhaustiveness guard throws; it cannot publish a Field.
+            continue
         elif op == "variant_construct" and len(path) >= 2 and path[0] == "@variant":
             if node.attrs["tag"] == path[1]:
                 pending.append((node.inputs[0], path[2:]))

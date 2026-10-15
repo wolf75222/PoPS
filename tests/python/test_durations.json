@@ -5051,9 +5051,9 @@
           "registration": "completion_20261015"
         },
         "tests/python/unit/time/test_typed_capture_outlining_v14.py": {
-          "basis": "Provisional 60-second scheduling estimate requested by the integration owner, not a measured GitHub CI duration. The final local source-only six-case gate passed in47.85 seconds (earlier observations46-49 seconds); those observations are distinct from scheduling and native qualification. Typed capture outlining checks preserve success, typed failure, metadata and source-map correspondence; no native compilation is performed by this source suite.",
-          "declared_cases": 6,
-          "estimated_seconds": 60,
+          "basis": "Provisional scheduling estimate for seven source-only cases, including the new multiline schema counterexample. Latest local seven-case receipt:137.87 seconds; this is neither a GitHub duration nor a native execution receipt. Existing launch watchdogs and assertions are unchanged.",
+          "declared_cases": 7,
+          "estimated_seconds": 180,
           "kind": "source_contract",
           "registration": "v14"
         },
@@ -5150,6 +5150,130 @@
           "basis": "Unmeasured source-only scheduling weight, not a native execution receipt."
         },
         "tests/python/unit/runtime/test_uniform_exchange_rank_migration.py": {
+          "kind": "source_contract",
+          "estimated_seconds": 30,
+          "registration": "completion_20261015",
+          "basis": "Unmeasured source-only scheduling weight, not a native execution receipt."
+        },
+        "tests/python/integration/runtime/test_api_v02_temporal_hierarchy_native.py": {
+          "kind": "native_profile",
+          "registration": "completion_20261015",
+          "native_dimension": 2,
+          "declared_cases": 4,
+          "estimated_seconds": 1200,
+          "ci_ranks": [
+            1,
+            2
+          ],
+          "planned_local_reception_ranks": [
+            1,
+            2,
+            3
+          ],
+          "entrypoint": "tests/python/integration/mpi/test_api_v02_temporal_hierarchy_native_mpi2.py",
+          "execution_lane": "serial_and_mpi",
+          "basis": "Unmeasured scheduling estimate including cold generated C++ compilation; not a native receipt. Existing launch watchdog and scientific thresholds remain unchanged."
+        },
+        "tests/python/integration/runtime/test_api_v02_path_hierarchy_native.py": {
+          "kind": "native_profile",
+          "registration": "completion_20261015",
+          "native_dimension": 2,
+          "declared_cases": 2,
+          "estimated_seconds": 1200,
+          "ci_ranks": [
+            1,
+            2
+          ],
+          "planned_local_reception_ranks": [
+            1,
+            2,
+            3
+          ],
+          "entrypoint": "tests/python/integration/mpi/test_api_v02_path_hierarchy_native_mpi2.py",
+          "execution_lane": "serial_and_mpi",
+          "basis": "Unmeasured scheduling estimate including cold generated C++ compilation; not a native receipt. Existing launch watchdog and scientific thresholds remain unchanged."
+        },
+        "tests/python/integration/runtime/test_api_v02_original_field_typed_recovery_native.py": {
+          "kind": "native_profile",
+          "registration": "completion_20261015",
+          "native_dimension": 2,
+          "declared_cases": 4,
+          "estimated_seconds": 1200,
+          "ci_ranks": [
+            1,
+            2
+          ],
+          "planned_local_reception_ranks": [
+            1,
+            2,
+            3
+          ],
+          "entrypoint": "tests/python/integration/mpi/test_api_v02_original_field_typed_recovery_native_mpi2.py",
+          "execution_lane": "serial_and_mpi",
+          "basis": "Unmeasured scheduling estimate including cold generated C++ compilation; not a native receipt. Existing launch watchdog and scientific thresholds remain unchanged."
+        },
+        "tests/python/unit/codegen/test_path_hierarchy_regions.py": {
+          "kind": "source_contract",
+          "estimated_seconds": 30,
+          "registration": "completion_20261015",
+          "basis": "Unmeasured source-only scheduling weight, not a native execution receipt."
+        },
+        "tests/python/unit/fields/test_amr_original_field_typed_recovery.py": {
+          "kind": "source_contract",
+          "estimated_seconds": 30,
+          "registration": "completion_20261015",
+          "basis": "Unmeasured source-only scheduling weight, not a native execution receipt."
+        },
+        "tests/python/unit/runtime/test_continuation_receipt_v5.py": {
+          "kind": "source_contract",
+          "estimated_seconds": 30,
+          "registration": "completion_20261015",
+          "basis": "Unmeasured source-only scheduling weight, not a native execution receipt."
+        },
+        "tests/python/unit/time/test_boolean_algebra_v02.py": {
+          "kind": "source_contract",
+          "estimated_seconds": 30,
+          "registration": "completion_20261015",
+          "basis": "Unmeasured source-only scheduling weight, not a native execution receipt."
+        },
+        "tests/python/unit/time/test_temporal_hierarchy_v02.py": {
+          "kind": "source_contract",
+          "estimated_seconds": 30,
+          "registration": "completion_20261015",
+          "basis": "Unmeasured source-only scheduling weight, not a native execution receipt."
+        },
+        "tests/python/unit/time/test_owned_structural_fields_v02.py": {
+          "kind": "source_contract",
+          "estimated_seconds": 30,
+          "registration": "completion_20261015",
+          "basis": "Unmeasured source-only scheduling weight, not a native execution receipt."
+        },
+        "tests/python/integration/runtime/test_api_v02_continuation_capture_native.py": {
+          "kind": "native_profile",
+          "registration": "completion_20261015",
+          "native_dimension": 2,
+          "declared_cases": 2,
+          "estimated_seconds": 1200,
+          "ci_ranks": [
+            1,
+            2
+          ],
+          "planned_local_reception_ranks": [
+            1,
+            2,
+            3
+          ],
+          "entrypoint": "tests/python/integration/mpi/test_api_v02_continuation_capture_native_mpi2.py",
+          "execution_lane": "serial_and_mpi",
+          "basis": "Unmeasured scheduling estimate including cold generated C++ compilation; not a native receipt. Existing launch watchdog and scientific thresholds remain unchanged."
+        },
+        "tests/python/unit/fields/test_amr_continuation_capture.py": {
+          "kind": "source_contract",
+          "estimated_seconds": 30,
+          "registration": "completion_20261015",
+          "basis": "Unmeasured source-only scheduling weight, not a native execution receipt."
+        },
+        "tests/python/unit/runtime/test_amr_continuation_receipt_issuer.py": {
           "kind": "source_contract",
           "estimated_seconds": 30,
           "registration": "completion_20261015",
@@ -5421,7 +5545,7 @@
         "native_cases": 83,
         "native_files": 28,
         "native_received": false,
-        "source_cases": 253,
+        "source_cases": 254,
         "source_files": 21
       },
       "v15_registration": {
@@ -5955,7 +6079,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1071,
+    "estimated_count": 1083,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6060,6 +6184,7 @@
       "tests/python/integration/runtime/test_api_v02_authored_stability_native.py",
       "tests/python/integration/runtime/test_api_v02_composite_integral_native.py",
       "tests/python/integration/runtime/test_api_v02_continuation_auxiliary_regrid_native.py",
+      "tests/python/integration/runtime/test_api_v02_continuation_capture_native.py",
       "tests/python/integration/runtime/test_api_v02_continuation_forest_native.py",
       "tests/python/integration/runtime/test_api_v02_continuation_regrid_native.py",
       "tests/python/integration/runtime/test_api_v02_continuum_native.py",
@@ -6091,7 +6216,9 @@
       "tests/python/integration/runtime/test_api_v02_original_field_recovery_native.py",
       "tests/python/integration/runtime/test_api_v02_original_field_regions_native.py",
       "tests/python/integration/runtime/test_api_v02_original_field_sequence_native.py",
+      "tests/python/integration/runtime/test_api_v02_original_field_typed_recovery_native.py",
       "tests/python/integration/runtime/test_api_v02_output_history_remap_native.py",
+      "tests/python/integration/runtime/test_api_v02_path_hierarchy_native.py",
       "tests/python/integration/runtime/test_api_v02_realization_choices_native.py",
       "tests/python/integration/runtime/test_api_v02_realization_loops_native.py",
       "tests/python/integration/runtime/test_api_v02_regions_native.py",
@@ -6110,6 +6237,7 @@
       "tests/python/integration/runtime/test_api_v02_stencil_extensions_native.py",
       "tests/python/integration/runtime/test_api_v02_stencil_selection_native.py",
       "tests/python/integration/runtime/test_api_v02_temporal_field_native.py",
+      "tests/python/integration/runtime/test_api_v02_temporal_hierarchy_native.py",
       "tests/python/integration/runtime/test_api_v02_terminal_failure_native.py",
       "tests/python/integration/runtime/test_api_v02_transport_oracles_native.py",
       "tests/python/integration/runtime/test_api_v02_variants_native.py",
@@ -6463,6 +6591,7 @@
       "tests/python/unit/codegen/test_operator_validation.py",
       "tests/python/unit/codegen/test_param_core_contract.py",
       "tests/python/unit/codegen/test_partition_stability.py",
+      "tests/python/unit/codegen/test_path_hierarchy_regions.py",
       "tests/python/unit/codegen/test_phase_pipeline.py",
       "tests/python/unit/codegen/test_physical_global_primitive_authority.py",
       "tests/python/unit/codegen/test_physical_global_source.py",
@@ -6545,10 +6674,12 @@
       "tests/python/unit/domain/test_cartesian3d_tuto.py",
       "tests/python/unit/domain/test_cartesian_domain_grid.py",
       "tests/python/unit/domain/test_domain_preview_nd.py",
+      "tests/python/unit/fields/test_amr_continuation_capture.py",
       "tests/python/unit/fields/test_amr_original_field_codegen.py",
       "tests/python/unit/fields/test_amr_original_field_continuations.py",
       "tests/python/unit/fields/test_amr_original_field_recovery.py",
       "tests/python/unit/fields/test_amr_original_field_regions.py",
+      "tests/python/unit/fields/test_amr_original_field_typed_recovery.py",
       "tests/python/unit/fields/test_api040_m08_live_stage_authoring.py",
       "tests/python/unit/fields/test_case_field_storage.py",
       "tests/python/unit/fields/test_external_field_solver_provider.py",
@@ -6757,6 +6888,7 @@
       "tests/python/unit/runtime/test_amr_accepted_state_inspector.py",
       "tests/python/unit/runtime/test_amr_bind_lowering.py",
       "tests/python/unit/runtime/test_amr_checkpoint_contract.py",
+      "tests/python/unit/runtime/test_amr_continuation_receipt_issuer.py",
       "tests/python/unit/runtime/test_amr_empty_diagnostic_rank_restart.py",
       "tests/python/unit/runtime/test_amr_execution_contract.py",
       "tests/python/unit/runtime/test_amr_local_box_bounds_contract.py",
@@ -6790,6 +6922,7 @@
       "tests/python/unit/runtime/test_continuation_forest_migration.py",
       "tests/python/unit/runtime/test_continuation_receipt_v3.py",
       "tests/python/unit/runtime/test_continuation_receipt_v4.py",
+      "tests/python/unit/runtime/test_continuation_receipt_v5.py",
       "tests/python/unit/runtime/test_continuation_transitions.py",
       "tests/python/unit/runtime/test_coupled_rate_program_stability.py",
       "tests/python/unit/runtime/test_cutcell_thresholds.py",
@@ -6880,6 +7013,7 @@
       "tests/python/unit/time/test_array_derivatives_v14.py",
       "tests/python/unit/time/test_authored_stability_admission.py",
       "tests/python/unit/time/test_balance_composition_v02.py",
+      "tests/python/unit/time/test_boolean_algebra_v02.py",
       "tests/python/unit/time/test_bundle_provenance_v15.py",
       "tests/python/unit/time/test_bundles_v14.py",
       "tests/python/unit/time/test_checked_scalar_v02.py",
@@ -6954,6 +7088,7 @@
       "tests/python/unit/time/test_mpi_restart_fixture_contracts.py",
       "tests/python/unit/time/test_multirate_history_contract.py",
       "tests/python/unit/time/test_operator_handle_resolution.py",
+      "tests/python/unit/time/test_owned_structural_fields_v02.py",
       "tests/python/unit/time/test_post_synchronization.py",
       "tests/python/unit/time/test_program_authoring_atomicity.py",
       "tests/python/unit/time/test_program_cadence.py",
@@ -6997,6 +7132,7 @@
       "tests/python/unit/time/test_structured_control.py",
       "tests/python/unit/time/test_temporal_field_v02.py",
       "tests/python/unit/time/test_temporal_handle_data_model.py",
+      "tests/python/unit/time/test_temporal_hierarchy_v02.py",
       "tests/python/unit/time/test_temporal_problem_regions.py",
       "tests/python/unit/time/test_temporal_tau_program_authority.py",
       "tests/python/unit/time/test_terminal_failure_budget.py",
@@ -7229,7 +7365,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1136,
+    "total_files": 1148,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -7364,6 +7500,7 @@
   "tests/python/integration/runtime/test_api_v02_authored_stability_native.py": 900,
   "tests/python/integration/runtime/test_api_v02_composite_integral_native.py": 1200,
   "tests/python/integration/runtime/test_api_v02_continuation_auxiliary_regrid_native.py": 1200,
+  "tests/python/integration/runtime/test_api_v02_continuation_capture_native.py": 1200,
   "tests/python/integration/runtime/test_api_v02_continuation_forest_native.py": 1200,
   "tests/python/integration/runtime/test_api_v02_continuation_regrid_native.py": 1200,
   "tests/python/integration/runtime/test_api_v02_continuum_native.py": 600,
@@ -7395,7 +7532,9 @@
   "tests/python/integration/runtime/test_api_v02_original_field_recovery_native.py": 1200,
   "tests/python/integration/runtime/test_api_v02_original_field_regions_native.py": 1200,
   "tests/python/integration/runtime/test_api_v02_original_field_sequence_native.py": 1200,
+  "tests/python/integration/runtime/test_api_v02_original_field_typed_recovery_native.py": 1200,
   "tests/python/integration/runtime/test_api_v02_output_history_remap_native.py": 900,
+  "tests/python/integration/runtime/test_api_v02_path_hierarchy_native.py": 1200,
   "tests/python/integration/runtime/test_api_v02_realization_choices_native.py": 1200,
   "tests/python/integration/runtime/test_api_v02_realization_loops_native.py": 300,
   "tests/python/integration/runtime/test_api_v02_regions_native.py": 600,
@@ -7414,6 +7553,7 @@
   "tests/python/integration/runtime/test_api_v02_stencil_extensions_native.py": 900,
   "tests/python/integration/runtime/test_api_v02_stencil_selection_native.py": 900,
   "tests/python/integration/runtime/test_api_v02_temporal_field_native.py": 1200,
+  "tests/python/integration/runtime/test_api_v02_temporal_hierarchy_native.py": 1200,
   "tests/python/integration/runtime/test_api_v02_terminal_failure_native.py": 300,
   "tests/python/integration/runtime/test_api_v02_transport_oracles_native.py": 900,
   "tests/python/integration/runtime/test_api_v02_variants_native.py": 900,
@@ -7780,6 +7920,7 @@
   "tests/python/unit/codegen/test_operator_validation.py": 5,
   "tests/python/unit/codegen/test_param_core_contract.py": 2.0,
   "tests/python/unit/codegen/test_partition_stability.py": 5.0,
+  "tests/python/unit/codegen/test_path_hierarchy_regions.py": 30,
   "tests/python/unit/codegen/test_phase_pipeline.py": 2.0,
   "tests/python/unit/codegen/test_physical_global_primitive_authority.py": 300,
   "tests/python/unit/codegen/test_physical_global_source.py": 5,
@@ -7869,10 +8010,12 @@
   "tests/python/unit/domain/test_cartesian_domain_grid.py": 60.0,
   "tests/python/unit/domain/test_domain_preview.py": 1.1,
   "tests/python/unit/domain/test_domain_preview_nd.py": 2.0,
+  "tests/python/unit/fields/test_amr_continuation_capture.py": 30,
   "tests/python/unit/fields/test_amr_original_field_codegen.py": 5,
   "tests/python/unit/fields/test_amr_original_field_continuations.py": 30,
   "tests/python/unit/fields/test_amr_original_field_recovery.py": 30,
   "tests/python/unit/fields/test_amr_original_field_regions.py": 30,
+  "tests/python/unit/fields/test_amr_original_field_typed_recovery.py": 30,
   "tests/python/unit/fields/test_api040_m08_live_stage_authoring.py": 5,
   "tests/python/unit/fields/test_case_field_storage.py": 5.0,
   "tests/python/unit/fields/test_external_field_solver_provider.py": 1.0,
@@ -8129,6 +8272,7 @@
   "tests/python/unit/runtime/test_continuation_forest_migration.py": 30,
   "tests/python/unit/runtime/test_continuation_receipt_v3.py": 30,
   "tests/python/unit/runtime/test_continuation_receipt_v4.py": 30,
+  "tests/python/unit/runtime/test_continuation_receipt_v5.py": 30,
   "tests/python/unit/runtime/test_continuation_transitions.py": 15,
   "tests/python/unit/runtime/test_coupled_rate.py": 0.5,
   "tests/python/unit/runtime/test_coupled_rate_program_stability.py": 175,
@@ -8240,6 +8384,7 @@
   "tests/python/unit/time/test_array_derivatives_v14.py": 60,
   "tests/python/unit/time/test_authored_stability_admission.py": 30,
   "tests/python/unit/time/test_balance_composition_v02.py": 15,
+  "tests/python/unit/time/test_boolean_algebra_v02.py": 30,
   "tests/python/unit/time/test_bundle_provenance_v15.py": 60,
   "tests/python/unit/time/test_bundles_v14.py": 120,
   "tests/python/unit/time/test_checked_scalar_v02.py": 15,
@@ -8316,6 +8461,7 @@
   "tests/python/unit/time/test_mpi_restart_fixture_contracts.py": 5,
   "tests/python/unit/time/test_multirate_history_contract.py": 1.0,
   "tests/python/unit/time/test_operator_handle_resolution.py": 1.0,
+  "tests/python/unit/time/test_owned_structural_fields_v02.py": 30,
   "tests/python/unit/time/test_post_synchronization.py": 2.0,
   "tests/python/unit/time/test_program_authoring_atomicity.py": 1.0,
   "tests/python/unit/time/test_program_cadence.py": 1.0,
@@ -8359,6 +8505,7 @@
   "tests/python/unit/time/test_structured_control.py": 15,
   "tests/python/unit/time/test_temporal_field_v02.py": 30,
   "tests/python/unit/time/test_temporal_handle_data_model.py": 1.0,
+  "tests/python/unit/time/test_temporal_hierarchy_v02.py": 30,
   "tests/python/unit/time/test_temporal_problem_regions.py": 5.0,
   "tests/python/unit/time/test_temporal_tau_program_authority.py": 5.0,
   "tests/python/unit/time/test_terminal_failure_budget.py": 30,
@@ -8391,9 +8538,10 @@
   "tests/python/unit/time/test_time_std_imex_lie_ab.py": 0.5,
   "tests/python/unit/time/test_time_std_rk.py": 180.0,
   "tests/python/unit/time/test_time_where.py": 70.0,
-  "tests/python/unit/time/test_typed_capture_outlining_v14.py": 60,
+  "tests/python/unit/time/test_typed_capture_outlining_v14.py": 180,
   "tests/python/unit/time/test_typed_provenance_guards.py": 1.0,
   "tests/python/unit/time/test_typed_schedule.py": 1.0,
   "tests/python/unit/time/test_uniform_affine_expressions_v02.py": 30,
-  "tests/python/unit/time/test_variant_types_v09.py": 15
+  "tests/python/unit/time/test_variant_types_v09.py": 15,
+  "tests/python/unit/runtime/test_amr_continuation_receipt_issuer.py": 30
 }

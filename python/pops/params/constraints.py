@@ -7,7 +7,6 @@ from fractions import Fraction
 from typing import Any
 
 from pops.descriptors import Descriptor
-from pops.identity.scalar import parse_canonical_integer
 
 
 def _literal_data(value: Any) -> dict[str, Any]:
@@ -23,6 +22,9 @@ def _literal_data(value: Any) -> dict[str, Any]:
 
 
 def _literal_from_data(data: Any) -> Any:
+    # Canonical scalar conversion is a lazy serialization seam, like _literal_data.
+    from pops.identity.scalar import parse_canonical_integer
+
     if not isinstance(data, Mapping) or not isinstance(data.get("kind"), str):
         raise TypeError("constraint literal data must be a mapping with a kind")
     kind = data["kind"]

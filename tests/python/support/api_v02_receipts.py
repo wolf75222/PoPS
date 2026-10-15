@@ -39,13 +39,19 @@ def _decode(spec, image, *, rank=None, schema=None):
         return struct.unpack("<q", struct.pack("<Q", word()))[0]
 
     magic = text()
-    assert magic in {"POPSCONT1", "POPSCONT2", "POPSCONT3", "POPSCONT4"}
+    assert magic in {"POPSCONT1", "POPSCONT2", "POPSCONT3", "POPSCONT4", "POPSCONT5"}
     identity = text()
     dimension = word()
     assert dimension in (1, 2, 3)
     publication = word()
     field_expressions, used_field_expressions = [], set()
-    if magic == "POPSCONT4":
+    has_expressions = magic == "POPSCONT4"
+    if magic == "POPSCONT5":
+        expression_flag = word()
+        assert expression_flag in (0, 1)
+        has_expressions = bool(expression_flag)
+    supports_seen = []
+    if has_expressions:
         from tests.python.support.field_expression_receipts import decode_field_expressions
         field_expressions = decode_field_expressions(blob())
         assert field_expressions and all(x is not None for x in field_expressions)
@@ -60,7 +66,7 @@ def _decode(spec, image, *, rank=None, schema=None):
         ]
     else:
         realm_count = bounded_count(24)
-        if magic in {"POPSCONT3", "POPSCONT4"}:
+        if magic in {"POPSCONT3", "POPSCONT4", "POPSCONT5"}:
             slot = word()
             assert slot <= realm_count
             primary_finite = slot - 1 if slot else None
@@ -69,6 +75,9 @@ def _decode(spec, image, *, rank=None, schema=None):
             replicated = word()
             assert replicated in (0, 1)
             realms.append(dict(issuer=issuer, replicated=bool(replicated)))
+            if magic == "POPSCONT2" and replicated:
+                assert primary_finite is None, "CONT2 has only one replicated allocator"
+                primary_finite = len(realms) - 1
         for i in range(bounded_count(40)):
             realm = word()
             assert realm < len(realms)
@@ -85,7 +94,7 @@ def _decode(spec, image, *, rank=None, schema=None):
         assert len({entry["issuer"] for entry in realms}) == len(realms)
         if primary_finite is not None:
             assert realms[primary_finite]["replicated"]
-        if magic in {"POPSCONT3", "POPSCONT4"}:
+        if magic in {"POPSCONT3", "POPSCONT4", "POPSCONT5"}:
             registry_count = bounded_count(32)
             slot = word()
             assert slot <= registry_count
@@ -95,13 +104,13 @@ def _decode(spec, image, *, rank=None, schema=None):
             assert len({entry["issuer"] for entry in registries}) == len(registries)
         count = bounded_count(40)
         if count:
-            if magic not in {"POPSCONT3", "POPSCONT4"}:
+            if magic not in {"POPSCONT3", "POPSCONT4", "POPSCONT5"}:
                 issuer = (word(), word())
                 storage = dict(bytes=word(), versions=word())
                 registries.append(dict(issuer=issuer, **storage))
                 primary_registry = 0
             for i in range(count):
-                slot = word() if magic in {"POPSCONT3", "POPSCONT4"} else 0
+                slot = word() if magic in {"POPSCONT3", "POPSCONT4", "POPSCONT5"} else 0
                 assert slot < len(registries)
                 issuer = registries[slot]["issuer"]
                 version, family, capacity = word(), signed(), signed()
@@ -228,8 +237,20 @@ def _decode(spec, image, *, rank=None, schema=None):
         return known_arrays[key]
 
     def value(sig):
-        kind = word()
         name = sig["vtype"]
+        support = None
+        if magic == "POPSCONT5" and name in {"state", "scalar_field"}:
+            present = word()
+            assert present in (0, 1)
+            if present:
+                support = dict(program_identity=text(), origin_point=text(),
+                               program_owner=word(), producer_level=word(),
+                               topology_epoch=word(), materialization_generation=word())
+                assert support["program_identity"] and support["origin_point"]
+                assert support["program_owner"] <= (1 << 31)-1
+                assert support["producer_level"] <= (1 << 31)-1
+                supports_seen.append(support)
+        kind = word()
         assert kind == native_kind(sig), (kind, name)
         if name in {"bool", "int64", "scalar"}:
             assert kind == {"bool": 0, "int64": 1, "scalar": 2}[name]
@@ -304,7 +325,7 @@ def _decode(spec, image, *, rank=None, schema=None):
                     "<f" + str(precision)
                 )
             expression = None
-            if magic == "POPSCONT4":
+            if has_expressions:
                 slot = word()
                 assert slot <= len(field_expressions)
                 if slot:
@@ -312,6 +333,7 @@ def _decode(spec, image, *, rank=None, schema=None):
                     expression = field_expressions[slot - 1]
             return dict(
                 field_expression=expression,
+                field_support=support,
                 components=components,
                 axes=axes,
                 replicated=bool(replicated),
@@ -321,7 +343,7 @@ def _decode(spec, image, *, rank=None, schema=None):
             )
         raise AssertionError("unexpected receiver type " + name)
 
-    if magic in {"POPSCONT2", "POPSCONT3", "POPSCONT4"}:
+    if magic in {"POPSCONT2", "POPSCONT3", "POPSCONT4", "POPSCONT5"}:
         for i in range(bounded_count(40)):
             version = word()
             sig = table_signature(blob())
@@ -350,6 +372,7 @@ def _decode(spec, image, *, rank=None, schema=None):
     out = value(schema)
     assert at == len(image)
     assert used_field_expressions == set(range(len(field_expressions)))
+    assert magic != "POPSCONT5" or supports_seen
     return {
         "root": out,
         "field_expressions": field_expressions,

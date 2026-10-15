@@ -147,7 +147,7 @@ def _plain_json_data(value, *, nonempty_keys=False, finite_floats=False):
                 return False
         if node is None or kind is str or kind is int or kind is float or kind is bool:
             continue
-        if kind not in (dict, list, tuple):
+        if kind is not dict and kind is not list and kind is not tuple:
             return False
         identity = id(node)
         if identity in seen:

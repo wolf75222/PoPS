@@ -61,6 +61,7 @@ LOCAL_OPS = frozenset(
         "provenance_bind",
         "int64_constant",
         "bool_constant",
+        "bool_op",
         "int64_op",
         "int64_compare",
         "finite_real",

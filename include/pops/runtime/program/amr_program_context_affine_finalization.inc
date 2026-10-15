@@ -4,6 +4,7 @@ private:
 struct AffineMacroFinalization {
   double start = 0.0;
   double requested = 0.0;
+  std::uint64_t topology_epoch = 0, materialization_generation = 0;
   std::vector<std::vector<field_type>> entry;
   std::vector<std::vector<field_type>> provisional;
   HistoryManager<Dim> entry_histories;
@@ -13,6 +14,26 @@ struct AffineMacroFinalization {
   bool accepted = false;
 };
 mutable std::optional<AffineMacroFinalization> affine_finalization_;
+
+std::optional<int> affine_field_owner_(const field_type& field) const {
+  if (!affine_finalization_)
+    return std::nullopt;
+  const auto& frame = *affine_finalization_;
+  std::optional<int> owner;
+  for (const auto* tower : {&frame.entry, &frame.provisional})
+    for (std::size_t block = 0; block < tower->size(); ++block)
+      for (std::size_t level = 0; level < tower->at(block).size(); ++level)
+        if (&field == &tower->at(block).at(level)) {
+          if (!frame.ready || active_level_ != static_cast<int>(level) ||
+              frame.topology_epoch != runtime_->topology_epoch() ||
+              frame.materialization_generation != runtime_->materialization_generation())
+            throw std::invalid_argument("affine snapshot requires its exact prepared support");
+          if (owner && *owner != static_cast<int>(block))
+            throw std::logic_error("affine snapshot aliases multiple runtime owners");
+          owner = static_cast<int>(block);
+        }
+  return owner;
+}
 
 void require_affine_finalization_(const char* operation) const {
   if (!affine_finalization_ || !affine_finalization_->ready || active_level_ != 0)
@@ -63,6 +84,8 @@ void begin_affine_finalization(double requested, std::initializer_list<int> prog
     AffineMacroFinalization frame;
     frame.start = facade_->time();
     frame.requested = requested;
+    frame.topology_epoch = runtime_->topology_epoch();
+    frame.materialization_generation = runtime_->materialization_generation();
     frame.entry = copy_affine_tower_();
     frame.entry_histories = runtime_state().hist_;
     frame.entry_history_flux = history_flux_expressions_;

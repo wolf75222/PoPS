@@ -59,7 +59,9 @@ def test_preconditioner_provider_is_exact_and_authenticated():
 
 def test_one_public_solve_verb_and_no_parallel_solve_verbs():
     assert tuple(inspect.signature(Program.solve).parameters) == (
-        "self", "problem", "solver", "name", "values", "at")
+        "self", "problem", "solver", "name", "values", "at", "temporal")
+    temporal = inspect.signature(Program.solve).parameters["temporal"]
+    assert temporal.kind is inspect.Parameter.KEYWORD_ONLY and temporal.default is None
     for legacy in (
         "solve_linear", "solve_local_linear", "solve_local_nonlinear", "solve_residual"):
         assert not hasattr(Program, legacy)

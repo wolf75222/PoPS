@@ -1,11 +1,10 @@
 """Bounded, owner-authenticated scalar expressions for native field load evaluation."""
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any
 
 from pops.identity import canonical_bytes
-from pops.identity.scalar import ScalarLiteral, parse_canonical_integer
+from pops.time.expression_dag import decode_expression_literal as decode_field_literal
 from pops.time._program.serialization import _json_ready
 
 
@@ -24,23 +23,6 @@ def field_input_contract(states: Any) -> tuple[tuple[Any, tuple[str, ...]], ...]
     if len({canonical_bytes(handle.canonical_identity()) for handle, _ in rows}) != len(rows):
         raise ValueError("field expression has ambiguous repeated state bindings")
     return tuple(rows)
-
-
-def decode_field_literal(data: Any) -> ScalarLiteral:
-    if not isinstance(data, Mapping) or data.get("kind") not in (
-            "integer", "rational", "decimal", "binary64"):
-        raise TypeError("field expression requires an exact numeric literal without raw C++")
-    kind = data["kind"]
-    if kind == "integer":
-        payload = parse_canonical_integer(data["value"])
-    elif kind == "rational":
-        payload = (parse_canonical_integer(data["numerator"]), parse_canonical_integer(data["denominator"]))
-    else:
-        payload = data["value"]
-    literal = ScalarLiteral(kind, payload, data.get("unit"), data.get("target"))
-    if canonical_bytes(literal.to_data()) != canonical_bytes(dict(data)):
-        raise ValueError("field expression literal is not canonical")
-    return literal
 
 
 def encode_field_expression(expression: Any, states: Any, *, unknowns: tuple = ()) -> tuple:

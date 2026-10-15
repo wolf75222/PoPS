@@ -51,6 +51,11 @@ ContinuationRegridFrame& require_continuation_regrid_() const {
   return *continuation_regrid_;
 }
 
+bool continuation_regrid_publication_deferred_() const noexcept {
+  return continuation_regrid_ && continuation_regrid_->attempt.visible() &&
+         !continuation_regrid_->target_ready && !continuation_regrid_->published;
+}
+
 public:
 bool continuation_regrid_phase() const noexcept {
   return continuation_regrid_ && continuation_regrid_->attempt.visible() &&
@@ -263,7 +268,7 @@ void end_continuation_regrid() const noexcept {
   continuation_regrid_.reset();
   // Any retained target is reauthenticated from the newly accepted Store.
   // Old source aliases must not carry a previous generation across this seam.
-  continuation_field_storage_.clear();
+  revoke_continuation_field_copies_();
 }
 
 void install_continuation_regrid_graph(std::function<void()> graph) const {

@@ -30,6 +30,36 @@ struct AmrProgramHistoryRemapCollectiveTestAccess {
     return found != context.continuation_field_storage_.end() && !found->second.lifetime.expired();
   }
   static void revoke_copied_fields(Context& context) { context.continuation_revoke_attempt_(); }
+  static void promotion_preflight_fixture(Context& context, std::int64_t operation) {
+    context.mapping_continuation_ = std::make_unique<typename Context::MappingContinuation>();
+    auto& frame = *context.mapping_continuation_;
+    frame.executing = true;
+    frame.failures.resize(static_cast<std::size_t>(context.nlev()));
+    for (auto& handlers : frame.failures) {
+      typename Context::MappingFailureHandler handler;
+      handler.operation = operation;
+      handler.identity = "tests.child-promotion-local-preflight";
+      handler.callback = [](std::exception_ptr) {};
+      handlers.push_back(std::move(handler));
+    }
+    context.level_continuation_authorities_[0] = std::make_shared<ContinuationAuthority<Dim>>();
+  }
+  static void discard_promotion_fixture(Context& context) { context.mapping_continuation_.reset(); }
+  static void capture_affine_fields(Context& context) {
+    typename Context::AffineMacroFinalization frame;
+    frame.entry = context.copy_affine_tower_();
+    frame.provisional = context.copy_affine_tower_();
+    frame.topology_epoch = context.runtime_->topology_epoch();
+    frame.materialization_generation = context.runtime_->materialization_generation();
+    frame.ready = true;
+    context.affine_finalization_.emplace(std::move(frame));
+  }
+  static Field& affine_entry(Context& context, int level) {
+    return context.affine_finalization_->entry.at(0).at(level);
+  }
+  static void stale_affine_fields(Context& context) {
+    ++context.affine_finalization_->materialization_generation;
+  }
   static std::string key(Context& context, const std::string& name, int level) {
     return context.history_key_(name, level);
   }
@@ -382,12 +412,18 @@ TEST(AmrContinuationFieldStorage, ExactCopiesRetainOwnerWithoutShapeOrPointerReu
   fixture.context->for_each_program_resource_level([&](int level) {
     auto& source = fixture.context->state(0);
     auto copy = std::make_shared<Field>(source);
+    EXPECT_THROW(fixture.context->require_program_field_access(*copy), std::invalid_argument);
     EXPECT_THROW(fixture.context->rhs_scratch(9901, 0, *copy), std::invalid_argument);
     fixture.context->continuation_bind_field_provenance(source, *copy, copy);
     EXPECT_NO_THROW(fixture.context->rhs_scratch(9901, 0, *copy));
     EXPECT_TRUE(Access::live_copied_field(*fixture.context, copy.get()));
-    if (level != 0)
+    if (level != 0) {
       EXPECT_THROW(fixture.context->rhs_scratch(9902, 0, *copies.front()), std::invalid_argument);
+      // Moving a structural payload is legal, even when calculating with it is not.
+      auto opaque = fixture.context->own_structural_field(*copies.front());
+      EXPECT_THROW(fixture.context->require_program_field_access(*opaque), std::invalid_argument);
+      EXPECT_EQ(opaque->layout(), copies.front()->layout());
+    }
     auto transient = std::make_shared<Field>(source);
     fixture.context->continuation_bind_field_provenance(source, *transient, transient);
     const auto retired = transient.get();
@@ -397,8 +433,61 @@ TEST(AmrContinuationFieldStorage, ExactCopiesRetainOwnerWithoutShapeOrPointerReu
   });
   Access::revoke_copied_fields(*fixture.context);
   fixture.context->for_each_program_resource_level([&](int level) {
-    if (copies[level])
+    if (copies[level]) {
       EXPECT_THROW(fixture.context->rhs_scratch(9903, 0, *copies[level]), std::invalid_argument);
+      EXPECT_THROW(fixture.context->require_program_field_access(*copies[level]),
+                   std::invalid_argument);
+      EXPECT_THROW(fixture.context->own_structural_field(*copies[level]), std::invalid_argument);
+    }
   });
+}
+TEST(AmrContinuationFieldStorage, AffineSnapshotsHaveExactPreparedStorageAuthority) {
+  Fixture fixture;
+  Access::capture_affine_fields(*fixture.context);
+  fixture.context->for_each_program_resource_level([&](int level) {
+    auto& source = Access::affine_entry(*fixture.context, level);
+    EXPECT_NO_THROW(fixture.context->require_program_field_access(source));
+    EXPECT_NO_THROW(fixture.context->rhs_scratch(9911, 0, source));
+    auto owned = fixture.context->own_structural_field(source);
+    EXPECT_NO_THROW(fixture.context->require_program_field_access(*owned));
+    pops::MultiFab<Dim> lookalike(source);
+    EXPECT_THROW(fixture.context->require_program_field_access(lookalike), std::invalid_argument);
+    if (level != 0)
+      EXPECT_THROW(
+          fixture.context->require_program_field_access(Access::affine_entry(*fixture.context, 0)),
+          std::invalid_argument);
+  });
+  Access::stale_affine_fields(*fixture.context);
+  fixture.context->for_each_program_resource_level([&](int level) {
+    EXPECT_THROW(fixture.context->require_program_field_access(
+                     Access::affine_entry(*fixture.context, level)),
+                 std::invalid_argument);
+  });
+}
+TEST(AmrContinuationFieldStorage, RankLocalPromotionFailurePrecedesTheOnlyCollectiveVote) {
+  Fixture fixture;
+  using Authority = pops::runtime::program::ContinuationAuthority<Dim>;
+  constexpr std::int64_t operation = 771;
+  Access::promotion_preflight_fixture(*fixture.context, operation);
+  const auto& lane = fixture.context->prepared_execution_lane();
+  Authority::Scope scope;
+  Authority::Accepted accepted;
+  std::shared_ptr<int> lifetime;
+  if (lane.rank() != 0)
+    lifetime = std::make_shared<int>(1);
+  // Rank zero rejects the absent frame. Other ranks reach their existing but
+  // uninitialized issuer and reject its absent scope. Neither local path may
+  // enter an issuer getter collective before this one common outer vote.
+  std::exception_ptr failure;
+  try {
+    fixture.context->prepare_hierarchy_scope_promotion(operation, scope, accepted, lifetime);
+  } catch (...) {
+    failure = std::current_exception();
+  }
+  EXPECT_TRUE(failure);
+  EXPECT_THROW(
+      pops::collectively_rethrow_exception(failure, lane, "promotion preflight must converge"),
+      std::exception);
+  Access::discard_promotion_fixture(*fixture.context);
 }
 }  // namespace

@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from pops.codegen.program_emit_kernels import ProgramValue
+from pops.time._program.traversal import all_ops, all_ops_with_ancestry
 
 
 _MODEL_OWNER_SENSITIVE_OPS = frozenset(
@@ -31,50 +32,6 @@ _MODEL_OWNER_SENSITIVE_OPS = frozenset(
 )
 
 
-_STRUCTURED_BLOCK_KEYS = (
-    "cond_block",
-    "body_block",
-    "apply_block",
-    "residual_block",
-    "true_block",
-    "false_block",
-)
-
-
-def all_ops_with_ancestry(program: Any) -> Any:
-    """Yield ``(node, ancestry)`` recursively with authenticated structured-region ownership."""
-    seen: set[int] = set()
-
-    def walk(value: Any, ancestry: tuple[tuple[int, str], ...]) -> Any:
-        value_id = getattr(value, "id", None)
-        region = getattr(value, "region", None)
-        if type(value_id) is not int or value_id < 0:
-            raise TypeError("Program node identity must be a non-negative exact integer")
-        if value_id in seen:
-            raise ValueError("Program node %d appears in multiple structured regions" % value_id)
-        if type(region) is not int or region < 0:
-            raise TypeError("Program node %d has an invalid structured region" % value_id)
-        if (region == 0) != (not ancestry):
-            raise ValueError(
-                "Program node %d structured ancestry disagrees with region %d"
-                % (value_id, region)
-            )
-        seen.add(value_id)
-        yield value, ancestry
-        for key in _STRUCTURED_BLOCK_KEYS:
-            block = value.attrs.get(key)
-            if isinstance(block, (list, tuple)):
-                for nested in block:
-                    yield from walk(nested, ancestry + ((value_id, key),))
-
-    for value in program._values:
-        yield from walk(value, ())
-
-
-def all_ops(program: Any) -> Any:
-    """Iterate every node recursively, including lazy branch and solver sub-regions."""
-    for value, _ancestry in all_ops_with_ancestry(program):
-        yield value
 
 
 def check_model_owner_dispatch(program: Any, model: Any) -> None:
@@ -131,9 +88,12 @@ def _check_amr_flux_weights(program: Any) -> None:
 
     values = list(all_ops(program))
     stored_histories: dict[str, list[Any]] = {}
+    folded_carries: dict[int, tuple[Any, Any]] = {}
     for value in values:
         if value.op == "store_history":
             stored_histories.setdefault(value.attrs["history"], []).append(value.inputs[0])
+        elif value.op == "structured_fold":
+            folded_carries[value.attrs["body_argument"].id] = (value.inputs[0], value.attrs["body"])
 
     unknown = object()
     powers: dict[int, object | frozenset[int]] = {}
@@ -166,8 +126,17 @@ def _check_amr_flux_weights(program: Any) -> None:
         changed = False
         for value in values:
             prior = powers.get(value.id, frozenset())
-            if value.op == "rhs":
-                current: object | frozenset[int] = (
+            if value.id in folded_carries:
+                # The first invocation sees the initial value; every later
+                # invocation sees the preceding body result. Native structural
+                # copies preserve the exact Field exchange expression.
+                current: object | frozenset[int] = merged([
+                    powers.get(source.id, frozenset()) for source in folded_carries[value.id]])
+            elif value.op == "structured_fold":
+                current = merged([powers.get(source.id, frozenset())
+                                  for source in (value.inputs[0], value.attrs["body"])])
+            elif value.op == "rhs":
+                current = (
                     frozenset({0}) if value.attrs.get("flux", True) else frozenset())
             elif value.op == "diffusive_rhs":
                 current = (

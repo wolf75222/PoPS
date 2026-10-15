@@ -22,8 +22,9 @@ def test_authored_guard_replaces_only_the_default_sufficient_certificate(dynamic
         action=RejectAttempt(), role=GuardRole.NUMERICAL_STABILITY)
     p.commit(q.next, guarded)
     p.step_strategy(FixedDt(.001))
-    updates, covered, rates = explicit_update_consumption(p)
+    updates, covered, rates, consumed_rates = explicit_update_consumption(p)
     assert candidate.id in updates and candidate.id in covered and rate.id in rates
+    assert rate.id in consumed_rates
     cpp = emit(model, p)
     assert "energy_admission" in cpp and "StepAttemptRejected" in cpp
     assert '"runtime_affine_spatial_stability"' not in cpp
@@ -55,8 +56,9 @@ def test_an_unused_guard_cannot_admit_an_unguarded_commit():
     p.guard("unused", candidate, p.norm_inf(candidate) < 10,
             action=RejectAttempt(), role=GuardRole.NUMERICAL_STABILITY)
     p.commit(q.next, candidate)
-    _, covered, rates = explicit_update_consumption(p)
+    _, covered, rates, consumed_rates = explicit_update_consumption(p)
     assert not covered and not rates
+    assert rate.id in consumed_rates
     with pytest.raises(ValueError, match="convex affine"):
         emit(model, p)
 
@@ -68,8 +70,9 @@ def test_a_path_without_the_guard_retains_its_default_obligation():
         action=RejectAttempt(), role=GuardRole.NUMERICAL_STABILITY)
     selected = p.branch(p.norm_inf(q.n) > 0, lambda b: guarded, lambda b: candidate)
     p.commit(q.next, selected)
-    _, covered, rates = explicit_update_consumption(p)
+    _, covered, rates, consumed_rates = explicit_update_consumption(p)
     assert candidate.id not in covered and rate.id not in rates
+    assert rate.id in consumed_rates
 
 
 def test_an_invariant_guard_does_not_silently_change_the_numerical_contract():
@@ -111,13 +114,17 @@ def test_declared_diffusion_uses_the_same_authored_admission_authority():
     rate = model.rate("rate", equation=math.ddt(state) == math.div(flux))
     case = pops.Case("signed_diffusion")
     block = case.block("field", model)
-    numerics = DiscretizationPlan(); numerics.rates.add(rate, Diffusion(flux=flux))
+    numerics = DiscretizationPlan()
+    numerics.rates.add(rate, Diffusion(flux=flux))
     case.numerics(numerics, block=block)
-    p = pops.Program("authored_diffusion"); q = p.state(block[state])
+    p = pops.Program("authored_diffusion")
+    q = p.state(block[state])
     candidate = p.value("negative_rate", q.n-p.dt*rate(q.n), at=q.next.point)
     guarded = p.guard("authored_heat_admission", candidate, p.norm_inf(candidate) < 10,
                      action=RejectAttempt(), role=GuardRole.NUMERICAL_STABILITY)
-    p.commit(q.next, guarded); p.step_strategy(FixedDt(.001)); case.program(p)
+    p.commit(q.next, guarded)
+    p.step_strategy(FixedDt(.001))
+    case.program(p)
     plan = pops.resolve(pops.validate(case), layout=layout)
     cpp = emit_cpp_program(plan.time, model_graph=ProgramModelGraph.from_resolved_blocks(plan.blocks))
     assert "authored_heat_admission" in cpp

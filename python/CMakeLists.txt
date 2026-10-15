@@ -271,6 +271,7 @@ if(POPS_NATIVE_DIM STREQUAL "2")
   set(_pops_py_gpu_entrypoints
       tests/python/integration/native_loader/test_gpu_external_field_dispatch_runtime.py)
   set(_pops_py_mpi_orchestrators
+    tests/python/integration/mpi/test_api_v02_continuation_migration.py
       tests/python/integration/mpi/test_amr_rank_change_restart.py
       tests/python/integration/mpi/test_initial_field_ghost_mpi.py
       tests/python/integration/mpi/test_public_accepted_halo_mpi1.py

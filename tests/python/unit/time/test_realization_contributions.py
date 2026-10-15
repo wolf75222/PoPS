@@ -253,21 +253,31 @@ def test_interval_replace_and_scale_cannot_relabel_runtime_endpoints():
         inc.scale(p,1,name="relabel",interval=second)
 
 
-def test_interval_child_capture_and_amr_lowering_are_refused():
+def test_interval_fold_capture_requires_qualified_invocation():
     model,p,q,_=fixture()
     window=p.interval()
     result=p.fold(q.n,1,lambda inner,carried,index:window.bind(inner,carried,name="bad"))
     p.commit(q.next,p.value("candidate",result,at=q.next.point))
     with pytest.raises((NotImplementedError,ValueError),match="effect|Interval|qualified|unsupported"):
         p.validate()
+
+
+def test_amr_interval_issuance_authenticates_live_clock_and_attempt_collectively():
     model,p,q,_=fixture()
     window=p.interval()
     shared=Contribution("J",p.value("J",q.n),window)
     inc=Increment((shared,),(identity_delivery(shared,q.n),))
     p.commit(q.next,inc.apply(p,q.n,name="root",at=q.next.point))
     from pops.codegen.program_emit_intervals import emit_interval
-    with pytest.raises(NotImplementedError,match="Uniform"):
-        emit_interval(p,window.begin,{},[],target="amr_system")
+    lines=[]
+    names={}
+    emit_interval(p,window.begin,names,lines,target="amr_system")
+    source="\n".join(lines)
+    assert "ctx.boundary_evaluation_point(0)" in source
+    assert "ctx.resource_attempt()" in source
+    assert ".visible()" in source and ".clock !=" in source
+    assert "pops::all_reduce_max(" in source and "ctx.prepared_execution_lane()" in source
+    assert names[window.begin.id] == "interval_begin_%d" % window.begin.id
 
 
 def test_computed_interval_requires_exact_published_duration_ssa():

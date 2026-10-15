@@ -63,14 +63,11 @@ class HistoryTransfer:
         slots = target_slots
         if not callable(body):
             raise TypeError("HistoryTransfer body must author scalar equations")
-        from pops.time import Program
-        from pops.time.expressions import ProgramScalar, encode_expressions
+        from pops._ir.expr import Var
+        from pops.time.expressions import encode_expressions
         from pops.model.hash_data import canonical_hash_data
-        program = Program("history_transfer_graph")
-        values = tuple(program._new("scalar", "history_transfer_input", (), {},
-            "history_transfer_input_%d" % i, None, inherit_state_ref=False)
-            for i in range(2*source_slots+2+len(parameters)))
-        scalars = tuple(ProgramScalar(value) for value in values)
+        scalars = tuple(Var("history_transfer_input_%d" % i, "history_transfer")
+                        for i in range(2*source_slots+2+len(parameters)))
         samples = tuple(HistorySample(scalars[2*i], scalars[2*i+1]) for i in range(source_slots))
         tail = 2*source_slots
         valid, rows = body(samples, scalars[tail], scalars[tail+1], *scalars[tail+2:])
@@ -81,12 +78,11 @@ class HistoryTransfer:
             if type(row) is not tuple or len(row) != 3 or type(row[2]) is not tuple or len(row[2]) != source_slots:
                 raise ValueError("HistoryTransfer rows require time, interval and one weight per source")
             flattened.extend((row[0], row[1], *row[2]))
-        roots, nodes, inputs = encode_expressions(flattened, program)
-        positions = {value.id: i for i, value in enumerate(values)}
+        roots, nodes, inputs = encode_expressions(flattened, None, symbolic_inputs=scalars)
         encoded = []
         for node in nodes:
             if node[0] == "input":
-                encoded.append(("input", positions[inputs[node[1]].id], node[2]))
+                encoded.append(tuple(node))
             elif node[0] == "literal":
                 encoded.append(("literal", node[1].to_data()))
             elif node[0] == "coefficient":
@@ -94,7 +90,7 @@ class HistoryTransfer:
             else:
                 encoded.append(node)
         data = dict(kind="history_transfer", schema_version=1 if legacy else 2, slots=slots,
-                    input_count=len(values), roots=roots, nodes=tuple(encoded))
+                    input_count=len(inputs), roots=roots, nodes=tuple(encoded))
         if not legacy:
             data.update(source_slots=source_slots, parameter_names=parameters)
         # Validate through exactly the decoder used by code generation.
@@ -134,14 +130,12 @@ def transfer_dimensions(data):
 
 
 def validate_transfer_data(data):
-    from pops.fields._program_expression import decode_field_literal
-    from pops.codegen.program_emit_expressions import checked_expression_dag
+    from pops.time.expression_dag import decode_expression_literal, restore_expression_dag
     transfer_dimensions(data)
-    nodes = tuple(("literal", decode_field_literal(node[1]))
+    nodes = tuple(("literal", decode_expression_literal(node[1]))
                   if node[0] == "literal" else tuple(node) for node in data["nodes"])
-    # This validation shares the existing scalar language and lazy branch
-    # lowering; a transfer cannot invent an opcode or capture another Program.
-    checked_expression_dag(tuple(data["roots"]), nodes,
+    # This validation shares the existing scalar language and branch structure; a transfer cannot invent an opcode or capture another Program.
+    restore_expression_dag(tuple(data["roots"]), nodes,
                            tuple(("input_%d" % i,) for i in range(data["input_count"])))
     return nodes
 

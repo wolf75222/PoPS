@@ -33,6 +33,9 @@ def validate_field_observation(value: Any) -> tuple[int, int, Any]:
             or type(value.attrs.get("ncomp")) is not int or value.attrs["ncomp"] != 1 \
             or len(value.inputs) != 1:
         raise ValueError("field observation requires one consumed packed source")
+    byte_capacity = value.attrs.get("observation_byte_capacity", 64 * 1024 * 1024)
+    if type(byte_capacity) is not int or not 1 <= byte_capacity <= (1 << 63) - 1:
+        raise ValueError("field observation byte capacity must be a positive int64 ceiling")
     identity = Identity.from_token(value.attrs.get("field_problem_identity"))
     if identity.domain != "field-problem":
         raise ValueError("field observation lost its physical field-problem identity")

@@ -102,7 +102,9 @@ def build(cells, order=(0, 1, 2), *, guarded=False, seed=False, right_preconditi
     current, load, coefficient = (program.state(block[handle]) for block, handle in
         zip(blocks, (state, forcing, parameter), strict=True))
     program.store_history("accepted-response", current.n, depth=1)
-    original_point = (coefficient.n.point if physical_seed is not None else program.stage("original-field", c=0))
+    original_point = (coefficient.n.point if physical_seed is not None or control_region in
+        ("capture_typed", "iterate_typed_success", "iterate_typed_error", "iterate_typed_budget")
+        else program.stage("original-field", c=0))
     request = field.bind_program_inputs(program=program,
         values={blocks[1][forcing]: load.n, blocks[2][parameter]: coefficient.n},
         at=original_point, solver=solver)
@@ -119,7 +121,7 @@ def build(cells, order=(0, 1, 2), *, guarded=False, seed=False, right_preconditi
         request = request.seed_product(program=program, space=space, name="declared-original-seed",
             expressions=tuple(0 * coefficient.n[0] + physical_seed for _ in order))
     if control_region is not None:
-        if width != 1 or control_region not in ("branch_true", "branch_false", "fold", "fold_overflow", "capture_success", "capture_runtime", "capture_terminal", "capture_user", "iterate_success", "iterate_budget", "iterate_runtime"):
+        if width != 1 or control_region not in ("branch_true", "branch_false", "fold", "fold_overflow", "capture_success", "capture_runtime", "capture_terminal", "capture_user", "capture_typed", "iterate_success", "iterate_budget", "iterate_runtime", "iterate_typed_success", "iterate_typed_error", "iterate_typed_budget"):
             raise ValueError("invalid original-field structured observation fixture")
 
         def regional_solve(body, factor, *, reject=False, terminal=False):
@@ -133,6 +135,24 @@ def build(cells, order=(0, 1, 2), *, guarded=False, seed=False, right_preconditi
             result = field.observe(body.solve(regional_request, solver=regional_solver).consume(action=RejectAttempt() if reject and not terminal else FailRun()))
             return body.max(result[field[unknowns[0]]])
 
+        def typed_result(body, value, error):
+            from pops.time.variant_types import Result, Variant, type_of
+            domain = body.range_set(3, capacity=3, ownership="replicated")
+            samples = body.map(domain, lambda child, index: value + child.float64(child.index_value(index)))
+            payload = body.product(code=body.int64(-(1 << 63)), samples=samples)
+            errors = Variant(retry=type_of(payload))
+            result_type = Result(type_of(value), errors)
+            return body.branch(error,
+                lambda child: child.variant(result_type, "err", child.variant(errors, "retry", payload)),
+                lambda child: child.variant(result_type, "ok", value))
+
+        def typed_observation(body, error):
+            return body.match(error, retry=lambda child, payload: child.branch(payload["code"] == -(1 << 63),
+                lambda inner: inner.reduce(payload["samples"], inner.float64(0),
+                    lambda local, total, sample: total + sample, order="ascending"),
+                lambda inner: inner.float64(-9)), runtime=lambda child, payload: child.branch(payload["code"] == 1,
+                    lambda inner: inner.float64(-7), lambda inner: inner.float64(-9)))
+
         if control_region.startswith("branch"):
             observation = program.branch(program.boolean(control_region == "branch_true"),
                 lambda body: regional_solve(body, 2), lambda body: regional_solve(body, 1))
@@ -142,23 +162,45 @@ def build(cells, order=(0, 1, 2), *, guarded=False, seed=False, right_preconditi
                     terminal=control_region == "capture_terminal")
                 if control_region == "capture_user":
                     result = body.require_success(body.failure(result, -(1 << 63)))
+                if control_region == "capture_typed":
+                    result = body.require_success(typed_result(body, result, body.boolean(True)))
                 return result
             result = program.capture(captured)
-            observation = program.match(result,
-                ok=lambda body, value: body.float64(5),
-                err=lambda body, error: body.branch(error["code"] == (-(1 << 63) if control_region == "capture_user" else 3),
-                    lambda inner: inner.float64(-7), lambda inner: inner.float64(-9)))
+            if control_region == "capture_typed":
+                observation = program.match(result, ok=lambda body, value: body.float64(5), err=typed_observation)
+            else:
+                observation = program.match(result,
+                    ok=lambda body, value: body.float64(5),
+                    err=lambda body, error: body.branch(error["code"] == (-(1 << 63) if control_region == "capture_user" else 3),
+                        lambda inner: inner.float64(-7), lambda inner: inner.float64(-9)))
         elif control_region.startswith("iterate"):
-            result = program.iterate(program.float64(0),
-                lambda body, carry: carry + regional_solve(body, 1, reject=control_region == "iterate_runtime"),
-                lambda body, carry: carry > .2, max_steps=1 if control_region == "iterate_budget" else 3)
-            observation = program.match(result,
-                ok=lambda body, value: body.float64(5),
-                err=lambda body, error: body.branch(error["code"] == (1 if control_region == "iterate_budget" else 3),
-                    lambda inner: inner.float64(-7), lambda inner: inner.float64(-9)))
+            if control_region.startswith("iterate_typed"):
+                result = program.iterate(program.float64(0),
+                    lambda body, carry: typed_result(body, carry + regional_solve(body, 1),
+                        carry > 0 if control_region == "iterate_typed_error" else body.boolean(False)),
+                    lambda body, carry: carry > .2, max_steps=1 if control_region == "iterate_typed_budget" else 3)
+                observation = program.match(result,
+                    ok=lambda body, value: value["state"] + .01*body.float64(value["iterations"]),
+                    err=typed_observation)
+            else:
+                result = program.iterate(program.float64(0),
+                    lambda body, carry: carry + regional_solve(body, 1, reject=control_region == "iterate_runtime"),
+                    lambda body, carry: carry > .2, max_steps=1 if control_region == "iterate_budget" else 3)
+                observation = program.match(result,
+                    ok=lambda body, value: body.float64(5),
+                    err=lambda body, error: body.branch(error["code"] == (1 if control_region == "iterate_budget" else 3),
+                        lambda inner: inner.float64(-7), lambda inner: inner.float64(-9)))
         else:
             observation = program.fold(program.float64(0), program.int64(3 if control_region == "fold_overflow" else 2),
                 lambda body, carry, index: carry + regional_solve(body, 1), max_steps=program.int64(2))
+        if (control_region.startswith(("capture", "iterate")) and "typed" not in control_region):
+            error_origin = program.match(result,
+                ok=lambda body, value: body.float64(0),
+                err=lambda body, error: body.branch(error["origin"] == 1,
+                    lambda inner: inner.float64(1),
+                    lambda inner: inner.branch(error["origin"] == 2,
+                        lambda nested: nested.float64(2), lambda nested: nested.float64(-99))))
+            program.record_scalar("structured_original_failure_origin", error_origin)
         program.record_scalar("structured_original_observation", observation)
     observed = field.observe(program.solve(request, solver=solver).consume(action=FailRun()))
     if second_solve:

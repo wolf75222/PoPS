@@ -33,7 +33,7 @@ def _level(program, value):
 
 def topology(program, field, *, level, side, dimension):
     """Borrow one exact old/new layout; no geometry or interpolation is inferred."""
-    from pops.time.field_representation import validate_topology_signature
+    from pops.time.field_topology import validate_topology_signature
 
     context = _context(program)
     require_owned(program, field, "regrid topology Field")

@@ -3,6 +3,9 @@
 #include <pops/runtime/program/amr_program_context_hierarchy_barriers.inc>
 
 public:
+struct HierarchyTypedFailure;
+using hierarchy_typed_failure = std::shared_ptr<const HierarchyTypedFailure>;
+
 void suspend_map(std::string identity, bool target, field_type& field,
                  std::function<void()> continuation) const {
   if (!mapping_continuation_ || !mapping_continuation_->executing || identity.empty() ||
@@ -86,6 +89,13 @@ struct MappingFailureHandler {
   std::string identity;
   std::function<void(std::exception_ptr)> callback;
 };
+struct HierarchyScopePromotion {
+  ContinuationAuthority<Dim>* issuer = nullptr;
+  typename ContinuationAuthority<Dim>::Scope* scope = nullptr;
+  typename ContinuationAuthority<Dim>::Accepted* destination = nullptr;
+  std::shared_ptr<const void> lifetime;
+  typename ContinuationAuthority<Dim>::Promotion plan;
+};
 struct MappingContinuation {
   double dt = 0;
   bool executing = false;
@@ -97,11 +107,15 @@ struct MappingContinuation {
   std::function<void()> completed;
   std::vector<MappingLevelPort> ports;
   std::vector<std::vector<MappingFailureHandler>> failures;
+  hierarchy_typed_failure typed_failure;
+  std::map<std::int64_t, std::vector<std::optional<HierarchyScopePromotion>>> promotions;
   std::vector<field_type*> fields;
 };
 mutable std::unique_ptr<MappingContinuation> mapping_continuation_;
 
 #include <pops/runtime/program/amr_program_context_hierarchy_failure.inc>
+#include <pops/runtime/program/amr_program_context_hierarchy_promotion.inc>
+#include <pops/runtime/program/amr_program_context_hierarchy_typed_failure.inc>
 
 void cancel_mapping_hierarchy_() const noexcept {
   revoke_finite_values_on_rollback();

@@ -2773,7 +2773,9 @@ def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(m
         prepare_outer_state,
         after_native_apply,
         rollback_after_native_apply,
+        workspace_byte_capacity,
     ):
+        assert workspace_byte_capacity is None
         assert runtime is owner and executor is native
         assert payload == b"checkpoint"
         assert bit_identical is True
@@ -3182,7 +3184,9 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
         prepare_outer_state,
         after_native_apply,
         rollback_after_native_apply,
+        workspace_byte_capacity,
     ):
+        assert workspace_byte_capacity is None
         assert owner is runtime and executor is native
         assert payload == b"checkpoint" and bit_identical is False
         assert hierarchy_mode == "regrid_on_restart"

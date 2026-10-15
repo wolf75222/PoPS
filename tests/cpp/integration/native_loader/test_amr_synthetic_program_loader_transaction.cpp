@@ -10,6 +10,7 @@
 #include "amr_tagging_test_authority.hpp"
 #include "component_abi_test_helpers.hpp"
 #include "gtest_compat.hpp"
+#include "legacy_amr_attempt_fixture.hpp"
 #include "synthetic_loader_fixture.hpp"
 
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
@@ -1272,9 +1273,22 @@ TEST(test_amr_synthetic_program_loader_transaction,
   std::fill(corrupt.begin() + offset, corrupt.begin() + offset + 8, std::uint8_t{0});
   EXPECT_THROW(system.restore_checkpoint_accepted_state(corrupt), std::invalid_argument);
   unchanged();
-  auto legacy = accepted;
-  legacy.erase(legacy.begin() + offset, legacy.begin() + offset + 8);
-  legacy[7] = '7';
+  const auto legacy = pops::test_support::legacy_and7_attempt_image(decoded);
+  const auto legacy_decoded =
+      pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(legacy);
+  EXPECT_FALSE(legacy_decoded.accepted_attempt.has_value());
+  for (int axis = 0; axis < Dim; ++axis) {
+    ASSERT_EQ(legacy_decoded.accepted_face_flux[axis].size(),
+              decoded.accepted_face_flux[axis].size());
+    for (std::size_t index = 0; index < decoded.accepted_face_flux[axis].size(); ++index) {
+      EXPECT_EQ(legacy_decoded.accepted_face_flux[axis][index].key.attempt,
+                decoded.accepted_face_flux[axis][index].key.attempt);
+      EXPECT_EQ(legacy_decoded.accepted_face_flux[axis][index].payload,
+                decoded.accepted_face_flux[axis][index].payload);
+      EXPECT_EQ(legacy_decoded.accepted_face_flux[axis][index].measure.stage_weight,
+                decoded.accepted_face_flux[axis][index].measure.stage_weight);
+    }
+  }
   if (pops::n_ranks() == 1)
     EXPECT_THROW(system.restore_checkpoint_accepted_state(legacy), std::invalid_argument);
   else

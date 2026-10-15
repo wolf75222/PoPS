@@ -169,3 +169,45 @@ def test_json_projection_fast_codec_does_not_add_integer_or_depth_limits():
     value.append(value)
     with pytest.raises(ValueError, match="cycle"):
         _json_ready(value)
+
+
+def test_canonical_snapshot_fast_codec_preserves_order_scalars_and_isolation():
+    from pops.identity.scalar import scalar_data
+    shared = {"é": (-0.0, 1e-310, 2**80), "last": [True, None]}
+    source = {"z": shared, "a": shared}
+    snapshot = CanonicalData(source)
+    first = snapshot.to_data()
+    assert list(first) == ["z", "a"]
+    assert first["z"]["é"] == [{"scalar": scalar_data(x)} for x in shared["é"]]
+    first["z"]["last"].append(7)
+    shared["last"].append(8)
+    assert snapshot.to_data()["z"]["last"] == [True, None]
+    assert first["a"]["last"] == [True, None]
+
+
+def test_canonical_snapshot_retains_each_observable_protocol_occurrence():
+    calls = []
+    class Observed:
+        __pops_ir_immutable__ = True
+        def to_data(self):
+            calls.append(len(calls))
+            return {"occurrence": len(calls)}
+    observed = Observed()
+    snapshot = CanonicalData([observed, observed])
+    from pops.identity.scalar import scalar_data
+    assert snapshot.to_data() == [
+        {"occurrence": {"scalar": scalar_data(1)}},
+        {"occurrence": {"scalar": scalar_data(2)}}]
+    assert calls == [0, 1]
+
+
+def test_streaming_chunks_bound_occurrence_expansion_and_keep_exact_bytes():
+    import hashlib
+    from pops._structural_data import canonical_json_chunks, canonical_json_sha256
+    shared = {"z": "\U0001f642" * 10, "a": [-0.0, True, None]}
+    value = [shared] * 10000
+    chunks = list(canonical_json_chunks(value))
+    expected = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    assert "".join(chunks) == expected
+    assert max(map(len, chunks)) <= 65536
+    assert canonical_json_sha256(value) == hashlib.sha256(expected.encode()).hexdigest()

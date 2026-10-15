@@ -1429,6 +1429,10 @@ name = "pops_python_integration_mpi"
 path = "tests/python/integration/mpi"
 labels = ["integration", "python", "mpi", "medium"]
 mpi_entrypoints = [
+  { path = "tests/python/integration/mpi/test_api_v02_continuation_capture_native_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_original_field_typed_recovery_native_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_path_hierarchy_native_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_temporal_hierarchy_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_retained_stencil_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_original_field_recovery_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_original_field_regions_native_mpi2.py", nproc = 2, native_dimension = 2 },

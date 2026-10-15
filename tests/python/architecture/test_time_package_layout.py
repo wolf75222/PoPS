@@ -78,6 +78,7 @@ PUBLIC = (
     "TimeState", "StageHandle", "HistoryHandle", "StateEndpointHandle", "CopyCurrent",
     "HistoryContract", "HistoryValidity", "InterpolationCapability",
     "NoInterpolation", "PiecewiseConstant", "LinearInterpolation", "DenseOutput",
+    "HistoryTransfer", "HistorySample", "TemporalEvaluation", "TemporalSample",
     "HistoryPersistence", "Dense", "Interval", "Revolve",
     "Domain", "AcceptedStep", "Attempt", "Stage", "ClockTick", "AMRLevel",
     "EventHandle", "Event", "WallOutput", "Trigger", "Always", "Every", "EveryDt",

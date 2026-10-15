@@ -25,6 +25,17 @@ std::vector<AmrProgramContinuationLevel> rematerialize_continuation_forest_field
   using Store = ContinuationStore<Dim>;
   using Ref = ContinuationValueRef<Dim>;
   using Archive = ContinuationFieldArchive<Dim>;
+  auto source_supports =
+      [source_owners, source_modes](
+          const ContinuationFieldSupport::Ref& support) -> typename Archive::SourceTopology {
+    support->validate();
+    const auto level = static_cast<std::size_t>(support->producer_level);
+    if (level >= source_owners.size() || level >= source_modes.size())
+      throw std::invalid_argument("continuation Field producer level is absent from source forest");
+    if (source_modes[level] != "replicated" && source_modes[level] != "partitioned")
+      throw std::invalid_argument("continuation Field producer distribution is unknown");
+    return {source_owners[level], source_modes[level] == "replicated"};
+  };
   if (ranked.empty() || ranked.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
       !targets || ranked.front().size() < 2 || ranked.front().size() != installed.size() ||
       source_owners.size() + 1 != installed.size() || source_modes.size() != source_owners.size())
@@ -98,16 +109,16 @@ std::vector<AmrProgramContinuationLevel> rematerialize_continuation_forest_field
       // workspace adds archive prototypes and conversion temporaries to that
       // per-store bound.
       budget.charge(record.image.size());
-      archives.push_back(std::make_unique<Archive>(target_fields, owners, replicated,
-                                                   static_cast<int>(ranked.size()),
-                                                   static_cast<int>(rank), budget));
+      archives.push_back(std::make_unique<Archive>(
+          target_fields, owners, replicated, static_cast<int>(ranked.size()),
+          static_cast<int>(rank), budget, source_supports));
       Archive& archive = *archives.back();
-      auto fields = [&archive](int owner) -> const MultiFab<Dim>& {
-        return archive.prototype(owner);
-      };
-      auto resolve = [&archive](const ContinuationType& type,
-                                std::span<const std::uint8_t> bytes) -> const MultiFab<Dim>& {
-        return archive.resolve(type, bytes);
+      auto fields = [&archive](int owner, const ContinuationFieldSupport::Ref& support)
+          -> const MultiFab<Dim>& { return archive.prototype(owner, support); };
+      auto resolve = [&archive](
+                         const ContinuationType& type, std::span<const std::uint8_t> bytes,
+                         const ContinuationFieldSupport::Ref& support) -> const MultiFab<Dim>& {
+        return archive.resolve(type, bytes, support);
       };
       // No source communicator is fabricated. Distributed values require the
       // later native GID plan and are rejected by the codec when no source

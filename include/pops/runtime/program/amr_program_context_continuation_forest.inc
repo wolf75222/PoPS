@@ -282,7 +282,7 @@ void continuation_require_forest_(const std::map<int, ContinuationStore<Dim>>& s
   }
 }
 void continuation_revoke_attempt_() const noexcept {
-  continuation_field_storage_.clear();
+  revoke_continuation_field_copies_();
   end_continuation_regrid();
   continuation_discard_restart_levels_();
   // Snapshot/restart has already installed the exact restored retention plan.

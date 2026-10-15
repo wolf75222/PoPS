@@ -112,7 +112,11 @@ def fragments(image, *, _include_interfaces=False, _with_cursor=False):
                     payload=payload,
                 )
             )
-    assert result
+    # The cursor is also used to inspect the following Continuation forest.
+    # A source-only method has a valid empty face ledger; flux qualifications
+    # still require actual faces, including through interface_fragments().
+    if not _with_cursor:
+        assert result
     if not _include_interfaces and not _with_cursor:
         return result
 

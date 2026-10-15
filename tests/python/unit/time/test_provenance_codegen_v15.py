@@ -62,7 +62,7 @@ def test_emitters_reject_copied_receipt_even_if_computed_reference_is_also_rewri
             _emit_one(p, forged, env)
         else:
             from pops.codegen.program_emit_distributed_arrays import _local
-            _local((forged,), env, [])
+            _local((forged,), env, [], lane="authenticated_test_lane")
 
 
 def _finish(p, q, answer):
@@ -80,7 +80,8 @@ def _finish(p, q, answer):
 
 def test_scalar_alias_is_located_at_its_real_existing_binding():
     p = Program('scalar_alias')
-    q = typed_state(p, 'material', state_name='U'); q.n
+    q = typed_state(p, 'material', state_name='U')
+    _ = q.n
     _, mapping, aliases = _finish(p, q, _updated(p, p.float64(2)))
     assert len(aliases) == 1
     assert aliases[0]['location_basis'] == 'identical_emitter_binding'
@@ -88,7 +89,8 @@ def test_scalar_alias_is_located_at_its_real_existing_binding():
 
 def test_branch_arms_in_fold_do_not_borrow_each_others_binding_origins():
     p = Program('nested_aliases')
-    q = typed_state(p, 'material', state_name='U'); q.n
+    q = typed_state(p, 'material', state_name='U')
+    _ = q.n
     answer = p.fold(p.float64(2), 2,
         lambda b, state, index: b.branch(state > 0,
             lambda c: _updated(c, state), lambda c: _updated(c, -state)), max_steps=2)
@@ -108,7 +110,8 @@ def test_branch_arms_in_fold_do_not_borrow_each_others_binding_origins():
 @pytest.mark.parametrize('ownership', ('replicated', 'distributed'))
 def test_alias_inside_real_finite_map_reuses_the_local_value_and_is_source_mapped(ownership):
     p = Program('array_alias_' + ownership)
-    q = typed_state(p, 'material', state_name='U'); q.n
+    q = typed_state(p, 'material', state_name='U')
+    _ = q.n
     if ownership == 'replicated':
         domain = p.range_set(3, capacity=4, ownership='replicated')
         values = p.map(domain, lambda b, i: _updated(b, b.float64(b.index_value(i))))

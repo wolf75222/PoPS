@@ -486,7 +486,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         An explicit target topology instead allocates that target storage and requires an authored
         Float64 initial value; it never copies or interpolates the prototype's values."""
         if topology is not None:
-            from pops.time.field_representation import allocate_field_storage
+            from pops.time._program.field_representation import allocate_field_storage
             return allocate_field_storage(self, like, topology, initial, ncomp=ncomp, name=name)
         if initial is not None:
             raise ValueError("scalar_field: initial requires an explicit target topology")

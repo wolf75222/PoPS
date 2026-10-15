@@ -8,7 +8,7 @@ from pops.fields.spatial_interaction import CellMidpoint
 from pops.model.spaces import StateSpace
 from pops.time import Program
 from pops.time._program.detach import detach_compiled_program
-from pops.time.field_representation import (
+from pops.time._program.field_representation import (
     validate_field_representation,
     validate_field_representation_program,
 )

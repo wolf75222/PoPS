@@ -31,6 +31,14 @@ def scalar_signature(kind) -> ValueSignature:
     return cast("ValueSignature", dict(vtype=kind, block=None, space=None, state_ref=None, field_context=None))
 
 
+def validate_boolean_operation(inputs, attrs, signature):
+    operation = attrs.get("operation")
+    if (operation not in ("and", "or", "not") or signature["vtype"] != "bool"
+            or len(inputs) != (1 if operation == "not" else 2)
+            or any(value.vtype != "bool" for value in inputs)):
+        raise TypeError("boolean algebra requires exact Bool operands and arity")
+
+
 def new_typed(program, signature, op, inputs, attrs, *, point=None, name=None) -> ProgramValue:
     attrs = dict(attrs)
     if signature["vtype"] in ("product", "variant", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted", "field_topology"):
@@ -230,6 +238,20 @@ class _ProgramStructuredControl(_ProgramBase):
         if type(value) is not bool:
             raise TypeError("boolean requires an exact Python bool")
         return new_typed(self, scalar_signature("bool"), "bool_constant", (), {"value": value})
+
+    @atomic_authoring
+    def _boolean_op(self, values, operation):
+        """Pure algebra over already-evaluated Bool values, with no implicit truth conversion."""
+        for value in values:
+            if type(value) is bool:
+                continue
+            require_owned(self, value, "boolean algebra")
+            if value.vtype != "bool":
+                raise TypeError("boolean algebra requires Bool operands")
+        inputs = tuple(self.boolean(value) if type(value) is bool else value for value in values)
+        signature, attrs = scalar_signature("bool"), {"operation": operation}
+        validate_boolean_operation(inputs, attrs, signature)
+        return new_typed(self, signature, "bool_op", inputs, attrs)
 
     @atomic_authoring
     def _int64_binop(self, a, b, operation):

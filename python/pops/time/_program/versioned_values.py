@@ -263,7 +263,7 @@ def _same(expected, actual, where):
 
 def validate_continuations(program, *, target=None):
     """Check the closed executable profile and unique root publication after deserialization too."""
-    from pops.time.field_representation import validate_field_representation_program
+    from pops.time._program.field_representation import validate_field_representation_program
     validate_field_representation_program(program)
     def walk(values):
         for value in values:

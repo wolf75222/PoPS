@@ -214,7 +214,7 @@ def _compiled(program):
     compiled = CompiledProblem(
         "/tmp/pops-cache/problem.so", program, model, "SIG|c++|c++23",
         "c++", "c++23", problem_hash="deadbeefcafe", cache_key="0badc0de")
-    return typed_compiled_artifact(compiled, model)
+    return typed_compiled_artifact(compiled, model, source_program=program)
 
 
 def chk(cond, label):

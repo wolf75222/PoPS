@@ -45,11 +45,11 @@ if reports:
 def test_exact_groups_cover_all_declared_contracts_and_nodes_with_existing_caps():
     plan = runner.make_plan()
     assert (len(plan['groups']), plan['contract_count'], plan['orchestrator_count'],
-            plan['entrypoint_count']) == (114, 115, 29, 86)
-    assert plan['parent_launch_count'] == 139
+            plan['entrypoint_count']) == (118, 119, 29, 90)
+    assert plan['parent_launch_count'] == 143
     launches = [launch for group in plan['groups'] for launch in group['launches']]
-    assert len({(launch['path'], launch.get('parent_node', '')) for launch in launches}) == 139
-    assert len({launch['path'] for launch in launches}) == 115
+    assert len({(launch['path'], launch.get('parent_node', '')) for launch in launches}) == 143
+    assert len({launch['path'] for launch in launches}) == 119
     pairs = [row for row in plan['groups'] if row['group'].startswith('worlds-')]
     assert len(pairs) == 25
     for pair in pairs:
@@ -162,7 +162,7 @@ def test_plan_cli_exports_the_same_complete_dynamic_matrix(tmp_path):
     values = dict(line.split('=', 1) for line in outputs.read_text().splitlines())
     matrix = json.loads(values['matrix'])
     assert matrix['include'] == [{'group': row['group']} for row in plan['groups']]
-    assert values['group_count'] == '114'
+    assert values['group_count'] == '118'
 
 
 def wheel_artifact(tmp_path):

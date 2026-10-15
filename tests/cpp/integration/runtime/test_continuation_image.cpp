@@ -480,6 +480,84 @@ TEST(ContinuationImage, FieldExpressionCodecPreservesSharedBasesAndRejectsMissin
                std::length_error);
 }
 
+TEST(ContinuationImage, ProducerSupportKeepsHistoricalPointAndExactPrototypeThroughCodec) {
+  Extent<D> cells{}, ranks_extent{};
+  for (int d = 0; d < D; ++d) {
+    cells[d] = 2;
+    ranks_extent[d] = 1;
+  }
+  const auto layout = mesh::BoxArray<D>::from_domain(Box<D>::from_extents(cells), cells);
+  const auto distribution =
+      mesh::Distribution<D>::replicated(layout, mesh::RankSpace<D>(Index<D>{}, ranks_extent));
+  MultiFab<D> field(layout, distribution, Index<D>{}, 1, Extent<D>{});
+  field.set_val(Real(7));
+  auto support = std::make_shared<const ContinuationFieldSupport>(
+      ContinuationFieldSupport{"same-program", "history/time=0.125/point=stage-2", 0, 2, 7, 19});
+  auto basis = std::make_shared<const FieldExchangeExpressions::Basis>(
+      FieldExchangeExpressions::Basis{"historical-native/evaluation", 0, {}, {}});
+  auto expression = std::make_shared<const FieldExchangeExpressions::Expression>(
+      FieldExchangeExpressions::Expression{true, {{basis, .5}}});
+  auto type = scalar(ContinuationKind::Field);
+  type.field_owner = 0;
+  type.field_components = 1;
+  type.scientific_contract = "history/type-and-point";
+  int exact_requests = 0;
+  auto provider = [&](int owner,
+                      const ContinuationFieldSupport::Ref& origin) -> const MultiFab<D>& {
+    if (owner != 0 || !origin || *origin != *support)
+      throw std::invalid_argument("unattested producer support");
+    ++exact_requests;
+    return field;
+  };
+  Codec codec(type, "test/producer-support", 1ULL << 20, provider);
+  for (bool with_expression : {false, true}) {
+    auto value = V::field(field, 0, type.scientific_contract,
+                          with_expression ? expression : FieldExchangeExpressions::Ref{}, support);
+    const auto bytes = codec.encode(value, 4);
+    continuation_detail::Reader reader(bytes);
+    EXPECT_EQ(reader.text(), "POPSCONT5");
+    const auto decoded = codec.decode(bytes);
+    ASSERT_TRUE(decoded.root->field_support());
+    EXPECT_EQ(*decoded.root->field_support(), *support);
+    EXPECT_EQ(bool(decoded.root->field_exchange_expression()), with_expression);
+    EXPECT_EQ(codec.encode(decoded.root, 4), bytes);
+    EXPECT_EQ(codec.collective_identity(value, 4), codec.collective_identity(decoded.root, 4));
+    const auto archived = codec.decode_archive(bytes, 0, 1, [](std::uint64_t) {});
+    EXPECT_EQ(codec.archive_collective_identity(archived, 1ULL << 20, [](std::uint64_t) {}),
+              codec.collective_identity(value, 4));
+    auto legacy = Codec(type, "test/producer-support", 1ULL << 20,
+                        [&](int) -> const MultiFab<D>& { return field; });
+    EXPECT_THROW(legacy.decode(bytes), std::invalid_argument);
+    auto truncated = bytes;
+    truncated.resize(truncated.size() - 1);
+    EXPECT_THROW(codec.decode(truncated), std::invalid_argument);
+    const auto shared = V::with_field_metadata(value, {expression, support});
+    EXPECT_EQ(value->field_storage_owner(), shared->field_storage_owner());
+    EXPECT_EQ(V::with_field_exchange_expression(shared, {})->field_support(), support);
+    const finite_structural::Limits limits{1ULL << 20, 1ULL << 20, 1ULL << 20};
+    ContinuationFieldMetadata retained;
+    auto flat = finite_structural::unpack<D>(
+        type, value, limits,
+        [&](const auto&, auto&, const auto&, const ContinuationFieldMetadata& metadata) {
+          retained = metadata;
+        });
+    auto repacked = finite_structural::pack<D>(
+        type, flat, limits, [&](const auto&, auto&, const auto&, const ContinuationType& schema) {
+          EXPECT_EQ(schema.scientific_contract, type.scientific_contract);
+          return retained;
+        });
+    EXPECT_EQ(codec.encode(repacked, 4), bytes);
+    EXPECT_THROW(finite_structural::unpack<D>(type, value, limits), std::invalid_argument);
+  }
+  EXPECT_GT(exact_requests, 0);
+  auto foreign = std::make_shared<ContinuationFieldSupport>(*support);
+  foreign->producer_level = 1;
+  auto changed = V::field(field, 0, type.scientific_contract, {}, foreign);
+  EXPECT_THROW(codec.encode(changed, 4), std::invalid_argument);
+  foreign->program_owner = 1;
+  EXPECT_THROW(V::field(field, 0, type.scientific_contract, {}, foreign), std::invalid_argument);
+}
+
 TEST(ContinuationAuthority, ParentRejectionRevokesPromotedDescendants) {
   auto store = initial_store();
   PreparedResourceCache cache;
@@ -1162,4 +1240,82 @@ TEST(ContinuationAuthority, RegridDescendantsKeepDistinctTargetAllocatorsAndSour
   EXPECT_EQ(source.checkpoint(none()), source_bytes);
   EXPECT_GT(first_domains.issue(1, 8, 31)->version, first_new->version);
   EXPECT_GT(second_domains.issue(1, 8, 31)->version, second_new->version);
+}
+
+TEST(ContinuationAuthority, PromotionPreparationIsPureAndCommitKeepsExactAssessment) {
+  auto store = initial_store();
+  PreparedResourceCache cache;
+  Authority authority;
+  authority.begin(cache.begin_attempt());
+  auto base = authority.read(store);
+  auto scope = authority.begin_scope();
+  auto candidate = authority.freeze(base, V::real(.2), envelope(root(.2, 1, 3), 11));
+  auto assessment = authority.attest(candidate, V::boolean(true), true, "graph/check");
+  auto accepted = authority.accept(candidate, assessment);
+  const auto before = authority.logical_state();
+  auto prepared = authority.prepare_promotion(scope, accepted);
+  EXPECT_EQ(authority.logical_state(), before);
+  EXPECT_THROW(authority.require_root_publication(accepted, store), std::logic_error);
+  authority.validate_promotion(prepared, scope);
+  EXPECT_EQ(authority.logical_state(), before);
+  static_assert(noexcept(authority.commit_promotion(std::move(prepared), scope)));
+  auto promoted = authority.commit_promotion(std::move(prepared), scope);
+  EXPECT_EQ(promoted.value(), accepted.value());
+  EXPECT_TRUE(assessment.accepted());
+  EXPECT_EQ(authority.require_root_publication(promoted, store), promoted.value()->members()[0]);
+  EXPECT_THROW(authority.validate_promotion(prepared, scope), std::logic_error);
+  EXPECT_EQ(authority.consume_increment(promoted)->integer(), 11);
+  EXPECT_THROW(authority.consume_increment(promoted), std::logic_error);
+}
+
+TEST(ContinuationAuthority, LateRejectedSiblingLeavesEveryPromotionUncommitted) {
+  auto first_store = initial_store(), second_store = initial_store();
+  PreparedResourceCache first_cache, second_cache;
+  Authority first, second;
+  first.begin(first_cache.begin_attempt());
+  second.begin(second_cache.begin_attempt());
+  auto first_base = first.read(first_store), second_base = second.read(second_store);
+  auto first_scope = first.begin_scope(), second_scope = second.begin_scope();
+  auto a = first.freeze(first_base, V::integer(1), envelope(root(.1, 1, 1)));
+  auto b = second.freeze(second_base, V::integer(2), envelope(root(.1, 1, 2)));
+  auto accepted_a = first.accept(a, first.attest(a, V::boolean(true), true, "first/check"));
+  auto accepted_b = second.accept(b, second.attest(b, V::boolean(true), true, "second/check"));
+  auto pending_a = first.prepare_promotion(first_scope, accepted_a);
+  auto pending_b = second.prepare_promotion(second_scope, accepted_b);
+  const auto before_a = first.logical_state(), before_b = second.logical_state();
+  second.supersede(b);
+  EXPECT_NO_THROW(first.validate_promotion(pending_a, first_scope));
+  EXPECT_THROW(second.validate_promotion(pending_b, second_scope), std::logic_error);
+  EXPECT_EQ(first.logical_state(), before_a);
+  EXPECT_EQ(second.logical_state(), before_b);
+  EXPECT_THROW(first.require_root_publication(accepted_a, first_store), std::logic_error);
+  // Abandoning prepared proposals did not promote or detach either Scope.
+  first_scope = Authority::Scope{};
+  second_scope = Authority::Scope{};
+  EXPECT_THROW(accepted_a.value(), std::logic_error);
+  EXPECT_THROW(accepted_b.value(), std::logic_error);
+  first_store.require_frontier(0, 0);
+  second_store.require_frontier(0, 0);
+}
+
+TEST(ContinuationAuthority, PromotionRejectsMovedHandleForeignIssuerAndRevokedAttempt) {
+  auto store = initial_store();
+  PreparedResourceCache cache;
+  Authority authority, foreign;
+  authority.begin(cache.begin_attempt());
+  auto base = authority.read(store);
+  auto scope = authority.begin_scope();
+  auto candidate = authority.freeze(base, V::real(.1), envelope(root(.1, 1, 1)));
+  auto accepted =
+      authority.accept(candidate, authority.attest(candidate, V::boolean(true), true, "check"));
+  auto prepared = authority.prepare_promotion(scope, accepted);
+  auto moved = std::move(scope);
+  EXPECT_THROW(authority.validate_promotion(prepared, moved), std::logic_error);
+  EXPECT_THROW(authority.validate_promotion(prepared, scope), std::logic_error);
+  PreparedResourceCache foreign_cache;
+  foreign.begin(foreign_cache.begin_attempt());
+  EXPECT_THROW(foreign.validate_promotion(prepared, moved), std::logic_error);
+  auto valid = authority.prepare_promotion(moved, accepted);
+  cache.reject_attempt();
+  EXPECT_THROW(authority.validate_promotion(valid, moved), std::logic_error);
 }

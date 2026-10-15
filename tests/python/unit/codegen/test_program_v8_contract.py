@@ -3,7 +3,8 @@ import pops
 import pytest
 
 from pops._ir.quantity import PhysicalDimension
-from pops.time import FailRun, SolveRequestError
+from pops.time import FailRun
+from pops.time._program.traversal import all_ops
 from tests.python.unit.codegen.test_integral_candidate_capture import build_feedback
 from tests.python.unit.fields.test_nonlinear_mixed_field_problem import mixed_case
 
@@ -39,7 +40,21 @@ def test_original_spatial_residual_version_has_order_independent_precedence(pair
     assert serialized["version"] == 8
 
 
-def test_unsupported_spatial_residual_in_lazy_region_is_atomic():
+def test_spatial_residual_in_lazy_region_keeps_its_version_and_scope():
+    _, field, program, current, request, *_ = mixed_case()
+
+    def with_solve(author):
+        author.solve(request, solver=field.default_program_solver()).consume(action=FailRun())
+        return current.n
+
+    condition = program.norm2(current.n) > 0
+    program.branch(condition, with_solve, lambda author: current.n)
+    assert program._serialize()["version"] == 8
+    assert sum(node.op == "solve_spatial_field" for node in all_ops(program)) == 1
+    assert not any(node.op == "solve_spatial_field" for node in program._values)
+
+
+def test_incompatible_lazy_region_with_spatial_residual_is_atomic():
     _, field, program, current, request, *_ = mixed_case()
 
     def with_solve(author):
@@ -48,8 +63,8 @@ def test_unsupported_spatial_residual_in_lazy_region_is_atomic():
 
     condition = program.norm2(current.n) > 0
     before = program._ir_hash()
-    with pytest.raises(SolveRequestError, match="top-level prepared spatial Newton"):
-        program.branch(condition, with_solve, lambda author: current.n)
+    with pytest.raises(ValueError, match="same value type"):
+        program.branch(condition, with_solve, lambda author: author.boolean(True))
     assert program._ir_hash() == before
     assert not any(node.op == "solve_spatial_field" for node in program._values)
     assert program._serialize()["version"] == 5

@@ -504,7 +504,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     from pops.codegen.program_emit_hierarchy_regions import (
         hierarchy_region_solves, hierarchy_path_rhs, hierarchy_field_publications,
         hierarchy_named_field_barriers, hierarchy_original_field_solves,
-        open_hierarchy_continuation,
+        open_hierarchy_continuation, hierarchy_spatial_solves,
     )
     hierarchy_solves = (hierarchy_region_solves(program) if target == "amr_system" else ())
     hierarchy_solve_ids = {value.id for value in hierarchy_solves}
@@ -512,7 +512,10 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     path_ids = {value.id for value in hierarchy_path_rhs(program)} if target == "amr_system" else set()
     named_field_ids = {value.id for value in hierarchy_named_field_barriers(program)} if target == "amr_system" else set()
     hierarchy_enabled = target == "amr_system" and bool(
-        hierarchy_solves or path_ids or hierarchy_field_publications(program) or named_field_ids or original_ids)
+        hierarchy_solves or path_ids or hierarchy_field_publications(program) or named_field_ids or original_ids
+        or hierarchy_spatial_solves(program))
+    var[("hierarchy_shared_interface_jvp",)] = has_shared_interface_implicit_jacvec
+    from .program_emit_hierarchy_operations import is_operation_barrier, emit_operation_barrier
     legacy_path_prefix = bool(path_ids and any(
         "hierarchy_field_identity" not in value.attrs for value in hierarchy_solves))
     if legacy_path_prefix:
@@ -552,6 +555,15 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
             index += 1
             continue
         base = bases.get(v.block)  # the block-state value of THIS op's block (None: a scalar op)
+        if target == "amr_system" and is_operation_barrier(v):
+            from .program_source_map import operation
+            with operation(v, lines, prelude, environment=var):
+                emit_operation_barrier(program, v, base, values[:index], var, model, lines,
+                    prelude, block_idx, field_plans, committed_ids=committed_ids,
+                    shared_interface_jvp=has_shared_interface_implicit_jacvec)
+            continuation_closers.append(_normal_close)
+            index += 1
+            continue
         hierarchy_solve = v.id in hierarchy_solve_ids
         if hierarchy_solve:
             var[("direct_hierarchy_solve", v.id)] = True
@@ -609,10 +621,6 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
             open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
                                         ["ctx.publish_staged_field_warm_start(%d);" % v.id],
                                         kind="field_warm_start")
-            continuation_closers.append(_normal_close)
-        elif v.id in path_ids:
-            open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
-                                        ["ctx.publish_staged_path_rhs(%d);" % v.id], kind="spatial_rhs")
             continuation_closers.append(_normal_close)
         elif hierarchy_enabled and v.op == "field_publication":
             open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
@@ -1127,18 +1135,8 @@ def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: A
     x = ("b%d" if v.vtype == "bool" else "s%d") % v.id
     is_field = v.vtype in ("state", "rhs", "scalar_field")
     if is_field:
-        x = "x%d" % v.id
-        if base is None:
-            raise NotImplementedError(
-                "branch codegen for a block-free scalar_field result requires an explicit "
-                "layout template")
-        lines += ["pops::MultiFab<pops::kNativeDimension>* %s_storage = nullptr;" % x,
-                  "std::exception_ptr %s_error;" % x,
-                  "try { %s_storage = &ctx.scratch_state(%d, 0, %s); }" % (x,int(v.id),var[base.id]),
-                  "catch (...) { %s_error = std::current_exception(); }" % x,
-                  "try { Kokkos::fence(); } catch (...) { if (!%s_error) %s_error = std::current_exception(); }" % (x,x),
-                  'pops::collectively_rethrow_exception(%s_error, ctx.prepared_execution_lane(), "branch allocation");' % x,
-                  "auto& %s = *%s_storage;" % (x,x)]
+        from .program_emit_structured_control import _slots, value_signature
+        x = _slots(value_signature(v), None, v.id, "branch", lines)
     else:
         cpp_type = "bool" if v.vtype == "bool" else "pops::Real"
         lines.append("%s %s;" % (cpp_type, x))

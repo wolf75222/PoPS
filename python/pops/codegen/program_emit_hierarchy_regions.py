@@ -5,25 +5,49 @@ import json
 from typing import Any
 
 
+def _structured_region_nodes(program: Any) -> set[int]:
+    allowed: set[int] = set()
+    pending = list(program._values)
+    while pending:
+        value = pending.pop()
+        allowed.add(id(value))
+        if value.op in ("branch", "structured_fold", "capture_result", "structured_iterate"):
+            for key in ("true_block", "false_block", "body_block", "cond_block"):
+                pending.extend(value.attrs.get(key, ()))
+    return allowed
+
+
 def hierarchy_path_rhs(program: Any) -> tuple[Any, ...]:
     from pops.codegen.program_lowerability import all_ops
+    from .program_emit_hierarchy_operations import is_path_rhs, validate_operation_barrier
     nodes = tuple(all_ops(program))
-    selected = tuple(value for value in nodes
-                     if value.op == "rhs" and value.attrs.get("path_conservative", False))
+    selected = tuple(value for value in nodes if is_path_rhs(value))
     if not selected:
         return ()
-    top_level = {id(value) for value in program._values}
-    if any(id(value) not in top_level or value.attrs.get("schedule") is not None for value in selected):
-        raise NotImplementedError("path-conservative hierarchy barriers require unscheduled top-level RHS")
-    if any(value.op == "solve_spatial_nonlinear" for value in nodes):
-        raise NotImplementedError("path RHS cannot share a hierarchy with spatial nonlinear solves")
+    allowed = _structured_region_nodes(program)
+    if any(id(value) not in allowed for value in selected):
+        raise NotImplementedError("path RHS suspension needs an explicit region continuation")
+    for value in selected:
+        validate_operation_barrier(program, value)
+    return selected
+
+
+def hierarchy_spatial_solves(program: Any) -> tuple[Any, ...]:
+    from pops.codegen.program_lowerability import all_ops
+    from .program_emit_hierarchy_operations import is_spatial_solve, validate_operation_barrier
+    selected = tuple(value for value in all_ops(program) if is_spatial_solve(value))
+    allowed = _structured_region_nodes(program)
+    if any(id(value) not in allowed for value in selected):
+        raise NotImplementedError("composite spatial solve needs an explicit region continuation")
+    for value in selected:
+        validate_operation_barrier(program, value)
     return selected
 
 
 def has_hierarchy_continuations(program: Any) -> bool:
     return bool(hierarchy_region_solves(program) or hierarchy_path_rhs(program)
                 or hierarchy_field_publications(program) or hierarchy_named_field_barriers(program)
-                or hierarchy_original_field_solves(program))
+                or hierarchy_original_field_solves(program) or hierarchy_spatial_solves(program))
 
 
 def hierarchy_original_field_solves(program: Any) -> tuple[Any, ...]:
@@ -88,12 +112,12 @@ def hierarchy_region_solves(program: Any) -> tuple[Any, ...]:
 
     from pops.time._program.temporal_field import is_temporal_field_solve
     nodes = tuple(all_ops(program))
-    temporal = tuple(value for value in nodes if is_temporal_field_solve(value))
     scoped = tuple(value for value in nodes
                    if value.op == "solve_linear" and value.attrs.get("scope") == "hierarchy"
                    and not is_temporal_field_solve(value))
-    if temporal and scoped:
-        raise NotImplementedError("temporal field evaluation cannot share synchronized hierarchy continuations")
+    # Temporal evaluations own all-level input reconstruction at the active
+    # invocation point. Only ordinary common-time solves suspend the level body;
+    # their distinct solve resources preserve observations across that suspension.
     selected = tuple(value for value in scoped if "hierarchy_field_identity" in value.attrs)
     paths = hierarchy_path_rhs(program)
     named = hierarchy_named_field_barriers(program)

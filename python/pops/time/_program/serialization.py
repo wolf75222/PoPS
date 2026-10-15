@@ -338,7 +338,7 @@ class _ProgramSerialization(_ProgramBase):
             if id(node) in seen:
                 continue
             seen.add(id(node))
-            if node.op in ("scalar_op", "scalar_isfinite", "scalar_expression"):
+            if node.op in ("scalar_op", "scalar_isfinite", "scalar_expression", "bool_op"):
                 _raise_ir_version(result, 28)
             if node.op.startswith(("variant_", "finite_", "continuation_", "distributed_")) or node.vtype == "variant":
                 # v29: persistent domain authority, dynamic continuation capabilities and

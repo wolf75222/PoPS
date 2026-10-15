@@ -268,6 +268,7 @@ def typed_compiled_artifact(
     target: str = "system",
     layout: Any = None,
     spatial: Any = None,
+    source_program: Program | None = None,
 ):
     """Wrap inert compiled components in the exact compile-phase artifact.
 
@@ -276,6 +277,8 @@ def typed_compiled_artifact(
     free-name table.  ``models`` is either one real ``CompiledModel`` shared by all blocks or an
     exact block-name mapping of ``CompiledModel`` values.  The helper returns a
     ``CompiledSimulationArtifact``; it never mutates a component with bind/install phase state.
+    ``source_program`` disambiguates a detached snapshot using its exact authoring
+    context, after checking that its serialized graph still matches that snapshot.
     """
     from pops.codegen._plans import ResolvedBlock, ResolvedSimulationPlan
     from pops.codegen._compiled_model_identity import model_compile_identity
@@ -289,6 +292,11 @@ def typed_compiled_artifact(
     from pops.time.references import block_name
 
     program = getattr(compiled, "program", None)
+    if source_program is not None:
+        if type(source_program) is not Program or program is None:
+            raise TypeError("typed artifact source must be an exact Program")
+        if source_program._ir_hash() != program._ir_hash():
+            raise ValueError("typed artifact source differs from its sealed Program")
     commits = program.commits() if program is not None else {}
     names = tuple(dict.fromkeys(block_name(ref.block_ref) for ref in commits))
     if not names:
@@ -314,7 +322,8 @@ def typed_compiled_artifact(
     for name in names:
         model = by_name[name]
         source_models[name] = _source_model_for_owner(
-            block_refs[name].model_owner_path, program=program)
+            block_refs[name].model_owner_path,
+            program=program if source_program is None else source_program)
         model_owner = block_refs[name].model_owner_path.nodes[-1].name
         schema_module = Module(model_owner)
         for declaration in model.params.values():

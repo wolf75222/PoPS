@@ -88,6 +88,7 @@ bool recover_mapping_failure_(std::exception_ptr failure) const {
                                  "hierarchy recovery preparation");
   // Agreement precedes either replacing pending callbacks or popping any scope.
   PreparedHierarchyBarrier::agree_ports(prepared, frame.fields, prepared_execution_lane());
+  frame.promotions.erase(operation);
   frame.ports.swap(prepared);
   for (auto& stack : frame.failures)
     stack.pop_back();

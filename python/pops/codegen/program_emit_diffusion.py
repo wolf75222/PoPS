@@ -339,6 +339,10 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
         frequency += " + " + transport_frequency
     if explicit and not selected.get("coupled"):
         lines.append("const pops::Real diffusion_frequency_%d=%s;" % (v.id,frequency))
+        # Only this route supplies the convex explicit-update certificate.
+        # A signed component-gradient operator reports a norm bound, which
+        # cannot be substituted for a forward-Euler stability certificate.
+        var[("partition_frequency", v.id)] = "diffusion_frequency_%d" % v.id
         if not defer_explicit_bound:
             lines.append("if (!(std::isfinite(dt) && dt>=0 && dt*diffusion_frequency_%d<=1+32*std::numeric_limits<pops::Real>::epsilon()))" % v.id)
             lines.append('  ctx.consume_pointwise_evaluation_status(%d,%d,2,"combined_transport_diffusion_stability",502);' % (bidx,v.id))

@@ -3,14 +3,23 @@ import numpy as np
 import pops
 import pytest
 
-from examples.api_v02.continuation_regrid_auxiliary import build_continuation_regrid_auxiliary
+from examples.api_v02.continuation_regrid_auxiliary import (
+    build_continuation_regrid_auxiliary, initial_auxiliary_values,
+)
 from tests.python.support.amr_continuation_receipts import forest
-from tests.python.support.api_v02_native import _bind
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.integral_state_receipts import collective_directory
+from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.public_native_profile import compile_profile_plan_once, native_profile
 
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
+
+
+def _bind(spec, artifact, world):
+    return collective_call(world, lambda: pops.bind(artifact,
+        initial_values={subject: value.copy() for subject, value in spec.initial_values.items()},
+        aux=initial_auxiliary_values(spec, artifact.plan),
+        resources={"execution_context": artifact_execution_context(artifact)}))
 
 
 def _factor(step):

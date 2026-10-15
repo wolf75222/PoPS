@@ -526,6 +526,25 @@ class ContinuationAuthority {
     }
   };
 
+  /// A promotion proposal owns the exact capabilities, but grants no new scope.
+  /// The Scope handle itself must remain at its prepared address through
+  /// commit.
+  class Promotion {
+   public:
+    Promotion() = default;
+    Promotion(const Promotion&) = delete;
+    Promotion& operator=(const Promotion&) = delete;
+    Promotion(Promotion&&) noexcept = default;
+    Promotion& operator=(Promotion&&) noexcept = default;
+
+   private:
+    friend class ContinuationAuthority;
+    std::weak_ptr<State> issuer_;
+    const Scope* handle_ = nullptr;
+    std::shared_ptr<ScopeState> child_, parent_;
+    Accepted source_, promoted_;
+  };
+
   ContinuationAuthority() : state_(std::make_shared<State>()) {}
   ContinuationAuthority(const ContinuationAuthority&) = delete;
   ContinuationAuthority& operator=(const ContinuationAuthority&) = delete;
@@ -640,20 +659,55 @@ class ContinuationAuthority {
       throw std::logic_error("child cannot supersede a borrowed parent candidate");
     candidate.data_->superseded = true;
   }
-  Accepted promote(Scope&& child, const Accepted& accepted) {
+  Promotion prepare_promotion(const Scope& child, const Accepted& accepted) const {
     require_scope_();
+    require_candidate_(accepted.candidate_);
     accepted.require_();
     if (child.issuer_.lock() != state_ || !child.scope_ || child.scope_ != state_->current_scope ||
-        accepted.scope_ != child.scope_ || !child.scope_->parent)
+        accepted.scope_ != child.scope_ || !child.scope_->parent ||
+        accepted.candidate_.data_->owner_scope != child.scope_)
       throw std::logic_error("child promotion requires its exact current accepted scope");
-    const auto parent = child.scope_->parent;
-    // The immutable candidate/assessment identity does not change. The child remains linked
-    // to its parent so a later parent rejection still revokes every descendant.
-    auto out = Accepted(accepted.candidate_, accepted.assessment_, parent);
-    accepted.candidate_.data_->owner_scope = parent;
-    state_->current_scope = parent;
+    Promotion prepared;
+    prepared.issuer_ = state_;
+    prepared.handle_ = &child;
+    prepared.child_ = child.scope_;
+    prepared.parent_ = child.scope_->parent;
+    prepared.source_ = accepted;
+    prepared.promoted_ = Accepted(accepted.candidate_, accepted.assessment_, prepared.parent_);
+    return prepared;
+  }
+  void validate_promotion(const Promotion& prepared, const Scope& child) const {
+    require_scope_();
+    if (prepared.issuer_.lock() != state_ || prepared.handle_ != &child ||
+        child.issuer_.lock() != state_ || !prepared.child_ || prepared.child_ != child.scope_ ||
+        prepared.child_ != state_->current_scope || prepared.parent_ != prepared.child_->parent ||
+        !prepared.parent_ || prepared.source_.scope_ != prepared.child_)
+      throw std::logic_error("prepared promotion lost its exact child scope");
+    require_candidate_(prepared.source_.candidate_);
+    prepared.source_.require_();
+    if (prepared.source_.candidate_.data_->owner_scope != prepared.child_)
+      throw std::logic_error("prepared promotion candidate changed its owning scope");
+  }
+  /// Commit only after every participating proposal has passed
+  /// validate_promotion and the caller's collective vote. No authority mutation
+  /// may intervene. All storage and capability checks belong to preparation;
+  /// these shared-owner moves neither allocate nor evaluate scientific data nor
+  /// throw after a vote.
+  Accepted commit_promotion(Promotion&& prepared, Scope& child) noexcept {
+    auto accepted = std::move(prepared.promoted_);
+    prepared.source_.candidate_.data_->owner_scope = prepared.parent_;
+    state_->current_scope = prepared.parent_;
     child.scope_.reset();
-    return out;
+    prepared.issuer_.reset();
+    prepared.handle_ = nullptr;
+    prepared.child_.reset();
+    prepared.parent_.reset();
+    prepared.source_ = Accepted{};
+    return accepted;
+  }
+  Accepted promote(Scope&& child, const Accepted& accepted) {
+    auto prepared = prepare_promotion(child, accepted);
+    return commit_promotion(std::move(prepared), child);
   }
   Base provisional_base(const Accepted& accepted) {
     accepted.require_();

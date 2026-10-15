@@ -92,11 +92,22 @@ def test_existing_graph_identity_and_source_remain_exact(kind):
 
     # IR v28 discriminates scalar-op nonfinite rejection. The legacy CFL product uses it;
     # the unbounded identity has no scalar op and retains v5. Check this explicit
-    # transition before comparing every remaining byte with the historical v5
-    # receipts. Do not refresh the old hashes or normalize any node metadata.
+    # transition and the four explicit resource contracts added since 5d97b7a5.
+    # Compare every remaining byte with the historical v5 receipts. In particular,
+    # preserve all node metadata and the old hashes; resources stay in today's hash.
     version = 28 if kind == "legacy" else 5
     assert ir["version"] == semantic["version"] == version
-    historical = (dict(ir, version=5), dict(semantic, version=5))
+    resources = {
+        "flux_expression_budget": None,
+        "max_exact_coefficient_bytes": 65536,
+        "terminal_failure_aggregate_byte_capacity": 268435456,
+        "terminal_failure_byte_capacity": 67108864,
+    }
+    for data in (ir, semantic):
+        assert {key: data[key] for key in resources} == resources
+    historical = tuple(dict({key: value for key, value in data.items()
+                             if key not in resources}, version=5)
+                       for data in (ir, semantic))
     assert tuple(digest(data) for data in historical) == BASELINE[kind][:2]
     assert program._ir_hash() == digest(ir)
     from pops.codegen.program_source_map import source_map

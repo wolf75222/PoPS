@@ -26,6 +26,7 @@ _OPS = frozenset(
         "finite_real",
         "int64_constant",
         "bool_constant",
+        "bool_op",
         "int64_op",
         "int64_compare",
         "int64_cast",
@@ -245,6 +246,9 @@ def _emit_block(block, env, lines, failure, index, constants, *, kernel=None):
                 )
             elif op == "bool_constant":
                 expression = "true" if value.attrs["value"] else "false"
+            elif op == "bool_op":
+                from .program_emit_structured_control import boolean_expression
+                expression = boolean_expression(value, args)
             elif op == "finite_real":
                 expression = "pops::Real(%s)" % args[0] if args else constants[value.id]
             elif op == "int64_op":

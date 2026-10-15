@@ -362,6 +362,10 @@ def _local(block, bindings, lines, *, lane, lifted=()):
                 expr = CV + "::integer(" + e + ")"
             elif op == "bool_constant":
                 expr = CV + "::boolean(" + ("true" if v.attrs["value"] else "false") + ")"
+            elif op == "bool_op":
+                from .program_emit_structured_control import boolean_expression
+                expression = boolean_expression(v, tuple("(%s)->boolean()" % arg for arg in args))
+                expr = CV + "::boolean(" + expression + ")"
             elif op == "distributed_gid":
                 expr = CV + "::integer((" + args[0] + ")->distributed_index_offset())"
             elif op == "distributed_rank":

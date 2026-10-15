@@ -588,7 +588,8 @@ jobs:
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
         with:
-          extra-apt: mold
+          # Match every consumer before the compiler include-tree capture.
+          extra-apt: mold libopenmpi-dev openmpi-bin
 
       - id: python
         uses: actions/setup-python@v7
@@ -604,7 +605,7 @@ jobs:
         with:
           path: build-kokkos-py/python/pops
           lookup-only: true
-          key: pops-module-dim${{ matrix.dimension }}-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml', '.github/actions/setup-kokkos/**', 'scripts/ci_python_module_objects.py') }}-kokkos4.4.01-15dc143e
+          key: pops-module-dim${{ matrix.dimension }}-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-headers${{ steps.kokkos.outputs.compiler-includes }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml', '.github/actions/setup-kokkos/**', 'scripts/ci_python_module_objects.py', 'scripts/ci_compiler_include_identity.py', 'scripts/write_compiler_include_contract.py', 'python/pops/codegen/_compiler_include_tree.py') }}-kokkos4.4.01-15dc143e
 
       - name: Configure identical production module graph
         if: steps.module-cache-probe.outputs.cache-hit != 'true'
@@ -709,7 +710,8 @@ jobs:
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
         with:
-          extra-apt: mold
+          # Match every consumer before the compiler include-tree capture.
+          extra-apt: mold libopenmpi-dev openmpi-bin
 
       - id: python
         uses: actions/setup-python@v7
@@ -753,7 +755,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: build-kokkos-py/python/pops
-          key: pops-module-dim${{ matrix.dimension }}-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml', '.github/actions/setup-kokkos/**', 'scripts/ci_python_module_objects.py') }}-kokkos4.4.01-15dc143e
+          key: pops-module-dim${{ matrix.dimension }}-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-headers${{ steps.kokkos.outputs.compiler-includes }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml', '.github/actions/setup-kokkos/**', 'scripts/ci_python_module_objects.py', 'scripts/ci_compiler_include_identity.py', 'scripts/write_compiler_include_contract.py', 'python/pops/codegen/_compiler_include_tree.py') }}-kokkos4.4.01-15dc143e
 
       - name: Download parallel prewarm caches
         if: steps.modcache.outputs.cache-hit != 'true'
@@ -912,7 +914,7 @@ jobs:
       fail-fast: false
       matrix:
         # Keep original duration-bin identities even when the plan omits empty bins.
-        # Watchdogs and native-dimension routing continue to use the fixed 116-bin partition.
+        # Watchdogs and native-dimension routing continue to use the fixed 119-bin partition.
         shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}
 
     env:
@@ -925,7 +927,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale
       SHARD_INDEX: ${{ matrix.shard }}
-      SHARD_TOTAL: "116"
+      SHARD_TOTAL: "119"
       # ADC-548 (b): pin the DSL .so cache to a KNOWN dir and keep the generated source so a codegen
       # failure in a shard's DSL tests leaves the ADC-536 provenance sidecars (<so>.cpp + <so>.cachekey)
       # on disk for the on-failure upload. Setting POPS_CACHE_DIR here just relocates the default cache
@@ -1179,7 +1181,8 @@ jobs:
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
         with:
-          extra-apt: mold
+          # Match every consumer before the compiler include-tree capture.
+          extra-apt: mold libopenmpi-dev openmpi-bin
 
       - uses: actions/setup-python@v7
         with:
@@ -1995,6 +1998,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libeigen3-dev ninja-build ccache mold
 
+      - name: Install MPI SDK before Python prewarm capture
+        if: matrix.graph == 'python'
+        run: sudo apt-get install -y libopenmpi-dev openmpi-bin
+
       - name: Resolve OpenMP prewarm platform identity
         id: openmp-prewarm-platform
         run: |
@@ -2251,6 +2258,14 @@ jobs:
         if: matrix.kind == 'python'
         run: sudo apt-get install -y libopenmpi-dev openmpi-bin
 
+      - name: Fingerprint installed OpenMP compiler include trees
+        id: openmp-compiler-includes
+        if: matrix.kind == 'python'
+        run: |
+          python3 scripts/ci_compiler_include_identity.py --compiler g++ \
+            --output "$RUNNER_TEMP/pops-ci-compiler-include-identity.json" \
+            --github-output "$GITHUB_OUTPUT"
+
       - name: Resolve runner and compiler cache identity
         id: kokkos-platform
         run: |
@@ -2289,7 +2304,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: build-kokkos-py/python/pops
-          key: pops-module-openmp-dim2-${{ runner.os }}-${{ steps.kokkos-platform.outputs.key }}-py${{ steps.openmp-python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml') }}-kokkos${{ env.KOKKOS_VERSION }}-${{ env.KOKKOS_COMMIT }}
+          key: pops-module-openmp-dim2-${{ runner.os }}-${{ steps.kokkos-platform.outputs.key }}-headers${{ steps.openmp-compiler-includes.outputs.identity }}-py${{ steps.openmp-python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml', 'scripts/ci_compiler_include_identity.py', 'scripts/write_compiler_include_contract.py', 'python/pops/codegen/_compiler_include_tree.py') }}-kokkos${{ env.KOKKOS_VERSION }}-${{ env.KOKKOS_COMMIT }}
 
       - name: Build + install Kokkos (OpenMP)
         # Reconstruit Kokkos UNIQUEMENT sur cache miss.

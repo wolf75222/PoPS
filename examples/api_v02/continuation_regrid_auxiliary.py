@@ -29,6 +29,33 @@ from .continuation_regrid_amr import _approve, _bundle_mass, _injection, ab2_fac
 from .models_M01_M14 import _domain, _initial
 
 
+def initial_auxiliary_values(spec, plan):
+    """Initialize this declared input FieldSpace with the actual scalar q(0).
+
+    FieldSample subsequently creates the independently owned AB2 history from
+    State. The input is required by the FieldSpace declaration; it is not a
+    substitute for the calculated history used by the method.
+    """
+    from pops.codegen.provider_instances import require_instance_contract, runtime_key
+    from pops.model.provider_pack import ProviderPack
+
+    initial = next(iter(spec.initial_values.values()))
+    result = {}
+    for block in plan.blocks:
+        operations = block.resolved_operations
+        pack = ProviderPack.from_data(operations.to_data()["provider_evidence"]["auxiliary"])
+        instance = require_instance_contract(operations, owner_qid=block.instance_owner_qid)
+        for key in pack:
+            entry = pack.declared_entry(key)
+            if entry.producer != "runtime_input" or not entry.availability or entry.slot is None:
+                continue
+            assert (key.space_kind, key.space_name, key.component) == (
+                "field", "previous", "q_previous"), "an additional required input needs its own data"
+            result[runtime_key(key, instance)] = np.ascontiguousarray(initial[0], dtype=np.float64)
+    assert len(result) == 1, "the declared retained FieldSpace input must remain explicit"
+    return result
+
+
 def build_continuation_regrid_auxiliary(*, cells=(16, 8), dt=.1, steps=3):
     frame, _ = _domain("auxiliary_regrid", cells)
     model = pops.Model("independent_retained_field", frame=frame)

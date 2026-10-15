@@ -541,6 +541,12 @@ class _Analyzer:
             _arithmetic("compare", x[0], rhs)
             return _Discrete("bool")
         if op == "scalar_isfinite": return _Discrete("bool")
+        if op == "bool_op":
+            from pops.time._program.structured_control import validate_boolean_operation
+            validate_boolean_operation(value.inputs, a, value_signature(value))
+            if any(not isinstance(child, _Discrete) for child in x):
+                raise TypeError("boolean algebra cannot erase scientific dimensions")
+            return _Discrete("bool")
         if op in ("branch", "result_match"):
             self.block(a.get("true_block", ())); self.block(a.get("false_block", ()))
             return _compatible(self.get(a["true_result"]), self.get(a["false_result"]))

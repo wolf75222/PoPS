@@ -3773,6 +3773,10 @@ struct AmrSystem<Dim>::Impl {
   mutable std::shared_ptr<const PreparedHistoryHierarchyImages<Dim>>
       history_regrid_sequence_sources;
   std::shared_ptr<const PreparedRegridStateImages<Dim>> regrid_sequence_state_sources;
+  // A complete topology replacement owns one scientific remap, after every
+  // interface has been qualified on the final hierarchy. Parent prefixes only
+  // prepare representation metadata inside the same outer transaction.
+  bool continuation_regrid_sequence_active = false;
   mutable std::vector<const std::vector<field_type>*> program_hierarchy_candidates;
   mutable std::shared_ptr<const provider_snapshot_type> pending_provider_restore;
   mutable std::shared_ptr<const provider_registry_snapshot_type> pending_provider_registry_restore;
@@ -11435,7 +11439,8 @@ struct AmrSystem<Dim>::Impl {
         publication_preflight_error, &graph_lane,
         "AMR topology publication preflight failed collectively");
     const std::uint64_t prior_topology_epoch = engine->topology_epoch();
-    const bool continuation_remap = begin_program_continuation_regrid(graph_lane);
+    const bool continuation_remap =
+        !continuation_regrid_sequence_active && begin_program_continuation_regrid(graph_lane);
     multiblock_hierarchy->publish_regrid(static_cast<std::size_t>(parent_level),
                                          std::move(*prepared), std::move(child_states));
     const bool topology_changed = engine->topology_epoch() != prior_topology_epoch;
@@ -21366,18 +21371,28 @@ void AmrSystem<Dim>::complete_program_step_() {
   const auto state_sources = p_->prepare_regrid_state_images();
   runtime::amr::PersistentTaggingState<Dim> staged_state = p_->tagging_state;
   staged_state.begin_cycle(p_->tagging_spec->min_cycles);
+  const auto prior_epoch = p_->engine->topology_epoch();
+  const auto& sequence_lane = p_->require_package_assembly_lane();
+  const bool continuation_remap = p_->begin_program_continuation_regrid(sequence_lane);
   p_->multiblock_hierarchy->begin_interface_topology_replacement_();
   p_->regrid_sequence_state_sources = state_sources;
+  p_->continuation_regrid_sequence_active = true;
   try {
     for (int parent_level = 0; parent_level < p_->cfg.level_count - 1; ++parent_level)
       if (!p_->regrid_parent(parent_level, std::nullopt, &staged_state, history_sources.get()))
         break;
     p_->multiblock_hierarchy->finish_interface_topology_replacement_();
     p_->regrid_sequence_state_sources.reset();
+    p_->continuation_regrid_sequence_active = false;
+    p_->finish_program_continuation_regrid(
+        continuation_remap, p_->engine->topology_epoch() != prior_epoch, sequence_lane);
+    if (continuation_remap)
+      p_->program.refresh_hierarchy_state("AmrSystem complete Continuation topology replacement");
   } catch (...) {
     // Restore the complete interface recipe before the accepted snapshot restores old levels.
     p_->multiblock_hierarchy->abort_interface_topology_replacement_();
     p_->regrid_sequence_state_sources.reset();
+    p_->continuation_regrid_sequence_active = false;
     throw;
   }
   p_->tagging_state = std::move(staged_state);
@@ -22287,12 +22302,20 @@ void AmrSystem<Dim>::regrid_on_restart() {
   bool reconstruction_started = false;
   try {
     const auto state_sources = p_->prepare_regrid_state_images();
+    const auto& sequence_lane = p_->require_package_assembly_lane();
+    const bool continuation_remap = p_->begin_program_continuation_regrid(sequence_lane);
     p_->multiblock_hierarchy->begin_interface_topology_replacement_();
     reconstruction_started = true;
     p_->regrid_sequence_state_sources = state_sources;
+    p_->continuation_regrid_sequence_active = true;
     p_->program.regrid_on_restart("AmrSystem::regrid_on_restart:");
     p_->multiblock_hierarchy->finish_interface_topology_replacement_();
     p_->regrid_sequence_state_sources.reset();
+    p_->continuation_regrid_sequence_active = false;
+    p_->finish_program_continuation_regrid(
+        continuation_remap, p_->engine->topology_epoch() != prior_topology_epoch, sequence_lane);
+    if (continuation_remap)
+      p_->program.refresh_hierarchy_state("AmrSystem restart Continuation topology replacement");
     p_->refresh_prepared_hierarchy();
     if (p_->engine->topology_epoch() == prior_topology_epoch)
       throw std::runtime_error("AmrSystem restart regrid authority did not publish a new topology");
@@ -22311,6 +22334,7 @@ void AmrSystem<Dim>::regrid_on_restart() {
     if (reconstruction_started) {
       p_->multiblock_hierarchy->abort_interface_topology_replacement_();
       p_->regrid_sequence_state_sources.reset();
+      p_->continuation_regrid_sequence_active = false;
     }
     regrid_error = std::current_exception();
   }
@@ -25719,9 +25743,16 @@ void AmrSystem<Dim>::restore_checkpoint_accepted_state(const std::vector<std::ui
     local_error = std::current_exception();
   }
   if (all_reduce_max(local_failure, lane.communicator()) != 0) {
-    if (lane.size() == 1 && local_error)
-      std::rethrow_exception(local_error);
-    throw std::runtime_error("AMR checkpoint post-requalification validation failed collectively");
+    if (local_error) {
+      try {
+        std::rethrow_exception(local_error);
+      } catch (const std::exception& error) {
+        throw std::runtime_error("AMR checkpoint post-requalification validation failed on rank " +
+                                 std::to_string(lane.rank()) + ": " + error.what());
+      }
+    }
+    throw std::runtime_error(
+        "AMR checkpoint post-requalification validation failed on another rank");
   }
   // The enclosing restart transaction has installed the candidate hierarchy and fields.  Decode
   // and retain the complete continuation forest now, before publishing the candidate facade bytes.

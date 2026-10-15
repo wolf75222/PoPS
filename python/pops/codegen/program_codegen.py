@@ -333,7 +333,7 @@ def _emit_cpp_program_impl(
         if target == "amr_system" else None)
     from .program_emit_finite_arrays import FINITE_OPS, finite_cpp_helpers
     from .program_emit_versioned import VERSIONED_OPS
-    from pops.time.field_representation import FIELD_REPRESENTATION_OPS
+    from pops.time._program.field_representation import FIELD_REPRESENTATION_OPS
     value_ops = FINITE_OPS | VERSIONED_OPS | FIELD_REPRESENTATION_OPS
     finite_roots = list(program._values)
     if program._dt_bound is not None:
@@ -674,7 +674,7 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
     from .program_emit_structured_control import STRUCTURED_OPS
     from .program_emit_finite_arrays import FINITE_OPS
     from .program_emit_versioned import VERSIONED_OPS
-    from pops.time.field_representation import FIELD_REPRESENTATION_OPS, validate_field_representation
+    from pops.time._program.field_representation import FIELD_REPRESENTATION_OPS, validate_field_representation
     if v.op in FIELD_REPRESENTATION_OPS:
         validate_field_representation(v)
         return

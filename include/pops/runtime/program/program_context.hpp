@@ -2291,6 +2291,15 @@ class ProgramContext {
   runtime_state_type& runtime_state() const { return system_->program_runtime_state_(); }
 
  public:
+  /// Own opaque structural storage without performing a numerical Field operation.
+  /// The copy constructor retains the complete valid/ghost storage. Its caller
+  /// converges allocation/copy errors before publishing any structural slot.
+  std::shared_ptr<field_type> own_structural_field(const field_type& source) const {
+    auto owned = std::make_shared<field_type>(source);
+    continuation_bind_field_provenance(source, *owned, owned);
+    return owned;
+  }
+
   void continuation_bind_field_provenance(const field_type& source,
                                           const field_type& destination) const {
     field_exchanges_->copy(&destination, &source);
@@ -2301,6 +2310,22 @@ class ProgramContext {
                                                                    const Lifetime& lifetime) const {
     field_exchanges_->copy_retained(&destination, &source, lifetime);
     return field_exchanges_->expression(&destination);
+  }
+  template <class Lifetime>
+  ContinuationFieldMetadata continuation_bind_field_provenance(const field_type& source,
+                                                               const field_type& destination,
+                                                               const Lifetime& lifetime,
+                                                               const ContinuationType&) const {
+    return {continuation_bind_field_provenance(source, destination, lifetime), {}};
+  }
+  template <class Lifetime>
+  void continuation_bind_field_provenance(const field_type& source, const field_type& destination,
+                                          const Lifetime& lifetime,
+                                          const ContinuationFieldMetadata& metadata) const {
+    if (metadata.support)
+      throw std::invalid_argument(
+          "Uniform Field restoration requires an explicit support transfer");
+    continuation_bind_field_provenance(source, destination, lifetime, metadata.expression);
   }
   template <class Lifetime>
   FieldExchangeExpressions::Ref continuation_bind_field_provenance(

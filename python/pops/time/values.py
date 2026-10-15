@@ -424,6 +424,21 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
     def __le__(self, other: Any) -> Any:
         return self._compare(other, "<=")
 
+    def __and__(self, other: Any) -> Any:
+        return self.prog._boolean_op((self, other), "and")
+
+    def __rand__(self, other: Any) -> Any:
+        return self.prog._boolean_op((other, self), "and")
+
+    def __or__(self, other: Any) -> Any:
+        return self.prog._boolean_op((self, other), "or")
+
+    def __ror__(self, other: Any) -> Any:
+        return self.prog._boolean_op((other, self), "or")
+
+    def __invert__(self) -> Any:
+        return self.prog._boolean_op((self,), "not")
+
     def __getitem__(self, component):
         if self.vtype == "array":
             return self.prog.at(self, component)

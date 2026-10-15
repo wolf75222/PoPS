@@ -34,6 +34,21 @@ Independent NumPy oracles run after native execution and do not provide its
 trajectory. None of the selected method identifiers is dispatched inside the
 Program code generator or native Program/AMR context.
 
+The T10 cut-cell witness conserves its authored quadratic energy in the **fixed
+discrete measure** exposed by the native geometry. It checks that fractions and
+integration weights are bitwise unchanged during the attempt and that omitting
+the fractions changes the relaxation factor. It does not certify exact continuum
+volume or conservation when a regrid reconstructs a different discrete measure.
+In particular, the existing Dim1/2 `CutCell` geometry uses products of
+centre-to-neighbour ray lengths. For the plane `x = 1/2` on eight cells, the
+adjacent fluid cell has fraction `(1 + 1/2)/2 = 3/4`, so the initial measure is
+`1/2 - (1/8)/4 = 0.46875`. Refining the central half in both axes yields
+`0.4765625` in Dim2. The storage receiver checks these independently derived
+measures at unchanged tolerance; the compatible staircase case separately
+requires unchanged mass and forbids invented transport flux. This is a property
+of that selected geometric discretization, not a restriction of Python algebra
+or an engine branch for a physical model.
+
 ## Compositions requiring their own receipt
 
 The historical SDK007 flux-history receiver executed through time .32 after

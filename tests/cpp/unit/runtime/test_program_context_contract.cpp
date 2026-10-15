@@ -32,6 +32,7 @@
 #include <pops/core/foundation/allocator.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/numerics/diffusion/prepared_diffusion.hpp>
 #include <pops/runtime/program/history_sample_identity_codec.hpp>
 #include <pops/runtime/program/uniform_history_exchange_checkpoint.hpp>
 #include <pops/runtime/accelerator/prepared_stream_executor.hpp>
@@ -1350,6 +1351,8 @@ TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {
   add_gas_block(sim, "b");
   sim.set_program_block_map({0, 1});
   NativeProgramContext ctx(&sim);
+  ctx.configure_primary_clock("primary");
+  ctx.begin_step(Real(.01));
 
   NativeField& first = ctx.state(0);
   NativeField& second = ctx.state(1);
@@ -3390,4 +3393,185 @@ TEST(ProgramContextContract, DomainIssuersChangeOnlyAfterSuccessfulRestartFinali
   sim.finalize_restart_transaction();
   EXPECT_TRUE(fresh->visible());
   EXPECT_TRUE(new_domain->visible());
+}
+
+TEST(ProgramContextContract, StructuralFieldOwnsCompleteStorageAndExactFaceExpression) {
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(8));
+  install_execution_lane(sim, "pops.test.owned-structural-field");
+  add_gas_block(sim, "gas");
+  sim.set_state("gas", ic(8));
+  sim.set_program_block_map({0});
+  NativeProgramContext ctx(&sim);
+  ctx.configure_primary_clock("clock.structural");
+  ctx.begin_step(.125);
+  ctx.set_stage_time(0, 1);
+  ctx.configure_stencil_expressions(4, 4, 256);
+  std::shared_ptr<NativeField> owned;
+  {
+    auto source = ctx.scratch_state_like(ctx.state(0));
+    source.set_val(Real(7));
+    ctx.capture_stencil_exchanges(source, 0, "source.structural", [&](auto&& append) {
+      for (std::size_t local = 0; local < source.local_size(); ++local) {
+        std::string incidence = "cell";
+        for (int axis = 0; axis < kTestDimension; ++axis)
+          incidence += ":" + std::to_string(source.box(local).lo[axis]);
+        incidence += "/axis:0/side:0";
+        runtime::program::ExchangeRecord record{"authored.face",
+                                                "face." + std::to_string(source.box(local).lo[0]),
+                                                "source.structural",
+                                                incidence,
+                                                1,
+                                                1.,
+                                                2.,
+                                                1.,
+                                                1,
+                                                0,
+                                                0,
+                                                0};
+        append(std::move(record), source.box(local).lo);
+      }
+    });
+    owned = ctx.own_structural_field(source);
+    ASSERT_TRUE(owned);
+    EXPECT_FALSE(owned->shares_storage_with(source));
+    EXPECT_EQ(owned->ghosts(), source.ghosts());
+    EXPECT_EQ(owned->ncomp(), source.ncomp());
+    source.set_val(Real(99));
+    expect_owned_first_value(*owned, Real(7));
+  }
+  // The source and its lexical frame are gone. Copies retain both complete
+  // storage and the same immutable evaluated face bases, not a re-evaluation.
+  auto second = ctx.own_structural_field(*owned);
+  auto probe = std::make_shared<NativeField>(*second);
+  const auto expression = ctx.continuation_bind_field_provenance(*second, *probe, probe);
+  ASSERT_TRUE(expression);
+  ASSERT_EQ(expression->terms.size(), 1u);
+  const auto basis = expression->terms.front().basis;
+  owned.reset();
+  expect_owned_first_value(*second, Real(7));
+  const auto again = ctx.continuation_bind_field_provenance(*second, *probe, probe);
+  ASSERT_TRUE(again);
+  EXPECT_EQ(again->terms.front().basis, basis);
+  EXPECT_EQ(again->terms.front().coefficient, expression->terms.front().coefficient);
+  EXPECT_EQ(again->terms.front().basis->records.size(), second->local_size());
+}
+
+TEST(ProgramContextContract, StructuralFieldCannotEraseForeignSupportDuringRestore) {
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.owned-structural-support");
+  add_gas_block(sim, "gas");
+  sim.set_state("gas", ic(4));
+  sim.set_program_block_map({0});
+  NativeProgramContext ctx(&sim);
+  auto source = ctx.scratch_state_like(ctx.state(0));
+  source.set_val(Real(5));
+  auto target = ctx.own_structural_field(source);
+  auto support = std::make_shared<runtime::program::ContinuationFieldSupport>();
+  support->program_identity = "other.program";
+  support->origin_point = "fine.accepted";
+  support->program_owner = 0;
+  support->producer_level = 1;
+  const runtime::program::ContinuationFieldMetadata metadata{{}, support};
+  EXPECT_THROW(ctx.continuation_bind_field_provenance(source, *target, target, metadata),
+               std::invalid_argument);
+  expect_owned_first_value(*target, Real(5));
+}
+
+TEST(ProgramContextContract, DiffusiveRateCaptureDefersExactFacesUntilAffineDelivery) {
+  using namespace runtime::program;
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.retained-diffusive-rate");
+  add_gas_block(sim, "gas");
+  sim.set_state("gas", ic(4));
+  sim.set_program_block_map({0});
+  NativeProgramContext ctx(&sim);
+  ctx.configure_primary_clock("clock.diffusive-capture");
+  ctx.begin_step(.125);
+  ctx.set_stage_time(0, 1);
+  ctx.configure_stencil_expressions(2, 2, 256);
+  auto q = ctx.scratch_state_like(ctx.state(0));
+  auto rate = ctx.scratch_state_like(q);
+  auto accepted = ctx.scratch_state_like(q);
+  for (std::size_t local = 0; local < q.local_size(); ++local) {
+    const auto values = q.fab(local).view();
+    for_each_cell(q.box(local), [=] POPS_HD(const Index<kTestDimension>& cell) {
+      Real value = 1;
+      for (int axis = 0; axis < kTestDimension; ++axis)
+        value += Real(.01) * (axis + 1) * cell[axis] * cell[axis];
+      for (int component = 0; component < kNcomp; ++component)
+        values(cell, component) = (component + 1) * value;
+    });
+  }
+  PreparedDiffusion<kTestDimension, kNcomp> prepared(ctx, q, {});
+  EXPECT_THROW(prepared.capture_exchanges(ctx, rate, 0, "diffusion", "rate", "eval", 1.),
+               std::logic_error);
+  EXPECT_TRUE(ctx.runtime_state().accepted_exchanges_.records().empty());
+  const auto law = [&q](std::size_t local) {
+    const auto values = std::as_const(q).fab(local).view();
+    return [=] POPS_HD(const Index<kTestDimension>& cell) {
+      std::array<Real, kNcomp*(kTestDimension + 2)> law{};
+      for (int component = 0; component < kNcomp; ++component) {
+        const int offset = component * (kTestDimension + 2);
+        law[offset] = values(cell, component);
+        for (int axis = 0; axis < kTestDimension; ++axis)
+          law[offset + 1 + axis] = Real(.1);
+        law[offset + 1 + kTestDimension] = Real(1);
+      }
+      return law;
+    };
+  };
+  prepared.apply(q, rate, law);
+  prepared.capture_exchanges(ctx, rate, 0, "diffusion", "rate", "eval", 1.);
+  // A completed nonlinear solve's rate is not yet an accepted delivery.
+  EXPECT_TRUE(ctx.runtime_state().accepted_exchanges_.records().empty());
+  auto retained = ctx.own_structural_field(rate);
+  auto probe = std::make_shared<NativeField>(*retained);
+  const auto expression = ctx.continuation_bind_field_provenance(*retained, *probe, probe);
+  ASSERT_TRUE(expression);
+  ASSERT_EQ(expression->terms.size(), 1u);
+  const auto& basis = *expression->terms[0].basis;
+  std::size_t owned_cells = 0;
+  for (std::size_t local = 0; local < q.local_size(); ++local)
+    owned_cells += q.box(local).numPts();
+  ASSERT_EQ(basis.records.size(), owned_cells * 2 * kTestDimension * kNcomp);
+  ASSERT_EQ(basis.cells.size(), basis.records.size());
+  bool nonzero = false;
+  for (std::size_t index = 0; index < basis.records.size(); ++index) {
+    const auto& record = basis.records[index];
+    const auto& cell = basis.cells[index];
+    const int axis = record.trace_axis;
+    const int center = static_cast<int>(cell[axis]);
+    const int neighbor = (center + (record.trace_side == 0 ? -1 : 1) + 4) % 4;
+    const Real difference = Real(.01) * (axis + 1) * (record.trace_component + 1) *
+                            (neighbor * neighbor - center * center);
+    const Real expected = Real(.4) * (record.trace_side == 0 ? -difference : difference);
+    EXPECT_NEAR(record.numerical_flux, expected, 2e-14);
+    EXPECT_DOUBLE_EQ(record.temporal_weight, 1.);
+    EXPECT_DOUBLE_EQ(record.face_measure, std::pow(.25, kTestDimension - 1));
+    EXPECT_FALSE(record.exterior_trace);
+    nonzero |= std::abs(record.numerical_flux) > Real(1e-6);
+  }
+  EXPECT_GT(all_reduce_sum(nonzero ? 1L : 0L, ctx.prepared_execution_lane()), 0);
+  // Reusing the mutable provider must not change the retained rate's face basis.
+  q.set_val(19);
+  prepared.apply(q, rate, law);
+  ctx.lincomb(accepted, 1., ctx.state(0), .03125, *retained);
+  EXPECT_TRUE(ctx.runtime_state().accepted_exchanges_.records().empty());
+  ctx.publish_stencil_exchanges(0, accepted);
+  const auto& delivered = ctx.runtime_state().accepted_exchanges_.records();
+  ASSERT_EQ(delivered.size(), basis.records.size());
+  for (std::size_t index = 0; index < delivered.size(); ++index) {
+    EXPECT_EQ(delivered[index].quadrature_identity, basis.records[index].quadrature_identity);
+    EXPECT_DOUBLE_EQ(delivered[index].numerical_flux, basis.records[index].numerical_flux);
+    EXPECT_DOUBLE_EQ(delivered[index].temporal_weight, .03125);
+  }
+  const auto delivered_count = delivered.size();
+  ctx.publish_stencil_exchanges(0, accepted);
+  EXPECT_EQ(ctx.runtime_state().accepted_exchanges_.records().size(), delivered_count);
 }

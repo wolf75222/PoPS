@@ -2,6 +2,7 @@
 
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/runtime/program/distributed_domain.hpp>
+#include <pops/runtime/program/continuation_field_support.hpp>
 #include <pops/runtime/program/field_exchange_expression.hpp>
 #include <pops/runtime/program/structural_traversal.hpp>
 
@@ -25,6 +26,13 @@
 #include <vector>
 
 namespace pops::runtime::program {
+
+// Both descriptions travel with an opaque Field. Neither description by itself
+// grants permission to read its storage in a consuming execution context.
+struct ContinuationFieldMetadata {
+  FieldExchangeExpressions::Ref expression;
+  ContinuationFieldSupport::Ref support;
+};
 
 // Structural language types only: no physical-model or numerical-method dispatch.
 enum class ContinuationKind : std::uint8_t {
@@ -620,18 +628,26 @@ class ContinuationValue {
     return out;
   }
   static Ref field(const Field& value, int owner, std::string contract,
-                   FieldExchangeExpressions::Ref expression = {}) {
+                   FieldExchangeExpressions::Ref expression = {},
+                   ContinuationFieldSupport::Ref support = {}) {
     // Fab's copy constructor deep-copies Kokkos storage. No scratch borrow survives this call.
     return owned_field_(std::make_shared<const Field>(value), owner, std::move(contract),
-                        std::move(expression));
+                        std::move(expression), std::move(support));
   }
   static Ref with_field_exchange_expression(const Ref& value,
                                             FieldExchangeExpressions::Ref expression) {
     if (!value)
       throw std::invalid_argument("field expression requires an owning continuation value");
     value->require_(ContinuationKind::Field);
+    return owned_field_(value->field_, value->field_owner_, value->contract_, std::move(expression),
+                        value->field_support_);
+  }
+  static Ref with_field_metadata(const Ref& value, ContinuationFieldMetadata metadata) {
+    if (!value)
+      throw std::invalid_argument("field metadata requires an owning continuation value");
+    value->require_(ContinuationKind::Field);
     return owned_field_(value->field_, value->field_owner_, value->contract_,
-                        std::move(expression));
+                        std::move(metadata.expression), std::move(metadata.support));
   }
   ContinuationKind kind() const noexcept { return kind_; }
   const distributed::DomainRef& distributed_domain_ref() const {
@@ -696,6 +712,10 @@ class ContinuationValue {
   const FieldExchangeExpressions::Ref& field_exchange_expression() const noexcept {
     return field_exchange_expression_;
   }
+  const ContinuationFieldSupport::Ref& field_support() const noexcept { return field_support_; }
+  ContinuationFieldMetadata field_metadata() const noexcept {
+    return {field_exchange_expression_, field_support_};
+  }
   const std::string& scientific_contract() const noexcept { return contract_; }
 
  private:
@@ -709,6 +729,7 @@ class ContinuationValue {
   FiniteDomainRef domain_;
   std::shared_ptr<const Field> field_;
   FieldExchangeExpressions::Ref field_exchange_expression_;
+  ContinuationFieldSupport::Ref field_support_;
   int field_owner_ = -1;
   std::string contract_;
   ContinuationValue* retirement_next_ = nullptr;
@@ -737,12 +758,19 @@ class ContinuationValue {
     return out;
   }
   static Ref owned_field_(std::shared_ptr<const Field> field, int owner, std::string contract,
-                          FieldExchangeExpressions::Ref expression = {}) {
+                          FieldExchangeExpressions::Ref expression = {},
+                          ContinuationFieldSupport::Ref support = {}) {
+    if (support) {
+      support->validate();
+      if (support->program_owner != owner)
+        throw std::invalid_argument("Field producer support changes its installed owner");
+    }
     auto out = fresh_(ContinuationKind::Field);
     out->field_ = std::move(field);
     out->field_owner_ = owner;
     out->contract_ = std::move(contract);
     out->field_exchange_expression_ = std::move(expression);
+    out->field_support_ = std::move(support);
     return out;
   }
   static void require_domain_(const FiniteDomainRef& domain) {
@@ -938,15 +966,72 @@ class ContinuationCodec {
   using Value = ContinuationValue<Dim>;
   using Ref = typename Value::Ref;
   using Field = MultiFab<Dim>;
-  using Prototypes = std::function<const Field&(int)>;
+  class Prototypes {
+   public:
+    Prototypes() = default;
+    template <class Provider>
+    Prototypes(Provider provider) {
+      if constexpr (std::is_invocable_r_v<const Field&, Provider, int,
+                                          const ContinuationFieldSupport::Ref&>)
+        provider_ = std::move(provider);
+      else {
+        static_assert(std::is_invocable_r_v<const Field&, Provider, int>);
+        provider_ = [provider = std::move(provider)](
+                        int owner, const ContinuationFieldSupport::Ref& support) -> const Field& {
+          if (support)
+            throw std::invalid_argument(
+                "Field producer support requires an exact prototype provider");
+          return provider(owner);
+        };
+      }
+    }
+    explicit operator bool() const noexcept { return bool(provider_); }
+    const Field& operator()(int owner, const ContinuationFieldSupport::Ref& support = {}) const {
+      return provider_(owner, support);
+    }
+
+   private:
+    std::function<const Field&(int, const ContinuationFieldSupport::Ref&)> provider_;
+  };
 
   // Installed archive migration may reconstruct the old native distribution
   // after the complete source-rank table has been authenticated. The ordinary
   // exact-layout decoder leaves this empty. The resolver must enforce the
   // source and target storage authority; decode_ still checks the exact
   // resulting layout and all payload framing below.
-  using ArchiveFieldResolver =
-      std::function<const Field&(const ContinuationType&, std::span<const std::uint8_t>)>;
+  class ArchiveFieldResolver {
+   public:
+    ArchiveFieldResolver() = default;
+    template <class Provider>
+    ArchiveFieldResolver(Provider provider) {
+      if constexpr (std::is_invocable_r_v<const Field&, Provider, const ContinuationType&,
+                                          std::span<const std::uint8_t>,
+                                          const ContinuationFieldSupport::Ref&>)
+        provider_ = std::move(provider);
+      else {
+        static_assert(std::is_invocable_r_v<const Field&, Provider, const ContinuationType&,
+                                            std::span<const std::uint8_t>>);
+        provider_ = [provider = std::move(provider)](
+                        const ContinuationType& type, std::span<const std::uint8_t> bytes,
+                        const ContinuationFieldSupport::Ref& support) -> const Field& {
+          if (support)
+            throw std::invalid_argument(
+                "archive Field producer support requires an exact resolver");
+          return provider(type, bytes);
+        };
+      }
+    }
+    explicit operator bool() const noexcept { return bool(provider_); }
+    const Field& operator()(const ContinuationType& type, std::span<const std::uint8_t> bytes,
+                            const ContinuationFieldSupport::Ref& support = {}) const {
+      return provider_(type, bytes, support);
+    }
+
+   private:
+    std::function<const Field&(const ContinuationType&, std::span<const std::uint8_t>,
+                               const ContinuationFieldSupport::Ref&)>
+        provider_;
+  };
 
   struct Decoded {
     Ref root;
@@ -1044,8 +1129,8 @@ class ContinuationCodec {
       throw std::length_error("continuation archive exceeds installed capacity");
     continuation_detail::Reader in(bytes);
     const auto wire = in.text();
-    if (wire == "POPSCONT2" || wire == "POPSCONT3" || wire == "POPSCONT4")
-      return decode_extended_(in, wire != "POPSCONT2", wire == "POPSCONT4");
+    if (wire == "POPSCONT2" || wire == "POPSCONT3" || wire == "POPSCONT4" || wire == "POPSCONT5")
+      return decode_extended_(in, wire != "POPSCONT2", wire == "POPSCONT4", wire == "POPSCONT5");
     if (wire != "POPSCONT1" || in.text() != identity_ || in.word() != Dim)
       throw std::invalid_argument(
           "continuation image has a different schema, dimension or wire version");
@@ -1100,6 +1185,49 @@ class ContinuationCodec {
   ArchiveFieldResolver archive_fields_;
 
 #include <pops/runtime/program/continuation_codec_extended.inc>
+  static void encode_field_support_(const ContinuationFieldSupport::Ref& support,
+                                    continuation_detail::Writer& out) {
+    out.word(bool(support));
+    if (!support)
+      return;
+    support->validate();
+    out.text(support->program_identity);
+    out.text(support->origin_point);
+    out.word(support->program_owner);
+    out.word(support->producer_level);
+    out.word(support->topology_epoch);
+    out.word(support->materialization_generation);
+  }
+  static ContinuationFieldSupport::Ref decode_field_support_(
+      continuation_detail::Reader& in, const std::function<void(std::uint64_t)>& reserve = {}) {
+    const auto present = in.word();
+    if (present > 1)
+      throw std::invalid_argument("invalid Field producer support tag");
+    if (!present)
+      return {};
+    // Preflight both variable-length descriptors and all fixed words before
+    // allocation. Inert migration additionally charges its common workspace.
+    auto check = in;
+    const auto identity = check.blob(), point = check.blob();
+    const auto owner = check.word(), level = check.word();
+    (void)check.word();
+    (void)check.word();
+    if (identity.empty() || point.empty() ||
+        owner > std::uint64_t(std::numeric_limits<int>::max()) ||
+        level > std::uint64_t(std::numeric_limits<int>::max()))
+      throw std::invalid_argument("invalid Field producer support descriptor");
+    if (reserve)
+      reserve(sizeof(ContinuationFieldSupport) + identity.size() + point.size());
+    auto support = std::make_shared<ContinuationFieldSupport>();
+    support->program_identity = in.text();
+    support->origin_point = in.text();
+    support->program_owner = static_cast<int>(in.word());
+    support->producer_level = static_cast<int>(in.word());
+    support->topology_epoch = in.word();
+    support->materialization_generation = in.word();
+    support->validate();
+    return support;
+  }
   bool collective_node_(const Value& node, continuation_detail::Writer& out) const {
     const auto* value = &node;
     out.word(static_cast<unsigned>(value->kind()));
@@ -1163,6 +1291,10 @@ class ContinuationCodec {
           out.text("pops.field-exchange-expression@1");
           out.text(FieldExchangeExpressions::collective_identity(
               value->field_exchange_expression(), field_expression_limits_(out.capacity())));
+        }
+        if (value->field_support()) {
+          out.text("pops.field-producer-support@1");
+          encode_field_support_(value->field_support(), out);
         }
         const auto& field = value->field();
         out.word(field.ncomp());
@@ -1288,7 +1420,7 @@ class ContinuationCodec {
           return;
         }
         case ContinuationKind::Field: {
-          const auto& prototype = prototypes_(type.field_owner);
+          const auto& prototype = prototypes_(type.field_owner, value->field_support());
           const auto& field = value->field();
           if (value->field_exchange_expression())
             FieldExchangeExpressions::require_expression(value->field_exchange_expression(),
@@ -1471,7 +1603,7 @@ class ContinuationCodec {
         [](const Value&) {});
   }
   Ref decode_(const ContinuationType& type, const std::vector<FiniteDomainRef>& domains,
-              continuation_detail::Reader& in) const {
+              continuation_detail::Reader& in, ContinuationFieldSupport::Ref support = {}) const {
     using Frame = continuation_detail::DecodeFrame<Dim>;
     return continuation_detail::decode_structure<Dim>(
         type, capacity_, [&](const ContinuationType& type) -> Frame {
@@ -1510,8 +1642,11 @@ class ContinuationCodec {
               return Frame::leaf(Value::index(domain, signed_word_(in)));
           }
           if (type.kind == ContinuationKind::Field) {
-            const auto& prototype = archive_fields_ ? archive_fields_(type, in.bytes.subspan(in.at))
-                                                    : prototypes_(type.field_owner);
+            if (support && support->program_owner != type.field_owner)
+              throw std::invalid_argument("continuation Field support owner differs from schema");
+            const auto& prototype = archive_fields_
+                                        ? archive_fields_(type, in.bytes.subspan(in.at), support)
+                                        : prototypes_(type.field_owner, support);
 
             const auto begin = in.at;
             if (in.word() != static_cast<std::uint64_t>(type.field_components))
@@ -1582,7 +1717,7 @@ class ContinuationCodec {
               fab.copy_from_host(host);
             }
             return Frame::leaf(Value::owned_field_(std::move(restored), type.field_owner,
-                                                   type.scientific_contract));
+                                                   type.scientific_contract, {}, support));
           }
           const auto count = in.word();
           const auto expected = type.kind == ContinuationKind::Product ? type.children.size()

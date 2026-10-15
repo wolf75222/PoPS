@@ -54,12 +54,16 @@ def requires_rhs_input_trace(value: Any) -> bool:
 
 def emit_rhs_input_trace(value: Any, block: int, state: str, lines: list[str], target: str,
                          *, force: bool = False) -> str | None:
-    if target != "amr_system" or not (requires_rhs_input_trace(value) or force):
+    if target != "amr_system":
         return None
     if force:
-        from pops.time._program.value_validation import TOP_LEVEL_REGION
-        if value.region != TOP_LEVEL_REGION or value.attrs.get("schedule") is not None:
-            raise ValueError("path RHS traces require unscheduled top-level stage inputs")
+        from .program_emit_hierarchy_regions import hierarchy_path_rhs
+        # A supported control region owns a real all-level suspension and
+        # resumes only after publication of this exact invocation's input.
+        if not any(candidate is value for candidate in hierarchy_path_rhs(value.prog)):
+            raise ValueError("path RHS traces require an authenticated hierarchy continuation")
+    elif not requires_rhs_input_trace(value):
+        return None
     name = "rhs_input_trace_%d" % value.id
     source_id = value.prog._canonical_value(value.inputs[0]).id
     lines.append("auto %s = ctx.capture_rhs_input_trace(%d, %s, %d, %d);"

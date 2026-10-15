@@ -27,6 +27,7 @@ from pops.numerics import DiscretizationPlan, StateStorage
 from pops.params import RuntimeParam
 from pops.solvers import CompositeFieldGMRES
 from pops.time import TemporalEvaluation, FixedDt, FailRun, RejectAttempt, HistoryTransfer, every
+from pops.time.expressions import ProgramScalar
 from .common import CaseSpec, non_owner_metrics
 from .models_M01_M14 import _domain, _initial
 
@@ -102,6 +103,8 @@ def build_temporal_field(
     reject_parent=False,
     regrid_observation=False,
     observation_transfer=True,
+    hierarchy_companion=False,
+    observation_byte_capacity=64 * 1024 * 1024,
 ):
     frame, _ = _domain("temporal_field_domain", cells)
     model = pops.Model("polynomial_field_load", frame=frame)
@@ -164,7 +167,8 @@ def build_temporal_field(
     observed = field.observe(
         p.solve(
             field, values={block[U]: candidate}, at=q.next.point, temporal={block[U]: policy}
-        ).consume(action=FailRun())
+        ).consume(action=FailRun()),
+        byte_capacity=observation_byte_capacity,
     )[field[phi]]
     p.store_history(
         "observed",
@@ -175,6 +179,26 @@ def build_temporal_field(
         if regrid_observation and observation_transfer
         else None,
     )
+    if hierarchy_companion:
+        observed_sum_before = p.sum(observed)
+        p.store_history("observed_before_barrier", observed, depth=1, owner_block=block)
+        companion_input = p.value(
+            "companion_endpoint", (3 + target**2, target, q.n[2]), at=q.next.point
+        )
+        synchronized = field.observe(
+            p.solve(field, values={block[U]: companion_input}, at=q.next.point).consume(
+                action=FailRun()
+            ),
+            byte_capacity=observation_byte_capacity,
+        )[field[phi]]
+        p.store_history("synchronized", synchronized, depth=1, owner_block=block)
+        p.store_history("observed_after_barrier", observed, depth=1, owner_block=block)
+        observed_sum_after = p.sum(observed)
+        candidate = p.value(
+            "retained_observation_reduction_difference",
+            (candidate[0], candidate[1], ProgramScalar(observed_sum_after - observed_sum_before)),
+            at=q.next.point,
+        )
     p.commit(q.next, candidate)
     marker_model = pops.Model("temporal_mesh_marker", frame=frame)
     marker = marker_model.state("marker", components=("tag",))
@@ -227,7 +251,9 @@ def build_temporal_field(
         if regrid_observation
         else AMRRegrid.frozen(),
         transfer=transfer,
-        execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)),
+        execution=AMRExecution.synchronous()
+        if hierarchy_companion
+        else AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)),
     )
     x, y = np.meshgrid(
         (np.arange(cells[0]) + 0.5) / cells[0], (np.arange(cells[1]) + 0.5) / cells[1]

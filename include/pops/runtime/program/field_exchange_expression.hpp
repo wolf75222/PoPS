@@ -170,10 +170,14 @@ class FieldExchangeExpressions {
       }
     }
     std::erase_if(next.terms, [](const Term& term) { return term.coefficient == 0; });
-    require_expression(std::make_shared<const Expression>(next), limits_);
-    install_(output, next.exact && next.terms.empty()
+    // The exact zero expression carries no face storage. Canonicalize it before
+    // budget admission, just as install_ does; ordinary field algebra therefore
+    // needs no stencil resource contract when none of its inputs has faces.
+    Ref expression = next.exact && next.terms.empty()
                          ? Ref{}
-                         : std::make_shared<const Expression>(std::move(next)));
+                         : std::make_shared<const Expression>(std::move(next));
+    require_expression(expression, limits_);
+    install_(output, std::move(expression));
   }
 
   /// The qualifier runs while the evaluation's actual clock/interval is still active. The

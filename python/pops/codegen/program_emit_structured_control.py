@@ -6,14 +6,14 @@ import json
 
 from pops.time._program.structured_control import value_signature
 from pops.time._program.versioned_values import VERSIONED_OPS
-from pops.time.field_representation import FIELD_REPRESENTATION_OPS
+from pops.time._program.field_representation import FIELD_REPRESENTATION_OPS
 from pops.time._program.distributed_arrays import GLOBAL_OPS as _DISTRIBUTED, local_effects
 from .program_emit_finite_arrays import FINITE_OPS
 
 
 STRUCTURED_OPS = frozenset((
     "product", "product_get", "region_argument", "region_index", "int64_constant",
-    "int64_cast", "bool_constant", "int64_op", "int64_compare", "structured_fold",
+    "int64_cast", "bool_constant", "bool_op", "int64_op", "int64_compare", "structured_fold",
     "structured_iterate", "iteration_success", "iteration_is_ok", "iteration_payload",
     "result_match",
     "result_ok", "result_error", "capture_result", "result_success", "result_is_ok",
@@ -410,6 +410,11 @@ def _inject_error(destination_signature, destination, source_signature, source, 
 
 
 def _propagate_typed_error(program, signature, tokens, var, lines, block_idx, target):
+    hierarchy = var.get(("hierarchy_typed_failure_capture",))
+    if hierarchy is not None and var.get(("typed_failure_capture",)) is None:
+        from .program_emit_hierarchy_typed_recovery import emit_raise
+        emit_raise(program, signature, tokens, hierarchy, lines, block_idx)
+        return
     capture = var.get(("typed_failure_capture",))
     if capture is None:
         from .program_emit_typed_failure import emit_terminal_failure
@@ -429,8 +434,23 @@ def _outline_capture_region(lines, start, node_id):
               "#if defined(__GNUC__) || defined(__clang__)",
               "[&]() __attribute__((noinline)) {",
               "#else", "[&]() {", "#endif"]
-    lines.extend("  " + line for line in region_lines)
+    # Schema/type emitters may return several physical lines in one entry.
+    # Indent each line, preserving blank-line bytes and all instruction text.
+    # Retain each entry's grouping: enclosing emitters indent an entry once.
+    # Flattening here would also change their unrelated indentation afterwards.
+    lines.extend("\n".join("  " + physical if physical.strip() else physical
+                           for physical in line.split("\n"))
+                 for line in region_lines)
     lines += ["}();", "// pops-outlined-capture end %d" % node_id]
+
+
+def boolean_expression(value, operands):
+    from pops.time._program.structured_control import validate_boolean_operation
+    validate_boolean_operation(value.inputs, value.attrs, value_signature(value))
+    if value.attrs["operation"] == "not":
+        return "(!(%s))" % operands[0]
+    return "((%s) %s (%s))" % (
+        operands[0], "&&" if value.attrs["operation"] == "and" else "||", operands[1])
 
 
 def _emit_typed_capture(program, value, var, model, lines, prelude, block_idx, field_plans, target):
@@ -597,6 +617,10 @@ def emit_structured_op(program, value, var, model, lines, prelude, block_idx, fi
                    % (source, source, source, source, source), lines, "inexact/out-of-range Int64 cast")
         var[value.id] = "integer_%d" % value.id
         lines.append("const std::int64_t %s = static_cast<std::int64_t>(%s);" % (var[value.id], source))
+    elif op == "bool_op":
+        expression = boolean_expression(value, tuple(var[item.id] for item in value.inputs))
+        var[value.id] = "boolean_%d" % value.id
+        lines.append("const bool %s = %s;" % (var[value.id], expression))
     elif op == "int64_compare":
         a, b = (var[item.id] for item in value.inputs)
         var[value.id] = "(%s %s %s)" % (a, value.attrs["comparison"], b)

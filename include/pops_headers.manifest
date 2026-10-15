@@ -321,6 +321,7 @@ sdk-support pops/runtime/program/amr_program_context_field_runtime_services.inc
 sdk-support pops/runtime/program/amr_program_context_general_field_public.inc
 sdk-support pops/runtime/program/amr_program_context_general_field_services.inc
 sdk-support pops/runtime/program/amr_program_context_general_field_scratch.inc
+sdk-support pops/runtime/program/amr_program_context_field_observation.inc
 sdk-support pops/runtime/program/amr_program_context_field_runtime_solver.inc
 sdk-support pops/runtime/program/amr_program_context_flux_basis.inc
 sdk-support pops/runtime/program/amr_program_context_flux_basis_definitions.inc
@@ -463,6 +464,9 @@ sdk-support pops/runtime/program/continuation_distributed_migration.hpp
 sdk-support pops/runtime/program/continuation_forest_distributed_migration.hpp
 sdk-support pops/runtime/program/hierarchy_control_failure.hpp
 sdk-support pops/runtime/program/amr_program_context_hierarchy_failure.inc
+sdk-support pops/runtime/program/amr_program_context_hierarchy_promotion.inc
+sdk-support pops/runtime/program/amr_program_context_hierarchy_typed_failure.inc
+sdk-support pops/runtime/program/continuation_field_support.hpp
 
 sdk-support pops/runtime/program/field_exchange_expression_codec.inc
 

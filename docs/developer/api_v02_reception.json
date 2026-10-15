@@ -3914,6 +3914,116 @@
         "installed_identity_exit_code": 0,
         "native_execution_claim": false
       }
+    },
+    {
+      "archive_key": "completion-v02/build-0014-dim2/receipt.json",
+      "sha256": "ff64b74606e6eebc75fa5d8cbe77eb43a49780fdd9a6455716f5b41a95d0d042",
+      "availability": "local_archive",
+      "result": {
+        "scope": "official source014 Dim2/MPI build and installed identity; unchanged source manifest",
+        "exit_code": 0,
+        "source_unchanged": true,
+        "installed_identity_exit_code": 0,
+        "native_execution_claim": false
+      }
+    },
+    {
+      "archive_key": "completion-v02/methods/cpp-source013-qualified.json",
+      "sha256": "4567eaa6dba9ffb8c28376cb64e3e6428154da64d06d0ec8a72bbd81a0e05d63",
+      "availability": "local_archive",
+      "result": {
+        "scope": "25 selected C++ contracts on immutable core013; corrected test fixtures individually authenticated",
+        "selected_cases_passed": 25,
+        "rank_observations": 150,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "qualified": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/methods/cpp-source014-0001/receipt.json",
+      "sha256": "e477a446d299b6e3558137bd8cb7e49838b0df7b36e60b48e246cda79d9e26f7",
+      "availability": "local_archive",
+      "result": {
+        "scope": "new diffusive capture and three atomic promotion cases pass MPI1/2/3; stage/masks fixture fails MPI2/3 before execution and is corrected in a separate receipt",
+        "selected_cases_passed": 4,
+        "rank_observations": 24,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "complete_cohort_qualified": false
+      }
+    },
+    {
+      "archive_key": "completion-v02/methods/cpp-source014-fixture0002/receipt.json",
+      "sha256": "fda32cded46b77016f370a1422af820c75ae1af3b9132943b5f52e02c89a2a11",
+      "availability": "local_archive",
+      "result": {
+        "scope": "stage/masks fixture corrected to actual MPI rank space and ownership; same immutable core014 and scientific oracle",
+        "selected_cases_passed": 1,
+        "rank_observations": 6,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "qualified": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-regrid-0014/receipt.json",
+      "sha256": "af5caf7b405af3441a2e4abfd06d0d3b090fe04180883fa2b3a1975bdd3e6947",
+      "availability": "local_archive",
+      "result": {
+        "scope": "late-refusal regrid rollback passes; two complete receivers fail their reader after actual regridding; correction replay pending",
+        "selected_cases_passed": 1,
+        "selected_cases_failed": 2,
+        "mpi_ranks": [
+          1
+        ],
+        "source_and_installed_unchanged": true,
+        "qualified": false
+      }
+    },
+    {
+      "archive_key": "completion-v02/backend/romeo009m/perf16g-gc-diagnostic/receipt.json",
+      "sha256": "938f4d34f6748286c7781aeda7af0e96273ab4ceb39a2f1294c23b29fb6e513d",
+      "availability": "local_archive",
+      "result": {
+        "scope": "instrumented CPU/GPU pilots stopped after about90minutes without completed measured repetitions; both stacks in native distributed continuation GC",
+        "performance_qualified": false,
+        "native_execution_claim": "diagnostic only",
+        "jobs": [
+          747779,
+          747780
+        ],
+        "cancelled_dependents": [
+          747783,
+          747801,
+          747802,
+          747804
+        ]
+      }
+    },
+    {
+      "archive_key": "completion-v02/models/regrid014-reader-replay/receipt.json",
+      "sha256": "3eff33d81cc5d88b36246ae3bf0348ff7baf6ae21b5660b78c522229115e73b1",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Both full source014 regrid/restart receivers after exactly two authenticated reader corrections; compilation forbidden; SDK and four generated DSOs unchanged",
+        "selected_cases_passed": 2,
+        "selected_cases_failed": 0,
+        "seconds": 40.79,
+        "mpi_ranks": [
+          1
+        ],
+        "qualified": true
+      }
     }
   ],
   "final_head_or_ci_qualified": false

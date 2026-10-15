@@ -13,14 +13,16 @@ template <class Function>
 decltype(auto) continuation_checkpoint_at_level_(int level, Function&& function) const {
   using Prototypes = typename ContinuationCodec<Dim>::Prototypes;
   if (level == -1) {
-    Prototypes no_fields = [](int) -> const field_type& {
-      throw std::invalid_argument("AMR macro continuation must be field-free");
+    Prototypes fields = [this](int block,
+                               const ContinuationFieldSupport::Ref& support) -> const field_type& {
+      return continuation_field_prototype_(block, -1, support);
     };
-    return std::forward<Function>(function)(std::move(no_fields));
+    return std::forward<Function>(function)(std::move(fields));
   }
   return with_program_resource_level(level, [&]() -> decltype(auto) {
-    Prototypes fields = [this](int block) -> const field_type& {
-      return facade_->prepared_amr_block_state(sys_block(block), active_level_);
+    Prototypes fields = [this](int block,
+                               const ContinuationFieldSupport::Ref& support) -> const field_type& {
+      return continuation_field_prototype_(block, active_level_, support);
     };
     return std::forward<Function>(function)(std::move(fields));
   });
@@ -268,13 +270,11 @@ void install_continuation_checkpoint_preflight_(std::shared_ptr<AmrProgramContex
             ranked.push_back(std::move(state.continuation_levels));
           }
           targets = [owner](int level) -> Prototypes {
-            if (level == -1)
-              return [](int) -> const field_type& {
-                throw std::invalid_argument("AMR macro continuation must be field-free");
-              };
-            return [owner, level](int block) -> const field_type& {
-              return owner->facade_->prepared_amr_block_state(owner->sys_block(block), level);
-            };
+            return
+                [owner, level](int block,
+                               const ContinuationFieldSupport::Ref& support) -> const field_type& {
+                  return owner->continuation_field_prototype_(block, level, support);
+                };
           };
         });
         return rematerialize_continuation_forest<Dim>(

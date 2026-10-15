@@ -15,11 +15,13 @@ def emit_field_gradient(value: Any, var: Any, lines: Any, prelude: Any, *, targe
         raise ValueError("field gradient source has no emitted consumed observation authority")
     token, boundary = "field_gradient_%d" % value.id, "field_gradient_boundary_%d" % value.id
     if target == "amr_system":
-        selected = source.attrs["component"]
+        snapshot = var.get(("field_observation_snapshot", source.id))
+        if snapshot is None:
+            raise ValueError("field gradient source has no immutable solved snapshot")
         lines.append("static_assert(pops::kNativeDimension == %d);" % dimension)
         lines.append("auto& %s = ctx.hierarchy_field_scratch(%d, %d, 0, %d, 1);" % (
             token, solve.id, value.id, dimension))
-        lines.append("ctx.observe_hierarchy_field_gradient(%d, %s, %d);" % (solve.id, token, selected))
+        lines.append("ctx.observe_hierarchy_field_gradient(%s, %s);" % (snapshot, token))
         var[value.id] = token
         var[("field_observation", value.id)] = source.attrs["field_problem_identity"]
         var[("field_pointer", value.id)] = "(&%s)" % token

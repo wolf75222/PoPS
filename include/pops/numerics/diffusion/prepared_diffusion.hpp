@@ -16,6 +16,7 @@
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace pops::runtime::program {
@@ -752,6 +753,40 @@ class PreparedDiffusion {
   void stage_accepted_exchanges(Context& ctx, int program_block, const std::string& operation,
                                 const std::string& occurrence, const std::string& evaluation,
                                 Real temporal_weight, bool physical_boundary_only = false) const {
+    with_exchange_records_(ctx, program_block, operation, occurrence, evaluation, temporal_weight,
+                           physical_boundary_only, [&](auto&& produce) {
+                             ctx.stage_exchange_batch([&](auto&& stage_exchange) {
+                               produce([&](ExchangeRecord record, const Index<Dim>&) {
+                                 stage_exchange(std::move(record));
+                               });
+                             });
+                           });
+  }
+
+  /// Retain the evaluated rate's face records without publishing a delivery.
+  /// The coefficient belongs to this rate; its later affine consumer supplies
+  /// the time increment through the ordinary field-expression algebra.
+  template <class Context>
+  void capture_exchanges(Context& ctx, const Field& rhs, int program_block,
+                         const std::string& operation, const std::string& occurrence,
+                         const std::string& evaluation, Real coefficient,
+                         bool physical_boundary_only = false) const {
+    if (all_reduce_max(matches_storage_(rhs) ? 0L : 1L, *lane_) != 0)
+      throw std::invalid_argument("captured diffusive rate has foreign storage collectively");
+    with_exchange_records_(ctx, program_block, operation, occurrence, evaluation, coefficient,
+                           physical_boundary_only, [&](auto&& produce) {
+                             ctx.capture_stencil_exchanges(
+                                 rhs, program_block, evaluation,
+                                 std::forward<decltype(produce)>(produce));
+                           });
+  }
+
+ private:
+  template <class Context, class Consumer>
+  void with_exchange_records_(Context& ctx, int program_block, const std::string& operation,
+                              const std::string& occurrence, const std::string& evaluation,
+                              Real temporal_weight, bool physical_boundary_only,
+                              Consumer&& consume) const {
     (void)explicit_frequency();
     const Field* active = nullptr;
     const Field* coverage = nullptr;
@@ -788,7 +823,7 @@ class PreparedDiffusion {
       throw std::invalid_argument(
           "accepted diffusive face mask differs from "
           "local patches collectively");
-    ctx.stage_exchange_batch([&](auto&& stage_exchange) {
+    std::forward<Consumer>(consume)([&](auto&& append) {
       if (!owner_contributes)
         return;
       for (std::size_t local = 0; local < variable_.local_size(); ++local) {
@@ -845,10 +880,11 @@ class PreparedDiffusion {
                 const auto component_identity =
                     Components == 1 ? identity
                                     : identity + "/component:" + std::to_string(component);
-                stage_exchange({operation, occurrence, evaluation, component_identity,
-                                side == 0 ? -1 : 1, measure, faces.axes[axis](face, component),
-                                temporal_weight, 1, axis, side, component,
-                                (*external_face)(axis, side, cell)});
+                append(ExchangeRecord{operation, occurrence, evaluation, component_identity,
+                                      side == 0 ? -1 : 1, measure,
+                                      faces.axes[axis](face, component), temporal_weight, 1, axis,
+                                      side, component, (*external_face)(axis, side, cell)},
+                       cell);
               }
             }
           }
@@ -856,6 +892,8 @@ class PreparedDiffusion {
       }
     });
   }
+
+ public:
   const auto& faces() const { return faces_; }
   const Field& prototype() const { return variable_; }
   const auto& geometry() const { return geometry_; }

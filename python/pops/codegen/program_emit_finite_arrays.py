@@ -82,12 +82,9 @@ def _packed(signature, token, lines, prefix):
         from .program_structural_storage import pack_record
         return pack_record(signature, token, lines, prefix)
     if signature["vtype"] in ("state", "rhs", "scalar_field"):
-        from .program_emit_structured_control import _copy
         output = prefix + "_snapshot"
         lines.append("%s %s;" % (finite_cpp_type(signature), output))
-        _allocate("std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.scratch_state_like(%s))" % token,
-                  output, lines)
-        _copy(signature, "(*%s)" % output, token, lines)
+        _allocate("ctx.own_structural_field(%s)" % token, output, lines)
         return output
     return "%s(%s)" % (finite_cpp_type(signature), token)
 

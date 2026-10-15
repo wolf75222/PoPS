@@ -15,13 +15,40 @@ remains historical evidence; its results do not certify later changes.
 The source012 reception has passed 51 selected native C++ cases on MPI1,
 MPI2 and MPI3 (306 rank observations), covering continuation images, Field
 migration, retained face sources and hierarchy recovery. The official Dim2/MPI
-build and installed identity check pass. Python-authored end-to-end receivers
-for that snapshot are still running. A separate source009m H100 reception
+build and installed identity check pass. Its Python-authored receivers exposed
+failures in hierarchy reconstruction, checkpoint migration between MPI sizes,
+Bool composition in a rollback predicate, and the depth160 preparation budget.
+The initial failed receipts remain available; subsequent reader/oracle fixes
+are recorded separately and do not turn an unexecuted correction into a pass.
+A separate source009m H100 reception
 passes 15 CUDA cases; it does not qualify source012 or establish MPI speedup.
-The larger kinetic performance case currently rejects its first step and
-therefore supplies no accepted timing. The depth160 source011 receiver reached
-its unchanged 900-second watchdog before native execution; source012 includes
-a content-verified snapshot-validation optimization awaiting that receiver.
+The larger kinetic performance case exhausted its declared storage budget;
+new CPU/GPU pilots with an explicit larger budget have not yet supplied accepted
+timings. The depth160 source011 and source012 receivers reached their unchanged
+900-second watchdog before native execution. The source013 Python preparation
+passes in 652 seconds with unchanged depth; its native execution is still pending.
+
+The source013 and source014 official Dim2/MPI builds also pass in both isolated
+environments with unchanged source manifests and verified native identities.
+Source013 receives 25 selected C++ contracts on MPI1/2/3 (150 rank observations);
+source014 receives five diffusion/publication and atomic-promotion contracts on
+those ranks (30 observations). Corrected test fixtures are separately hashed and
+linked to the unchanged native core; the initial failures remain in the archive.
+The source014 regrid campaign passes the late-refusal rollback case and exposes
+two reader assertions after successful regridding. The reader correction and
+its nine issuer counterexamples pass. Both complete receivers then pass in a
+40.79-second replay with compilation forbidden and unchanged SDK/generated DSOs,
+including checkpoint/restart and the next step; only the two readers are replaced.
+Changed-rank restart now reaches MPI1 to MPI2 and identifies a missing live
+flux-budget contract during post-requalification; this remains an open defect.
+
+The large CPU/GPU pilots were stopped after approximately 90 minutes without a
+completed measured repetition. Native stack samples locate both in distributed
+continuation garbage collection, after compilation. These instrumented runs are
+diagnostics, not performance measurements. Their exact jobs, terminal states and
+stack traces are preserved. The next qualification must measure the corrected
+collector and must still receive independent Field supports, persistent
+representation obligations, nested implicit compositions and final-source CI.
 
 ## Contract of the language
 

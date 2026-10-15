@@ -1686,11 +1686,24 @@ TEST(GeneratedAmrSystemBlock, ProgramStateConsumesEmbeddedMeasureWithoutInventin
         "explicit", 1.4, 1, 1));
     system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, mode);
     system.set_conservative_state("state", std::vector<double>(cell_count(config.shape), 1.0));
+    // Dim1/2 CutCell declares the product of centre-to-neighbour ray lengths,
+    // not exact plane clipping: the last fluid cell has (1 + 1/2)/2 = 3/4
+    // retained volume. Rematerializing that discrete metric at h/2 changes its
+    // measure. Staircase and the Dim3 clipped geometry have the exact half volume.
+    const bool ray_metric = mode == "cutcell" && Dim < 3;
+    const double h = 1.0 / config.shape[0];
+    const double expected_initial = 0.5 - (ray_metric ? h / 4 : 0.0);
     const double initial_mass = system.mass("state");
-    EXPECT_NEAR(initial_mass, 0.5, 1.e-12);
+    EXPECT_NEAR(initial_mass, expected_initial, 1.e-12) << mode;
     publish_centered_fine_level(system);
     system.refresh_prepared_amr_levels();
-    EXPECT_NEAR(system.mass("state"), initial_mass, 1.e-12);
+    double refined_transverse_fraction = 1.0;
+    for (int axis = 1; axis < Dim; ++axis)
+      refined_transverse_fraction *= 0.5;
+    const double expected_measure_change = ray_metric ? h / 8 * refined_transverse_fraction : 0.0;
+    EXPECT_NEAR(system.mass("state"), expected_initial + expected_measure_change, 1.e-12) << mode;
+    if (!ray_metric)
+      EXPECT_NEAR(system.mass("state"), initial_mass, 1.e-12) << mode;
     EXPECT_EQ(system.effective_options_report().eb.geometry_mode, mode);
     EXPECT_ANY_THROW((void)system.evaluate_prepared_amr_level(point<Dim>(0)));
   }

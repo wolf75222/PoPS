@@ -235,7 +235,12 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
               "auto %s = %s_provider->stage_original_field_candidate_collectively(std::move(%s), %s_candidate, %d, ctx.prepared_execution_lane(), %s_provider, std::move(%s_validate), std::move(%s_synchronize));" %
               (outcome, stem, report, stem, options["max_iterations"], stem, stem, stem)]
     _append_solve_report_guard(program, value, outcome, lines, label="original_amr_field_residual", phase="solve")
-    closed_sources = [node for node in program._values if node.op == "spatial_interaction"
+    # A CPS segment is an emission view, not the authority for future consumers.
+    # The solved SSA node retains its full immutable Program, including consumers
+    # after a suspension or in a closed region. Exact identity below still ties
+    # every seal binding to this particular solve, never another equal graph.
+    from pops.codegen.program_lowerability import all_ops
+    closed_sources = [node for node in all_ops(value.prog) if node.op == "spatial_interaction"
                       and node.attrs.get("contract") == "pops.spatial-interaction@3"]
     closed_sources = [node for node in closed_sources if node.inputs[0].inputs[0].inputs[0].inputs[0] is value]
     if closed_sources:

@@ -1,5 +1,6 @@
 """Reject control-flow receipt loss instead of accepting an unrecorded face transfer."""
 from fractions import Fraction
+import re
 
 import pops
 import pytest
@@ -67,12 +68,18 @@ def test_control_result_cannot_silently_drop_root_stencil_receipt(kind):
         accepted_stencil_quadrature(program)
 
 
-def test_whole_codegen_refuses_stencil_candidate_hidden_by_branch():
+def test_whole_codegen_publishes_only_the_owned_selected_stencil_candidate():
     case, layout, _, _ = _case("state_branch")
     resolved = pops.resolve(pops.validate(case), layout=layout)
-    with pytest.raises(ValueError, match="hides stencil faces outside affine quadrature"):
-        emit_cpp_program(resolved.time,
-            model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
+    cpp = emit_cpp_program(resolved.time,
+        model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
+    # The static affine helper still rejects ambiguous control above. The complete
+    # compiler instead carries native face provenance on the selected owned Field.
+    selected = re.search(r"ctx\.publish_stencil_exchanges\(0, (\(\*branch_\d+_s0_owner\))\);", cpp)
+    assert selected is not None
+    assert cpp.count("ctx.publish_stencil_exchanges(") == 1
+    assert "ctx.commit_many({{&u0, &%s}});" % selected.group(1) in cpp
+    assert cpp.count("ctx.capture_stencil_exchanges(") == 1
 
 
 def test_direct_flux_is_retained_and_a_fresh_rate_does_not_inherit_predictor_faces():

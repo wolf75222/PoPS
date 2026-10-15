@@ -24,6 +24,8 @@ def test_original_field_recovery_preserves_result_and_complete_restart(
     _, world = native_profile(dimension=2, scope="API0.2 original AMR asynchronous recovery")
     case, layout = collective_call(world, lambda: build(16, (0,), control_region=mode,
         right_preconditioner="SpatialBasisJacobi@1"))
+    final_report_prefixes = {"amr_original_field_%d" % value.id for value in case._time._values
+                             if value.op == "solve_spatial_field"}
     plan = collective_call(world, lambda: pops.resolve(pops.validate(case), layout=layout))
     artifact = compile_profile_plan_once(world, plan, route="original AMR captured evaluation",
                                          compile_artifact=pops.compile)
@@ -39,12 +41,19 @@ def test_original_field_recovery_preserves_result_and_complete_restart(
             diagnostics = dict(image[2][1])
             expected = 5 if mode.endswith("success") else -7
             assert diagnostics["structured_original_observation"] == expected
+            expected_origin = 0 if mode.endswith("success") else 1 if mode == "capture_user" else 2
+            assert diagnostics["structured_original_failure_origin"] == expected_origin
             residuals = [value for key, value in diagnostics.items() if key.endswith(".residual_norm")]
-            assert len(residuals) == 2 and all(np.isfinite(value) and value >= 0 for value in residuals)
-            # The deliberately one-iteration solve must actually fail, while the
-            # final independent solve still supplies the physical response.
+            # A rejected SolveOutcome transfers control before the successful
+            # observation/diagnostic publication. Its runtime-failure code is
+            # consumed by the Python error branch above; the terminal twin case
+            # verifies the iteration-limit reason. The final solve must converge.
+            expected_reports = 1 if mode.endswith("runtime") else 2
+            assert len(residuals) == expected_reports
+            assert all(np.isfinite(value) and 0 <= value <= 1e-10 for value in residuals)
             if mode.endswith("runtime"):
-                assert max(residuals) > 1e-10
+                assert {key.split(".", 1)[0] for key in diagnostics
+                        if key.startswith("amr_original_field_")} == final_report_prefixes
         return image
 
     runtime = bind()

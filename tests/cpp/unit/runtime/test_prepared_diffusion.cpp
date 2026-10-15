@@ -921,7 +921,16 @@ TEST(PreparedDiffusion, TensorLawDoesNotReadBeyondItsTwoCellNativeProviderSuppor
 
 TEST(PreparedDiffusion, AcceptedPublicationReadsFacesAndBothMasksWithoutChangingSources) {
   DiffusionContext context;
-  auto q = field(), output = field(), active = field(), coverage = field();
+  // This receipt runs on MPI as well: each physical replica has its exact
+  // execution rank, while only rank zero contributes replicated face records.
+  const auto layout =
+      mesh::BoxArray<2>::from_domain(Box<2>{Index<2>{0, 0}, Index<2>{3, 3}}, Extent<2>{4, 4});
+  const auto distribution = mesh::Distribution<2>::replicated(
+      layout, mesh::RankSpace<2>{Index<2>{0, 0}, Extent<2>{context.lane.size(), 1}});
+  const auto make_field = [&] {
+    return Field(layout, distribution, Index<2>{context.lane.rank(), 0}, 1, Extent<2>{1, 1});
+  };
+  auto q = make_field(), output = make_field(), active = make_field(), coverage = make_field();
   const auto values = q.fab(0).view();
   const auto active_values = active.fab(0).view();
   const auto coverage_values = coverage.fab(0).view();
@@ -935,25 +944,26 @@ TEST(PreparedDiffusion, AcceptedPublicationReadsFacesAndBothMasksWithoutChanging
   PreparedDiffusion<2> prepared(context, q, {});
   prepared.apply(q, output, identity_law(q));
   prepared.stage_accepted_exchanges(context, 0, "operator", "masked", "stage0", .03);
-  ASSERT_EQ(context.ledger.records().size(), 16);
+  ASSERT_EQ(context.ledger.records().size(), context.lane.rank() == 0 ? 16u : 0u);
   std::map<std::string, Real> expected;
   const auto sample = [](int i, int j) {
     i = (i + 4) % 4;
     j = (j + 4) % 4;
     return 1 + Real(.01) * i * i + Real(.02) * j;
   };
-  for (const int i : {0, 2})
-    for (const int j : {1, 2})
-      for (int axis = 0; axis < 2; ++axis)
-        for (int side = 0; side < 2; ++side) {
-          const int shift = side == 0 ? -1 : 1;
-          const Real center = sample(i, j);
-          const Real neighbor = sample(i + (axis == 0 ? shift : 0), j + (axis == 1 ? shift : 0));
-          const Real flux = .4 * (side == 0 ? center - neighbor : neighbor - center);
-          expected.emplace("cell:" + std::to_string(i) + ":" + std::to_string(j) +
-                               "/axis:" + std::to_string(axis) + "/side:" + std::to_string(side),
-                           flux);
-        }
+  if (context.lane.rank() == 0)
+    for (const int i : {0, 2})
+      for (const int j : {1, 2})
+        for (int axis = 0; axis < 2; ++axis)
+          for (int side = 0; side < 2; ++side) {
+            const int shift = side == 0 ? -1 : 1;
+            const Real center = sample(i, j);
+            const Real neighbor = sample(i + (axis == 0 ? shift : 0), j + (axis == 1 ? shift : 0));
+            const Real flux = .4 * (side == 0 ? center - neighbor : neighbor - center);
+            expected.emplace("cell:" + std::to_string(i) + ":" + std::to_string(j) +
+                                 "/axis:" + std::to_string(axis) + "/side:" + std::to_string(side),
+                             flux);
+          }
   for (const auto& record : context.ledger.records()) {
     const auto found = expected.find(record.quadrature_identity);
     ASSERT_TRUE(found != expected.end());

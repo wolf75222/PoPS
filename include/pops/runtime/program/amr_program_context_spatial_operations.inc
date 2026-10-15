@@ -92,28 +92,28 @@ void apply_coupling_operators(std::string_view graph_identity, std::string_view 
 }
 
 private:
- using Identity = runtime::program::ProgramOwnerFieldIdentity;
- using Family = Identity::Family;
- Identity classify_owner_field_(int owner, const field_type& seed, const char* role) const {
-   return runtime::program::classify_program_owner_field(
-       owner, seed, nlev(),
-       [&](int level) -> const field_type& {
-         return facade_->prepared_amr_block_state(owner, level);
-       },
-       [&](int level) { return live_attempt_state_(owner, level); }, scratches_,
-       runtime_state().hist_, decode_history_key_, role);
- }
- const field_type& resolve_owner_field_(int owner, const field_type& seed, const Identity& identity,
-                                        int level, const char* role) const {
-   return runtime::program::resolve_program_owner_field(
-       owner, seed, identity, level,
-       [&](int requested) -> const field_type& {
-         return facade_->prepared_amr_block_state(owner, requested);
-       },
-       [&](int requested) { return live_attempt_state_(owner, requested); }, scratches_,
-       runtime_state().hist_,
-       [&](const std::string& name, int requested) { return history_key_(name, requested); }, role);
- }
+using Identity = runtime::program::ProgramOwnerFieldIdentity;
+using Family = Identity::Family;
+Identity classify_owner_field_(int owner, const field_type& seed, const char* role) const {
+  return runtime::program::classify_program_owner_field(
+      owner, seed, nlev(),
+      [&](int level) -> const field_type& {
+        return facade_->prepared_amr_block_state(owner, level);
+      },
+      [&](int level) { return live_attempt_state_(owner, level); }, scratches_,
+      runtime_state().hist_, decode_history_key_, role);
+}
+const field_type& resolve_owner_field_(int owner, const field_type& seed, const Identity& identity,
+                                       int level, const char* role) const {
+  return runtime::program::resolve_program_owner_field(
+      owner, seed, identity, level,
+      [&](int requested) -> const field_type& {
+        return facade_->prepared_amr_block_state(owner, requested);
+      },
+      [&](int requested) { return live_attempt_state_(owner, requested); }, scratches_,
+      runtime_state().hist_,
+      [&](const std::string& name, int requested) { return history_key_(name, requested); }, role);
+}
 
 /// Visit every live hierarchy level of an authenticated Program owner exactly once.  The seed
 /// field identifies the owner's state, scratch, history, or current-level layout; each visit
@@ -128,6 +128,9 @@ void for_each_owner_active_level_(int program_block, const field_type& left,
   if (levels < 1)
     return;
 
+  require_program_field_access(left);
+  if (right)
+    require_program_field_access(*right);
   const Identity left_identity =
       classify_owner_field_(runtime_block, left, "AMR Program reduction");
   const std::optional<Identity> right_identity =
@@ -179,14 +182,17 @@ void converge_owner_reduction_(std::exception_ptr local_error, const ExecutionLa
 
 public:
 Real sum_component(const field_type& field, int component) const {
+  prepare_spatial_collectively([&] { require_program_field_access(field); });
   return static_cast<Real>(
       all_reduce_sum(pops::reduce_sum_local(field, component), prepared_execution_lane()));
 }
 Real max_component(const field_type& field, int component) const {
+  prepare_spatial_collectively([&] { require_program_field_access(field); });
   return static_cast<Real>(
       all_reduce_max(pops::reduce_max_local(field, component), prepared_execution_lane()));
 }
 Real min_component(const field_type& field, int component) const {
+  prepare_spatial_collectively([&] { require_program_field_access(field); });
   return static_cast<Real>(
       all_reduce_min(pops::reduce_min_local(field, component), prepared_execution_lane()));
 }
@@ -340,8 +346,7 @@ void for_each_owner_finest_active_level_(int program_block, const field_type& le
                                          const field_type& right, Visitor&& visitor) const {
   for_each_owner_active_level_(
       program_block, left, &right,
-      [&](const field_type& level_left, const field_type* level_right,
-          const field_type* active) {
+      [&](const field_type& level_left, const field_type* level_right, const field_type* active) {
         const int owner = sys_block(program_block);
         const Identity identity = classify_owner_field_(owner, level_left, "AMR dot_all coverage");
         const field_type& coverage =
@@ -360,15 +365,15 @@ Real dot_all(int program_block, const field_type& left, const field_type& right)
   try {
     for_each_owner_finest_active_level_(
         program_block, left, right,
-        [&](const field_type& left_field, const field_type* right_field,
-            const field_type* active, const field_type* coverage) {
+        [&](const field_type& left_field, const field_type* right_field, const field_type* active,
+            const field_type* coverage) {
           if (right_field == nullptr)
             throw std::logic_error("AMR Program dot_all is missing its right owner field");
           require_same_field_contract_(left_field, *right_field, "AMR Program dot_all");
           if (left_field.ghosts() != right_field->ghosts())
             throw std::invalid_argument("AMR Program dot_all ghost count differs");
-          const auto checked =
-              pops::dot_owned_active_all_finite_sum_local(left_field, *right_field, active, coverage);
+          const auto checked = pops::dot_owned_active_all_finite_sum_local(left_field, *right_field,
+                                                                           active, coverage);
           if (!left_field.distribution().replicated() || lane.rank() == 0)
             accumulated.join(checked);
           if (!accumulated.finite())
@@ -516,10 +521,11 @@ void fill_boundary(field_type& field, const ExecutionLane& lane) const {
 /// A field region constrains its own equation and does not select this full-domain stencil.
 void require_condensed_field_boundary(int program_block, std::string_view field_slot) const {
   const int owner = sys_block(program_block);
-  const auto conditions = facade_->prepared_amr_field_boundary_conditions(owner,active_level_,field_slot);
+  const auto conditions =
+      facade_->prepared_amr_field_boundary_conditions(owner, active_level_, field_slot);
   const auto point = boundary_evaluation_point(0);
   prepare_spatial_collectively([&] {
-    require_current_boundary_point_exact_(point,"AMR condensed field physical boundary");
+    require_current_boundary_point_exact_(point, "AMR condensed field physical boundary");
     if (!hierarchy_tensor_selection_ || !hierarchy_tensor_solver_ ||
         hierarchy_tensor_selection_->program_block != program_block ||
         hierarchy_tensor_selection_->components != 1 ||
@@ -532,14 +538,16 @@ void require_condensed_field_boundary(int program_block, std::string_view field_
     if (boundary.geometry != geometry())
       throw std::logic_error("AMR condensed field boundary geometry is stale");
     for (int axis = 0; axis < Dim; ++axis)
-      for (const auto side : {BoundarySide::lower,BoundarySide::upper}) {
-        const Face<Dim> face{axis,side};
+      for (const auto side : {BoundarySide::lower, BoundarySide::upper}) {
+        const Face<Dim> face{axis, side};
         const auto field_law = conditions.at(face);
         const auto tensor_law = boundary.conditions.at(face);
-        if (conditions.topology().is_periodic(face) != boundary.conditions.topology().is_periodic(face) ||
+        if (conditions.topology().is_periodic(face) !=
+                boundary.conditions.topology().is_periodic(face) ||
             field_law.kind != tensor_law.kind || field_law.value != tensor_law.value ||
             field_law.alpha != tensor_law.alpha || field_law.beta != tensor_law.beta)
-          throw std::invalid_argument("AMR condensed tensor physical faces differ from the installed scalar field");
+          throw std::invalid_argument(
+              "AMR condensed tensor physical faces differ from the installed scalar field");
       }
   });
 }
@@ -579,19 +587,22 @@ std::shared_ptr<tensor_boundary_session_type> prepare_condensed_boundary_session
   });
   return tensor_boundary_session_type::prepare(
       boundary->geometry, boundary->conditions, prototype, lane, next_boundary_generation_(),
-      PreparedTensorBoundaryAuthority{
-          this, runtime_, reinterpret_cast<std::uintptr_t>(owner), std::string(lane.identity()),
-          program_block, runtime_block, active_level_, runtime_->topology_epoch(),
-          runtime_->materialization_generation()},
-      point, active_level_ == 0 ? HaloLayoutCoverage::full_domain : HaloLayoutCoverage::sparse_level);
+      PreparedTensorBoundaryAuthority{this, runtime_, reinterpret_cast<std::uintptr_t>(owner),
+                                      std::string(lane.identity()), program_block, runtime_block,
+                                      active_level_, runtime_->topology_epoch(),
+                                      runtime_->materialization_generation()},
+      point,
+      active_level_ == 0 ? HaloLayoutCoverage::full_domain : HaloLayoutCoverage::sparse_level);
 }
 
 elliptic::nd::CartesianTensorStencilOptions condensed_stencil_options(int program_block) const {
   if (!hierarchy_tensor_selection_ || hierarchy_tensor_selection_->program_block != program_block)
     throw std::logic_error("condensed stencil has no owner-qualified tensor provider");
-  if (hierarchy_tensor_selection_->options.schema_identity != tensor_elliptic_detail::kCompositeTensorOptionSchema)
+  if (hierarchy_tensor_selection_->options.schema_identity !=
+      tensor_elliptic_detail::kCompositeTensorOptionSchema)
     return {};
-  return tensor_elliptic_detail::decode_controls(hierarchy_tensor_selection_->options).stencil_options;
+  return tensor_elliptic_detail::decode_controls(hierarchy_tensor_selection_->options)
+      .stencil_options;
 }
 
 void fill_condensed_potential(int program_block, field_type& field) const {
@@ -605,7 +616,8 @@ void condensed_tensor_laplacian(int program_block, field_type& output, field_typ
     require_scalar_stencil_(output, input, 1, "AMR condensed tensor divergence");
     require_same_layout_(input, tensor, "AMR condensed tensor coefficients");
     if (tensor.ncomp() != Dim * Dim || tensor.ghosts() != input.ghosts())
-      throw std::invalid_argument("AMR condensed metric requires one row-major tensor with one ghost");
+      throw std::invalid_argument(
+          "AMR condensed metric requires one row-major tensor with one ghost");
   });
   boundary->fill(input);
   const auto options = condensed_stencil_options(program_block);
@@ -615,7 +627,8 @@ void condensed_tensor_laplacian(int program_block, field_type& output, field_typ
     const auto tensor_operator = elliptic::nd::make_cartesian_tensor_operator<
         elliptic::nd::CartesianTensorDivergenceSign::positive_divergence>(
         std::as_const(input.fab(local)).view(),
-        elliptic::nd::packed_cartesian_tensor_coefficients<Dim>(std::as_const(tensor.fab(local)).view()),
+        elliptic::nd::packed_cartesian_tensor_coefficients<Dim>(
+            std::as_const(tensor.fab(local)).view()),
         geom, options);
     for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
       result(cell, 0) = tensor_operator.image(cell);
@@ -658,7 +671,8 @@ void prepare_condensed_prior(int program_block, field_type& field) const {
   const field_type* parent = nullptr;
   std::string family_identity;
   prepare_spatial_collectively([&] {
-    const bool continuation_gather = mapping_continuation_ && mapping_continuation_->executing &&
+    const bool continuation_gather =
+        mapping_continuation_ && mapping_continuation_->executing &&
         mapping_continuation_->internal_sequence != 0 && !active_attempt_states_.empty() &&
         multiblock_subcycling_ && multiblock_subcycling_->has_synchronized_groups() &&
         active_subcycling_attempt_ == multiblock_subcycling_->synchronized_attempt();
@@ -673,7 +687,8 @@ void prepare_condensed_prior(int program_block, field_type& field) const {
     if (!synchronized_field_gather_ &&
         (identity.family != Family::Scratch ||
          identity.scratch_kind != static_cast<std::uint8_t>(ScratchKind::Scalar)))
-      throw std::invalid_argument("AMR continuation prior sampling requires its exact scalar scratch family");
+      throw std::invalid_argument(
+          "AMR continuation prior sampling requires its exact scalar scratch family");
     ExactContractBuilder proof;
     proof.text("pops.program.synchronous-prior-scalar");
     if (identity.family == Family::History) {

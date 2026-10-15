@@ -117,6 +117,26 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
             raise ValueError("field expression dependency metadata differs from its actual input reads")
 
     token = "program_field_%d" % value.id
+    if hierarchy and component:
+        from .program_lowerability import all_ops
+        if any(node.op in ("reduce", "field_gradient") and len(node.inputs) == 1 and node.inputs[0] is value
+               for node in all_ops(value.prog)):
+            # Composite reduction reads need the same full solved snapshot as
+            # this local projection, even after another origin reuses the provider.
+            # Keep the actual reductions at their authored control-flow points.
+            solve = hierarchy_field_solve(value)
+            snapshot = token + "_snapshot"
+            capacity = value.attrs.get("observation_byte_capacity", 64 * 1024 * 1024)
+            retain_halo = any(node.op == "field_gradient" and len(node.inputs) == 1
+                              and node.inputs[0] is value for node in all_ops(value.prog))
+            lines.append("auto %s = ctx.capture_hierarchy_field_observation(%d, %d, %d, UINT64_C(%d), %s);" %
+                         (snapshot, solve.id, value.id, selected, capacity,
+                          "true" if retain_halo else "false"))
+            var[value.id] = snapshot + "->local_field()"
+            var[("field_pointer", value.id)] = "(&%s->local_field())" % snapshot
+            var[("field_observation", value.id)] = identity.token
+            var[("field_observation_snapshot", value.id)] = snapshot
+            return
     if hierarchy:
         solve = hierarchy_field_solve(value)
         if component:
@@ -224,7 +244,8 @@ def field_observation_reduction(value: Any, var: Any, *, target: str) -> str:
     if type(component) is not int or component != 0:
         raise ValueError("scalar field observation has exactly one component")
     if target == "amr_system":
-        solve = hierarchy_field_solve(source)
-        return 'ctx.reduce_hierarchy_field_component(%d, %d, "%s")' % (
-            solve.id, source.attrs["component"], kind)
+        snapshot = var.get(("field_observation_snapshot", source.id))
+        if snapshot is None:
+            raise ValueError("composite field reduction lost its immutable observation snapshot")
+        return 'ctx.reduce_hierarchy_field_observation(%s, "%s")' % (snapshot, kind)
     return "ctx.%s(%s, 0)" % (methods[kind], var[source.id])

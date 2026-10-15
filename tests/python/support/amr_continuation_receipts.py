@@ -5,6 +5,19 @@ from tests.python.support.api_v02_receipts import _decode
 from tests.python.support.relaxed_flux_receipts import fragments
 
 
+def _issuer_high_water(decoded):
+    """The allocation counter belongs to the primary realm, not retained issuers."""
+    if decoded["wire"] == "POPSCONT1":
+        own = decoded["domains"]  # The legacy image has one implicit allocator.
+    else:
+        primary = decoded["primary_finite"]
+        own = [] if primary is None else [
+            entry for entry in decoded["domains"]
+            if entry["realm"]["issuer"] == decoded["realms"][primary]["issuer"]
+        ]
+    return max((entry["version"] for entry in own), default=0)
+
+
 def forest(spec, image, *, rank=None):
     assert image[:8] == b"POPSANDF"
     faces, interfaces, cursor = fragments(image, _with_cursor=True)
@@ -57,7 +70,7 @@ def forest(spec, image, *, rank=None):
         schema = contract["root_schema" if level == -1 else "level_schema"]
         decoded = _decode(None, payload, rank=rank, schema=schema["read"])
         assert identity == decoded["identity"]
-        assert high_water >= max((entry["version"] for entry in decoded["domains"]), default=0)
+        assert high_water >= _issuer_high_water(decoded), "primary allocator counter regressed"
         records.append(dict(level=level, epoch=epoch, generation=generation,
                             high_water=high_water, collective=collective, image=payload, **decoded))
     assert len(records) >= 2 and cursor == len(image)

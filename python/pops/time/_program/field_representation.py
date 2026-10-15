@@ -6,7 +6,6 @@ provided values into the authenticated target layout; interpolation is Python al
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from pops.bundles import BundleSchema, validate_bundle_signature
@@ -15,6 +14,7 @@ from pops.time._program.structured_control import new_typed, product_signature, 
 from pops.time._program.value_validation import require_owned
 from pops.time.value_signatures import same_signature, value_signature
 from pops.time.variant_types import ValueType
+from pops.time.field_topology import validate_topology_signature
 
 if TYPE_CHECKING:
     from pops.time._program.contract import _ProgramBase
@@ -23,22 +23,6 @@ else:
 
 FIELD_REPRESENTATION_OPS = frozenset(("field_bundle_export", "field_bundle_import", "field_storage_allocate"))
 TOPOLOGY_OPS = frozenset(("continuation_source_topology", "continuation_target_topology"))
-
-
-def validate_topology_signature(signature):
-    if (not isinstance(signature, Mapping) or set(signature) != {
-            "vtype", "field_signature", "side", "dimension"}
-            or signature["vtype"] != "field_topology"
-            or signature["side"] not in ("source", "target")
-            or type(signature["dimension"]) is not int
-            or not 1 <= signature["dimension"] <= 3):
-        raise TypeError("FieldTopology requires an exact native dimension and source/target authority")
-    field = signature["field_signature"]
-    if (not isinstance(field, Mapping) or field.get("vtype") not in ("state", "scalar_field")
-            or field.get("block") is None or field.get("space") is None
-            or not getattr(field["space"], "components", ())):
-        raise TypeError("FieldTopology requires an authenticated complete Field signature")
-    return signature
 
 
 def _capacity(value, name):

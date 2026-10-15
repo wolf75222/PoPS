@@ -14,6 +14,7 @@
 #include <span>
 #include <stdexcept>
 #include <utility>
+#include <tuple>
 #include <vector>
 
 namespace pops::runtime::program {
@@ -47,15 +48,22 @@ class ContinuationFieldArchive {
   using Codec = ContinuationCodec<Dim>;
   using Field = typename Codec::Field;
   using Prototypes = typename Codec::Prototypes;
+  struct SourceTopology {
+    std::span<const int> owners;
+    bool replicated;
+  };
+  using SourceSupports = std::function<SourceTopology(const ContinuationFieldSupport::Ref&)>;
 
   ContinuationFieldArchive(Prototypes targets, std::span<const int> source_owners, bool replicated,
-                           int source_ranks, int source_rank, ContinuationMigrationBudget& budget)
+                           int source_ranks, int source_rank, ContinuationMigrationBudget& budget,
+                           SourceSupports source_supports = {})
       : targets_(std::move(targets)),
         owners_(source_owners),
         replicated_(replicated),
         source_ranks_(source_ranks),
         source_rank_(source_rank),
-        budget_(budget) {
+        budget_(budget),
+        source_supports_(std::move(source_supports)) {
     if (!targets_ || source_ranks_ < 1 || source_rank_ < 0 || source_rank_ >= source_ranks_ ||
         (replicated_ && !owners_.empty()))
       throw std::invalid_argument("invalid authenticated continuation archive topology");
@@ -65,15 +73,29 @@ class ContinuationFieldArchive {
             "continuation archive owner is outside its source communicator");
   }
 
-  const Field& prototype(int owner) const {
-    const auto found = fields_.find(owner);
+  const Field& prototype(int owner, const ContinuationFieldSupport::Ref& support = {}) const {
+    const auto found = fields_.find(key_(owner, support));
     if (found == fields_.end())
       throw std::invalid_argument("continuation archive Field was not decoded under its authority");
-    return *found->second;
+    return *found->second.field;
   }
 
-  const Field& resolve(const ContinuationType& type, std::span<const std::uint8_t> bytes) {
-    const Field& target = targets_(type.field_owner);
+  const Field& resolve(const ContinuationType& type, std::span<const std::uint8_t> bytes,
+                       const ContinuationFieldSupport::Ref& support = {}) {
+    if (support && support->program_owner != type.field_owner)
+      throw std::invalid_argument("continuation archive Field support names a foreign owner");
+    if (support && !source_supports_)
+      throw std::invalid_argument("continuation archive requires authenticated producer topology");
+    const auto topology =
+        support ? source_supports_(support) : SourceTopology{owners_, replicated_};
+    const auto source_owners = topology.owners;
+    const bool replicated_source = topology.replicated;
+    if (replicated_source && !source_owners.empty())
+      throw std::invalid_argument("replicated continuation source has an owner table");
+    for (int owner : source_owners)
+      if (owner < 0 || owner >= source_ranks_)
+        throw std::invalid_argument("continuation producer topology names a foreign rank");
+    const Field& target = targets_(type.field_owner, support);
     continuation_detail::Reader in(bytes);
     if (in.word() != static_cast<std::uint64_t>(type.field_components))
       throw std::invalid_argument("continuation archive Field components differ from its schema");
@@ -102,41 +124,42 @@ class ContinuationFieldArchive {
         ranks.linear_rank(local) != static_cast<std::size_t>(source_rank_))
       throw std::invalid_argument("continuation Field archive names a different source rank");
     const auto replicated = in.word(), count = in.word();
-    if (replicated > 1 || bool(replicated) != replicated_ ||
-        target.distribution().replicated() != replicated_ || count != target.layout().size() ||
-        (!replicated_ && owners_.size() != count))
+    if (replicated > 1 || bool(replicated) != replicated_source ||
+        target.distribution().replicated() != replicated_source ||
+        count != target.layout().size() || (!replicated_source && source_owners.size() != count))
       throw std::invalid_argument(
           "continuation archive layout differs from authenticated topology");
-    const auto width = static_cast<std::uint64_t>(Dim) * (replicated_ ? 16 : 24);
+    const auto width = static_cast<std::uint64_t>(Dim) * (replicated_source ? 16 : 24);
     if (count > (in.bytes.size() - in.at) / width)
       throw std::invalid_argument("continuation archive patch descriptors are truncated");
     budget_.charge(count, sizeof(Index<Dim>));
     std::vector<Index<Dim>> owners;
-    if (!replicated_)
+    if (!replicated_source)
       owners.resize(static_cast<std::size_t>(count));
     for (std::size_t p = 0; p < count; ++p) {
       Index<Dim> owner{};
       for (int d = 0; d < Dim; ++d) {
         if (index() != target.layout()[p].lo[d] || index() != target.layout()[p].hi[d])
           throw std::invalid_argument("continuation migration changes physical patch geometry");
-        if (!replicated_)
+        if (!replicated_source)
           owner[d] = index();
       }
-      if (!replicated_) {
-        if (ranks.linear_rank(owner) != static_cast<std::size_t>(owners_[p]))
+      if (!replicated_source) {
+        if (ranks.linear_rank(owner) != static_cast<std::size_t>(source_owners[p]))
           throw std::invalid_argument("continuation Field owner differs from its sealed archive");
         owners[p] = owner;
       }
     }
     const auto distribution =
-        replicated_
+        replicated_source
             ? mesh::Distribution<Dim>::replicated(target.layout(), ranks)
             : mesh::Distribution<Dim>::partitioned(target.layout(), ranks, std::move(owners));
-    const auto found = fields_.find(type.field_owner);
+    const auto found = fields_.find(key_(type.field_owner, support));
     if (found != fields_.end()) {
-      if (found->second->distribution() != distribution || found->second->local_rank() != local)
+      if (found->second.field->distribution() != distribution ||
+          found->second.field->local_rank() != local)
         throw std::invalid_argument("one continuation owner names incompatible archive layouts");
-      return *found->second;
+      return *found->second.field;
     }
     // The prototype supplies geometry only; one component suffices. The
     // existing codec allocates the schema's exact component count after
@@ -157,18 +180,39 @@ class ContinuationFieldArchive {
     budget_.charge(elements, sizeof(Real));
     budget_.charge(sizeof(Field) + sizeof(typename decltype(fields_)::value_type));
     auto field = std::make_unique<Field>(target.layout(), distribution, local, 1, prototype_ghosts);
-    auto [entry, inserted] = fields_.emplace(type.field_owner, std::move(field));
+    auto [entry, inserted] =
+        fields_.emplace(key_(type.field_owner, support), CachedField{support, std::move(field)});
     (void)inserted;
-    return *entry->second;
+    return *entry->second.field;
   }
 
  private:
+  using Key = std::tuple<int, bool, std::string_view, std::string_view, int, int, std::uint64_t,
+                         std::uint64_t>;
+  static Key key_(int owner, const ContinuationFieldSupport::Ref& support) {
+    if (!support)
+      return {owner, false, {}, {}, -1, -1, 0, 0};
+    support->validate();
+    return {owner,
+            true,
+            support->program_identity,
+            support->origin_point,
+            support->program_owner,
+            support->producer_level,
+            support->topology_epoch,
+            support->materialization_generation};
+  }
   Prototypes targets_;
   std::span<const int> owners_;
   bool replicated_;
   int source_ranks_, source_rank_;
   ContinuationMigrationBudget& budget_;
-  std::map<int, std::unique_ptr<Field>> fields_;
+  SourceSupports source_supports_;
+  struct CachedField {
+    ContinuationFieldSupport::Ref support;
+    std::unique_ptr<Field> field;
+  };
+  std::map<Key, CachedField> fields_;
 };
 
 /// Join every authenticated old-rank image and copy each Field patch to its
@@ -275,12 +319,17 @@ ContinuationValueRef<Dim> rematerialize_continuation_fields(
         result = Value::variant(first.arm(), std::move(frame.children.at(0)));
         break;
       case ContinuationKind::Field: {
-        const Field& target = targets(first.field_owner());
+        const Field& target = targets(first.field_owner(), first.field_support());
         const auto count = target.layout().size();
         budget.charge(count, sizeof(std::pair<const Field*, std::size_t>));
         std::vector<std::pair<const Field*, std::size_t>> patches(count, {nullptr, 0});
         for (const auto* source : frame.sources) {
           const Field& old = source->field();
+          const auto& support = source->field_support();
+          const auto& expected = first.field_support();
+          if (bool(support) != bool(expected) || (support && *support != *expected))
+            throw std::invalid_argument(
+                "continuation Field producer support differs between ranks");
           if (source->field_owner() != first.field_owner() ||
               source->scientific_contract() != first.scientific_contract() ||
               old.layout() != target.layout() || old.ghosts() != first.field().ghosts() ||
@@ -361,7 +410,7 @@ ContinuationValueRef<Dim> rematerialize_continuation_fields(
                     throw std::invalid_argument("field expression cell exceeds native index range");
                   coordinate[d] = static_cast<int>(cell[d]);
                 }
-                const auto& prototype = targets(owner);
+                const auto& prototype = targets(owner, first.field_support());
                 for (std::size_t p = 0; p < prototype.local_size(); ++p)
                   if (prototype.layout()[prototype.global_index(p)].contains(coordinate))
                     return true;
@@ -370,7 +419,7 @@ ContinuationValueRef<Dim> rematerialize_continuation_fields(
               &field_expression_cache);
         }
         result = Value::field(next, first.field_owner(), first.scientific_contract(),
-                              std::move(expression));
+                              std::move(expression), first.field_support());
         break;
       }
       case ContinuationKind::DistributedDomain:

@@ -367,9 +367,15 @@ void refresh_accepted_hierarchy_state_(bool prepare_subcycling = true) const {
   if (prepare_subcycling)
     prepare_multiblock_subcycling_engine_();
   publish_history_flux_snapshots_();
-  const auto state = accepted_state_();
-  facade_->restore_program_accepted_state(serialize_amr_program_accepted_state(state));
-  accepted_state_revision_ = facade_->program_accepted_state_revision();
+  // Parent prefixes prepare representation metadata under the outer transaction.
+  // The complete scientific forest is remapped only after all interfaces are
+  // qualified; publishing an image here would expose its old Field projections.
+  const bool deferred = continuation_regrid_publication_deferred_();
+  const auto state = accepted_state_(!deferred);
+  if (!deferred) {
+    facade_->restore_program_accepted_state(serialize_amr_program_accepted_state(state));
+    accepted_state_revision_ = facade_->program_accepted_state_revision();
+  }
   accepted_temporal_partition_ = state.temporal_partition;
   accepted_flux_budget_contract_ = state.flux_budget_contract;
   accepted_coupling_contract_ = state.coupling_contract;
@@ -540,10 +546,11 @@ void refresh_accepted_hierarchy_state_after_remap_(
     std::vector<std::uint8_t> bytes;
     std::string exact_contract;
   };
+  const bool deferred = continuation_regrid_publication_deferred_();
   AcceptedImageCandidate image = prepare_history_mutation_collectively_(
       [&]() {
         AcceptedImageCandidate staged;
-        staged.state = accepted_state_();
+        staged.state = accepted_state_(!deferred);
         staged.state.pending_history_remaps.clear();
         staged.state.pending_history_remaps.reserve(candidate.pending.size());
         for (const auto& [key, marker] : candidate.pending) {
@@ -560,15 +567,18 @@ void refresh_accepted_hierarchy_state_after_remap_(
         return staged.exact_contract;
       },
       "AMR Program accepted history remap image");
-  try {
-    // All allocation, serialization, and exact byte agreement completed above.  Every prepared
-    // rank now enters the facade's collective publication with the same immutable image.
-    facade_->restore_program_accepted_state(image.bytes);
-  } catch (const std::exception& exception) {
-    throw std::runtime_error("AMR Program accepted history remap cannot publish accepted state: " +
-                             std::string(exception.what()));
+  if (!deferred) {
+    try {
+      // All allocation, serialization, and exact byte agreement completed above. Every prepared
+      // rank now enters the facade's collective publication with the same immutable image.
+      facade_->restore_program_accepted_state(image.bytes);
+    } catch (const std::exception& exception) {
+      throw std::runtime_error(
+          "AMR Program accepted history remap cannot publish accepted state: " +
+          std::string(exception.what()));
+    }
+    accepted_state_revision_ = facade_->program_accepted_state_revision();
   }
-  accepted_state_revision_ = facade_->program_accepted_state_revision();
   static_assert(std::is_nothrow_swappable_v<decltype(accepted_temporal_partition_)>);
   static_assert(std::is_nothrow_swappable_v<decltype(accepted_flux_budget_contract_)>);
   static_assert(std::is_nothrow_swappable_v<decltype(accepted_coupling_contract_)>);
@@ -1181,13 +1191,4 @@ void refresh_resources_after_accepted_history_remap_(
   publish_history_flux_snapshots_();
   scratches_.clear();
   rhs_input_traces_.clear();
-}
-
-void publish_history_flux_snapshots_() const {
-  if (history_flux_expressions_.empty() && facade_->program_history_flux_snapshots().empty())
-    return;
-  prepare_spatial_collectively([&] {
-    facade_->publish_program_history_flux_snapshots(history_flux::reachable_sources<Dim>(
-        history_flux_expressions_, facade_->configured_n_levels()));
-  });
 }

@@ -234,6 +234,7 @@ class FieldSolution:
     observation_spaces: tuple[Any, ...] = ()
     coordinate_units: tuple[Any, ...] = ()
     observation_axes: tuple[int, ...] | None = None
+    byte_capacity: int = 64 * 1024 * 1024
 
     def mapping_port(self, unknown: Handle, *, derivative_axis: int | None = None, factor: Any = 1):
         """Declare a scalar physical port of this consumed Field problem."""
@@ -264,6 +265,7 @@ class FieldSolution:
             raise FieldProblemError("field.observation.unknown", "observation selects a foreign field unknown")
         return self.packed.prog._new("scalar_field", "field_component", (self.packed,),
             {"ncomp": 1, "component": matches[0], "field_problem_identity": self.problem_identity,
+             "observation_byte_capacity": self.byte_capacity,
              "field_unknown": self.unknowns[matches[0]], "stencil_access": StencilAccess.pointwise()},
             unknown.local_id + "_value", None, point=self.packed.point, inherit_state_ref=False,
             space=None if not self.observation_spaces else self.observation_spaces[matches[0]])
@@ -364,7 +366,10 @@ class FieldSolution:
             unknown.local_id + "_gradient", None, point=value.point, inherit_state_ref=False, space=space)
 
 
-def observe_field_solution(field: Handle, solution: Any, *, unknown: Handle | None = None) -> Any:
+def observe_field_solution(field: Handle, solution: Any, *, unknown: Handle | None = None,
+                           byte_capacity: int = 64 * 1024 * 1024) -> Any:
+    if type(byte_capacity) is not int or not 1 <= byte_capacity <= (1 << 63) - 1:
+        raise ValueError("field observation byte_capacity must be a positive int64 ceiling")
     from pops.time.solve_outcome import ResidualSolution
     if type(solution) is not ResidualSolution or len(solution.values) != 1:
         raise TypeError("field observation requires the consumed ResidualSolution of one field solve")
@@ -390,7 +395,8 @@ def observe_field_solution(field: Handle, solution: Any, *, unknown: Handle | No
     result = FieldSolution(field, packed, unknowns, registered.identity.token,
         tuple(registered.unknown_spaces[row] for row in registered.unknowns) if getattr(registered, "unknown_spaces", None) else (),
         getattr(registered, "coordinate_units", ()),
-        getattr(registry.resolved_registration(field).discretization, "observation_axes", None))
+        getattr(registry.resolved_registration(field).discretization, "observation_axes", None),
+        byte_capacity)
     return result if unknown is None else result[unknown]
 
 

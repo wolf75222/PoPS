@@ -331,7 +331,7 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
             from pops.time._program.finite_state import require_finite_state_program
             require_finite_state_program(self)
         from pops.time._step.strategy import ComputedDt
-        from pops.codegen.program_lowerability import all_ops
+        from pops.time._program.traversal import all_ops
         computed = [v for v in all_ops(self) if v.op in {"reached_duration", "accept_increment"}]
         if type(self._step_strategy) is ComputedDt:
             if len(computed) != 1:

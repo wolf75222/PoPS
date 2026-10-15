@@ -2219,11 +2219,14 @@ TEST(ProgramRuntime, ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPub
   fill_ic(initial, n, gamma);
   sim.set_state("gas", initial);
   (void)consume_solve_outcome(sim.solve_fields());
-  sim.register_history("gas.guard_candidate", 2, kGasComponents);
+  sim.register_history("gas.guard_candidate", 1, kGasComponents);
   sim.set_program_block_map({0});
 
   int consumed_solves = 0;
   auto ctx = runtime::program::make_program_execution_provider(&sim);
+  ASSERT_EQ(ctx->runtime_state().hist_.slot_exchanges.at("gas.guard_candidate").size(), 2u);
+  sim.register_history("gas.guard_candidate", 2, kGasComponents);
+  ASSERT_EQ(ctx->runtime_state().hist_.slot_exchanges.at("gas.guard_candidate").size(), 3u);
   ctx->install([ctx, &consumed_solves](double dt) {
     ctx->begin_step(dt);
     MultiFab<kNativeDimension>& state = ctx->state(0);

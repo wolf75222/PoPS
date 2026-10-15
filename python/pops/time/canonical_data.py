@@ -16,7 +16,17 @@ from pops.time.references import handle_data
 
 
 def strict_data(value: Any, *, where: str) -> Any:
-    from pops._structural_data import transform_tree
+    from pops._structural_data import transform_tree, _plain_json_data
+    # The C codec preserves occurrence copies and exact scalar spelling for closed
+    # builtin data. Protocol-bearing objects always use the observable traversal.
+    if _plain_json_data(value, nonempty_keys=True, finite_floats=True):
+        import json
+        try:
+            return json.loads(json.dumps(value, allow_nan=False, separators=(",", ":")),
+                parse_int=lambda text: {"scalar": scalar_data(int(text))},
+                parse_float=lambda text: {"scalar": scalar_data(float(text))})
+        except (RecursionError, ValueError):
+            pass
     def describe(node):
         if isinstance(node, CanonicalData):
             return None, node.to_data()
@@ -59,20 +69,17 @@ class CanonicalData:
 
     def __init__(self, value: Any, *, where: str = "ProgramGraph metadata") -> None:
         data = strict_data(value, where=where)
-        from types import MappingProxyType
-        from pops._structural_data import canonical_json, transform
-        def describe(node):
-            if isinstance(node, Mapping):
-                keys = tuple(node)
-                return tuple(node.values()), lambda children: MappingProxyType(dict(zip(keys, children, strict=False)))
-            if isinstance(node, (list, tuple)):
-                return node, tuple
-            return None, node
-        object.__setattr__(self, "_json", canonical_json(data))
-        object.__setattr__(self, "_data", transform(data, describe))
+        from pops._structural_data import canonical_json
+        canonical = canonical_json(data)
+        ordered = canonical_json(data, sort_keys=False)
+        object.__setattr__(self, "_json", canonical)
+        # Immutable bytes avoid retaining and repeatedly walking a second Python
+        # forest. Identity sorts keys; the data projection preserves input order.
+        object.__setattr__(self, "_data", canonical if ordered == canonical else ordered)
 
     def to_data(self) -> Any:
-        return _json_ready(self._data)
+        from pops._structural_data import json_containers
+        return json_containers(self._data)
 
 
 

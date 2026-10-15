@@ -27,16 +27,27 @@ def _enter(program, value, available, var, lines):
     open_hierarchy_continuation(program, value, available, var, lines, [], kind="control")
 
 
-def _finish(program, value, available, var, lines, join, frame):
+def _finish(program, value, available, var, lines, join, frame, *, promotion=False):
     from .program_emit_hierarchy_regions import open_hierarchy_continuation
     from .program_emit_hierarchy_control import _normal_close
-    open_hierarchy_continuation(program, value, available, var, lines,
-        ["ctx.close_hierarchy_failure_handlers(%d);" % value.id], kind="control")
+    once = ["ctx.close_hierarchy_failure_handlers(%d);" % value.id]
+    if promotion:
+        from .program_emit_versioned import _checked
+        once = []
+        _checked(once, "hierarchy_promotion_vote_%d" % value.id, "bool",
+                 ["ctx.validate_hierarchy_scope_promotions(%d);" % value.id], "true",
+                 message="accepted hierarchy child promotion failed")
+        once.append("ctx.commit_hierarchy_scope_promotions(%d);" % value.id)
+    open_hierarchy_continuation(program, value, available, var, lines, once, kind="control")
     lines.append("%s(%s);" % (join, frame))
     _normal_close(lines)
 
 
 def open_capture(program, value, available, var, model, lines, prelude, block_idx, field_plans):
+    if value.vtype == "variant":
+        from .program_emit_hierarchy_typed_recovery import open_typed_capture
+        return open_typed_capture(program, value, available, var, model, lines, prelude,
+                                  block_idx, field_plans)
     from .program_emit_hierarchy_control import (
         _heap_slots, _capture, _open_join, _close_join, _normal_close, emit_region,
     )
@@ -77,7 +88,9 @@ def open_iterate(program, value, available, var, model, lines, prelude, block_id
     )
     from .program_emit_structured_control import _copy, _uniform_int, _storage_width
     if value.attrs.get("error_signature") is not None:
-        raise NotImplementedError("hierarchy iteration requires complete typed payload recovery transport")
+        from .program_emit_hierarchy_typed_recovery import open_typed_iterate
+        return open_typed_iterate(program, value, available, var, model, lines, prelude,
+                                  block_idx, field_plans)
     state_signature = value.attrs["state_signature"]
     signature = {"vtype": "product", "members": (
         ("state", state_signature), ("code", scalar_signature("int64")),

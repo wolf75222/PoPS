@@ -221,7 +221,7 @@ TEST(DistributedGcV14, DeepRemoteRootAndSharedEdgesSurviveClosureAndCollectExact
   payload.reset();
   const auto bytes = registry.retained_bytes();
   {
-    d::gc_detail::Census<2> small(256);
+    d::gc_detail::Census<2> small(256, registry.issuer());
     const auto held = registry.resolve_value(version, d::array_type_tag<2>());
     small.register_domain(domain->identity().ordinal, domain);
     small.register_array(version.ordinal, held, d::array_type_tag<2>());

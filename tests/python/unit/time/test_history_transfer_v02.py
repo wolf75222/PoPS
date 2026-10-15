@@ -32,6 +32,27 @@ def test_history_transfer_closes_algebra_and_changes_actual_cpp():
     assert quadratic_transfer().to_data()!=quadratic_transfer(linear_control=True).to_data()
 
 
+def test_history_transfer_validation_does_not_emit_target_code(monkeypatch):
+    import pops.codegen.cpp_writer as writer
+    def forbidden_emission(*args, **kwargs):
+        raise AssertionError("authoring validation invoked target emission")
+    monkeypatch.setattr(writer, "_cse_emit", forbidden_emission)
+    data = quadratic_transfer().to_data()
+    assert validate_transfer_data(data)
+    # The common graph validator still rejects invalid structure before lowering.
+    data["nodes"][0] = ["add", 0, 0]
+    with pytest.raises(ValueError, match="earlier nodes"):
+        validate_transfer_data(data)
+
+
+def test_transfer_refuses_a_same_name_foreign_scalar_symbol():
+    from pops._ir.expr import Var
+    foreign = Var("history_transfer_input_0", "history_transfer")
+    with pytest.raises(TypeError, match="closed input bindings"):
+        HistoryTransfer(slots=2, body=lambda samples, time, ratio: (
+            time >= 0, ((time, foreign, (1, 0)), (samples[1].time, 1, (0, 1)))))
+
+
 def test_interval_authority_cannot_escape_into_post_synchronization():
     from pops.intervals import validate_intervals
     program=pops.Program("foreign_phase")
@@ -54,7 +75,8 @@ def test_interval_authority_cannot_escape_into_post_synchronization():
     lambda data:data.update(extra="hidden_callback"),
 ])
 def test_transfer_rejects_forged_closed_graph(mutation):
-    data=copy.deepcopy(quadratic_transfer().to_data());mutation(data)
+    data = copy.deepcopy(quadratic_transfer().to_data())
+    mutation(data)
     with pytest.raises((ValueError,TypeError)):
         validate_transfer_data(data)
 
@@ -70,9 +92,11 @@ def test_transfer_rejects_foreign_program_capture_and_incomplete_rows():
 
 def _identity(kind,digest,magic=b"POPSHID2"):
     header=magic+struct.pack("<Q",1)+b"q"+struct.pack("<qQ",1,1)
-    bits=lambda value:struct.unpack("<Q",struct.pack("<d",value))[0]
+    def bits(value):
+        return struct.unpack("<Q", struct.pack("<d", value))[0]
     words=(kind,bits(.125),bits(.0625),1)
-    if magic==b"POPSHID2":words+=digest
+    if magic == b"POPSHID2":
+        words += digest
     return header+struct.pack("<"+"Q"*len(words),*words)
 
 

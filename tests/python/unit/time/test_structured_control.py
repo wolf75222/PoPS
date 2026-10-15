@@ -14,8 +14,7 @@ def _fixture(name="structured"):
     left = typed_state(program, "left", state_name="U")
     right = typed_state(program, "right", state_name="U")
     # Declare state inputs in the enclosing graph before any closed control region reads them.
-    left.n
-    right.n
+    _ = left.n, right.n
     return program, left, right
 
 
@@ -49,7 +48,7 @@ def test_nested_product_fold_preserves_two_blocks_and_simultaneous_swaps():
     assert p.validate()
     source = emit_cpp_program(p)
     assert source.count("for (; iteration_") == 2
-    assert "ctx.scratch_state" in source and "ctx.copy_with_provenance" in source
+    assert "ctx.own_structural_field" in source and "_owner = std::move" in source
     assert "std::int64_t" in source
     assert p.to_graph().to_data() == detach_compiled_program(p).to_graph().to_data()
 
@@ -62,11 +61,13 @@ def test_swap_same_authority_stages_uses_two_phase_copy():
     source = emit_cpp_program(p)
     line = source.index("for (; iteration_")
     tail = source[line:]
-    assert tail.index("copy_with_provenance(next_") < tail.index("copy_with_provenance(carry_")
-    assert tail.count("copy_with_provenance(next_") == 2
-    assert "structured control field allocation" in source
-    assert "structured control field copy" in source
-    assert source.index("structured control field allocation") < source.index("auto& carry_")
+    # Both next fields prepare before either holder is replaced; the carry
+    # copies only start once the complete next product is owned.
+    vote = tail.index('"structured control owned copy"')
+    assert tail.count("ctx.own_structural_field") == 4
+    assert tail.index("next_") < tail.index("carry_", tail.index("next_"))
+    assert tail.index("_owner = std::move") > vote
+    assert "is_nothrow_move_assignable_v" not in tail  # This product contains only Fields.
 
 
 def test_iterate_requires_guarded_projection_and_preserves_budget_in_graph():
@@ -225,7 +226,7 @@ def test_iteration_step_result_and_nested_capture_propagate_without_failed_updat
     status = re.search(r"std::int64_t (matched_\w+_status)", source)
     assert status is not None
     failure = source.index("break; }", status.start())
-    copy = source.index("copy_with_provenance(next_", failure)
+    copy = source.index("ctx.own_structural_field", failure)
     assert failure < copy
     assert source.count("= failure.code;") == 3
     assert source.count("= failure.origin;") == 3

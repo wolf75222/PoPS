@@ -107,6 +107,15 @@ void store_history_(const std::string& name, const field_type& value) const {
   manager.store_pending.at(candidate.key) = true;
 }
 
+void publish_history_flux_snapshots_() const {
+  if (history_flux_expressions_.empty() && facade_->program_history_flux_snapshots().empty())
+    return;
+  prepare_spatial_collectively([&] {
+    facade_->publish_program_history_flux_snapshots(history_flux::reachable_sources<Dim>(
+        history_flux_expressions_, facade_->configured_n_levels()));
+  });
+}
+
 void rotate_histories_(std::optional<std::string> clock_identity) const {
   require_unfrozen_history_authoring_();
   auto& manager = runtime_state().hist_;

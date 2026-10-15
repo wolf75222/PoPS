@@ -25,31 +25,57 @@ struct Array {
 };
 
 namespace detail {
+template <class Result>
+ContinuationFieldMetadata field_metadata(Result&& result) {
+  if constexpr (std::is_convertible_v<Result, ContinuationFieldMetadata>)
+    return std::forward<Result>(result);
+  else {
+    static_assert(std::is_convertible_v<Result, FieldExchangeExpressions::Ref>);
+    return {std::forward<Result>(result), {}};
+  }
+}
 template <class Observer, class Field, class Lifetime>
-FieldExchangeExpressions::Ref copied_field(const Observer& observer, const Field& source,
-                                           const Field& destination, const Lifetime& lifetime) {
-  if constexpr (std::is_invocable_v<Observer, const Field&, const Field&, const Lifetime&>) {
-    if constexpr (std::is_convertible_v<
-                      std::invoke_result_t<Observer, const Field&, const Field&, const Lifetime&>,
-                      FieldExchangeExpressions::Ref>)
-      return observer(source, destination, lifetime);
+ContinuationFieldMetadata copied_field(const Observer& observer, const Field& source,
+                                       const Field& destination, const Lifetime& lifetime,
+                                       const ContinuationType& type) {
+  if constexpr (std::is_invocable_v<Observer, const Field&, const Field&, const Lifetime&,
+                                    const ContinuationType&>) {
+    if constexpr (std::is_void_v<std::invoke_result_t<Observer, const Field&, const Field&,
+                                                      const Lifetime&, const ContinuationType&>>)
+      observer(source, destination, lifetime, type);
     else
+      return field_metadata(observer(source, destination, lifetime, type));
+  } else if constexpr (std::is_invocable_v<Observer, const Field&, const Field&, const Lifetime&>) {
+    if constexpr (std::is_void_v<
+                      std::invoke_result_t<Observer, const Field&, const Field&, const Lifetime&>>)
       observer(source, destination, lifetime);
+    else
+      return field_metadata(observer(source, destination, lifetime));
   } else
     observer(source, destination);
   return {};
 }
 template <class Observer, class Field, class Lifetime>
 void copied_field(const Observer& observer, const Field& source, const Field& destination,
-                  const Lifetime& lifetime, const FieldExchangeExpressions::Ref& expression) {
+                  const Lifetime& lifetime, const ContinuationFieldMetadata& metadata) {
   if constexpr (std::is_invocable_v<Observer, const Field&, const Field&, const Lifetime&,
-                                    const FieldExchangeExpressions::Ref&>)
-    observer(source, destination, lifetime, expression);
+                                    const ContinuationFieldMetadata&>)
+    observer(source, destination, lifetime, metadata);
   else {
-    if (expression)
-      throw std::invalid_argument(
-          "Field copy observer cannot preserve retained exchange provenance");
-    (void)copied_field(observer, source, destination, lifetime);
+    if (metadata.support)
+      throw std::invalid_argument("Field copy observer cannot preserve retained producer support");
+    if constexpr (std::is_invocable_v<Observer, const Field&, const Field&, const Lifetime&,
+                                      const FieldExchangeExpressions::Ref&>)
+      observer(source, destination, lifetime, metadata.expression);
+    else {
+      if (metadata.expression)
+        throw std::invalid_argument(
+            "Field copy observer cannot preserve retained exchange provenance");
+      if constexpr (std::is_invocable_v<Observer, const Field&, const Field&, const Lifetime&>)
+        observer(source, destination, lifetime);
+      else
+        observer(source, destination);
+    }
   }
 }
 
@@ -255,9 +281,9 @@ ContinuationValueRef<Dim> pack_leaf(const ContinuationType& type, const std::any
         throw std::invalid_argument("finite structural Field component count differs");
       field_storage(*value, input, output);
       auto copied = Value::field(*value, type.field_owner, type.scientific_contract);
-      auto expression =
-          copied_field(on_field_copy, *value, copied->field(), copied->field_storage_owner());
-      return Value::with_field_exchange_expression(copied, std::move(expression));
+      auto metadata =
+          copied_field(on_field_copy, *value, copied->field(), copied->field_storage_owner(), type);
+      return Value::with_field_metadata(copied, std::move(metadata));
     }
     default:
       throw std::invalid_argument("finite structural leaf has a container type");
@@ -473,7 +499,7 @@ std::any unpack(const ContinuationType& type, const ContinuationValueRef<Dim>& s
         detail::copied_field(on_field_copy, value->field(),
                              *std::any_cast<const std::shared_ptr<MultiFab<Dim>>&>(destination),
                              std::any_cast<const std::shared_ptr<MultiFab<Dim>>&>(destination),
-                             value->field_exchange_expression());
+                             value->field_metadata());
         break;
       case ContinuationKind::Array: {
         detail::domain(value->domain_ref(), schema);

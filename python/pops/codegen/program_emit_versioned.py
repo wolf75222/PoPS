@@ -232,7 +232,7 @@ def pack_owned(signature, tokens, lines, prefix, block_indices, *, capacity, rol
     return prefix
 
 
-def unpack_owned(signature, reference, lines, prefix, *, capacity, block_indices=None):
+def unpack_owned(signature, reference, lines, prefix, *, capacity, block_indices=None, retain_owner=None):
     """Materialize an immutable native value into owned, ordinary Program value tokens."""
     from .program_emit_finite_arrays import finite_cpp_type, _unpacked
     body = []
@@ -240,6 +240,14 @@ def unpack_owned(signature, reference, lines, prefix, *, capacity, block_indices
                          capacity=capacity, block_idx=block_indices)
     _checked(lines, prefix, finite_cpp_type(signature), body, expression,
              message="continuation capability read or owned materialization failed")
+    if retain_owner is not None:
+        # A resumed callback may outlive this local Record. Keep the exact shared
+        # Field leaves until its heap frame is destroyed; do not retain raw views.
+        owner = prefix + "_owner"
+        _checked(lines, owner, "std::shared_ptr<const void>", [],
+                 "std::make_shared<%s>(%s)" % (finite_cpp_type(signature), prefix),
+                 message="continuation materialization lifetime retention failed")
+        lines.append("%s = std::move(%s);" % (retain_owner, owner))
     return _unpacked(signature, prefix)
 
 
