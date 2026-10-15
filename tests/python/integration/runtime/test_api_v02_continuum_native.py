@@ -36,3 +36,22 @@ def test_hall_zero_and_ohmic_are_different_physics_in_same_native_primitive(
             assert hall[0]["frequency"]>1.2*zero[0]["frequency"]
             assert ohmic[0]["amplitude"]<hall[0]["amplitude"]
             assert abs(ohmic[0]["energy_loss"])<2e-12
+
+
+@pytest.mark.compiler
+@pytest.mark.kokkos
+@pytest.mark.native_loader
+@pytest.mark.parametrize("pressure,drag", [(0.3, 0.), (0., 0.4), (0.3, 0.4)])
+def test_bn_authored_relaxation_changes_state_and_conserves_inventory(
+        pressure, drag, isolated_native_cache, native_cxx, kokkos_root, record_property):
+    del isolated_native_cache, native_cxx, kokkos_root
+    _, world = native_profile(dimension=2, scope="BN selected pressure and drag relaxation")
+    _, artifact, rows = execute_case(lambda: build_m24(
+        pressure_relaxation=pressure, velocity_relaxation=drag), world, "BN relaxation")
+    with collective_check(world):
+        owners = [row for row in rows if row.get("metrics_owner", True)]
+        assert owners and all(row["relaxation_gap"] > 1e-6 for row in owners), rows
+        assert all(row["mixture_inventory_defect"] < 2e-11 for row in owners), rows
+    record_property("artifact_identity", artifact.artifact_identity.hexdigest)
+    record_property("selected_relaxation_coefficients", str((pressure, drag)))
+    record_property("actual_metrics", str(rows))

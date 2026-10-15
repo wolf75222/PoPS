@@ -155,6 +155,7 @@ void install(std::function<void(double)> step, std::shared_ptr<AmrProgramContext
     throw std::invalid_argument("AMR Program install requires its exact owning context");
   auto lifetime = program_resource_lifetime_();
   facade_->install_program_step([step = std::move(step), keep_alive](double dt) { step(dt); });
+  runtime_state().history_transfers_ = history_transfers_;
   runtime_state().install_resource_lifetime(std::move(lifetime));
   if (resource_refresh)
     facade_->install_program_resource_refresh(std::move(resource_refresh));
@@ -182,6 +183,7 @@ void install(std::function<void(double)> step, std::shared_ptr<AmrProgramContext
       [owner = keep_alive]() { owner->restart_regrid_(); },
       [owner = keep_alive]() { owner->resync_after_restart_(); },
       [owner = keep_alive]() { return owner->accepted_context_snapshot(); });
+  install_continuation_checkpoint_preflight_(std::move(keep_alive));
 }
 
 std::unique_ptr<AcceptedProgramContextSnapshot> accepted_context_snapshot() const {
@@ -204,6 +206,7 @@ void begin_step(double dt) const {
   logical_substep_ = 0;
   revoke_interaction_history_snapshots_();
   prepare_interaction_history_snapshots_(dt);
+  prepare_temporal_field_images_(dt);
 }
 
 void configure_primary_clock(const std::string& clock) const {
@@ -224,7 +227,10 @@ void set_stage_time(std::int64_t numerator, std::int64_t denominator) const {
 runtime::multiblock::BoundaryEvaluationPoint boundary_evaluation_point(int stage) const {
   require_rate_identity_(stage);
   require_facade_execution_();
-  if (primary_clock_.empty() || !std::isfinite(current_dt_) || !(current_dt_ > 0.0))
+  const bool topology_point = continuation_regrid_phase() && current_dt_ == 0.0 &&
+                              current_interval_start_time_ == require_continuation_regrid_().time;
+  if (primary_clock_.empty() || !std::isfinite(current_dt_) ||
+      (!(current_dt_ > 0.0) && !topology_point))
     throw std::logic_error("AMR Program evaluation point lacks an active clock interval");
   return {.clock = primary_clock_,
           .tick = static_cast<std::int64_t>(facade_->macro_step()),

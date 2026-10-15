@@ -14,6 +14,18 @@ from pops.realization import Realize, Use
 from pops.time import FixedDt
 
 
+def test_realization_metadata_identity_does_not_use_the_python_call_stack():
+    from pops.codegen.program_realization import _key
+    inert = 7
+    for _ in range(1600):
+        inert = [inert]
+    assert _key(inert) == "[" * 1600 + "7" + "]" * 1600
+    cyclic = []
+    cyclic.append(cyclic)
+    with pytest.raises(ValueError, match="cycle"):
+        _key(cyclic)
+
+
 def assembled(*, kind="valid", repeated=False, source_only=False, derived=False):
     frame = Rectangle("program_balance_domain", (0., 0.), (1., 1.)).frame(Cartesian2D())
     model = pops.Model("declared_transport_and_exchange", frame=frame)

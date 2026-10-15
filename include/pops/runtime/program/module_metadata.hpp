@@ -308,6 +308,10 @@ struct ProgramCheckpointMetadata {
   std::string temporal_provider_identity;
   std::size_t temporal_cell_capacity = 0;
   std::size_t temporal_cells_per_topology_cell = 0;
+  std::string continuation_root_schema_identity;
+  std::size_t continuation_root_byte_capacity = 0;
+  std::string continuation_level_schema_identity;
+  std::size_t continuation_level_byte_capacity = 0;
 
   friend bool operator==(const ProgramCheckpointMetadata&,
                          const ProgramCheckpointMetadata&) = default;
@@ -364,7 +368,8 @@ inline ProgramCheckpointMetadata read_program_checkpoint_metadata(pops::dynlib::
     if (row.program_owner < 0 || row.depth < 2 || row.components == 0 || row.components < -1 ||
         row.ghost_depth < -1)
       throw std::runtime_error(
-          "compiled Program checkpoint history metadata has an invalid owner/depth/components/halo");
+          "compiled Program checkpoint history metadata has an invalid "
+          "owner/depth/components/halo");
     if (!history_names.insert(row.name).second)
       throw std::runtime_error(
           "compiled Program checkpoint metadata contains a duplicate history identity");
@@ -434,6 +439,39 @@ inline ProgramCheckpointMetadata read_program_checkpoint_metadata(pops::dynlib::
       (!global && metadata.temporal_cells_per_topology_cell == 0))
     throw std::runtime_error(
         "compiled Program temporal checkpoint metadata has an inconsistent shape family");
+  // Older artifacts have no continuation forest.  The quartet is optional only as a whole;
+  // a partly exported schema/capacity pair cannot authorize storage or a restart.
+  const auto root_schema = reinterpret_cast<TemporalProviderFn>(
+      pops::dynlib::sym(dl_handle, "pops_program_checkpoint_continuation_root_schema_identity"));
+  const auto root_bytes = reinterpret_cast<TemporalCellCapacityFn>(
+      pops::dynlib::sym(dl_handle, "pops_program_checkpoint_continuation_root_byte_capacity"));
+  const auto level_schema = reinterpret_cast<TemporalProviderFn>(
+      pops::dynlib::sym(dl_handle, "pops_program_checkpoint_continuation_level_schema_identity"));
+  const auto level_bytes = reinterpret_cast<TemporalCellCapacityFn>(
+      pops::dynlib::sym(dl_handle, "pops_program_checkpoint_continuation_level_byte_capacity"));
+  if (root_schema || root_bytes || level_schema || level_bytes) {
+    if (!root_schema || !root_bytes || !level_schema || !level_bytes)
+      throw std::runtime_error("compiled Program continuation metadata is incomplete");
+    const char* root_identity = root_schema();
+    const char* level_identity = level_schema();
+    if (!root_identity || !level_identity)
+      throw std::runtime_error("compiled Program continuation schema identity is null");
+    const auto root_capacity = root_bytes();
+    const auto level_capacity = level_bytes();
+    if constexpr (sizeof(std::size_t) < sizeof(std::uint64_t))
+      if (root_capacity > std::numeric_limits<std::size_t>::max() ||
+          level_capacity > std::numeric_limits<std::size_t>::max())
+        throw std::overflow_error("compiled Program continuation capacity exceeds size_t");
+    const bool enabled = root_capacity != 0;
+    if (enabled != (level_capacity != 0) || enabled != (root_identity[0] != '\0') ||
+        enabled != (level_identity[0] != '\0') ||
+        (enabled && (root_capacity < 32 || level_capacity < 32)))
+      throw std::runtime_error("compiled Program continuation metadata has an incomplete forest");
+    metadata.continuation_root_schema_identity = root_identity;
+    metadata.continuation_root_byte_capacity = static_cast<std::size_t>(root_capacity);
+    metadata.continuation_level_schema_identity = level_identity;
+    metadata.continuation_level_byte_capacity = static_cast<std::size_t>(level_capacity);
+  }
   return metadata;
 }
 

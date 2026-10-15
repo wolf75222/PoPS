@@ -114,7 +114,9 @@ def test_fixed_communicator_repartition_is_a_zero_block_closed_program():
     assert spec.case.validate() and not program._block_indices() and not spec.initial_values
     assert detach_compiled_program(program)._ir_hash()==program._ir_hash()
     cpp=emit_cpp_program(program)
-    assert 'requests_array<' in cpp and 'requests_from_array<' in cpp
+    # The installed iterative marshaller owns reference conversion; the
+    # generated program retains the exact Requests type and value authority.
+    assert 'finite_structural::pack<' in cpp and '::Requests' in cpp
     assert 'continuation_publish(' in cpp and 'new_instance == old_instance' in cpp
 
 

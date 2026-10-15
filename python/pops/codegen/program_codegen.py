@@ -31,6 +31,11 @@ are module-level constants in ``program_emit_kernels``, re-exported here.
 from __future__ import annotations
 
 from typing import Any
+from .cpp_symbols import printer_scope
+from .cpp_strings import cpp_string_literal
+from .program_source_map import emission_program_hash, emission_scope
+from .program_kernel_registry import kernel_scope, kernel_definitions
+from .program_uniform_finite import uniform_scope, uniform_definitions
 from pops.time.references import block_name
 
 import json  # noqa: F401  (kept for any external reference to program_codegen.json)
@@ -160,12 +165,11 @@ def _emit_resolved_cpp_program(
     )
 
 
-from .cpp_symbols import printer_scope
-from .cpp_strings import cpp_string_literal
-from .program_source_map import emission_scope
 
 @printer_scope
 @emission_scope
+@kernel_scope
+@uniform_scope
 def _emit_cpp_program_impl(
     program: Any,
     model: Any = None,
@@ -329,22 +333,25 @@ def _emit_cpp_program_impl(
         if target == "amr_system" else None)
     from .program_emit_finite_arrays import FINITE_OPS, finite_cpp_helpers
     from .program_emit_versioned import VERSIONED_OPS
-    value_ops = FINITE_OPS | VERSIONED_OPS
+    from pops.time.field_representation import FIELD_REPRESENTATION_OPS
+    value_ops = FINITE_OPS | VERSIONED_OPS | FIELD_REPRESENTATION_OPS
     finite_roots = list(program._values)
     if program._dt_bound is not None:
         finite_roots.extend(program._dt_bound[0])
     uses_finite_arrays = any(
         value.op in value_ops or any(child.op in value_ops for child in program._subblock_value_refs(value))
         for value in finite_roots)
-    finite_helpers = finite_cpp_helpers() if uses_finite_arrays else ""
     from .program_emit_distributed_arrays import OPS as DISTRIBUTED_OPS
-    uses_distributed = any(value.op in DISTRIBUTED_OPS or any(
-        child.op in DISTRIBUTED_OPS for child in program._subblock_value_refs(value)) for value in finite_roots)
+    from .program_emit_composite import composite_integral_helpers
+    distributed_ops = DISTRIBUTED_OPS | FIELD_REPRESENTATION_OPS
+    uses_distributed = any(value.op in distributed_ops or any(
+        child.op in distributed_ops for child in program._subblock_value_refs(value)) for value in finite_roots)
+    finite_helpers = finite_cpp_helpers() if uses_finite_arrays or uses_distributed else ""
     if uses_distributed:
         finite_helpers += "\n#include <pops/runtime/program/distributed_array.hpp>\n"
     return _PROGRAM_CPP_TEMPLATE.format(
         name=cpp_string_literal(program.name),
-        hash=program._ir_hash(),
+        hash=emission_program_hash(program),
         prelude=prelude,
         body=body,
         history_replay_authorities=_emit_history_replay_authorities(program),
@@ -354,7 +361,8 @@ def _emit_cpp_program_impl(
         module_metadata=_emit_module_metadata(program, authority),
         program_params=_emit_program_params(program, authority),
         field_boundaries=field_boundaries,
-        model_helpers=(finite_helpers + _emit_program_model_helpers(program, authority)
+        model_helpers=(finite_helpers + uniform_definitions() + kernel_definitions() + composite_integral_helpers(program)
+                       + _emit_program_model_helpers(program, authority)
                        + provider_plans.source_kernel_helpers.cpp()),
         block_names=(_emit_block_names(program, value_authority.block_names)
                      + (_emit_uniform_clock_manifest(program) if target == "system" else "")),
@@ -666,6 +674,10 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
     from .program_emit_structured_control import STRUCTURED_OPS
     from .program_emit_finite_arrays import FINITE_OPS
     from .program_emit_versioned import VERSIONED_OPS
+    from pops.time.field_representation import FIELD_REPRESENTATION_OPS, validate_field_representation
+    if v.op in FIELD_REPRESENTATION_OPS:
+        validate_field_representation(v)
+        return
     if v.op in STRUCTURED_OPS | FINITE_OPS | VERSIONED_OPS:
         for key in ("cond_block", "body_block", "true_block", "false_block"):
             for child in v.attrs.get(key, ()):

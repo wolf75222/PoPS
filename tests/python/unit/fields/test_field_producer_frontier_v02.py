@@ -32,7 +32,8 @@ def test_two_field_problems_compose_across_both_runge_kutta_stages(coupled_progr
     cpp=emit_cpp_program(coupled_program.time,
         model_graph=ProgramModelGraph.from_resolved_blocks(coupled_program.blocks))
     assert cpp.count("PreparedStencilInput<")==2
-    assert cpp.count("stage_exchange_batch")==2
+    assert cpp.count("capture_stencil_exchanges")==2
+    assert cpp.count("publish_stencil_exchanges")==1
 
 
 @pytest.mark.parametrize("producer", ("load","apply","coefficients"))

@@ -14,14 +14,16 @@ struct DiffusionContext {
   HaloLayoutCoverage coverage = HaloLayoutCoverage::full_domain;
   ExecutionLane lane = ExecutionLane::world("prepared-diffusion-test");
   AcceptedExchangeLedger ledger;
+  const Field* active_mask = nullptr;
+  const Field* coverage_mask = nullptr;
   const auto& geometry() const { return geometry_; }
   const auto& prepared_execution_lane() const { return lane; }
   auto prepare_mesh_boundary_session(Field& field, const ExecutionLane& execution) {
     return PreparedScalarBoundarySession<2>::prepare(geometry_, topology, field, execution, 1,
                                                      coverage);
   }
-  const Field* pointwise_active_mask(int, const Field&) const { return nullptr; }
-  const Field* pointwise_exchange_coverage_mask(int, const Field&) const { return nullptr; }
+  const Field* pointwise_active_mask(int, const Field&) const { return active_mask; }
+  const Field* pointwise_exchange_coverage_mask(int, const Field&) const { return coverage_mask; }
   bool is_external_trace_face(int axis, int side, const Index<2>& cell) const {
     const auto boundary = side == 0 ? BoundarySide::lower : BoundarySide::upper;
     return !topology.is_periodic(Face<2>{axis, boundary}) &&
@@ -915,4 +917,61 @@ TEST(PreparedDiffusion, TensorLawDoesNotReadBeyondItsTwoCellNativeProviderSuppor
                                        return Kokkos::abs(actual(cell, 0) - expected(cell, 0));
                                      }),
             Real(1e-13));
+}
+
+TEST(PreparedDiffusion, AcceptedPublicationReadsFacesAndBothMasksWithoutChangingSources) {
+  DiffusionContext context;
+  auto q = field(), output = field(), active = field(), coverage = field();
+  const auto values = q.fab(0).view();
+  const auto active_values = active.fab(0).view();
+  const auto coverage_values = coverage.fab(0).view();
+  for_each_cell(q.box(0), [=] POPS_HD(const Index<2>& cell) {
+    values(cell, 0) = 1 + Real(.01) * cell[0] * cell[0] + Real(.02) * cell[1];
+    active_values(cell, 0) = cell[0] % 2 == 0 ? 1 : 0;
+    coverage_values(cell, 0) = cell[1] == 1 || cell[1] == 2 ? 1 : 0;
+  });
+  context.active_mask = &active;
+  context.coverage_mask = &coverage;
+  PreparedDiffusion<2> prepared(context, q, {});
+  prepared.apply(q, output, identity_law(q));
+  prepared.stage_accepted_exchanges(context, 0, "operator", "masked", "stage0", .03);
+  ASSERT_EQ(context.ledger.records().size(), 16);
+  std::map<std::string, Real> expected;
+  const auto sample = [](int i, int j) {
+    i = (i + 4) % 4;
+    j = (j + 4) % 4;
+    return 1 + Real(.01) * i * i + Real(.02) * j;
+  };
+  for (const int i : {0, 2})
+    for (const int j : {1, 2})
+      for (int axis = 0; axis < 2; ++axis)
+        for (int side = 0; side < 2; ++side) {
+          const int shift = side == 0 ? -1 : 1;
+          const Real center = sample(i, j);
+          const Real neighbor = sample(i + (axis == 0 ? shift : 0), j + (axis == 1 ? shift : 0));
+          const Real flux = .4 * (side == 0 ? center - neighbor : neighbor - center);
+          expected.emplace("cell:" + std::to_string(i) + ":" + std::to_string(j) +
+                               "/axis:" + std::to_string(axis) + "/side:" + std::to_string(side),
+                           flux);
+        }
+  for (const auto& record : context.ledger.records()) {
+    const auto found = expected.find(record.quadrature_identity);
+    ASSERT_TRUE(found != expected.end());
+    EXPECT_NEAR(record.numerical_flux, found->second, 2e-14);
+    EXPECT_DOUBLE_EQ(record.face_measure, .25);
+    EXPECT_DOUBLE_EQ(record.temporal_weight, .03);
+    EXPECT_EQ(record.multiplicity, 1);
+    expected.erase(found);
+  }
+  EXPECT_TRUE(expected.empty());
+  const HostFabPublication<2> state_snapshot(std::as_const(q).fab(0));
+  const auto state_values = state_snapshot.view();
+  for (int j = 0; j < 4; ++j)
+    for (int i = 0; i < 4; ++i)
+      EXPECT_DOUBLE_EQ(state_values(Index<2>{i, j}, 0), sample(i, j));
+  // The second publication must observe a new mask, not cached host bytes.
+  coverage.set_val(0);
+  context.ledger.clear();
+  prepared.stage_accepted_exchanges(context, 0, "operator", "masked-empty", "stage0", .03);
+  EXPECT_TRUE(context.ledger.records().empty());
 }

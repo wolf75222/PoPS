@@ -72,8 +72,6 @@ namespace component {
 class LoadedComponent;
 }
 
-
-
 /// Immutable bind-time contract for one native transfer between two Uniform System layouts.
 /// Ratios follow the native ranked axis order; the runtime validates them against the
 /// actual source/target domains before allocating or launching a kernel.
@@ -225,7 +223,6 @@ class System {
   ~System();
   System(System&&) noexcept;
   System& operator=(System&&) noexcept;
-
 
   /// Adds an equation block (one species).
   /// @param model    composition of bricks (transport/source/elliptic + parameters)
@@ -490,9 +487,8 @@ class System {
 
   /// Compiler-qualified seed for the next installed field solve, separate from field outputs.
   POPS_EXPORT void publish_program_field_warm_start(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      const std::string& provider_slot, int runtime_block, const MultiFab<Dim>& potential,
-      const std::string& publication_identity);
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int runtime_block, const MultiFab<Dim>& potential, const std::string& publication_identity);
 
   /// Execute one exact installed named field at the accepted bind-time initial state.
   [[nodiscard]] POPS_EXPORT SolveOutcome solve_initial_field(const std::string& provider_slot);
@@ -518,7 +514,8 @@ class System {
       const;
   /// Future accepted-image reserve owned by the authenticated installed Program clock manifest.
   /// Raw publication outside that manifest is not covered by this certificate.
-  [[nodiscard]] POPS_EXPORT std::pair<std::size_t, std::size_t> checkpoint_program_auxiliary_capacity() const;
+  [[nodiscard]] POPS_EXPORT std::pair<std::size_t, std::size_t>
+  checkpoint_program_auxiliary_capacity() const;
   /// Restore supersedes transient staged input work with the checkpoint's accepted input cache;
   /// attempt rollback separately snapshots the complete transient journal and dirty set.
   /// Restore the accepted provider provenance only after the checkpoint backend has staged a
@@ -832,10 +829,12 @@ class System {
       std::function<void(const MultiFab<Dim>&, MultiFab<Dim>&)> rhs);
   /// Attach a separately qualified State/Auxiliary Field density. Its inputs are issued only
   /// from the current FieldSolveRequest, never from layout-compatible raw pointers.
-  POPS_EXPORT void set_block_elliptic_field_v2(
-      const std::string& block_name, const std::string& field,
-      const std::string& binding_identity, const std::string& consumer_qid,
-      std::size_t provider_count, runtime::system::FieldRhsCallbackV2<Dim> rhs);
+  POPS_EXPORT void set_block_elliptic_field_v2(const std::string& block_name,
+                                               const std::string& field,
+                                               const std::string& binding_identity,
+                                               const std::string& consumer_qid,
+                                               std::size_t provider_count,
+                                               runtime::system::FieldRhsCallbackV2<Dim> rhs);
   /// @}
   void step(double dt);  ///< solve_fields, then advances each block according to its scheme
   void advance(double dt, int nsteps);
@@ -853,16 +852,22 @@ class System {
   POPS_EXPORT Real consume_program_external_trace(
       const std::string& integral_identity,
       const runtime::program::AcceptedExchangeLedger::TraceSelection& selection, Real scale);
-  POPS_EXPORT std::vector<std::uint8_t> checkpoint_program_exchanges(bool provisional_capture=false) const;
+  POPS_EXPORT std::vector<std::uint8_t> checkpoint_program_exchanges(
+      bool provisional_capture = false) const;
   POPS_EXPORT std::string checkpoint_continuation_schema() const;
   POPS_EXPORT std::uint64_t checkpoint_continuation_capacity() const;
   POPS_EXPORT std::vector<std::uint8_t> checkpoint_continuation_image() const;
-  POPS_EXPORT void validate_checkpoint_continuation_image(std::span<const std::uint8_t>, double, int) const;
+  POPS_EXPORT void validate_checkpoint_continuation_image(std::span<const std::uint8_t>, double,
+                                                          int) const;
   POPS_EXPORT void restore_checkpoint_continuation_image(std::span<const std::uint8_t>);
   POPS_EXPORT void require_continuation_projection() const;
   POPS_EXPORT void validate_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes) const;
+  /// Prepare ranked accepted exchanges/history provenance for this installed layout.
+  /// This performs no publication; restart still commits through its native transaction.
+  POPS_EXPORT std::vector<std::uint8_t> remap_checkpoint_program_exchanges(
+      std::span<const std::span<const std::uint8_t>> source_images) const;
   POPS_EXPORT void validate_checkpoint_moving_geometry(std::span<const std::uint8_t> bytes,
-                                                      double accepted_time, int macro_step) const;
+                                                       double accepted_time, int macro_step) const;
   POPS_EXPORT void restore_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes);
   /// Seal the native state while retaining its accepted snapshot until external effects publish.
   void commit_step_transaction();
@@ -1015,8 +1020,7 @@ class System {
   POPS_EXPORT void block_path_rhs_into_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
       MultiFab<Dim>& R, Real courant, const System* prepared_system, int prepared_block,
-      const runtime::multiblock::BoundaryEvaluationPoint& prepared_point,
-      const ExecutionLane& lane,
+      const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
       const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
   /// Capture the actual incident-face frequency for a separately certified
   /// explicit consumer. A null result retains the immediate full-step check.
@@ -1024,8 +1028,7 @@ class System {
   POPS_EXPORT void block_path_rhs_into_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
       MultiFab<Dim>& R, Real courant, const System* prepared_system, int prepared_block,
-      const runtime::multiblock::BoundaryEvaluationPoint& prepared_point,
-      const ExecutionLane& lane,
+      const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
       const runtime::program::PreparedScalarBoundarySession<Dim>& transport,
       Real* evaluated_frequency);
   /// The active authored step_cfl request; zero denotes a fixed/external time step.
@@ -1494,8 +1497,8 @@ class System {
       const std::string& name) const;  ///< comp0, global cell product
   /// accepted-state-storage-observation@1: [rank-local, complete] POPSCAR1 bytes.
   /// Collective, accepted idle only; copies actual grown storage without refresh or fill.
-  [[nodiscard]] POPS_EXPORT std::vector<std::vector<std::uint8_t>>
-  observe_accepted_state_storage() const;
+  [[nodiscard]] POPS_EXPORT std::vector<std::vector<std::uint8_t>> observe_accepted_state_storage()
+      const;
   /// Checkpoint capture may serialize the current provisional effect under its active outer
   /// transaction; this is distinct from accepted-idle observation and makes no publication.
   [[nodiscard]] POPS_EXPORT std::vector<std::uint8_t> checkpoint_state_carriers() const;
@@ -1603,11 +1606,12 @@ class System {
   POPS_EXPORT SolveReport solve_fields_from_blocks_at_in_place_(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
       const std::vector<const MultiFab<Dim>*>& U_stages);
-  POPS_EXPORT SolveReport solve_fields_from_request_in_place_(
-      const runtime::system::FieldSolveRequest<Dim>& request);
+  POPS_EXPORT SolveReport
+  solve_fields_from_request_in_place_(const runtime::system::FieldSolveRequest<Dim>& request);
   void invoke_field_rhs_v2_(const std::string& field, int block, const MultiFab<Dim>& state,
-      MultiFab<Dim>& rhs, const std::string& binding, const std::string& consumer,
-      std::size_t count, const runtime::system::FieldRhsCallbackV2<Dim>& callback);
+                            MultiFab<Dim>& rhs, const std::string& binding,
+                            const std::string& consumer, std::size_t count,
+                            const runtime::system::FieldRhsCallbackV2<Dim>& callback);
   POPS_EXPORT void prepare_default_field_publication_storage_();
   POPS_EXPORT void prepare_named_field_publication_storage_(const std::string& field);
   POPS_EXPORT void begin_field_publication_transaction();

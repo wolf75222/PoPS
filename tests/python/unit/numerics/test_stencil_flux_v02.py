@@ -66,7 +66,8 @@ def test_body_and_accepted_weights_survive_real_program_detachment():
     from pops.codegen.program_codegen import emit_cpp_program
     from pops.codegen.program_models import ProgramModelGraph
     source = emit_cpp_program(program, model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
-    assert "PreparedStencilFlux" in source and "stage_exchange_batch" in source
+    assert "PreparedStencilFlux" in source and "capture_stencil_exchanges" in source
+    assert "publish_stencil_exchanges" in source
 
 
 @pytest.mark.parametrize("field,component", ((-1,0), (1,0), (True,0), (0,1)))
@@ -101,7 +102,8 @@ def test_typed_poisson_field_reads_keep_source_and_bounded_halo():
         _validate_fields(state,(),flux)
     cpp=emit_cpp_program(resolved.time,model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
     assert cpp.count("PreparedStencilInput<")==2 and "stencil_field_" in cpp
-    assert cpp.count("stage_exchange_batch")==2
+    assert cpp.count("capture_stencil_exchanges")==2
+    assert cpp.count("publish_stencil_exchanges")==1
 
 
 def test_native_scalar_stencil_arguments_survive_resolution_without_callbacks():
@@ -124,7 +126,8 @@ def test_native_scalar_stencil_arguments_survive_resolution_without_callbacks():
     p.step_strategy(FixedDt(.01));case.program(p)
     resolved=pops.resolve(pops.validate(case),layout=layout)
     cpp=emit_cpp_program(resolved.time,model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
-    assert "stencil_parameter_" in cpp and "stage_exchange_batch" in cpp
+    assert "stencil_parameter_" in cpp and "capture_stencil_exchanges" in cpp
+    assert "publish_stencil_exchanges" in cpp
     assert not hasattr(flux,"body") and flux.to_data()["parameters"]==("duration",)
 
 

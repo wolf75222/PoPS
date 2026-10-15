@@ -8,16 +8,18 @@ authorities fail closed; a dependent snapshot can be reloaded with explicit type
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
-import json
 import math
 from types import MappingProxyType
 
+from pops._structural_data import canonical_json, equal, transform_tree
 from pops.time import Program
 from pops.time._authoring import authoring_transaction, require_program
 from pops.time._program.structured_control import new_typed, value_signature
 from pops.time._program.value_validation import require_owned, validate_input_regions
+from pops.time._program.versioned_values import VERSIONED_OPS
+from pops.time._program.distributed_arrays import GLOBAL_OPS as _DISTRIBUTED, LOCAL_OPS as _LOCAL
 from pops.time.variant_types import ValueType, as_type, instantiate
 from pops.time.values import ProgramValue, _Coeff
 
@@ -37,18 +39,16 @@ _PURE = frozenset({"provenance_bind",
     "finite_range_set", "finite_size", "finite_domain", "finite_same_domain", "finite_index", "finite_index_value",
     "finite_index_argument", "finite_at", "finite_map", "finite_scan",
 })
-_COLLECTIVE = frozenset({"reduce"})
+_COLLECTIVE = frozenset({"reduce", "stencil_flux_divergence", "acceptance_guard"})
 _RENDEZVOUS = frozenset({"scalar_op", "scalar_expression", "finite_real", "int64_op", "int64_cast", "branch",
                         "structured_fold", "structured_iterate", "iteration_success",
                         "result_success", "variant_require_success", "variant_is", "result_match"})
 _FINITE_CHECKED = frozenset({"finite_range_set", "finite_same_domain", "finite_index", "finite_at", "finite_map", "finite_scan"})
-_PARTIAL = frozenset({"scalar_op", "scalar_expression", "int64_op", "int64_cast", "structured_fold",
+_PARTIAL = frozenset({"stencil_flux_divergence", "acceptance_guard", "scalar_op", "scalar_expression", "int64_op", "int64_cast", "structured_fold",
                       "structured_iterate", "iteration_success", "result_success",
                       "variant_require_success", "variant_unreachable", "pointwise_expression",
                       "finite_real", "branch", "variant_is", "result_match"})
-from pops.time._program.versioned_values import VERSIONED_OPS
 _SCOPED_CAPABILITIES = VERSIONED_OPS - {"continuation_open", "continuation_publish"}
-from pops.time._program.distributed_arrays import GLOBAL_OPS as _DISTRIBUTED, LOCAL_OPS as _LOCAL
 _PURE = _PURE | _SCOPED_CAPABILITIES
 _PURE = _PURE | _LOCAL
 _COLLECTIVE = _COLLECTIVE | _DISTRIBUTED
@@ -59,24 +59,34 @@ _SCALARS = frozenset({"scalar", "int64", "bool"})
 
 
 def _json(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return canonical_json(value, allow_nan=False)
 
 
 def _compatible(expected, actual):
     """Unbound scalar time is a parameter, never a wildcard for scientific authorities."""
-    if expected.get("vtype") != actual.get("vtype"):
-        return False
-    kind = expected["vtype"]
-    if kind in ("product", "variant"):
-        left, right = expected["members"], actual["members"]
-        return len(left) == len(right) and all(
-            a == b and _compatible(x, y) for (a, x), (b, y) in zip(left, right))
     from pops.time.canonical_data import _json_ready
-    left, right = dict(expected), dict(actual)
-    if kind in _SCALARS and left.get("point") is None:
-        left.pop("point", None)
-        right.pop("point", None)
-    return _json_ready(left) == _json_ready(right)
+    pending = [(expected, actual)]
+    while pending:
+        expected, actual = pending.pop()
+        if expected.get("vtype") != actual.get("vtype"):
+            return False
+        kind = expected["vtype"]
+        if kind in ("product", "variant"):
+            left, right = expected["members"], actual["members"]
+            if len(left) != len(right):
+                return False
+            for (a, x), (b, y) in zip(left, right, strict=True):
+                if a != b:
+                    return False
+                pending.append((x, y))
+            continue
+        left, right = dict(expected), dict(actual)
+        if kind in _SCALARS and left.get("point") is None:
+            left.pop("point", None)
+            right.pop("point", None)
+        if not equal(_json_ready(left), _json_ready(right)):
+            return False
+    return True
 
 
 def _instantiate(signature, point):
@@ -84,14 +94,21 @@ def _instantiate(signature, point):
 
 
 def _walk_type(value, path=()):
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            yield from _walk_type(item, (*path, key))
-    elif isinstance(value, (tuple, list)):
-        for index, item in enumerate(value):
-            yield from _walk_type(item, (*path, index))
-    elif value is not None and type(value) not in (str, int, bool, float):
-        yield path, value
+    pending, active = [(value, path, False)], set()
+    while pending:
+        value, path, leave = pending.pop()
+        if leave:
+            active.remove(id(value))
+            continue
+        if isinstance(value, (Mapping, tuple, list)):
+            if id(value) in active:
+                raise ValueError("GraphFunction type cannot contain a cycle")
+            active.add(id(value))
+            pending.append((value, path, True))
+            items = value.items() if isinstance(value, Mapping) else enumerate(value)
+            pending.extend((item, (*path, key), False) for key, item in reversed(tuple(items)))
+        elif value is not None and type(value) not in (str, int, bool, float):
+            yield path, value
 
 
 def _at(value, path):
@@ -114,115 +131,152 @@ class _Codec:
         from pops.time.value_metadata import CoeffPolynomial
         from decimal import Decimal
         from fractions import Fraction
-        if value is None or type(value) in (str, int, bool):
-            return value
-        if type(value) is float:
-            if not math.isfinite(value):
-                raise ValueError("GraphFunction constants must be finite")
-            return {"$float": value.hex()}
-        if isinstance(value, ProgramValue):
-            require_owned(self.program, value, "GraphFunction closed graph")
-            return {"$ref": value.id}
-        if isinstance(value, ScalarLiteral):
-            if value.cpp is not None or value.target not in (None, 'pops::Real', 'float', 'double'):
-                raise TypeError("GraphFunction constants cannot contain a custom C++ spelling or target")
-            return {"$literal": self.encode(value.__pops_scalar_literal__())}
-        if isinstance(value, (Fraction, Decimal)):
-            return {"$number": self.encode(ScalarLiteral.from_value(value))}
-        if isinstance(value, CoeffPolynomial):
-            if any(power != 0 for power in value):
-                raise ValueError("GraphFunction cannot capture ambient dt; pass a scalar duration")
-            return {"$polynomial": self.encode(dict(value))}
-        if type(value) is StencilAccess:
-            return {"$stencil": value.required_ghost_depth}
-        if isinstance(value, _Coeff):
-            if any(power != 0 for power in value.powers):
-                raise ValueError("GraphFunction cannot capture ambient dt; pass a scalar duration")
-            return {"$coefficient": self.encode(dict(value.powers))}
-        if isinstance(value, Mapping):
-            if value.get("vtype") in ("index_set", "index", "array") \
-                    and value.get("family") in self.local_families:
-                value = dict(value)
-                family = value.pop("family")
-                return {"$finite_signature": [family, self.encode(value)]}
-            return {"$map": [[self.encode(key), self.encode(item)] for key, item in value.items()]}
-        if isinstance(value, (tuple, list)):
-            return {"$tuple": [self.encode(item) for item in value]}
-        for path, authority in self.anchors:
-            if value is authority:
-                return {"$authority": list(path)}
-        if isinstance(value, TimePoint) and self.program is not None and value.clock == self.program.clock and value.step == 0 \
-                and value.offset.to_python() == 0:
-            return {"$point": "call"}
-        # A numerical rate derives its exact authority from its state formal, never a name lookup.
-        base_space = getattr(value, "base_space", None)
-        if getattr(value, "kind", None) == "rate" and base_space is not None:
-            return {"$rate": self.encode(base_space)}
-        raise TypeError("GraphFunction contains an unbound authority or unsupported capture: %s"
-                        % type(value).__name__)
+
+        def describe(value):
+            if value is None or type(value) in (str, int, bool):
+                return None, value
+            if type(value) is float:
+                if not math.isfinite(value):
+                    raise ValueError("GraphFunction constants must be finite")
+                return None, {"$float": value.hex()}
+            if isinstance(value, ProgramValue):
+                require_owned(self.program, value, "GraphFunction closed graph")
+                return None, {"$ref": value.id}
+            if isinstance(value, ScalarLiteral):
+                if value.cpp is not None or value.target not in (None, 'pops::Real', 'float', 'double'):
+                    raise TypeError("GraphFunction constants cannot contain a custom C++ spelling or target")
+                return (value.__pops_scalar_literal__(),), lambda children: {"$literal": children[0]}
+            if isinstance(value, (Fraction, Decimal)):
+                return (ScalarLiteral.from_value(value),), lambda children: {"$number": children[0]}
+            if isinstance(value, CoeffPolynomial):
+                if any(power != 0 for power in value):
+                    raise ValueError("GraphFunction cannot capture ambient dt; pass a scalar duration")
+                return (dict(value),), lambda children: {"$polynomial": children[0]}
+            if type(value) is StencilAccess:
+                return None, {"$stencil": value.required_ghost_depth}
+            from pops.numerics.stencil_flux import StencilFlux
+            if type(value) is StencilFlux:
+                from pops.model.stencil_codec import encode_stencil
+                return (encode_stencil(value),), lambda children: {"$stencil_flux": children[0]}
+            from pops.time.solve_outcome import FailRun, RejectAttempt
+            if type(value) in (FailRun, RejectAttempt):
+                return ((value.kind,value.statuses),), lambda children: {"$solve_action": children[0]}
+            if isinstance(value, _Coeff):
+                if any(power != 0 for power in value.powers):
+                    raise ValueError("GraphFunction cannot capture ambient dt; pass a scalar duration")
+                return (dict(value.powers),), lambda children: {"$coefficient": children[0]}
+            if isinstance(value, Mapping):
+                if value.get("vtype") in ("index_set", "index", "array") \
+                        and value.get("family") in self.local_families:
+                    signature = dict(value)
+                    family = signature.pop("family")
+                    return (signature,), lambda children: {"$finite_signature": [family, children[0]]}
+                children = tuple(child for pair in value.items() for child in pair)
+                return children, lambda items: {"$map": [items[i:i+2] for i in range(0, len(items), 2)]}
+            if isinstance(value, (tuple, list)):
+                return value, lambda children: {"$tuple": children}
+            for path, authority in self.anchors:
+                if value is authority:
+                    return None, {"$authority": list(path)}
+            if isinstance(value, TimePoint) and self.program is not None and value.clock == self.program.clock and value.step == 0 \
+                    and value.offset.to_python() == 0:
+                return None, {"$point": "call"}
+            base_space = getattr(value, "base_space", None)
+            if getattr(value, "kind", None) == "rate" and base_space is not None:
+                return (base_space,), lambda children: {"$rate": children[0]}
+            raise TypeError("GraphFunction contains an unbound authority or unsupported capture: %s"
+                            % type(value).__name__)
+        return transform_tree(value, describe)
 
     def decode(self, data):
         from pops.identity.scalar import ScalarLiteral
-        if data is None or type(data) in (str, int, bool):
-            return data
-        if not isinstance(data, dict) or len(data) != 1:
-            raise ValueError("malformed closed GraphFunction data")
-        key, item = next(iter(data.items()))
-        if key == "$float":
-            number = float.fromhex(item)
-            if not math.isfinite(number) or number.hex() != item:
-                raise ValueError("noncanonical GraphFunction float")
-            return number
-        if key == "$literal":
-            value = self.decode(item)
+
+        def literal(children):
+            value = children[0]
             if value.get("cpp") is not None or value.get('target') not in (None, 'pops::Real', 'float', 'double'):
                 raise ValueError("custom C++ literals are not GraphFunction constants")
             return ScalarLiteral(**value)
-        if key == "$coefficient":
-            return _Coeff(self.decode(item))
-        if key == "$polynomial":
+
+        def polynomial(children):
             from pops.time.value_metadata import CoeffPolynomial
-            value = self.decode(item)
+            value = children[0]
             if any(power != 0 for power in value):
                 raise ValueError("GraphFunction cannot capture ambient dt")
             return CoeffPolynomial(value)
-        if key == "$number":
-            return self.decode(item).to_python()
-        if key == "$stencil":
-            from pops.time.stencil import StencilAccess
-            return StencilAccess(item)
-        if key == "$tuple":
-            return tuple(self.decode(child) for child in item)
-        if key == "$map":
+
+        def mapping(children):
             result = {}
-            for a, b in item:
-                a = self.decode(a)
-                if a in result:
+            for i in range(0, len(children), 2):
+                key = children[i]
+                if key in result:
                     raise ValueError("duplicate GraphFunction map key")
-                result[a] = self.decode(b)
+                result[key] = children[i+1]
             return result
-        if key == "$ref":
-            if type(item) is not int or item not in self.values:
-                raise ValueError("unbound or forward GraphFunction value reference")
-            return self.values[item]
-        if key == "$authority":
-            return _at(self.bindings, item)
-        if key == "$point" and item == "call":
-            return self.point
-        if key == "$rate":
-            from pops.model.spaces import Rate
-            return Rate(self.decode(item))
-        if key == "$finite_signature":
-            if self.program is None:
-                raise ValueError("a finite GraphFunction signature requires a call Program")
-            family, signature = item
-            if type(family) is not int or family < 0:
-                raise ValueError("invalid GraphFunction finite domain family")
-            if family not in self.families:
-                self.families[family] = self.program._next_finite_domain_identity
-                self.program._next_finite_domain_identity += 1
-            return dict(self.decode(signature), family=self.families[family])
-        raise ValueError("unknown closed GraphFunction data tag %r" % key)
+
+        def describe(data):
+            if data is None or type(data) in (str, int, bool):
+                return None, data
+            if not isinstance(data, dict) or len(data) != 1:
+                raise ValueError("malformed closed GraphFunction data")
+            key, item = next(iter(data.items()))
+            if key == "$float":
+                number = float.fromhex(item)
+                if not math.isfinite(number) or number.hex() != item:
+                    raise ValueError("noncanonical GraphFunction float")
+                return None, number
+            if key == "$literal":
+                return (item,), literal
+            if key == "$coefficient":
+                return (item,), lambda children: _Coeff(children[0])
+            if key == "$polynomial":
+                return (item,), polynomial
+            if key == "$number":
+                return (item,), lambda children: children[0].to_python()
+            if key == "$stencil":
+                from pops.time.stencil import StencilAccess
+                return None, StencilAccess(item)
+            if key == "$stencil_flux":
+                from pops.model.stencil_codec import decode_stencil
+                return (item,), lambda children: decode_stencil(children[0])
+            if key == "$solve_action":
+                from pops.time.solve_outcome import FailRun, RejectAttempt
+                def action(children):
+                    kind, statuses = children[0]
+                    if kind not in ("fail_run", "reject_attempt"):
+                        raise ValueError("invalid closed graph failure disposition")
+                    return (FailRun if kind == "fail_run" else RejectAttempt)(statuses=tuple(statuses))
+                return (item,), action
+            if key == "$tuple":
+                return item, tuple
+            if key == "$map":
+                if not isinstance(item, (tuple, list)) or any(
+                        not isinstance(pair, (tuple, list)) or len(pair) != 2 for pair in item):
+                    raise ValueError("malformed GraphFunction map entry")
+                return tuple(child for pair in item for child in pair), mapping
+            if key == "$ref":
+                if type(item) is not int or item not in self.values:
+                    raise ValueError("unbound or forward GraphFunction value reference")
+                return None, self.values[item]
+            if key == "$authority":
+                return None, _at(self.bindings, item)
+            if key == "$point" and item == "call":
+                return None, self.point
+            if key == "$rate":
+                from pops.model.spaces import Rate
+                return (item,), lambda children: Rate(children[0])
+            if key == "$finite_signature":
+                if self.program is None:
+                    raise ValueError("a finite GraphFunction signature requires a call Program")
+                family, signature = item
+                if type(family) is not int or family < 0:
+                    raise ValueError("invalid GraphFunction finite domain family")
+                if family not in self.families:
+                    self.families[family] = self.program._next_finite_domain_identity
+                    self.program._next_finite_domain_identity += 1
+                fresh = self.families[family]
+                return (signature,), lambda children: dict(children[0], family=fresh)
+            raise ValueError("unknown closed GraphFunction data tag %r" % key)
+        return transform_tree(data, describe)
 
     def node(self, value):
         effects = _effects(value)
@@ -298,6 +352,21 @@ class _Codec:
             raise TypeError("GraphFunction operation has inconsistent value types")
         inputs = tuple(self.values[index] for index in node["inputs"])
         _validate_operation(op, inputs, attrs, signature)
+        if op == "acceptance_guard":
+            from pops.time._step.transaction import AcceptanceGuard, GuardRole
+            from pops.time.solve_outcome import FailRun, RejectAttempt
+            if len(inputs) != 2 or not inputs[0].is_field() or inputs[1].vtype != "bool" \
+                    or type(attrs.get("action")) not in (FailRun, RejectAttempt):
+                raise ValueError("closed graph guard has an invalid candidate or disposition")
+            numerical = attrs.get("numerical_stability")
+            if numerical not in (None, "pops.authored-stability-admission@1"):
+                raise ValueError("closed graph guard has an invalid admission authority")
+            if numerical is not None:
+                from pops.time._program.stability_admission import require_candidate_dependency
+                require_candidate_dependency(inputs[1], inputs[0])
+            attrs["guard"] = str(attrs["guard"]) + "/graph/" + str(self.program._next_id)
+            self.program._register_acceptance_guard(AcceptanceGuard(attrs["guard"],
+                GuardRole.NUMERICAL_STABILITY if numerical else GuardRole.INVARIANT, attrs["action"]))
         result = new_typed(self.program, signature, op, inputs, attrs,
                            point=self.decode(node["point"]))
         if sorted(_effects(result)) != node["effects"]:
@@ -339,7 +408,7 @@ def _validate_operation(op, inputs, attrs, signature):
         expect(signature['vtype'] == 'product' and len(fields) == len(inputs)
                and len(set(fields)) == len(fields)
                and same_signature(signature, {'vtype': 'product', 'members': tuple(
-                   (key, value_signature(value)) for key, value in zip(fields, inputs))}))
+                   (key, value_signature(value)) for key, value in zip(fields, inputs, strict=True))}))
     elif op == 'product_get':
         expect(len(inputs) == 1 and inputs[0].vtype == 'product')
         members = dict(value_signature(inputs[0])['members'])
@@ -404,6 +473,7 @@ class GraphFunction:
     inputs: ValueType
     output: ValueType
     _snapshot: str
+    _snapshot_data: object = field(compare=False, repr=False)
 
     def __init__(self, *, inputs, output, snapshot):
         inputs, output = as_type(inputs), as_type(output)
@@ -412,6 +482,7 @@ class GraphFunction:
         object.__setattr__(self, "inputs", inputs)
         object.__setattr__(self, "output", output)
         object.__setattr__(self, "_snapshot", _json(snapshot))
+        object.__setattr__(self, "_snapshot_data", _freeze(snapshot))
 
     @property
     def effects(self):
@@ -422,7 +493,9 @@ class GraphFunction:
         return hashlib.sha256(self._snapshot.encode()).hexdigest()
 
     def to_data(self):
-        return json.loads(self._snapshot)
+        return transform_tree(self._snapshot_data, lambda value:
+            (tuple(value.values()), lambda items: dict(zip(value, items, strict=True))) if isinstance(value, Mapping)
+            else (value, list) if isinstance(value, tuple) else (None, value))
 
     @classmethod
     def from_data(cls, data, *, inputs=None, output=None):
@@ -434,7 +507,7 @@ class GraphFunction:
             raise ValueError("unsupported GraphFunction schema")
         inputs = ValueType.from_data(data["inputs"]) if inputs is None else as_type(inputs)
         output = ValueType.from_data(data["output"]) if output is None else as_type(output)
-        if inputs.to_data() != data["inputs"] or output.to_data() != data["output"]:
+        if not equal(inputs.to_data(), data["inputs"]) or not equal(output.to_data(), data["output"]):
             raise TypeError("GraphFunction type witnesses disagree with its serialized contract")
         _Codec().decode(data['captures'])
         result = cls(inputs=inputs, output=output, snapshot=data)
@@ -485,11 +558,13 @@ def _formals(inputs):
     from pops.time.points import TimePoint
     program = Program("graph_function")
     def explicit_points(signature):
-        if signature["vtype"] in ("product", "variant"):
-            for _, child in signature["members"]:
-                yield from explicit_points(child)
-        elif signature.get("point") is not None:
-            yield signature["point"]
+        pending = [signature]
+        while pending:
+            signature = pending.pop()
+            if signature["vtype"] in ("product", "variant"):
+                pending.extend(child for _, child in reversed(signature["members"]))
+            elif signature.get("point") is not None:
+                yield signature["point"]
     # Abstract scalar parameters in a scientifically dependent function share that function's
     # explicit evaluation context. Concrete leaf points remain unchanged and clocks are checked.
     point = next(explicit_points(inputs.signature), TimePoint(program.clock))
@@ -498,10 +573,11 @@ def _formals(inputs):
     signature = _instantiate(inputs.signature, point)
     args = new_typed(program, signature, "graph_argument", (), {})
     # Scientific leaves have full declarations before any pointwise operation consumes them.
-    def declare(sig):
+    pending = [signature]
+    while pending:
+        sig = pending.pop()
         if sig["vtype"] in ("product", "variant"):
-            for _, child in sig["members"]:
-                declare(child)
+            pending.extend(child for _, child in reversed(sig["members"]))
         elif sig.get("state_ref") is not None and sig.get("space") is not None:
             from pops.time._program.value_validation import structural_state_space
             space = structural_state_space(sig["space"])
@@ -511,8 +587,7 @@ def _formals(inputs):
             program._next_finite_domain_identity = max(program._next_finite_domain_identity,
                                                        sig["family"]+1)
             if "element" in sig:
-                declare(sig["element"])
-    declare(signature)
+                pending.append(sig["element"])
     return program, args
 
 
@@ -568,11 +643,13 @@ def graph(*, inputs, output, captures=None, effects=None):
 
 
 def _freeze(value):
-    if isinstance(value, Mapping):
-        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
-    if isinstance(value, tuple):
-        return tuple(_freeze(item) for item in value)
-    return value
+    def describe(value):
+        if isinstance(value, Mapping):
+            return tuple(value.values()), lambda items: MappingProxyType(dict(zip(value, items, strict=True)))
+        if isinstance(value, (tuple, list)):
+            return value, tuple
+        return None, value
+    return transform_tree(value, describe)
 
 
 def call(function, arguments, *, program=None):

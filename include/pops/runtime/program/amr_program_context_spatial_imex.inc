@@ -17,6 +17,45 @@ void stage_spatial_hierarchy_previous(int identity, int program_block, const fie
   });
 }
 
+// Derive each interface's expected temporal measure from the immutable affine
+// predictor, independently of the ledger that will be authenticated against it.
+// A predictor may contain only part of an accepted time integral; the remaining
+// residual is reconciled by the composite implicit operator itself.
+template <class Expression>
+auto spatial_predictor_temporal_contract_(std::size_t parent, const Expression& coarse,
+                                          const Expression& fine) const {
+  using namespace ::pops::amr::reflux;
+  std::map<std::pair<int, std::array<int, Dim>>, MetricRefluxTemporalContract> result;
+  for (const auto& interface : program_interface_faces_(parent)) {
+    std::array<int, Dim> coordinate{};
+    for (int axis = 0; axis < Dim; ++axis)
+      coordinate[axis] = interface.coarse_face[axis];
+    auto& contract = result[{interface.axis, coordinate}];
+    const auto collect = [&](const Expression& expression, FaceLedgerRole role,
+                             RefluxTemporalWeights& weights) {
+      for (const auto& [identity, term] : expression) {
+        if (!term.basis || term.basis->identity != identity || term.coefficient.size() != 1 ||
+            term.coefficient.begin()->first != 1)
+          throw std::invalid_argument("spatial predictor lacks an exact affine flux integral");
+        const auto& basis = *term.basis;
+        const bool contributes =
+            std::any_of(basis.faces.begin(), basis.faces.end(), [&](const FluxBasisFace& face) {
+              return face.role == role && face.axis == interface.axis &&
+                     face.coarse_face == interface.coarse_face;
+            });
+        if (contributes) {
+          auto& total =
+              weights[basis.temporal_family][{basis.window.begin.phase, basis.window.end.phase}];
+          total = total + term.coefficient.begin()->second;
+        }
+      }
+    };
+    collect(coarse, FaceLedgerRole::Coarse, contract.coarse);
+    collect(fine, FaceLedgerRole::Fine, contract.fine);
+  }
+  return result;
+}
+
 // Reuse the current outer ledger as the sole accepted quadrature authority. A
 // committed copy supplies the provisional conservative RHS correction. The original
 // stays pending until the outer transaction commits its exact weighted evidence.
@@ -31,7 +70,16 @@ void reconcile_spatial_hierarchy_previous(int identity) const {
     const field_type* candidate;
   };
   std::vector<StagedLevel> staged;
-  prepare_spatial_collectively([&] { staged.resize(levels); });
+  using TemporalContracts = std::map<std::pair<int, std::array<int, Dim>>,
+                                     ::pops::amr::reflux::MetricRefluxTemporalContract>;
+  std::vector<TemporalContracts> temporal;
+  prepare_spatial_collectively([&] {
+    staged.resize(levels);
+    temporal.resize(levels);
+    for (std::size_t parent = 0; parent + 1 < levels; ++parent)
+      temporal[parent] = spatial_predictor_temporal_contract_(
+          parent, resource.previous_flux[parent], resource.previous_flux[parent + 1]);
+  });
   for (std::size_t level = 0; level < levels; ++level)
     with_program_attempt_level(static_cast<int>(level), [&] {
       const auto* candidate = active_attempt_states_[block];
@@ -58,7 +106,7 @@ void reconcile_spatial_hierarchy_previous(int identity) const {
           active_subcycling_attempt_, staged[parent].window, workspace.previous(parent),
           workspace.previous(child), *provisional, ratio, mapping});
     });
-    prepare_spatial_collectively([&] { apply_multiblock_reflux_(*context); });
+    prepare_spatial_collectively([&] { apply_multiblock_reflux_(*context, &temporal[parent]); });
     ::pops::numerics::time::amr::execute_average_down_collectively(
         *runtime_, child, workspace.previous(child), workspace.previous(parent),
         prepared_execution_lane(), &facade_->profiler_handle());

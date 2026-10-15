@@ -37,8 +37,8 @@ class IndexFamily:
     ownership: str = "replicated"
 
     def __post_init__(self):
-        if type(self.capacity) is not int or not 0 <= self.capacity <= (1 << 31)-1:
-            raise ValueError("IndexFamily capacity requires a nonnegative Int32 constant")
+        if type(self.capacity) is not int or not 0 <= self.capacity <= (1 << 63)-1:
+            raise ValueError("IndexFamily capacity requires a nonnegative exact Int64 constant")
         if self.ownership != "replicated":
             raise ValueError("use Distributed for a distributed domain family")
 
@@ -85,7 +85,7 @@ def validate_finite_operation(op, inputs, attrs, signature):
             require(type(x) in (float, int) and math.isfinite(x))
     elif op == "finite_range_set":
         require(signature["vtype"] == "index_set" and signature["ownership"] == "replicated")
-        require(type(signature["capacity"]) is int and 0 <= signature["capacity"] < (1 << 31))
+        require(type(signature["capacity"]) is int and 0 <= signature["capacity"] < (1 << 63))
         require(len(inputs) in (1, 2) and inputs[0].vtype == "int64")
         if len(inputs) == 2:
             require(inputs[1].vtype == "index_set" and same_signature(signature, sig(inputs[1])))
@@ -211,8 +211,8 @@ class _ProgramFiniteArrays(_ProgramBase):
             self._next_finite_domain_identity += 1
         if ownership != "replicated":
             raise NotImplementedError("finite array ownership currently requires explicit 'replicated'")
-        if type(capacity) is not int or not 0 <= capacity <= (1 << 31)-1:
-            raise ValueError("range_set capacity requires a nonnegative exact Int32-range constant")
+        if type(capacity) is not int or not 0 <= capacity <= (1 << 63)-1:
+            raise ValueError("range_set capacity requires a nonnegative exact Int64-range constant")
         count = self.int64(cardinality)
         signature = {"vtype": "index_set", "family": family_id, "capacity": capacity,
                      "ownership": "replicated", "point": count.point}

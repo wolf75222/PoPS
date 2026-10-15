@@ -57,7 +57,9 @@ def _terminal_domain_payload_case(kind, *, replicated):
     failure = p.variant(Result(Float64, type_of(payload)), 'err', payload)
     status = p.require_success(failure)
     p.commit(q.next, p.value('guarded_terminal_commit', status*q.n, at=q.next.point))
-    p.step_strategy(FixedDt(.01)); case.program(p); _initial(case, block[state], initial)
+    p.step_strategy(FixedDt(.01))
+    case.program(p)
+    _initial(case, block[state], initial)
     return pops.resolve(pops.validate(case), layout=layout)
 
 
@@ -67,7 +69,9 @@ def test_terminal_failure_retains_nested_distributed_domain_payload(kind):
     cpp=emit_cpp_program(plan.time, model_graph=ProgramModelGraph.from_resolved_blocks(plan.blocks))
     assert 'ctx.distributed_registry_if_present()' in cpp
     assert 'reject_typed_failure<' in cpp
-    assert ('::distributed_array(' if kind=='array' else '::distributed_domain(') in cpp
+    assert 'finite_structural::pack<' in cpp
+    assert ('ContinuationKind::DistributedArray' if kind=='array' else
+            'ContinuationKind::DistributedDomain') in cpp
 
 
 def test_terminal_failure_guard_retains_local_index_signature_without_global_lowering():
@@ -96,5 +100,6 @@ def test_terminal_failure_keeps_nested_replicated_array_payload():
     plan = _terminal_domain_payload_case('array', replicated=True)
     cpp = emit_cpp_program(plan.time, model_graph=ProgramModelGraph.from_resolved_blocks(plan.blocks))
     assert 'reject_typed_failure<' in cpp
-    assert '::array(' in cpp and '::variant(' in cpp and '::product(' in cpp
+    assert 'finite_structural::pack<' in cpp
+    assert all('ContinuationKind::' + kind in cpp for kind in ('Array', 'Variant', 'Product'))
     assert 'guarded_terminal_commit' in cpp

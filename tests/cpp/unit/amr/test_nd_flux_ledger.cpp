@@ -970,3 +970,49 @@ TEST(test_nd_flux_ledger, sources_cell_centering_and_stale_attempts_fail_closed)
   ledger.rollback();
   EXPECT_EQ(ledger.published_size(), 0u);
 }
+
+TEST(test_nd_flux_ledger, authored_partial_integral_requires_its_independent_exact_contract) {
+  using pops::amr::reflux::MetricRefluxTemporalContract;
+  const RefinementRatio<2> ratio{2, 2};
+  const auto mapping = sample_mapping<2>();
+  const auto query = sample_query<2>(0, 814);
+  const auto budget = reflux_budget();
+  // This comes from q + h/3 R(q), independently of any emitted face record.
+  MetricRefluxTemporalContract expected;
+  expected.coarse["diffusive-operator"][{{0, 1}, {1, 1}}] = pops::ExactWeight{1, 3};
+  expected.fine = expected.coarse;
+  TransactionalFaceFluxLedger<2, double> ledger{ledger_budget()};
+  ledger.begin(query.attempt);
+  accumulate_stage(ledger, query, ratio, mapping, budget, "predictor", Rational{0, 1},
+                   Rational{1, 3}, Rational{0, 1}, Rational{1, 1}, 2.0, 2.0, 1.0, 2.0, 5.0,
+                   "diffusive-operator");
+  ledger.commit();
+  // The full-step API must continue to refuse this incomplete quadrature.
+  EXPECT_THROW((void)metric_reflux(ledger, query, ratio, mapping, budget, scalar_axpy),
+               std::runtime_error);
+  const auto result = metric_reflux(ledger, query, ratio, mapping, budget, scalar_axpy, &expected);
+  EXPECT_DOUBLE_EQ(result.coarse_integrated, 8.0 / 3.0);
+  EXPECT_DOUBLE_EQ(result.fine_integrated, 20.0 / 3.0);
+  EXPECT_NEAR(result.mismatch, 4.0, 1e-14);
+  auto wrong = expected;
+  wrong.fine["diffusive-operator"].begin()->second = pops::ExactWeight{1, 2};
+  EXPECT_THROW((void)metric_reflux(ledger, query, ratio, mapping, budget, scalar_axpy, &wrong),
+               std::runtime_error);
+  wrong = expected;
+  wrong.coarse["foreign-operator"] = wrong.coarse["diffusive-operator"];
+  EXPECT_THROW((void)metric_reflux(ledger, query, ratio, mapping, budget, scalar_axpy, &wrong),
+               std::runtime_error);
+  wrong = expected;
+  wrong.coarse["diffusive-operator"][{{0, 1}, {1, 2}}] = pops::ExactWeight{1, 3};
+  EXPECT_THROW((void)metric_reflux(ledger, query, ratio, mapping, budget, scalar_axpy, &wrong),
+               std::runtime_error);
+  // Mutating both emitted sides together must not become its own authority.
+  TransactionalFaceFluxLedger<2, double> mutated{ledger_budget()};
+  mutated.begin(query.attempt);
+  accumulate_stage(mutated, query, ratio, mapping, budget, "predictor", Rational{0, 1},
+                   Rational{1, 2}, Rational{0, 1}, Rational{1, 1}, 2.0, 2.0, 1.0, 2.0, 5.0,
+                   "diffusive-operator");
+  mutated.commit();
+  EXPECT_THROW((void)metric_reflux(mutated, query, ratio, mapping, budget, scalar_axpy, &expected),
+               std::runtime_error);
+}

@@ -178,6 +178,11 @@ def _check_amr_flux_weights(program: Any) -> None:
                     powers.get(source.id, frozenset())
                     for source in stored_histories.get(value.attrs["history"], ())
                 ])
+            elif value.op == "product_get" and value.vtype in {"state", "rhs", "scalar_field"}:
+                from .program_structural_flux import field_projection_sources
+                sources = field_projection_sources(value)
+                current = (unknown if sources is None else merged([
+                    powers.get(source.id, frozenset()) for source in sources]))
             elif value.op == "linear_combine":
                 current = merged([
                     shifted(powers.get(source.id, frozenset()), coefficient)

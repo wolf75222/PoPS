@@ -52,7 +52,8 @@ def _single_forward_euler_with_frozen_inputs(program, rows):
     return evolving == 1
 
 
-def accepted_diffusive_quadrature(program, *, partition_stability_checked=(), model_authority=None):
+def accepted_diffusive_quadrature(program, *, partition_stability_checked=(),
+                                  authored_stability_rates=(), model_authority=None):
     """Stop at each fresh residual: a predictor's ancestry is not an accepted exchange."""
     selected = {}
 
@@ -93,17 +94,21 @@ def accepted_diffusive_quadrature(program, *, partition_stability_checked=(), mo
     if rows:
         from .program_accepted_ssp import prove_accepted_update_ssp
         certificate, reason = prove_accepted_update_ssp(program, model_authority=model_authority)
-        if certificate is None and not all(rate.id in partition_stability_checked for rate, _ in rows):
+        if certificate is None and not all(rate.id in partition_stability_checked
+                or rate.id in authored_stability_rates for rate, _ in rows):
             raise ValueError("explicit diffusive acceptance needs an SSP coefficient-one convex proof: " + reason)
-        if any(set(weight) != {1} or weight[1] < 0 for _,weight in rows):
+        if any(set(weight) != {1} or (weight[1] < 0 and rate.id not in authored_stability_rates)
+               for rate,weight in rows):
             raise ValueError("diffusive accepted quadrature must retain nonnegative exact dt weights")
     return rows
 
 
 def emit_accepted_diffusive_exchanges(program, *, target="system", block_indices=None,
-                                     partition_stability_checked=(), model_authority=None):
+                                     partition_stability_checked=(), authored_stability_rates=(),
+                                     model_authority=None):
     rows = accepted_diffusive_quadrature(
-        program, partition_stability_checked=partition_stability_checked, model_authority=model_authority)
+        program, partition_stability_checked=partition_stability_checked,
+        authored_stability_rates=authored_stability_rates, model_authority=model_authority)
     if rows and target not in {"system", "amr_system"}:
         raise ValueError("diffusive accepted exchanges require a native install scope")
     lines = []

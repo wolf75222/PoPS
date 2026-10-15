@@ -42,12 +42,15 @@ class _Frame:
         self.invocations = invocations or {}
 
 
-def delivered_frontiers(root, matches, *, path=(), max_alternatives=4096, max_iterations=256, with_choices=False, with_projection=False, expand_match=None):
+def delivered_frontiers(root, matches, *, path=(), max_alternatives=4096, max_iterations=256, with_choices=False, with_projection=False, expand_match=None, stop_at=None):
     """Find the nearest delivered value on every finite possible success path.
 
     Dynamic loop counts include zero. Count/stop predicates are control, not
     delivery. The explicit analysis budgets fail closed and are independent of
     the numerical loop capacity; no unchecked result is substituted at a limit.
+    ``stop_at`` identifies value computations whose inputs are numerical data,
+    rather than deliveries of this caller's queried occurrence. Matches are
+    inspected first; the optional frontier cannot hide the matched value itself.
     """
     if type(max_alternatives) is not int or max_alternatives <= 0:
         raise ValueError('realization delivery alternative budget must be a positive integer')
@@ -77,6 +80,8 @@ def delivered_frontiers(root, matches, *, path=(), max_alternatives=4096, max_it
         if matches(value) or value.op in {'result_error', 'variant_unreachable', 'variant_construct',
                                           'structured_fold', 'structured_iterate'}:
             answer = True
+        elif stop_at is not None and stop_at(value):
+            answer = False
         elif value.id in frame.bindings:
             target, bound_frame, _ = frame.bindings[value.id]
             answer = may_affect_frontier(target, bound_frame, active)
@@ -101,6 +106,8 @@ def delivered_frontiers(root, matches, *, path=(), max_alternatives=4096, max_it
         active.add(key)
         if matches(value):
             answer = True
+        elif stop_at is not None and stop_at(value):
+            answer = False
         elif value.id in frame.bindings:
             target, bound_frame, _ = frame.bindings[value.id]
             answer = may_deliver(target, bound_frame, active)
@@ -343,6 +350,8 @@ def delivered_frontiers(root, matches, *, path=(), max_alternatives=4096, max_it
             else:
                 reference = DeliveryReference(value.id, frame.invocations.get(value.id, ()), tuple(path) if with_projection else ())
                 result = ((frozenset(), frozenset((reference,))),)
+        elif stop_at is not None and stop_at(value):
+            result = empty
         elif value.op == 'product_get':
             result = visit(value.inputs[0], (value.attrs['field'],) + path, frame)
         elif value.op in {'continuation_publish', 'continuation_accept',

@@ -30,7 +30,8 @@ def test_api_v02_receivers_have_explicit_disjoint_native_dimensions():
     discovered.update(RUNTIME + name for name in (
         "test_computed_scratch_ssa_native.py", "test_stencil_flux_v02_native.py",
         "test_relations_v09_native.py", "test_continuation_v10_native.py",
-        "test_collective_control_preparation_v10.py"))
+        "test_collective_control_preparation_v10.py", "test_finite_structural_depth_native.py",
+        "test_diffusion_device_publication_native.py", "test_distributed_balanced_domain_native.py"))
     assert set(native) == discovered
     contract = json.loads((ROOT / "tests/python/native_dimensions.json").read_text())
     for path, row in native.items():
@@ -90,12 +91,13 @@ def _test_case_count(relative):
     return result
 
 
-def test_ale_split_preserves_all_eight_cases_and_no_test_module_imports():
+def test_ale_and_relaxation_receivers_keep_all_cases_and_no_test_module_imports():
     assert _test_case_count(RUNTIME + "test_api_v02_ale_native.py") == {
         "test_actual_ale_volumes": 3}
     assert _test_case_count(RUNTIME + "test_api_v02_continuum_native.py") == {
         "test_continuum_profile": 4,
-        "test_hall_zero_and_ohmic_are_different_physics_in_same_native_primitive": 1}
+        "test_hall_zero_and_ohmic_are_different_physics_in_same_native_primitive": 1,
+        "test_bn_authored_relaxation_changes_state_and_conserves_inventory": 3}
     helper = "tests/python/support/api_v02_native.py"
     assert not _test_case_count(helper)
     for path in (RUNTIME + "test_api_v02_ale_native.py",
@@ -105,9 +107,9 @@ def test_ale_split_preserves_all_eight_cases_and_no_test_module_imports():
                 assert not any(part.startswith("test_") for part in (node.module or "").split("."))
 
 
-def test_hyqmom_orders_are_four_dim1_cases_outside_the_dim2_model_receiver():
+def test_hyqmom_orders_are_six_dim1_cases_outside_the_dim2_model_receiver():
     assert _test_case_count(RUNTIME + "test_api_v02_hyqmom_orders_native.py") == {
-        "test_native_hyqmom_multiple_orders_and_regimes": 4}
+        "test_native_hyqmom_multiple_orders_and_regimes": 6}
     receivers = ("test_api_v02_models_M15_M21.py", "test_api_v02_models_M19_M21.py")
     models = []
     for receiver in receivers:
@@ -150,7 +152,12 @@ def test_v10_receivers_have_exact_cardinality_and_ranked_pytest_entrypoints():
     entries = {row["path"]: row for suite in manifest["python"]["suite"]
                for row in suite.get("mpi_entrypoints", [])}
     found = {}
-    for wrapper in (ROOT / "tests/python/integration/mpi").glob("test_api_v02_*_mpi2.py"):
+    mpi_directory = ROOT / "tests/python/integration/mpi"
+    wrappers = [*mpi_directory.glob("test_api_v02_*_mpi2.py"),
+                mpi_directory / "test_finite_structural_depth_native_mpi2.py",
+                mpi_directory / "test_diffusion_device_publication_native_mpi2.py",
+                mpi_directory / "test_distributed_balanced_domain_native_mpi2.py"]
+    for wrapper in wrappers:
         tree = ast.parse(wrapper.read_text())
         assert not any(isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
                        for node in tree.body), wrapper
@@ -167,7 +174,16 @@ def test_v10_receivers_have_exact_cardinality_and_ranked_pytest_entrypoints():
              if row.get("registration") == "ci_mpi_20261014"}
     assert mixed == {RUNTIME + "test_api_v02_finite_arrays_native.py",
                      RUNTIME + "test_api_v02_regions_native.py"}
-    assert set(found) == set(native) | mixed
+    completion = {path: row for path, row in rows.items()
+                  if row.get("registration") == "completion_20261015"
+                  and row["kind"] == "native_profile"}
+    assert len(completion) == 38
+    assert set(found) == set(native) | mixed | set(completion)
+    for path, row in completion.items():
+        assert sum(_test_case_count(path).values()) == row["declared_cases"], path
+        assert found[path] == {"expected_cases": row["declared_cases"], "ranks": 2}
+        assert row["ci_ranks"] == [1, 2] and row["planned_local_reception_ranks"] == [1, 2, 3]
+        assert row["execution_lane"] == "serial_and_mpi"
     for path, row in native.items():
         assert sum(_test_case_count(path).values()) == row["declared_cases"], path
         assert found[path] == {"expected_cases": row["declared_cases"], "ranks": 2}

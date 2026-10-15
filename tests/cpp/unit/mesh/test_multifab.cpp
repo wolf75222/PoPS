@@ -2,6 +2,7 @@
 
 #include <pops/mesh/layout/distribution.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/runtime/program/host_face_publication.hpp>
 
 #include <Kokkos_Core.hpp>
 
@@ -35,6 +36,29 @@ void expect_all_values(const MultiFab<Dim, MemorySpace>& fields, Real expected) 
 }
 
 }  // namespace
+
+TEST(test_multifab, face_publication_is_host_accessible_and_detached_on_every_axis) {
+  const Box<3> cells{Index<3>{-2, 1, 4}, Index<3>{0, 2, 5}};
+  pops::nd::FaceField<3> faces(cells, 2);
+  faces.field<0>().set_val(Real{2});
+  faces.field<1>().set_val(Real{3});
+  faces.field<2>().set_val(Real{5});
+  const pops::runtime::program::HostFacePublication<3> publication(faces);
+  faces.set_val(Real{-7});
+  Kokkos::fence();
+  const auto view = publication.view();
+  EXPECT_EQ(view.cells, cells);
+  EXPECT_EQ(view.ncomp, 2);
+  const std::array<Real, 3> expected{2, 3, 5};
+  for (int axis = 0; axis < 3; ++axis) {
+    auto upper_face = cells.hi;
+    ++upper_face[axis];
+    for (int component = 0; component < 2; ++component) {
+      EXPECT_DOUBLE_EQ(view.axes[axis](cells.lo, component), expected[axis]);
+      EXPECT_DOUBLE_EQ(view.axes[axis](upper_face, component), expected[axis]);
+    }
+  }
+}
 
 TEST(test_multifab, exact_metadata_and_local_global_index_spaces_are_explicit) {
   const BoxArray<2> layout =

@@ -1,5 +1,7 @@
 #include "../bindings_detail.hpp"
 #include "collective_python_prepare.hpp"
+#include "pops_compiler_include_contract.hpp"
+#include "pops_native_contract_strings.hpp"
 
 #if !defined(POPS_RUNTIME_SHARED_EXCEPTION_ABI) || !defined(POPS_EXPORT_BUILDING_MODULE)
 #error "the _pops host must build the shared runtime exception ABI as its exporting producer"
@@ -61,6 +63,21 @@
 #endif
 #ifndef POPS_KOKKOS_HEADER_HASHES
 #define POPS_KOKKOS_HEADER_HASHES ""
+#endif
+#ifndef POPS_KOKKOS_STANDARD
+#define POPS_KOKKOS_STANDARD ""
+#endif
+#ifndef POPS_KOKKOS_COMPILE_OPTIONS
+#define POPS_KOKKOS_COMPILE_OPTIONS ""
+#endif
+#ifndef POPS_KOKKOS_COMPILE_DEFINITIONS
+#define POPS_KOKKOS_COMPILE_DEFINITIONS ""
+#endif
+#ifndef POPS_KOKKOS_LINK_OPTIONS
+#define POPS_KOKKOS_LINK_OPTIONS ""
+#endif
+#ifndef POPS_KOKKOS_COMPILE_FEATURES
+#define POPS_KOKKOS_COMPILE_FEATURES ""
 #endif
 
 namespace pops::detail {
@@ -284,6 +301,14 @@ py::dict runtime_backend_manifest_to_dict(const std::string& backend, const std:
   capabilities["ownership"] = pops::platform::require_text_set(
       pops::platform::capability(manifest, "ownership"), "capabilities.ownership");
   capabilities["generic_field_view"] = true;
+  // Initial arrays are imported through native host mirrors. This capability
+  // does not permit kernels to dereference host arrays on a device backend.
+  capabilities["initial_state_import_mode"] = pops::platform::require_text(
+      pops::platform::capability(manifest, "initial_state_import_mode"),
+      "capabilities.initial_state_import_mode");
+  capabilities["initial_state_import_memory_spaces"] = pops::platform::require_text_set(
+      pops::platform::capability(manifest, "initial_state_import_memory_spaces"),
+      "capabilities.initial_state_import_memory_spaces");
   capabilities["execution_backend"] = pops::platform::require_text(
       pops::platform::capability(manifest, "execution_backend"), "capabilities.execution_backend");
   capabilities["shared_space"] = pops::platform::require_text(
@@ -576,14 +601,17 @@ void init_core(py::module_& m) {
   // type.  Status/action are exposed as their stable semantic names instead of leaking C++ enum
   // ordinals into the private bootstrap ABI.
   py::class_<pops::ResidualEvaluationEvidence>(m, "_ResidualEvaluationEvidence")
-      .def_readonly("initial_residual_norm", &pops::ResidualEvaluationEvidence::initial_residual_norm)
+      .def_readonly("initial_residual_norm",
+                    &pops::ResidualEvaluationEvidence::initial_residual_norm)
       .def_readonly("rhs_norm", &pops::ResidualEvaluationEvidence::rhs_norm)
-      .def_readonly("initial_evaluation_bound", &pops::ResidualEvaluationEvidence::initial_evaluation_bound)
+      .def_readonly("initial_evaluation_bound",
+                    &pops::ResidualEvaluationEvidence::initial_evaluation_bound)
       .def_readonly("evaluation_bound", &pops::ResidualEvaluationEvidence::evaluation_bound)
       .def_readonly("requested_threshold", &pops::ResidualEvaluationEvidence::requested_threshold)
       .def_readonly("applied_threshold", &pops::ResidualEvaluationEvidence::applied_threshold)
       .def_readonly("roundoff_limited", &pops::ResidualEvaluationEvidence::roundoff_limited)
-      .def_readonly("relative_to_rhs_upper", &pops::ResidualEvaluationEvidence::relative_to_rhs_upper);
+      .def_readonly("relative_to_rhs_upper",
+                    &pops::ResidualEvaluationEvidence::relative_to_rhs_upper);
   py::class_<pops::SolveReport>(m, "_SolveReport")
       .def_readonly("iters", &pops::SolveReport::iters)
       .def_readonly("evaluations", &pops::SolveReport::evaluations)
@@ -642,6 +670,7 @@ void init_core(py::module_& m) {
   m.attr("__cxx_std__") = static_cast<int>(__cplusplus > 202002L ? 23 : 20);
 #endif
   m.attr("__native_dimension__") = pops::kNativeDimension;
+  m.attr("__compiler_include_contract__") = pops::build::compiler_include_contract_json;
 
   // Compute backend COMPILED into the module: True if _pops was built with Kokkos
   // (-DPOPS_USE_KOKKOS=ON -> POPS_HAS_KOKKOS), hence capable of multi-thread (OpenMP device) / GPU.
@@ -650,11 +679,17 @@ void init_core(py::module_& m) {
 #ifdef POPS_HAS_KOKKOS
   m.attr("__has_kokkos__") = true;
   py::dict kokkos_contract;
-  kokkos_contract["schema_version"] = 1;
+  kokkos_contract["schema_version"] = 2;
   kokkos_contract["abi_sha256"] = POPS_KOKKOS_ABI;
   kokkos_contract["include_dirs"] = pipe_tuple(POPS_KOKKOS_INCLUDE);
   kokkos_contract["header_paths"] = pipe_tuple(POPS_KOKKOS_HEADER_PATHS);
   kokkos_contract["header_sha256"] = pipe_tuple(POPS_KOKKOS_HEADER_HASHES);
+  kokkos_contract["compiler"] = POPS_CXX_COMPILER;
+  kokkos_contract["standard"] = POPS_KOKKOS_STANDARD;
+  kokkos_contract["compile_options"] = pipe_tuple(POPS_KOKKOS_COMPILE_OPTIONS);
+  kokkos_contract["compile_definitions"] = pipe_tuple(POPS_KOKKOS_COMPILE_DEFINITIONS);
+  kokkos_contract["link_options"] = pipe_tuple(POPS_KOKKOS_LINK_OPTIONS);
+  kokkos_contract["compile_features"] = pipe_tuple(POPS_KOKKOS_COMPILE_FEATURES);
   m.attr("__kokkos_contract__") = std::move(kokkos_contract);
 #else
   m.attr("__has_kokkos__") = false;

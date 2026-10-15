@@ -27,43 +27,54 @@ inline void word(std::string& bytes, std::uint64_t value) {
     bytes.push_back(static_cast<char>((value >> shift) & 255));
 }
 inline std::uint64_t word(std::string_view bytes) {
-  if (bytes.size() != 8) throw std::invalid_argument("invalid typed failure size frame");
+  if (bytes.size() != 8)
+    throw std::invalid_argument("invalid typed failure size frame");
   std::uint64_t result = 0;
-  for (unsigned char byte : bytes) result = (result << 8) | byte;
+  for (unsigned char byte : bytes)
+    result = (result << 8) | byte;
   return result;
 }
 // ExecutionLane has no allocating allgather member. Use its exact communicator and an
 // ordered sequence of bounded broadcasts, like ObserverMpiLane, without selecting the world.
 // Each allocation and capacity check is a local phase converged before the next collective.
-inline std::vector<std::string> allgather_bytes(const ExecutionLane& lane,
-                                                const std::string& local,
+inline std::vector<std::string> allgather_bytes(const ExecutionLane& lane, const std::string& local,
                                                 TypedFailureCapacity capacity) {
   const auto communicator = lane.communicator();
   const int ranks = communicator.size(), me = communicator.rank();
   std::vector<std::string> result;
   std::exception_ptr error;
   try {
-    if (ranks <= 0 || local.size() > capacity.per_rank ||
-        local.size() > static_cast<std::size_t>(std::numeric_limits<long>::max()))
+    if (ranks <= 0 || local.size() > capacity.per_rank)
       throw std::length_error("typed failure byte shard exceeds native transport capacity");
     result.resize(static_cast<std::size_t>(ranks));
-  } catch (...) { error = std::current_exception(); }
+  } catch (...) {
+    error = std::current_exception();
+  }
   collectively_rethrow_exception(error, communicator, "typed failure gather preparation failed");
   std::uint64_t total = 0;
   for (int root = 0; root < ranks; ++root) {
-    const long length = all_reduce_max(me == root ? static_cast<long>(local.size()) : 0L,
-                                       communicator);
+    // A fixed number of exact limbs avoids imposing the host ABI's long width on
+    // an otherwise valid byte capacity. Each limb fits even a 32-bit long.
+    std::uint64_t length = 0;
+    for (unsigned shift = 0; shift < 64; shift += 21) {
+      const auto part = me == root ? (std::uint64_t(local.size()) >> shift) & 0x1fffffULL : 0;
+      length |= std::uint64_t(all_reduce_max(static_cast<long>(part), communicator)) << shift;
+    }
     error = {};
     try {
       const auto size = static_cast<std::uint64_t>(length);
-      if (length < 0 || size > capacity.per_rank || total > capacity.aggregate ||
+      if (size > capacity.per_rank || total > capacity.aggregate ||
           size > capacity.aggregate - total)
         throw std::length_error("typed failure gathered bytes exceed diagnostic capacity");
       total += size;
       auto& destination = result[static_cast<std::size_t>(root)];
-      if (me == root) destination = local;
-      else destination.resize(static_cast<std::size_t>(size));
-    } catch (...) { error = std::current_exception(); }
+      if (me == root)
+        destination = local;
+      else
+        destination.resize(static_cast<std::size_t>(size));
+    } catch (...) {
+      error = std::current_exception();
+    }
     collectively_rethrow_exception(error, communicator, "typed failure gather allocation failed");
     auto& destination = result[static_cast<std::size_t>(root)];
     broadcast_bytes_inplace(destination.data(), destination.size(), root, communicator);
@@ -71,26 +82,70 @@ inline std::vector<std::string> allgather_bytes(const ExecutionLane& lane,
   return result;
 }
 
-template<int Dim>
+template <int Dim>
 void describe(const ContinuationType& type, const ContinuationValueRef<Dim>& value,
-               std::string path, std::string& text, unsigned& remaining) {
-  if (!remaining) return;
+              std::string path, std::string& text, unsigned& remaining,
+              std::uint64_t workspace_capacity) {
   using K = ContinuationKind;
-  if (type.kind == K::Product) {
-    for (std::size_t n = 0; n < type.children.size(); ++n)
-      describe(type.children[n], value->members().at(n), path + type.names[n] + ".", text, remaining);
-  } else if (type.kind == K::Variant) {
-    const auto n = value->arm();
-    describe(type.children.at(n), value->members().at(0), path + type.names.at(n) + ".", text, remaining);
-  } else {
-    --remaining;
-    if (!path.empty()) path.pop_back();
-    if (path.size() > 160) path = path.substr(0, 160) + "...";
-    text += "; " + path + "=";
-    if (type.kind == K::Int64) text += std::to_string(value->integer());
-    else if (type.kind == K::Float64) text += std::to_string(value->real());
-    else if (type.kind == K::Boolean) text += value->boolean() ? "true" : "false";
-    else text += "<owned typed payload>";
+  struct Frame {
+    const ContinuationType* type;
+    const ContinuationValueRef<Dim>* value;
+    std::string path;
+    std::size_t next = 0;
+    bool truncated = false;
+  };
+  continuation_detail::StructuralBudget budget(workspace_capacity);
+  std::vector<Frame> stack;
+  auto push = [&](const ContinuationType& child, const ContinuationValueRef<Dim>& payload,
+                  std::string prefix, bool truncated) {
+    budget.consume();
+    budget.frames(stack.size() + 1, sizeof(Frame) + 160);
+    if (!payload)
+      throw std::invalid_argument("typed failure diagnostic has a missing value");
+    if (prefix.size() > 160) {
+      prefix.resize(160);
+      truncated = true;
+    }
+    stack.push_back({&child, &payload, std::move(prefix), 0, truncated});
+  };
+  push(type, value, std::move(path), false);
+  while (!stack.empty() && remaining) {
+    auto& frame = stack.back();
+    const auto& schema = *frame.type;
+    const auto& payload = **frame.value;
+    if (schema.kind == K::Product || schema.kind == K::Variant) {
+      const auto count = schema.kind == K::Product ? schema.children.size() : 1;
+      if (frame.next == count) {
+        stack.pop_back();
+        continue;
+      }
+      const auto member = frame.next++;
+      const auto arm = schema.kind == K::Product ? member : payload.arm();
+      auto prefix = frame.path;
+      bool truncated = frame.truncated;
+      const auto& name = schema.names.at(arm);
+      const auto available = 160 - prefix.size();
+      prefix.append(name.data(), std::min(available, name.size()));
+      if (name.size() >= available)
+        truncated = true;
+      else
+        prefix += '.';
+      push(schema.children.at(arm), payload.members().at(member), std::move(prefix), truncated);
+    } else {
+      --remaining;
+      if (!frame.truncated && !frame.path.empty())
+        frame.path.pop_back();
+      text += "; " + frame.path + (frame.truncated ? "..." : "") + "=";
+      if (schema.kind == K::Int64)
+        text += std::to_string(payload.integer());
+      else if (schema.kind == K::Float64)
+        text += std::to_string(payload.real());
+      else if (schema.kind == K::Boolean)
+        text += payload.boolean() ? "true" : "false";
+      else
+        text += "<owned typed payload>";
+      stack.pop_back();
+    }
   }
 }
 }  // namespace typed_failure_detail
@@ -98,41 +153,63 @@ void describe(const ContinuationType& type, const ContinuationValueRef<Dim>& val
 // Preparation is a generated, rank-local expression: evaluate the closed structural value,
 // copy any field shards and converge, close distributed dependencies, then encode each shard.
 // All ranks receive the same ordered aggregate. No field shard is replaced with rank-zero data.
-template<int Dim, class Prepare, class Prototypes>
+template <int Dim, class Prepare, class Prototypes>
 [[noreturn]] void reject_typed_failure(const ExecutionLane& lane, Prepare&& prepare,
-                                        Prototypes&& prototypes, TypedFailureCapacity capacity = {},
-                                        distributed::Registry* registry = nullptr) {
+                                       Prototypes&& prototypes, TypedFailureCapacity capacity = {},
+                                       distributed::Registry* registry = nullptr) {
   std::string local, schema, detail;
-  ContinuationType type; ContinuationValueRef<Dim> value;
+  ContinuationType type;
+  ContinuationValueRef<Dim> value;
   std::exception_ptr error;
   try {
     auto [prepared_type, prepared_value, scientific_schema] = prepare();
-    type=std::move(prepared_type); value=std::move(prepared_value); schema=std::move(scientific_schema);
-  } catch (...) { error = std::current_exception(); }
-  try { Kokkos::fence(); } catch (...) { if (!error) error = std::current_exception(); }
+    type = std::move(prepared_type);
+    value = std::move(prepared_value);
+    schema = std::move(scientific_schema);
+  } catch (...) {
+    error = std::current_exception();
+  }
+  try {
+    Kokkos::fence();
+  } catch (...) {
+    if (!error)
+      error = std::current_exception();
+  }
   collectively_rethrow_exception(error, lane, "typed failure value preparation failed");
 
   // This closure is a read-only authenticated snapshot of all reachable versions.
   // It includes every rank's shard, even if only one rank carries a reference.
   // It never adopts a restored registry or grants a continuation publication.
-  const auto closure=continuation_collective_closure<Dim>(value,registry,lane,capacity.per_rank);
-  error={};
+  const auto closure =
+      continuation_collective_closure<Dim>(value, registry, lane, capacity.per_rank);
+  error = {};
   try {
     ContinuationCodec<Dim> codec(type, schema, capacity.per_rank,
-        std::forward<Prototypes>(prototypes), &lane, registry, closure.get());
+                                 std::forward<Prototypes>(prototypes), &lane, registry,
+                                 closure.get());
     auto bytes = codec.encode(value, 0);
     local.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     detail = "unhandled typed Result failure";
     unsigned remaining = 8;
-    typed_failure_detail::describe(type, value, "", detail, remaining);
-  } catch (...) { error = std::current_exception(); }
-  try { Kokkos::fence(); } catch (...) { if (!error) error = std::current_exception(); }
+    typed_failure_detail::describe(type, value, "", detail, remaining, capacity.per_rank);
+  } catch (...) {
+    error = std::current_exception();
+  }
+  try {
+    Kokkos::fence();
+  } catch (...) {
+    if (!error)
+      error = std::current_exception();
+  }
   collectively_rethrow_exception(error, lane, "typed failure local preparation failed");
 
   std::string size_frame;
   error = {};
-  try { typed_failure_detail::word(size_frame, local.size()); }
-  catch (...) { error = std::current_exception(); }
+  try {
+    typed_failure_detail::word(size_frame, local.size());
+  } catch (...) {
+    error = std::current_exception();
+  }
   collectively_rethrow_exception(error, lane, "typed failure size framing failed");
   const auto sizes = typed_failure_detail::allgather_bytes(lane, size_frame, capacity);
   error = {};
@@ -148,7 +225,9 @@ template<int Dim, class Prepare, class Prototypes>
     }
     if (total > std::numeric_limits<std::size_t>::max())
       throw std::length_error("typed failure exceeds local address capacity");
-  } catch (...) { error = std::current_exception(); }
+  } catch (...) {
+    error = std::current_exception();
+  }
   collectively_rethrow_exception(error, lane, "typed failure aggregate capacity failed");
 
   const auto schemas = typed_failure_detail::allgather_bytes(lane, schema, capacity);
@@ -159,18 +238,23 @@ template<int Dim, class Prepare, class Prototypes>
   error = {};
   try {
     for (const auto& other : schemas)
-      if (other != schema) throw std::invalid_argument("typed failure schemas differ between ranks");
+      if (other != schema)
+        throw std::invalid_argument("typed failure schemas differ between ranks");
     aggregate.assign(typed_failure_detail::magic.data(), typed_failure_detail::magic.size());
     typed_failure_detail::word(aggregate, shards.size());
     for (const auto& shard : shards) {
-      typed_failure_detail::word(aggregate, shard.size()); aggregate += shard;
+      typed_failure_detail::word(aggregate, shard.size());
+      aggregate += shard;
     }
     // The diagnostic is abbreviated; the canonical payload retains every rank in full.
-    throw StepAttemptRejected(SolveStatus::kInvalidEvaluation, StepAttemptDisposition::kReject,
-                              0, "structured_control", details.front(), std::move(schema),
+    throw StepAttemptRejected(SolveStatus::kInvalidEvaluation, StepAttemptDisposition::kReject, 0,
+                              "structured_control", details.front(), std::move(schema),
                               std::move(aggregate));
-  } catch (const StepAttemptRejected&) { rejected = std::current_exception(); }
-  catch (...) { error = std::current_exception(); }
+  } catch (const StepAttemptRejected&) {
+    rejected = std::current_exception();
+  } catch (...) {
+    error = std::current_exception();
+  }
   collectively_rethrow_exception(error, lane, "typed failure collective publication failed");
   std::rethrow_exception(rejected);
 }

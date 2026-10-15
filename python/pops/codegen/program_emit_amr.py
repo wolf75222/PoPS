@@ -64,19 +64,23 @@ def _flux_expression_linear_combine(
 
 
 def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
-    """Derive exact finite per-block FluxExpression bounds from the frozen Program IR.
+    """Choose per-block resource ceilings for exact FluxExpression bookkeeping.
 
-    Every flux-producing RHS evaluation creates one distinct native basis. Fixed ``range`` and
-    ``subcycle`` regions are interpreted the authored number of times, and lazy branches are
-    explored independently. Coefficients use the same rational polynomial multiplication,
-    addition, and exact cancellation as ``AmrProgramContext``. An unbounded ``while`` may remain in
-    a source/local-solve region, but is refused when it can create or carry a flux expression.
+    An explicit ceiling admits dynamic support, including repeated dense history
+    remaps. Exceeding it must reject the native transaction before publication.
+    Without one, estimate the current invocation and declared retained windows;
+    that estimate is not a proof that arbitrary histories fit for unlimited steps.
     """
     blocks = program._block_indices()
     ordered_blocks = sorted(blocks, key=blocks.get)
+    from pops.time._program.resource_budgets import validate_flux_expression_budget
+    explicit = program.flux_expression_budget
+    validate_flux_expression_budget(explicit)
+    if explicit is not None:
+        return tuple(explicit for _ in ordered_blocks)
 
     def flux_basis_count(value: Any) -> int:
-        if value.op in {"rhs", "principal_rate"}:
+        if value.op in {"rhs", "principal_rate", "stencil_flux_divergence"}:
             return 1 if value.attrs.get("flux", True) else 0
         if value.op == "diffusive_rhs":
             from pops.codegen.program_emit_diffusion import diffusive_flux_basis_count
@@ -86,7 +90,7 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
 
     def contains_rhs(values: Any, block: Any, *, flux_only: bool = False) -> bool:
         for value in values:
-            if value.op in {"rhs", "diffusive_rhs", "principal_rate"} and value.block == block and (
+            if value.op in {"rhs", "diffusive_rhs", "principal_rate", "stencil_flux_divergence"} and value.block == block and (
                 not flux_only or flux_basis_count(value) != 0
             ):
                 return True
@@ -281,6 +285,9 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
     stored_histories: dict[tuple[Any, str], Any] = {}
     read_histories: set[tuple[Any, str]] = set()
     history_flux_blocks(program._values, stored_histories, read_histories)
+    history_manifest = {
+        row["name"]: row for row in program.temporal_manifest()["histories"]
+    }
     for index, block in enumerate(ordered_blocks):
         stored = {name: source for (candidate, name), source in stored_histories.items()
                   if candidate == block}
@@ -297,6 +304,7 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
             # basis bound from the frozen AB2 program.
             retained = 0
             live = 0
+            temporal_slots = 1
             for name, source in stored.items():
                 if name not in read:
                     continue
@@ -313,14 +321,33 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                     return sum(source_bases(input_value, seen) for input_value in value.inputs)
 
                 source_count = max(1, source_bases(source, set()))
+                interpolation = history_manifest[name]["interpolation"]
+                slots = (int(interpolation["slots"])
+                         if interpolation.get("kind") == "history_transfer" else 1)
+                # An affine macro publication binds the complete immutable entry
+                # and candidate rings, plus explicitly authorized state endpoints.
+                # Its rectangular row can select every source; scalar parameters
+                # are runtime values, so no branch/weight is assumed to be zero.
+                from pops.codegen.program_lowerability import all_ops
+                for operation in all_ops(program):
+                    if operation.op != "accept_increment":
+                        continue
+                    row = operation.attrs.get("histories", {}).get(name)
+                    if row is not None:
+                        from pops.time._history.transfer import transfer_dimensions
+                        sources, _targets, _parameters = transfer_dimensions(row["transfer"])
+                        slots = max(slots, sources)
+                temporal_slots = max(temporal_slots, slots)
                 live += source_count
-                retained += source_count * int(program._histories[name])
-            budgets[index] = (max(bases, live, 1) + retained, max(terms, 1))
+                retained += source_count * int(program._histories[name]) * slots
+            budgets[index] = (max(bases, live, 1) + retained, max(terms, 1) * temporal_slots)
     return tuple(budgets)
 
 
 def _emit_flux_expression_budget(program: Any) -> str:
     budgets = _flux_expression_budgets(program)
+    from pops.time._program.resource_budgets import validate_flux_expression_abi
+    validate_flux_expression_abi(budgets)
     rhs_bounds = ", ".join("UINT64_C(%d)" % rhs for rhs, _ in budgets)
     coefficient_bounds = ", ".join("UINT64_C(%d)" % coefficient for _, coefficient in budgets)
     count = len(budgets)
@@ -350,6 +377,8 @@ def _emit_flux_expression_budget(program: Any) -> str:
         f'extern "C" int pops_program_flux_expression_budget_count() {{ return {count}; }}\n'
         + lookup("pops_program_flux_rhs_basis_bound", rhs_bounds)
         + lookup("pops_program_flux_coefficient_term_bound", coefficient_bounds)
+        + 'extern "C" std::uint64_t pops_program_flux_exact_coefficient_bytes() { return '
+        f"UINT64_C({program.max_exact_coefficient_bytes}); }}\n"
         + 'extern "C" std::uint64_t '
         f"pops_program_interface_coupling_application_bound() {{ return UINT64_C({interface_samples}); }}\n"
         + 'extern "C" std::uint64_t '
@@ -579,6 +608,9 @@ def _emit_flux_temporal_family_install(program: Any) -> str:
                          _rhs_flux_temporal_family(value, named)))
         elif value.op == "principal_rate":
             rows.append((blocks[value.block], value.id, 1, _rhs_flux_temporal_family(value)))
+        elif value.op == "stencil_flux_divergence":
+            from pops.codegen.program_emit_stencil_flux import stencil_temporal_family
+            rows.append((blocks[value.block], value.id, 5, stencil_temporal_family(value)))
         elif value.op == "diffusive_rhs":
             constitutive, transport = _diffusive_flux_families(value)
             rows.append((blocks[value.block], value.id, 4, constitutive))
@@ -669,15 +701,32 @@ def _emit_amr_install(
             "}\n"
         )
 
-    post_sync_src = post_synchronization if post_synchronization else ""
+    from .program_amr_finite_scope import scope_body, uses_finite_values
+    from .program_amr_continuation import configuration_install, checkpoint_exports
+    from pops.time._program.continuation_forest import forest_node
+    continuation_forest = forest_node(program)
+    regrid_forest = bool(continuation_forest is not None and
+                         continuation_forest.attrs["continuation_forest"].get("regrid"))
+    finite_scopes = uses_finite_values(program)
+    body = scope_body(body, finite_scopes)
+    if hierarchy_bodies is not None:
+        hierarchy_bodies = tuple(scope_body(part, finite_scopes) for part in hierarchy_bodies)
+    if regrid_forest and post_synchronization:
+        post_synchronization = ("if (ctx.continuation_regrid_phase()) ctx.continuation_regrid_bind_target_();\n"
+                                + post_synchronization)
+    post_sync_src = scope_body(post_synchronization, finite_scopes) if post_synchronization else ""
+    from pops.codegen.program_lowerability import all_ops
+    affine_finalization = any(value.op == "accept_increment" for value in all_ops(program))
     post_sync_field = (
         "    std::function<void(double)> post_synchronization;\n" if post_sync_src else ""
     )
     post_sync_initializer = (
         "      , [=](double dt) {\n"
         "        auto& ctx = *ctx_owner;\n"
-        "        ctx.begin_step(dt);\n"
-        "        ctx.set_stage_time(1, 1);\n"
+        + ("        if (ctx.continuation_regrid_phase()) ctx.begin_regrid_invocation();\n"
+           "        else { ctx.begin_step(dt); ctx.set_stage_time(1, 1); }\n"
+           if regrid_forest else
+           "        ctx.begin_step(dt);\n        ctx.set_stage_time(1, 1);\n")
         + post_sync_src
         + "\n"
         "      }\n"
@@ -695,6 +744,23 @@ def _emit_amr_install(
         if post_sync_src
         else ""
     )
+    if affine_finalization:
+        post_sync_driver = (
+            "    ctx.prepare_affine_finalization();\n"
+            "    ctx.with_program_resource_level(0, [&]() {\n"
+            "      _level_programs->front().post_synchronization(dt);\n"
+            "    });\n"
+            "    ctx.finish_affine_finalization();\n"
+        )
+    if continuation_forest is not None:
+        if affine_finalization:
+            raise ValueError("AMR forest must express its complete transformation before parent assessment")
+        post_sync_driver += (
+            "    ctx.begin_continuation_parent();\n"
+            "    ctx.with_program_resource_level(0, [&]() {\n"
+            "      _level_programs->front().post_synchronization(dt);\n"
+            "    });\n"
+        )
 
     transform_guard = ""
     transform_refresh_guard = ""
@@ -845,6 +911,13 @@ def _emit_amr_install(
             + post_sync_driver
         )
 
+    if affine_finalization:
+        blocks = ", ".join(str(index) for index in program._block_indices().values())
+        installed_driver = ("    ctx.begin_affine_finalization(dt, {%s});\n" % blocks) + installed_driver
+    if continuation_forest is not None:
+        blocks = ", ".join(str(index) for index in program._block_indices().values())
+        installed_driver = ("    ctx.begin_continuation_forest(dt, {%s});\n" % blocks) + installed_driver
+
     # Every generated prelude allocation is layout-bound. Materialize one complete closure bundle
     # per level before the first advance, and rebuild the set exactly once after a topology epoch or
     # process-local materialization-generation change. This is deliberately generic: scalar scratch,
@@ -895,14 +968,15 @@ def _emit_amr_install(
         "      pops::collectively_rethrow_exception(level_error, lane,\n"
         '          "AMR Program level resource capture failed collectively");\n'
         "    });\n"
-        "    _level_programs->swap(next);\n"
+        + configuration_install(program)
+        + "    _level_programs->swap(next);\n"
         "    *_level_program_epoch = epoch;\n"
         "    *_level_program_generation = generation;\n"
         "  };\n"
         "  _refresh_level_programs();\n"
     )
     return (
-        flux_expression_budget
+        flux_expression_budget + checkpoint_exports(program)
         + "\n#include <pops/runtime/program/amr_program_context.hpp>  // registers the AmrSystem provider\n"
         "// AMR install entry (epic ADC-511 / ADC-508, Spec 6): the target='amr_system' counterpart\n"
         "// of pops_install_program. AmrSystem::install_program resolves + calls it after binding the\n"
@@ -925,5 +999,19 @@ def _emit_amr_install(
         + installed_driver
         + "  }, ctx_owner, [=]() { _refresh_level_programs(); },\n"
         "     [=]() { _refresh_level_programs(true); });\n"
-        "}\n"
+        + ("  ctx.install_continuation_regrid_graph([=]() {\n"
+           "    auto& ctx = *ctx_owner;\n"
+           "    _refresh_level_programs(true);\n"
+           "    const int _levels = ctx.program_resource_topology().levels;\n"
+           "    for (int _k = 0; _k < _levels; ++_k) {\n"
+           "      ctx.with_program_resource_level(_k, [&]() {\n"
+           "        _level_programs->at(static_cast<std::size_t>(_k)).post_synchronization(0.);\n"
+           "      });\n"
+           "    }\n"
+           "    ctx.begin_continuation_parent();\n"
+           "    ctx.with_program_resource_level(0, [&]() {\n"
+           "      _level_programs->front().post_synchronization(0.);\n"
+           "    });\n"
+           "  });\n" if regrid_forest else "")
+        + "}\n"
     )

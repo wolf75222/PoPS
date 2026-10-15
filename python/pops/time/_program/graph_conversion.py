@@ -2,6 +2,12 @@
 from __future__ import annotations
 
 from typing import Any
+from weakref import WeakKeyDictionary
+
+
+# Detached Programs are deeply frozen and graphs retain no authoring authorities.
+# Rehash on every lookup: reuse avoids repeated conversion, never the identity check.
+_detached_graphs: WeakKeyDictionary[Any, tuple[str, Any]] = WeakKeyDictionary()
 
 
 def _name(value: Any) -> str:
@@ -59,6 +65,10 @@ def program_to_graph(program: Any) -> Any:
         raise RuntimeError("cannot snapshot a Program while authoring a nested region")
     if getattr(program, "_compiled_detached", False):
         detached = program
+        identity = detached._ir_hash()
+        previous = _detached_graphs.get(detached)
+        if previous is not None and previous[0] == identity:
+            return previous[1]
     else:
         from pops.time._program.detach import detach_compiled_program
 
@@ -385,8 +395,10 @@ def program_to_graph(program: Any) -> Any:
         cadence=detached.cadence_contract(),
     )
     # Detachment and graph conversion are read-only; authoring identity remains stable.
-    if detached._ir_hash() != program._ir_hash():
+    identity = detached._ir_hash()
+    if identity != program._ir_hash():
         raise RuntimeError("Program.to_graph changed authoring IR identity")
+    _detached_graphs[detached] = (identity, graph)
     return graph
 
 

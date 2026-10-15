@@ -398,17 +398,33 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     # IR value id -> C++ token: a MultiFab variable name (states / RHS scratches), a scalar variable
     # name (reductions, ``s{id}``) or a parenthesized boolean expression (compares).
     var = {}
+    from pops.codegen.program_lowerability import all_ops
+    var[("stencil_flux_expressions",)] = target == "system" and any(
+        value.op == "stencil_flux_divergence" for value in all_ops(program))
+    from .program_amr_finite_scope import uses_finite_values
+    var[("amr_finite_scope",)] = target == "amr_system" and uses_finite_values(program)
     from .program_value_authority import prepare_program_value_authority
     if value_authority is None:
         value_authority = prepare_program_value_authority(program, model, field_plans or {}, target=target)
     var[("program_value_authority",)] = value_authority
     from .program_emit_moving import deferred_moving_rates
     var[("moving_deferred_rates",)] = deferred_moving_rates(program)
-    from pops.codegen.program_partition_stability import explicit_update_consumers
-    var[("explicit_state_updates",)] = explicit_update_consumers(program)
+    from pops.codegen.program_partition_stability import explicit_update_consumption
+    updates, admitted_updates, admitted_rates, consumed_rates = explicit_update_consumption(program)
+    var[("explicit_state_updates",)] = updates
+    var[("authored_stability_updates",)] = admitted_updates
+    var[("authored_stability_rates",)] = admitted_rates
+    var[("consumed_explicit_rates",)] = consumed_rates
     if provider_plans is not None:
         var[("program_provider_plans",)] = provider_plans
     prelude = []
+    if var[("stencil_flux_expressions",)]:
+        from pops.codegen.program_stencil_budget import uniform_stencil_expression_budget
+        from pops._structural_data import canonical_json
+        stencil_bases, stencil_terms = uniform_stencil_expression_budget(program)
+        identity_capacity = len(canonical_json(program._serialize(include_provenance=False)).encode("utf-8"))
+        prelude.append("ctx.configure_stencil_expressions(UINT64_C(%d), UINT64_C(%d), UINT64_C(%d));"
+                       % (stencil_bases, stencil_terms, identity_capacity))
     lines = []
     # ``var`` also carries emission-local schedule/coupled scratch tokens under tuple keys. Nothing
     # is written back into Program authoring state, so codegen remains pure after deep freeze.
@@ -464,6 +480,12 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                           json.dumps(state_identity), json.dumps(space_identity),
                           json.dumps(row["clock"]), json.dumps(interpolation),
                           history_ghost_depth(program, name)))
+        from .program_emit_history_transfer import emit_history_transfer
+        prelude.extend(emit_history_transfer(name, row, target=target))
+    from .program_emit_affine_history import affine_history_declarations
+    prelude.extend(affine_history_declarations(program))
+    from .program_emit_temporal_field import temporal_field_declarations
+    prelude.extend(temporal_field_declarations(program, block_idx, target=target))
     from pops.codegen.program_emit_spatial_interaction import emit_history_source_declarations
     prelude.extend(emit_history_source_declarations(program, block_idx, target=target))
     from pops.codegen.program_balance_due import (
@@ -481,21 +503,23 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     values = list(program._values)
     from pops.codegen.program_emit_hierarchy_regions import (
         hierarchy_region_solves, hierarchy_path_rhs, hierarchy_field_publications,
-        hierarchy_named_field_barriers,
+        hierarchy_named_field_barriers, hierarchy_original_field_solves,
         open_hierarchy_continuation,
     )
     hierarchy_solves = (hierarchy_region_solves(program) if target == "amr_system" else ())
     hierarchy_solve_ids = {value.id for value in hierarchy_solves}
+    original_ids = {value.id for value in hierarchy_original_field_solves(program)} if target == "amr_system" else set()
     path_ids = {value.id for value in hierarchy_path_rhs(program)} if target == "amr_system" else set()
     named_field_ids = {value.id for value in hierarchy_named_field_barriers(program)} if target == "amr_system" else set()
     hierarchy_enabled = target == "amr_system" and bool(
-        hierarchy_solves or path_ids or hierarchy_field_publications(program) or named_field_ids)
+        hierarchy_solves or path_ids or hierarchy_field_publications(program) or named_field_ids or original_ids)
     legacy_path_prefix = bool(path_ids and any(
         "hierarchy_field_identity" not in value.attrs for value in hierarchy_solves))
     if legacy_path_prefix:
         lines.append("ctx.with_synchronized_field_gather([&]() {")
     index = 0
-    mapping_continuations = 0
+    continuation_closers = []
+    from .program_emit_hierarchy_control import has_suspension, open_control, _normal_close
     # Group identities occupy compiler-reserved slots after the authored SSA namespace.  They are
     # deterministic, cannot alias a rate node, and keep BoundaryEvaluationPoint.stage faithful to
     # the atomic group while every RhsGroupRequest retains its own exact rate identity.
@@ -519,6 +543,14 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         if v.id in rhs_grouped or v.op == "post_synchronization":
             index += 1
             continue
+        if target == "amr_system" and v.op in ("branch", "structured_fold", "capture_result", "structured_iterate") and has_suspension(v):
+            from .program_source_map import operation
+            with operation(v, lines, prelude, environment=var):
+                close = open_control(program, v, values[:index], var, model, lines, prelude,
+                                     block_idx, field_plans)
+            continuation_closers.append(close)
+            index += 1
+            continue
         base = bases.get(v.block)  # the block-state value of THIS op's block (None: a scalar op)
         hierarchy_solve = v.id in hierarchy_solve_ids
         if hierarchy_solve:
@@ -528,13 +560,26 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
             # including a retry after a prior attempt failed between two level callbacks.
             lines.append("if (ctx.level() == 0) ctx.begin_staged_field_publications();")
         named_field_solve = v.id in named_field_ids and v.op != "field_warm_start"
+        original_solve = v.id in original_ids
+        if original_solve:
+            var[("original_field_hierarchy_phase",)] = "gather"
         emitted = [] if hierarchy_solve or named_field_solve else lines
         _emit_op(program, v, base, committed_ids, var, model, emitted, prelude, block_idx,
                  target=target, field_plans=field_plans,
                  has_shared_interface_implicit_jacvec=(
                      has_shared_interface_implicit_jacvec
                  ))
-        if hierarchy_solve:
+        if original_solve:
+            from .program_emit_amr_original_field import emit_amr_original_field
+            solve_vars = dict(var)
+            solve_vars[("original_field_hierarchy_phase",)] = "solve"
+            solve_lines: list[str] = []
+            emit_amr_original_field(program, v, solve_vars, solve_lines, [], block_idx)
+            var.pop(("original_field_hierarchy_phase",), None)
+            open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
+                                        solve_lines, kind="nonlinear_solve")
+            continuation_closers.append(_normal_close)
+        elif hierarchy_solve:
             if v.attrs.get("has_guess"):
                 lines.append("ctx.stage_hierarchy_field_initial_guess(%d, %s);" %
                              (v.id, var[v.inputs[2].id]) if "hierarchy_field_identity" in v.attrs
@@ -545,7 +590,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                              else "ctx.stage_linear_initial_guess();")
             open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
                                         emitted, kind="linear_solve")
-            mapping_continuations += 1
+            continuation_closers.append(_normal_close)
         elif named_field_solve:
             from .program_value_authority import field_value_overrides_cpp
             from .program_emit_field_routes import resolved_field_route, field_point_cpp
@@ -559,27 +604,28 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                       (v.id, v.id, json.dumps(field), field_value_overrides_cpp(v, var, block_idx)), "}"]
             open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
                                         emitted, kind="named_field_solve")
-            mapping_continuations += 1
+            continuation_closers.append(_normal_close)
         elif v.id in named_field_ids and v.op == "field_warm_start":
             open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
                                         ["ctx.publish_staged_field_warm_start(%d);" % v.id],
                                         kind="field_warm_start")
-            mapping_continuations += 1
+            continuation_closers.append(_normal_close)
         elif v.id in path_ids:
             open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
                                         ["ctx.publish_staged_path_rhs(%d);" % v.id], kind="spatial_rhs")
-            mapping_continuations += 1
+            continuation_closers.append(_normal_close)
         elif hierarchy_enabled and v.op == "field_publication":
             open_hierarchy_continuation(program, v, values[:index + 1], var, lines,
                                         ["ctx.publish_staged_field_components();"],
                                         kind="field_publication")
-            mapping_continuations += 1
+            continuation_closers.append(_normal_close)
         elif v.op in ("layout_map_export", "layout_map_import"):
             from pops.codegen.program_emit_mapping_regions import open_map_continuation
             open_map_continuation(v, values[:index + 1], var, lines)
-            mapping_continuations += 1
+            continuation_closers.append(_normal_close)
         index += 1
-    if any(value.op == "reached_duration" for value in values):
+    from pops.codegen.program_lowerability import all_ops
+    if any(value.op in {"reached_duration", "accept_increment"} for value in all_ops(program)):
         from pops.codegen.program_computed_frontier import require_computed_frontier_support
         require_computed_frontier_support(program, target=target)
     from .program_interaction_exchanges import emit_accepted_interaction_exchanges
@@ -589,7 +635,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     from pops.codegen.program_diffusion_exchanges import emit_accepted_diffusive_exchanges
     lines.extend(emit_accepted_diffusive_exchanges(
         program, target=target, block_indices=block_idx, model_authority=model,
-        partition_stability_checked=var.get(("partition_stability_checked",), ())))
+        partition_stability_checked=var.get(("partition_stability_checked",), ()),
+        authored_stability_rates=var.get(("authored_stability_rates",), ())))
     from .program_emit_stencil_flux import emit_accepted_stencil_exchanges
     lines.extend(emit_accepted_stencil_exchanges(program, var, block_idx, target=target))
     from pops.codegen.program_transport_quadrature import emit_accepted_transport_exchanges
@@ -605,8 +652,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     # reads lag k as the value k stores ago. Only emitted when the Program uses histories.
     if any(row["clock"] == program.clock.qualified_id for row in temporal["histories"]):
         lines.append("ctx.rotate_histories(%s);" % json.dumps(program.clock.qualified_id))
-    from pops.codegen.program_emit_mapping_regions import close_map_continuations
-    close_map_continuations(mapping_continuations, lines)
+    for close in reversed(continuation_closers):
+        close(lines)
     if legacy_path_prefix:
         lines.append("});")
     post_sync_lines = _emit_post_synchronization_phase(
@@ -714,12 +761,11 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
             "AMR hierarchy lowering requires exact shared-interface JVP evidence"
         )
     if has_hierarchy_continuations(program):
-        if any(value.op == "solve_spatial_field" for value in all_ops(program)):
-            raise NotImplementedError("original AMR fields require their own synchronized barrier; combined continuation scheduling is not realized")
         # Invocation-owned field resources cross each actual solve/publication barrier through
         # the same continuation scheduler as physical maps. No singleton phase split is needed.
         return None
-    solves = [v for v in all_ops(program) if v.op == "solve_linear"]
+    from pops.time._program.temporal_field import is_temporal_field_solve
+    solves = [v for v in all_ops(program) if v.op == "solve_linear" and not is_temporal_field_solve(v)]
     spatial = [v for v in all_ops(program) if v.op == "solve_spatial_nonlinear"]
     original = [v for v in all_ops(program) if v.op == "solve_spatial_field"]
     scoped = [v for v in solves if v.attrs.get("scope") == "hierarchy"] + spatial + original
@@ -759,7 +805,13 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
             raise NotImplementedError("hierarchy field publication barrier requires observation-only preparation; "
                                       "move consumers after publication: %r" % unsupported)
     control = {"while", "range", "branch"}
-    nested = [v.name for v in program._values if v.op in control]
+    # A spatial request copies previous/seed into its owned hierarchy workspace
+    # during gather. A wholly local control region before that copy need not
+    # survive the barrier. The portable-value checks below still reject every
+    # gather-local reference used by publish, and all other provider contracts
+    # retain their original lifetime requirements.
+    nested = [v.name for index,v in enumerate(program._values) if v.op in control
+              and not (spatial and index < split)]
     if nested:
         raise NotImplementedError(
             "a hierarchy-scoped solve must be a top-level barrier; control-flow regions %r cannot "
@@ -840,6 +892,14 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
         var: dict[Any, Any] = {("hierarchy_retained_bindings",): frozenset(
             value.id for value in program._values[:split] if value.op in binding_ops
         ) if phase in ("solve", "observe", "publish") else frozenset()}
+        # These are separate executable closures, not the flat fallback body.
+        # Their consumers must carry the same authored explicit-step budgets.
+        from .program_partition_stability import explicit_update_consumption
+        updates, admitted_updates, admitted_rates, consumed_rates = explicit_update_consumption(program)
+        var[("explicit_state_updates",)] = updates
+        var[("authored_stability_updates",)] = admitted_updates
+        var[("authored_stability_rates",)] = admitted_rates
+        var[("consumed_explicit_rates",)] = consumed_rates
         var[("hierarchy_field_phase",)] = phase
         if spatial:
             var[("spatial_hierarchy_phase",)] = phase
@@ -933,6 +993,8 @@ def _emit_while(program: Any, v: Any, base: Any, var: Any, model: Any, lines: An
         _emit_op(
             program, w, base, frozenset(), sub, model, body_lines,
             prelude=prelude, block_idx=block_idx, field_plans=field_plans, target=target)
+    from .program_partition_stability import require_deferred_partition_bounds
+    require_deferred_partition_bounds(sub, inherited=var.get(("partition_stability_deferred",), ()))
     # Write the next state into the loop variable in place (x <- body result).
     body_lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
                       % (x, x, sub[v.attrs["body"].id]))
@@ -962,6 +1024,8 @@ def _emit_range(program: Any, v: Any, base: Any, var: Any, model: Any, lines: An
         _emit_op(
             program, w, base, frozenset(), sub, model, body_lines,
             prelude=prelude, block_idx=block_idx, field_plans=field_plans, target=target)
+    from .program_partition_stability import require_deferred_partition_bounds
+    require_deferred_partition_bounds(sub, inherited=var.get(("partition_stability_deferred",), ()))
     body_lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
                       % (x, x, sub[v.attrs["body"].id]))
     lines += ["  " + ln for ln in body_lines]
@@ -1046,7 +1110,10 @@ def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: A
                  block_idx: Any = None, field_plans: Any = None,
                  *, target: str = "system") -> None:
     """Lower two captured regions to a genuinely lazy C++ ``if``/``else`` value branch."""
-    if (v.vtype in ("product", "variant", "int64", "result", "index_set", "index", "array")
+    from pops.time._program.versioned_values import CAPABILITY_TYPES
+
+    if (v.vtype in ("product", "variant", "int64", "result", "index_set", "index", "array", "field_topology")
+            or v.vtype in CAPABILITY_TYPES
             or v.inputs[0].op == "variant_is" or var.get(("structured_control",), False)):
         from .program_emit_structured_control import emit_structured_branch
         emit_structured_branch(program, v, var, model, lines, prelude, block_idx, field_plans, target)
@@ -1098,6 +1165,9 @@ def _emit_branch_arm(program: Any, block: Any, result: Any, output: str, is_fiel
         _emit_op(
             program, value, base, frozenset(), sub, model, arm_lines,
             prelude=prelude, block_idx=block_idx, field_plans=field_plans, target=target)
+    from .program_partition_stability import require_deferred_partition_bounds
+    require_deferred_partition_bounds(
+        sub, inherited=outer_var.get(("partition_stability_deferred",), ()))
     token = sub[result.id]
     if is_field:
         from .program_emit_structured_control import _copy, value_signature

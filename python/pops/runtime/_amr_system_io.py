@@ -67,7 +67,7 @@ class _AmrSystemIO(_AmrSystem):
         if not callable(factory):
             raise RuntimeError("AMR checkpoint candidate capture requires a rebuilt native backend")
         capture = factory()
-        if getattr(capture, "contract") != "pops.amr.prepared-checkpoint-capture@1":
+        if getattr(capture, "contract", None) != "pops.amr.prepared-checkpoint-capture@1":
             raise TypeError("AMR candidate capture has an unsupported native contract")
         return capture
 
@@ -111,6 +111,7 @@ class _AmrSystemIO(_AmrSystem):
         bit_identical: bool,
         hierarchy_mode: str = "restore_recorded_hierarchy",
         hierarchy_identity: str | None = None,
+        workspace_byte_capacity: int = 64 * 1024 * 1024,
     ) -> _PreparedAMRSystemRestart:
         """Authenticate and preflight the complete AMR payload without native mutation."""
         from pops.output._checkpoint_collective import (
@@ -119,7 +120,7 @@ class _AmrSystemIO(_AmrSystem):
             require_restart_hierarchy_mode,
         )
         from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION
-        from pops.runtime._checkpoint_resource_budget import require_checkpoint_resource_budget
+        from pops.output._checkpoint_restart_budget import restart_checkpoint_resource_budget
         from pops.runtime._checkpoint_manifest import (
             authenticate_checkpoint_payload,
             require_exact_payload_version,
@@ -130,7 +131,8 @@ class _AmrSystemIO(_AmrSystem):
         selected_hierarchy_mode = require_restart_hierarchy_mode(
             hierarchy_mode, where="AMR restart"
         )
-        data = decode_checkpoint_bytes(payload, require_checkpoint_resource_budget(self))
+        data = decode_checkpoint_bytes(payload, restart_checkpoint_resource_budget(
+            self, workspace_byte_capacity, bit_identical=bit_identical))
         identity = authenticate_checkpoint_payload(self, data, runtime_kind="amr")
         require_exact_payload_version(
             data,
@@ -147,6 +149,7 @@ class _AmrSystemIO(_AmrSystem):
                 bit_identical=bit_identical,
                 hierarchy_mode=selected_hierarchy_mode,
                 hierarchy_identity=hierarchy_identity,
+                workspace_byte_capacity=workspace_byte_capacity,
             ),
         )
 
@@ -160,6 +163,7 @@ class _AmrSystemIO(_AmrSystem):
             getattr(self, "_last_restart_identity", None),
             getattr(self, "_last_restart_report", None),
             getattr(self, "_last_restart_regrid_receipt", None),
+            getattr(self, "_last_restart_migration_receipt", None),
             getattr(self, "_temporal_restart_state", None),
             getattr(self, "_step_controller", None),
         )
@@ -207,6 +211,7 @@ class _AmrSystemIO(_AmrSystem):
                 self._last_restart_identity,
                 self._last_restart_report,
                 self._last_restart_regrid_receipt,
+                self._last_restart_migration_receipt,
                 self._temporal_restart_state,
                 self._step_controller,
             ) = snapshot
@@ -215,7 +220,12 @@ class _AmrSystemIO(_AmrSystem):
             del self._continuation_receipt_before_restart
             self.__dict__.pop("_prepared_continuation_restart_receipt", None)
 
-    def restart(self, path: Any, *, bit_identical: bool = False) -> Any:
+    @property
+    def last_restart_migration_receipt(self) -> Any:
+        return getattr(self, "_last_restart_migration_receipt", None)
+
+    def restart(self, path: Any, *, bit_identical: bool = False,
+                workspace_byte_capacity: int = 64 * 1024 * 1024) -> Any:
         """Restore the direct AMR engine through the native collective transaction protocol."""
         from pops.output._checkpoint_collective import restore_checkpoint_path
 
@@ -225,6 +235,7 @@ class _AmrSystemIO(_AmrSystem):
             path,
             bit_identical=bit_identical,
             phase_prefix="AMR direct-engine restart",
+            workspace_byte_capacity=workspace_byte_capacity,
         )
 
 

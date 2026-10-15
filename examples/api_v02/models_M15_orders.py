@@ -2,12 +2,11 @@
 
 Primary source: Fox--Laurent, https://arxiv.org/html/2103.10138, Algorithm 2,
 Eqs. (27)--(28), (37)--(46), and sections 5.1--5.2. ``order`` denotes the
-highest retained raw moment (2 or 4 in this reception); there are order+1
+highest retained raw moment (any positive even order); there are order+1
 unknowns. No distribution reconstruction is used to close the production flux.
 
 The native profile admits strictly positive Hankel matrices only. Vacuum,
-exact rank-deficient boundary states (Appendix E), arbitrary orders beyond the
-two received profiles, collision terms and continuum convergence are not
+exact rank-deficient boundary states (Appendix E), collision terms and continuum convergence are not
 qualified by a finite native/discrete-reference comparison.
 """
 from __future__ import annotations
@@ -90,7 +89,28 @@ def reference_flux(raw):
         c5 = .5*c3*(5*c4/c2-3*c3*c3/(c2*c2)-c2)
         terminal = rho*(u**5+10*u**3*c2+10*u*u*c3+5*u*c4+c5)
     else:
-        raise ValueError("independent closed-form reference covers only orders 2 and 4")
+        if len(raw) < 3 or len(raw) % 2 != 1:
+            raise ValueError("an even highest retained moment is required")
+        # Independent Gram construction: a_n = mean(a_0,...,a_{n-1}), and
+        # <x q_n^2> = a_n <q_n^2>. The only unknown in the former is M_(2n+1).
+        n = (len(raw)-1)//2
+        columns = raw.reshape(len(raw), -1)
+        closed = []
+        for moments in columns.T:
+            coefficients, norms, diagonal = [], [], []
+            for degree in range(n+1):
+                gram = np.array([[moments[i+j] for j in range(degree)]
+                                 for i in range(degree)])
+                q = (np.array([1.]) if degree == 0 else
+                     np.append(np.linalg.solve(gram, -moments[degree:2*degree]), 1.))
+                square = np.convolve(q, q)
+                coefficients.append(square)
+                norms.append(np.dot(square, moments[:len(square)]))
+                if degree < n:
+                    diagonal.append(np.dot(square, moments[1:len(square)+1])/norms[-1])
+            closed.append(np.mean(diagonal)*norms[-1]
+                          - np.dot(coefficients[-1][:-1], moments[1:]))
+        terminal = np.asarray(closed).reshape(raw.shape[1:])
     return np.concatenate((raw[1:],terminal[None,...]),axis=0)
 
 
@@ -102,8 +122,8 @@ def reference_spectrum(raw):
     """
     import numpy as np
     raw = np.asarray(raw,dtype=float)
-    if raw.ndim != 1 or len(raw) not in (3,5) or not np.isfinite(raw).all():
-        raise ValueError("one finite order-2 or order-4 moment vector required")
+    if raw.ndim != 1 or len(raw) < 3 or len(raw) % 2 != 1 or not np.isfinite(raw).all():
+        raise ValueError("one finite even-order moment vector required")
     n = (len(raw)-1)//2
     full = np.array([[raw[i+j] for j in range(n+1)] for i in range(n+1)])
     if np.linalg.eigvalsh(full).min() <= 0:
@@ -117,14 +137,16 @@ def reference_spectrum(raw):
             q = np.append(np.linalg.solve(gram,-raw[k:2*k]),1.)
         square = np.convolve(q,q)
         norm = np.dot(square,raw[:len(square)])
-        polynomials.append(q); norms.append(norm)
+        polynomials.append(q)
+        norms.append(norm)
         if k < n:
             a.append(np.dot(square,raw[1:len(square)+1])/norm)
     b = [0.]+[norms[k]/norms[k-1] for k in range(1,n+1)]
     j = np.diag(a)
     for k in range(1,n):
         j[k-1,k] = j[k,k-1] = np.sqrt(b[k])
-    k_matrix = np.zeros((n+1,n+1)); k_matrix[:n,:n] = j
+    k_matrix = np.zeros((n+1,n+1))
+    k_matrix[:n,:n] = j
     k_matrix[n,n] = sum(a)/n
     k_matrix[n-1,n] = k_matrix[n,n-1] = np.sqrt((2*n+1)*b[n]/n)
     return np.sort(np.concatenate((np.linalg.eigvalsh(j),np.linalg.eigvalsh(k_matrix))))
@@ -147,13 +169,20 @@ def initial_moments(order,cells,regime):
     """Exact cell averages of a non-Gaussian positive four-atom initial measure."""
     import numpy as np
     nodes = np.array([-1.1,-.25,.6,1.4])
-    weights = np.array([.2,.25,.35,.2])[:,None]*np.ones((1,cells))
+    atom_weights = np.array([.2,.25,.35,.2])
+    if order//2+1 > len(nodes):
+        nodes = np.linspace(-1.1, 1.4, order//2+1)
+        atom_weights = np.exp(-nodes*nodes)
+        atom_weights /= atom_weights.sum()
+    weights = atom_weights[:,None]*np.ones((1,cells))
     if regime == "smooth":
         phase = 2*np.pi*(np.arange(cells)+.5)/cells
-        weights *= 1+.12*np.sinc(1/cells)*np.sin(phase[None,:]+np.arange(4)[:,None])
+        weights *= 1+.12*np.sinc(1/cells)*np.sin(phase[None,:]+np.arange(len(nodes))[:,None])
     elif regime == "riemann":
         # Two separated periodic interfaces; no whole-line exact kinetic claim.
-        weights[:,cells//2:] *= np.array([.6,1.3,.8,1.5])[:,None]
+        factors = (np.array([.6,1.3,.8,1.5]) if len(nodes) == 4
+                   else 1+.4*np.cos(np.arange(len(nodes))))
+        weights[:,cells//2:] *= factors[:,None]
     else:
         raise ValueError("regime must be smooth or riemann")
     return np.stack([np.sum(weights*nodes[:,None]**k,axis=0) for k in range(order+1)])
@@ -174,8 +203,8 @@ def build_m15_orders(*,order=4,regime="smooth",cells=16,steps=4,dt=1e-4):
     from pops.numerics import DiscretizationPlan,reconstruction,riemann,variables
     from pops.numerics.spatial import FiniteVolume
     from pops.time import FixedDt,FailRun
-    if order not in (2,4) or type(order) is not int:
-        raise ValueError("received HyQMOM orders are exactly 2 and 4")
+    if type(order) is not int or order < 2 or order % 2:
+        raise ValueError("HyQMOM highest retained moment must be an even integer >=2")
     if type(cells) is not int or cells < 8 or cells % 2 or not 2 <= steps <= 32 or not 0 < dt <= 1e-4*16/cells:
         raise ValueError("bounded HyQMOM reception grid/time envelope exceeded")
     frame = CartesianDomain("M15_S04_interval",(0.,),(1.,)).frame(Cartesian1D())
@@ -185,29 +214,38 @@ def build_m15_orders(*,order=4,regime="smooth",cells=16,steps=4,dt=1e-4):
                       components={frame.axes[0]:hyqmom_flux(tuple(u))})
     rate = model.rate("moment_balance",equation=pm.ddt(u)==-pm.div(flux))
     model.wave_speeds_from_jacobian()
-    case = pops.Case("M15_S04_%d_%s"%(order,regime)); block=case.block("moments",model)
+    case = pops.Case("M15_S04_%d_%s"%(order,regime))
+    block=case.block("moments",model)
     subject = block[u]
     case.initials.add(InitialCondition(state=subject,value=BindArray(),projection=ConservativeCellAverage()))
-    plan=DiscretizationPlan();plan.rates.add(rate,FiniteVolume(flux=flux,
+    plan=DiscretizationPlan()
+    plan.rates.add(rate,FiniteVolume(flux=flux,
         variables=variables.Conservative(u),reconstruction=reconstruction.FirstOrder(),riemann=riemann.HLL()))
     case.numerics(plan,block=block)
-    p=pops.Program("M15_S04_Euler");state=p.state(subject)
+    p=pops.Program("M15_S04_Euler")
+    state=p.state(subject)
     def guard(value,name):
         margins=hankel_margins(tuple(value[k] for k in range(order+1)))
         margin=margins[0]
-        for next_margin in margins[1:]: margin=pm.minimum(margin,next_margin)
+        for next_margin in margins[1:]:
+            margin=pm.minimum(margin,next_margin)
         field=p.value(name+"_hankel_margin",(margin,)*(order+1))
         return p.guard(name,value,p.min(field)>0.,action=FailRun())
     current=guard(state.n,"strict_current_domain")
     rate_value=rate(current)
     candidate=p.value("candidate",tuple(current[k]+p.dt*rate_value[k] for k in range(order+1)),at=state.next.point)
-    p.commit(state.next,guard(candidate,"strict_candidate_domain"));p.step_strategy(FixedDt(dt));case.program(p)
+    p.commit(state.next,guard(candidate,"strict_candidate_domain"))
+    p.step_strategy(FixedDt(dt))
+    case.program(p)
     layout=Uniform(CartesianGrid(frame=frame,cells=(cells,),periodic=PeriodicAxes(frame.axes)))
-    initial=initial_moments(order,cells,regime);expected=initial.copy()
-    for _ in range(steps): expected=expected+dt*reference_rhs(expected)
+    initial=initial_moments(order,cells,regime)
+    expected=initial.copy()
+    for _ in range(steps):
+        expected=expected+dt*reference_rhs(expected)
     def check(runtime):
         actual=state_array(runtime,"moments",initial.shape)
-        if actual is None: return non_owner_metrics()
+        if actual is None:
+            return non_owner_metrics()
         error=float(np.max(abs(actual-expected)))
         inventory=float(np.max(abs(np.mean(actual-initial,axis=1))))
         margin=float(np.min(np.stack(hankel_margins(actual))))
@@ -217,7 +255,7 @@ def build_m15_orders(*,order=4,regime="smooth",cells=16,steps=4,dt=1e-4):
                                and margin>0 and change>1e-8),order=order,regime=regime,
                     native_discrete_error=error,inventory_error=inventory,minimum_hankel_determinant=margin,
                     minimum_spectral_gap=float(np.min(np.diff(spectrum,axis=1))),state_change=change)
-    profile=("M15 S04 Algorithm2 order%d (%d raw moments), %s positive four-atom data; "
+    profile=("M15 S04 Algorithm2 order%d (%d raw moments), %s positive finite-atom data; "
              "Dim1 periodic FV/HLL/forward Euler, fresh algebraic flux and differentiated native Jacobian; "
              "strict Hankel guard. No vacuum/exact boundary, collisions or continuum convergence qualification"%(order,order+1,regime))
     return CaseSpec(case,layout,{subject:initial},{"moments":subject},steps*dt,dt,check,profile)

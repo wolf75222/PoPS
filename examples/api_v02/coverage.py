@@ -1,14 +1,14 @@
-"""Portée scientifique des témoins API v0.2, indépendante de leur réception.
+"""Composants, hypothèses et qualification sont trois obligations distinctes.
 
-Ces données décrivent les obligations qui restent hors du profil fini choisi.
-Elles ne constituent ni un résultat de test, ni un statut de compilation, ni
-une qualification des articles entiers. Les reçus de réception font autorité
-pour le code, le binaire, les paramètres et les contrôles réellement exécutés.
-
-Les titres Mxx sont transcrits du corpus local ; ses anciens statuts ne sont
-pas repris. Les obligations T09 visent le nouveau témoin spatial Duhamel de
-``method_interval_transport.py``, et non son ancien témoin homogène.
+``OBLIGATIONS`` conserve la surface historique mais décrit désormais les
+propriétés scientifiques non établies des profils sélectionnés. Elle ne doit
+jamais servir de liste de primitives manquantes dans ``require_complete``.
+``LEGACY_OBLIGATIONS`` préserve verbatim l'ancien audit : plusieurs anciens
+manques d'implémentation ont depuis des profils nouveaux, sans transfert de reçu.
+Les récepteurs déclarés ne sont pas des résultats de test.
 """
+
+from .profile_contracts import SELECTED_PROFILES, selected_profile
 
 SOURCE_TITLE_SOURCE = "docs/development/api_040/corpus.json: models[*].title"
 
@@ -57,7 +57,7 @@ COMMON_SCOPE_NOTES = (
     "de l'article, ni une propriété pour tous les états admissibles.",
 )
 
-OBLIGATIONS = {
+LEGACY_OBLIGATIONS = {
     "M01": (
         "Le témoin est une advection scalaire 2D périodique à vitesse constante ; "
         "les frontières entrantes/sortantes et les vitesses variables ne sont pas qualifiées.",
@@ -377,3 +377,36 @@ OBLIGATIONS = {
         "hors de ces témoins de remplacement versionné.",
     ),
 }
+
+
+REQUIRED_COMPONENTS = {
+    identifier: contract.required_components for identifier, contract in SELECTED_PROFILES.items()
+}
+SCIENTIFIC_ASSUMPTIONS = {
+    identifier: contract.assumptions for identifier, contract in SELECTED_PROFILES.items()
+}
+MODEL_PROPERTIES = {
+    identifier: contract.model_properties for identifier, contract in SELECTED_PROFILES.items()
+}
+OBLIGATIONS = {
+    identifier: contract.unestablished_properties
+    for identifier, contract in SELECTED_PROFILES.items()
+}
+
+
+def scope_report(identifier):
+    """Return classified declarations, with no implicit native-success field."""
+    contract = selected_profile(identifier)
+    return {
+        "selected_contract": contract.key,
+        "required_components": {
+            component.identifier: component.description
+            for component in contract.required_components
+        },
+        "baseline_assumptions": contract.assumptions,
+        "model_properties": contract.model_properties,
+        "unestablished_properties": contract.unestablished_properties,
+        "numerical_receivers": contract.numerical_receivers,
+        "legacy_obligations": LEGACY_OBLIGATIONS[contract.identifier],
+        "scope_notes": COMMON_SCOPE_NOTES,
+    }

@@ -30,13 +30,13 @@ def build_field_seed_product(request: Any, program: Any, *, expressions: Any, sp
     from dataclasses import replace
     from pops.model.spaces import FieldSpace
     from pops.time._authoring import authoring_transaction
-    from pops.time._program.value_validation import require_top_level
+    from pops.time._program.value_validation import validate_input_regions
 
     residual = request.problem
     if type(residual) is not _SpatialFieldResidual or len(request.unknowns) != 1:
         raise SolveRequestError("unsupported_lowering", "seed_product currently requires one original field unknown product")
     for value in (residual.prototype, residual.coefficients, *residual.captures):
-        require_top_level(program, value, "original field seed product request")
+        validate_input_regions(program, (value,), program._current_region(), "original field seed product request")
     unknowns = residual.source_contract["unknown_components"]
     names = tuple(row["local_id"] for row in unknowns)
     if type(space) is not FieldSpace or space.components != names or space.centering != "cell" or \
@@ -149,7 +149,7 @@ def compile_equations(problem: Any, states: tuple, *, per_candidate: bool = Fals
 def bind_nonlinear_field_problem(program: Any, field: Handle, registration: Any, *,
                                  values: Any, at: Any, solver: Any) -> SolveRequest:
     from pops.solvers import Newton
-    from pops.time._program.value_validation import require_top_level
+    from pops.time._program.value_validation import validate_input_regions
     from pops.time.stencil import StencilAccess
 
     problem, numerical = registration.operator, registration.discretization
@@ -173,7 +173,7 @@ def bind_nonlinear_field_problem(program: Any, field: Handle, registration: Any,
         key, value = matches[0]
         if not isinstance(value, ProgramValue) or value.vtype != "state" or value.state_ref is None or _identity(value.state_ref) != _identity(key):
             raise FieldProblemError("field.nonlinear.capture", "capture does not preserve its exact State owner")
-        require_top_level(program, value, "field residual capture")
+        validate_input_regions(program, (value,), program._current_region(), "field residual capture")
         captures.append(value)
     if len(values) != len(dependencies):
         raise FieldProblemError("field.nonlinear.capture", "undeclared or duplicate field residual captures")
@@ -202,7 +202,6 @@ def bind_nonlinear_field_problem(program: Any, field: Handle, registration: Any,
     validate_encoded_tau((*diffusion, *local), temporal_tau)
     width = len(problem.unknowns)
     coefficient_dependencies = field_expression_dependencies(diffusion, captures, unknowns=problem.unknowns if candidate_policy else ())
-    contract = method_data["contract"]
     face_policy = method_data.get("coefficient_face_policy")
     if coefficient_dependencies and face_policy is None:
         raise FieldProblemError("field.nonlinear.face_policy",
@@ -304,12 +303,12 @@ def _request_data(program: Any, token: Any, unknown: Any, physical: Any) -> dict
 
 def build_nonlinear_field_request(program: Any, request: Any, prepared: Any, *, name: Any) -> Any:
     from pops.time._program.spatial_solve import PreparedSpatialNewton
-    from pops.time._program.value_validation import require_top_level
+    from pops.time._program.value_validation import validate_input_regions
     from pops.time.solve_outcome import SolveOutcome, ResidualSolution
 
     residual = request.problem
-    if type(prepared) is not PreparedSpatialNewton or len(request.unknowns) != 1 or program._recording:
-        raise SolveRequestError("unsupported_lowering", "field residual requires top-level prepared spatial Newton")
+    if type(prepared) is not PreparedSpatialNewton or len(request.unknowns) != 1:
+        raise SolveRequestError("unsupported_lowering", "field residual requires prepared spatial Newton")
     unknown = request.unknowns[0]
     expected = {"prototype": residual.prototype, "coefficients": residual.coefficients,
                 **{"capture_%d" % i: value for i, value in enumerate(residual.captures)}}
@@ -322,7 +321,7 @@ def build_nonlinear_field_request(program: Any, request: Any, prepared: Any, *, 
     seed = request.seeds[unknown.name]
     inputs = (residual.prototype, residual.coefficients, *residual.captures)
     for value in (*inputs, *(() if seed is None else (seed,))):
-        require_top_level(program, value, "field residual binding")
+        validate_input_regions(program, (value,), program._current_region(), "field residual binding")
     if seed is not None and _product_width(seed) != residual.prototype.attrs["ncomp"]:
         raise SolveRequestError("unknown_type_mismatch", "field product seed width/type differs")
     if seed is not None and seed.op == "pointwise_expression" and seed.vtype == "scalar_field" and "field_product_seed" not in seed.attrs:

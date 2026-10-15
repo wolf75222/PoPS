@@ -50,7 +50,10 @@ def successful_guard_input(value):
     if value.op!='acceptance_guard' or len(value.inputs)!=2:
         raise ValueError("accepted guard lacks its exact value/condition inputs")
     actual,condition=value.inputs
-    if set(value.attrs)!={'guard','action'} or type(value.attrs.get('action')) not in (FailRun,RejectAttempt) or condition.vtype!='bool':
+    allowed = {'guard','action'}
+    if value.attrs.get('numerical_stability') == 'pops.authored-stability-admission@1':
+        allowed.add('numerical_stability')
+    if set(value.attrs)!=allowed or type(value.attrs.get('action')) not in (FailRun,RejectAttempt) or condition.vtype!='bool':
         raise ValueError("accepted guard has no proved terminal nonmutating action")
     if value.vtype!=actual.vtype or value.block!=actual.block or value.clock!=actual.clock or value.point!=actual.point:
         raise ValueError("accepted guard changes its value's exact type/owner/point")

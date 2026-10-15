@@ -6,13 +6,14 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 import hashlib
-import json
+from pops._structural_data import canonical_json, json_containers, transform_tree
 import re
 from typing import TypedDict
 
 
 class _EmissionScope(TypedDict):
     program_hash: str
+    program: object
     nodes: dict[int, dict[str, object]]
     bindings: dict[int, dict[str, object]]
     unbound: set[int]
@@ -24,17 +25,19 @@ _PREFIX = "// pops-source-map@1 "
 
 def _plain(value):
     from collections.abc import Mapping
-    if isinstance(value, Mapping):
-        return {str(key): _plain(item) for key, item in value.items()}
-    if isinstance(value, (tuple, list)):
-        return [_plain(item) for item in value]
-    if value is None or type(value) in (str, bool, int):
-        return value
-    raise TypeError("source map metadata must be finite canonical data")
+    def describe(value):
+        if isinstance(value, Mapping):
+            return tuple(value.values()), lambda items: dict(zip(map(str, value), items, strict=True))
+        if isinstance(value, (tuple, list)):
+            return value, list
+        if value is None or type(value) in (str, bool, int):
+            return None, value
+        raise TypeError("source map metadata must be finite canonical data")
+    return transform_tree(value, describe)
 
 
 def _json(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return canonical_json(value, allow_nan=False)
 
 
 def _mark(kind, data):
@@ -53,14 +56,17 @@ def _node(value):
 
 def _bindings(value):
     """Keep only literal C++ bindings returned by the emitter, not Python objects."""
-    if type(value) is str:
-        return value
-    if isinstance(value, dict):
-        return {str(key): _bindings(item) for key, item in value.items()
-                if type(key) in (str, int)}
-    if isinstance(value, (tuple, list)):
-        return [_bindings(item) for item in value]
-    return None
+    def describe(value):
+        if type(value) is str:
+            return None, value
+        if isinstance(value, dict):
+            entries = [(str(key), item) for key, item in value.items() if type(key) in (str, int)]
+            return tuple(item for _, item in entries), \
+                lambda items: dict(zip((key for key, _ in entries), items, strict=True))
+        if isinstance(value, (tuple, list)):
+            return value, list
+        return None, None
+    return transform_tree(value, describe)
 
 
 def _remember(scope, environment):
@@ -122,6 +128,18 @@ def operation_group(values, lines, *, environment, channel):
             for value in values]}))
 
 
+def emission_program_hash(program):
+    """Reuse identity only inside this exact synchronous emission invocation.
+
+    No cache is retained on the authoring Program. Separate invocations and
+    different Programs always obtain their own current structural identity.
+    """
+    scope = _ACTIVE.get()
+    if scope is not None and scope["program"] is program:
+        return scope["program_hash"]
+    return program._ir_hash()
+
+
 def emission_scope(function):
     """One deterministic mapping scope for a complete emitted translation unit."""
     @wraps(function)
@@ -133,7 +151,7 @@ def emission_scope(function):
                 nodes[value.id] = _node(value)
                 for child in program._subblock_value_refs(value):
                     nodes[child.id] = _node(child)
-        scope: _EmissionScope = {"program_hash": program._ir_hash(), "nodes": nodes, "bindings": {},
+        scope: _EmissionScope = {"program": program, "program_hash": program._ir_hash(), "nodes": nodes, "bindings": {},
                                  "unbound": set(nodes)}
         token = _ACTIVE.set(scope)
         try:
@@ -186,13 +204,14 @@ def source_map(source):
                 raise ValueError("malformed Program source-map marker")
             kind, payload = fields
             try:
-                data = json.loads(base64.b64decode(payload, validate=True))
+                data = json_containers(base64.b64decode(payload, validate=True))
             except Exception as error:
                 raise ValueError("invalid Program source-map marker data") from error
             if kind == "begin":
                 row = dict(data, emission=len(rows), _lines=[], cpp_binding=None,
                            lexical_regions=[parent["emission"] for parent in stack])
-                rows.append(row); stack.append(row)
+                rows.append(row)
+                stack.append(row)
             elif kind == "group_begin":
                 if not data["nodes"]:
                     raise ValueError("empty Program source-map emission group")
@@ -204,7 +223,8 @@ def source_map(source):
                                lexical_regions=[parent["emission"] for parent in stack],
                                shared_emission_group=identity,
                                shared_ssa=[item["ssa"] for item in data["nodes"]])
-                    rows.append(row); members.append(row)
+                    rows.append(row)
+                    members.append(row)
                 members[0]["_group_members"] = members
                 stack.append(members[0])
             elif kind == "group_end":

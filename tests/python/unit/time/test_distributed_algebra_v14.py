@@ -137,7 +137,8 @@ def test_complete_distributed_reception_graph_resolves_and_emits(kind, ranks):
     assert "continuation_transport_session()" in cpp
     if kind=="nested":
         assert "continuation_new_local_domain" in cpp
-        assert "::distributed_array(" in cpp and "::import_values(" in cpp
+        assert "finite_structural::pack<" in cpp
+        assert "ContinuationKind::DistributedArray" in cpp and "::import_values(" in cpp
     if kind=="ordered":
         assert "::requests_from_array<" in cpp and "::scan(" in cpp and "::scatter_reduce(" in cpp
 

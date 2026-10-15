@@ -113,13 +113,17 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
 
     def _acceptance_guard_value(
         self, name: str, value: ProgramValue, condition: ProgramValue, action: Any,
+        *, numerical_stability: bool = False,
     ) -> ProgramValue:
         from pops.time.solve_outcome import FailRun, RejectAttempt
         if not isinstance(action, (RejectAttempt, FailRun)):
             raise TypeError("acceptance guard terminal action must be RejectAttempt() or FailRun()")
+        attrs = {"guard": name, "action": action}
+        if numerical_stability:
+            attrs["numerical_stability"] = "pops.authored-stability-admission@1"
         return self._new(
             value.vtype, "acceptance_guard", (value, condition),
-            {"guard": name, "action": action}, value.name, value.block,
+            attrs, value.name, value.block,
             space=value.space, point=value.point, field_context=value.field_context,
             state_ref=value.state_ref,
         )
@@ -156,13 +160,21 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         role = GuardRole.INVARIANT if role is None else role
         if type(role) is not GuardRole:
             raise TypeError("guard: role must be a GuardRole")
+        numerical_stability = role is GuardRole.NUMERICAL_STABILITY
+        if numerical_stability:
+            if value.vtype != "state" or not isinstance(action, (RejectAttempt, FailRun)):
+                raise ValueError("numerical stability admission needs a State and a terminal failure action; "
+                                 "compose any projection explicitly before its guard")
+            from .stability_admission import require_candidate_dependency
+            require_candidate_dependency(condition, value)
         validate_input_regions(
             self, (value, condition), self._current_region(), "acceptance guard")
 
         if isinstance(action, (RejectAttempt, FailRun)):
             if recheck is not None:
                 raise ValueError("guard: recheck is valid only with ProjectAndRecheck")
-            guarded = self._acceptance_guard_value(name, value, condition, action)
+            guarded = self._acceptance_guard_value(name, value, condition, action,
+                                                   numerical_stability=numerical_stability)
         elif type(action) is ProjectAndRecheck:
             if not callable(recheck):
                 raise TypeError(
@@ -665,7 +677,7 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         if condition.clock != true_result.clock:
             raise ValueError("branch: condition and result arms must share one clock")
         structured = ({"signature": true_result.attrs["signature"]}
-                      if true_result.vtype in ("product", "variant", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted") else
+                      if true_result.vtype in ("product", "variant", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted", "field_topology") else
                       {"success_signature": true_result.attrs["success_signature"]}
                       if true_result.vtype == "result" else {})
         return self._new(
@@ -681,7 +693,7 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
     def _require_branch_compatible(left: Any, right: Any) -> None:
         if left.vtype != right.vtype:
             raise ValueError("branch: both arms must return the same value type")
-        if left.vtype in ("product", "variant", "result", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted"):
+        if left.vtype in ("product", "variant", "result", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted", "field_topology"):
             from .structured_control import value_signature, same_signature
             if not same_signature(value_signature(left), value_signature(right)):
                 raise ValueError("branch: product arms must have identical structural types")
@@ -727,7 +739,8 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
     })
 
     @atomic_authoring
-    def after_synchronization(self, body_fn: Any, *, name: Any = None) -> Any:
+    def after_synchronization(self, body_fn: Any, *, name: Any = None,
+                              _continuation_forest: Any = None) -> Any:
         """Run ``body_fn(P)`` once per AMR level after reflux and average-down.
 
         The callback is a build-time authoring body.  It must return ``None`` and may be
@@ -759,7 +772,8 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
             "unit",
             "post_synchronization",
             (),
-            {"body_block": body_block, "body_region": body_region},
+            {"body_block": body_block, "body_region": body_region,
+             **({"continuation_forest": _continuation_forest} if _continuation_forest is not None else {})},
             name,
             None,
         )

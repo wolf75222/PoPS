@@ -34,7 +34,7 @@ struct BoundaryFaceOmission {
 namespace masked_operator_detail {
 
 template <int Axis, ReconstructionVariables Variables, int Dim, class Model, class Metric,
-          class Reconstruction, class NumericalFlux, class ProviderStorage>
+          class Reconstruction, class NumericalFlux, class ProviderStorage, class TraceTransform>
 struct MaterializeMaskedFaceFlux {
   Model model;
   Metric metric;
@@ -48,6 +48,7 @@ struct MaterializeMaskedFaceFlux {
   FaceFieldView<Real, Dim> integrated_fluxes{};
   FaceFieldView<Real, Dim> statuses{};
   BoundaryFaceOmission<Dim> omission{};
+  TraceTransform trace_transform;
 
   POPS_HD void clear(const FaceIndex<Dim, Axis>& face, FiniteVolumeStatus status) const {
     for (int component = 0; component < Model::n_vars; ++component)
@@ -81,6 +82,19 @@ struct MaterializeMaskedFaceFlux {
     }
 
     auto traces = reconstruct_face_pair<Axis, Variables>(model, state, face, reconstruction);
+    if (positivity_floor > Real(0)) {
+      if (traces.left_status == StateConversionStatus::Success &&
+          traces.left[positivity_component] < positivity_floor) {
+        traces.left = load_state<Model>(state, left_cell);
+        traces.left_status = model.admissibility(traces.left);
+      }
+      if (traces.right_status == StateConversionStatus::Success &&
+          traces.right[positivity_component] < positivity_floor) {
+        traces.right = load_state<Model>(state, right_cell);
+        traces.right_status = model.admissibility(traces.right);
+      }
+    }
+    trace_transform.template operator()<Axis>(model, state, face, traces);
     if (traces.left_status != StateConversionStatus::Success) {
       clear(face, finite_volume_detail::finite_volume_status(traces.left_status));
       return;
@@ -88,24 +102,6 @@ struct MaterializeMaskedFaceFlux {
     if (traces.right_status != StateConversionStatus::Success) {
       clear(face, finite_volume_detail::finite_volume_status(traces.right_status));
       return;
-    }
-    if (positivity_floor > Real(0)) {
-      if (traces.left[positivity_component] < positivity_floor) {
-        traces.left = load_state<Model>(state, left_cell);
-        traces.left_status = model.admissibility(traces.left);
-      }
-      if (traces.right[positivity_component] < positivity_floor) {
-        traces.right = load_state<Model>(state, right_cell);
-        traces.right_status = model.admissibility(traces.right);
-      }
-      if (traces.left_status != StateConversionStatus::Success) {
-        clear(face, finite_volume_detail::finite_volume_status(traces.left_status));
-        return;
-      }
-      if (traces.right_status != StateConversionStatus::Success) {
-        clear(face, finite_volume_detail::finite_volume_status(traces.right_status));
-        return;
-      }
     }
 
     const auto evaluation =
@@ -131,7 +127,8 @@ struct MaterializeMaskedFaceFlux {
 };
 
 template <int Axis, ReconstructionVariables Variables, int Dim, class Model, class Metric,
-          class Reconstruction, class NumericalFlux, class ProviderStorage, class MemorySpace>
+          class Reconstruction, class NumericalFlux, class ProviderStorage, class MemorySpace,
+          class TraceTransform = cartesian_operator_detail::IdentityFaceTrace>
 void materialize_axes(const Model& model, const Metric& metric,
                       const Reconstruction& reconstruction, const NumericalFlux& numerical_flux,
                       Real positivity_floor, int positivity_component,
@@ -139,17 +136,18 @@ void materialize_axes(const Model& model, const Metric& metric,
                       const ProviderStorage& providers,
                       FaceField<Dim, MemorySpace>& integrated_fluxes,
                       FaceField<Dim, MemorySpace>& statuses,
-                      const BoundaryFaceOmission<Dim>& omission) {
+                      const BoundaryFaceOmission<Dim>& omission,
+                      const TraceTransform& trace_transform = {}) {
   for_each_face<Axis>(state.box(),
                       MaterializeMaskedFaceFlux<Axis, Variables, Dim, Model, Metric, Reconstruction,
-                                                NumericalFlux, ProviderStorage>{
+                                                NumericalFlux, ProviderStorage, TraceTransform>{
                           model, metric, reconstruction, numerical_flux, positivity_floor,
                           positivity_component, state.view(), providers, active_cells.view(),
-                          integrated_fluxes.view(), statuses.view(), omission});
+                          integrated_fluxes.view(), statuses.view(), omission, trace_transform});
   if constexpr (Axis + 1 < Dim)
     materialize_axes<Axis + 1, Variables>(
         model, metric, reconstruction, numerical_flux, positivity_floor, positivity_component,
-        state, active_cells, providers, integrated_fluxes, statuses, omission);
+        state, active_cells, providers, integrated_fluxes, statuses, omission, trace_transform);
 }
 
 template <int Dim, class Metric, int N>

@@ -14,7 +14,7 @@ from decimal import Decimal
 from fractions import Fraction
 from typing import Any
 
-from pops.identity.scalar import scalar_literal
+from pops.identity.scalar import scalar_literal, parse_canonical_integer
 
 
 HLLC_FLUID_ROLES = "fluid_roles_v1"
@@ -69,9 +69,9 @@ def _delta_from_token(token: Any) -> Any:
     kind = data.get("kind")
     try:
         if kind == "integer" and set(data) == {"kind", "value"}:
-            value: Any = int(data["value"])
+            value: Any = parse_canonical_integer(data["value"])
         elif kind == "rational" and set(data) == {"kind", "numerator", "denominator"}:
-            value = Fraction(int(data["numerator"]), int(data["denominator"]))
+            value = Fraction(parse_canonical_integer(data["numerator"]), parse_canonical_integer(data["denominator"]))
         elif kind == "decimal" and set(data) == {"kind", "value"}:
             value = Decimal(data["value"])
         elif kind == "binary64" and set(data) == {"kind", "value"}:

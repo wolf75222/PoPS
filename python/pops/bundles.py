@@ -48,20 +48,23 @@ def _project_type(signature, path, *, domain=False):
 
 
 def _dependent_paths(signature, prefix=(), *, root=True):
-    # An inner Bundle owns its own relative binders and is validated recursively.
-    if not root and signature.get("bundle") is not None:
-        return
-    kind = signature["vtype"]
-    if kind in ("array", "index", "index_set"):
-        yield prefix, signature
-    if kind in ("product", "variant"):
-        for name, child in signature["members"]:
-            yield from _dependent_paths(child, (*prefix, name), root=False)
-    elif kind == "array":
-        yield from _dependent_paths(signature["element"], (*prefix, "[]"), root=False)
-    elif kind not in ("index", "index_set", "scalar", "int64", "bool"):
-        raise TypeError("Bundle data requires finite arrays and structural leaves; "
-                        "a legacy Field needs an explicit representation map")
+    # An inner Bundle owns its own relative binders.
+    stack = [(signature, prefix, root)]
+    while stack:
+        item, path, is_root = stack.pop()
+        if not is_root and item.get("bundle") is not None:
+            continue
+        kind = item["vtype"]
+        if kind in ("array", "index", "index_set"):
+            yield path, item
+        if kind in ("product", "variant"):
+            stack.extend((child, (*path, name), False)
+                         for name, child in reversed(item["members"]))
+        elif kind == "array":
+            stack.append((item["element"], (*path, "[]"), False))
+        elif kind not in ("index", "index_set", "scalar", "int64", "bool"):
+            raise TypeError("Bundle data requires finite arrays and structural leaves; "
+                            "a legacy Field needs an explicit representation map")
 
 
 def _unmarked(signature):
@@ -118,9 +121,12 @@ class BundleSchema:
     """
     input_type: ValueType
     value_type: ValueType
+    byte_capacity: int
     __pops_ir_immutable__ = True
 
-    def __init__(self, prototype, *, domains, bindings):
+    def __init__(self, prototype, *, domains, bindings, byte_capacity=64 * 1024 * 1024):
+        if type(byte_capacity) is not int or not 0 < byte_capacity < 2**63:
+            raise ValueError("Bundle byte_capacity requires a positive Int64 resource bound")
         if type(prototype) is ValueType:
             signature = prototype.signature
         else:
@@ -143,6 +149,7 @@ class BundleSchema:
         validate_bundle_signature(marked)
         object.__setattr__(self, "input_type", ValueType(signature))
         object.__setattr__(self, "value_type", ValueType(marked))
+        object.__setattr__(self, "byte_capacity", byte_capacity)
 
     def bind(self, program, value):
         return _bind(program, self, value)
@@ -153,7 +160,8 @@ def _bind(program, schema, value):
     require_owned(program, value, "Bundle input", vtype="product")
     if not same_signature(schema.input_type.signature, _unmarked(value_signature(value))):
         raise TypeError("Bundle construction changed its complete structural schema")
-    return new_typed(program, schema.value_type.signature, "bundle_validate", (value,), {},
+    return new_typed(program, schema.value_type.signature, "bundle_validate", (value,),
+                     {"byte_capacity": schema.byte_capacity},
                      point=value.point)
 
 
@@ -180,8 +188,11 @@ class Remap:
     body: GraphFunction
     source_instance: tuple
     histories: tuple
+    byte_capacity: int
 
-    def __init__(self, body, *, source_instance, histories):
+    def __init__(self, body, *, source_instance, histories, byte_capacity=64 * 1024 * 1024):
+        if type(byte_capacity) is not int or not 0 < byte_capacity < 2**63:
+            raise ValueError("Remap byte_capacity requires a positive Int64 resource bound")
         from pops.graph_functions import GraphFunction
         if type(body) is not GraphFunction:
             raise TypeError("Remap body must be a closed GraphFunction")
@@ -192,6 +203,7 @@ class Remap:
         object.__setattr__(self, "body", body)
         object.__setattr__(self, "source_instance", _path(source_instance))
         object.__setattr__(self, "histories", tuple(histories.items()))
+        object.__setattr__(self, "byte_capacity", byte_capacity)
 
 
 @atomic_authoring
@@ -223,6 +235,7 @@ def remap(program, method, bundle, *, data):
             raise TypeError("Remap must return the complete same-family Bundle schema")
         return new_typed(p, signature, "bundle_remap_validate", (bundle, candidate),
                          {"source_instance": method.source_instance,
+                          "byte_capacity": method.byte_capacity,
                           "history_policies": method.histories}, point=candidate.point)
 
     return program.capture(attempt)

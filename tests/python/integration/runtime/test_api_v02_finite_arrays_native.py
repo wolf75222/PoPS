@@ -27,7 +27,10 @@ def _build(kind):
     expected = initial.copy()
     if kind == "compositions":
         count = p.int64((1 << 53)+3) - (1 << 53)
-        domain = p.range_set(count, capacity=5, ownership="replicated")
+        # Capacity is metadata, not an eager allocation or an Int32 MPI count.
+        domain = p.range_set(count, capacity=(1 << 63)-1, ownership="replicated")
+        empty = p.range_set(0, capacity=(1 << 63)-1, ownership="replicated")
+        p.map(empty, lambda b, i: b.int64(1)//b.int64(0))
         values = p.map(domain, lambda b, i: b.product(
             n=b.index_value(i)+1, x=b.float64(b.index_value(i))+0.25))
         seed = p.product(a=values, k=p.int64(0))

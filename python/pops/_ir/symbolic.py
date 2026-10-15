@@ -76,33 +76,35 @@ def _truth_test_location(value: Any) -> SourceLocation:
 
 
 def freeze_symbolic_metadata(value: Any) -> Any:
-    """Recursively freeze container metadata retained by a symbolic node."""
-    if getattr(value, "__pops_ir_immutable__", False) is True:
-        return value
-    if isinstance(value, Mapping):
-        return MappingProxyType({
-            freeze_symbolic_metadata(key): freeze_symbolic_metadata(item)
-            for key, item in value.items()
-        })
-    if isinstance(value, (list, tuple)):
-        return tuple(freeze_symbolic_metadata(item) for item in value)
-    if isinstance(value, (set, frozenset)):
-        return frozenset(freeze_symbolic_metadata(item) for item in value)
-    if value is None or isinstance(value, (bool, int, str, bytes)):
-        return value
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError("symbolic floating metadata must be finite")
-        return value
-    if isinstance(value, Fraction):
-        return value
-    if isinstance(value, Decimal):
-        if not value.is_finite():
-            raise ValueError("symbolic Decimal metadata must be finite")
-        return value
-    raise TypeError(
-        "symbolic metadata leaf %s is mutable or opaque; use strict data or an immutable protocol"
-        % type(value).__name__)
+    """Freeze finite container metadata without depending on Python stack depth."""
+    from pops._structural_data import transform
+
+    def describe(value):
+        if getattr(value, "__pops_ir_immutable__", False) is True:
+            return None, value
+        if isinstance(value, Mapping):
+            children = tuple(child for pair in value.items() for child in pair)
+            return children, lambda items: MappingProxyType(dict(zip(items[::2], items[1::2], strict=True)))
+        if isinstance(value, (list, tuple)):
+            return value, tuple
+        if isinstance(value, (set, frozenset)):
+            return value, frozenset
+        if value is None or isinstance(value, (bool, int, str, bytes)):
+            return None, value
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise ValueError("symbolic floating metadata must be finite")
+            return None, value
+        if isinstance(value, Fraction):
+            return None, value
+        if isinstance(value, Decimal):
+            if not value.is_finite():
+                raise ValueError("symbolic Decimal metadata must be finite")
+            return None, value
+        raise TypeError(
+            "symbolic metadata leaf %s is mutable or opaque; use strict data or an immutable protocol"
+            % type(value).__name__)
+    return transform(value, describe)
 
 
 class _ImmutableSymbolicMeta(type):

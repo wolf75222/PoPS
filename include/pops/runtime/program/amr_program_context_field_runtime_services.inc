@@ -48,7 +48,8 @@ PhysicalBoundaryConditions<Dim> hierarchy_tensor_boundary_(
   else
     for (const auto& [key, unused] : options.values)
       if (key.starts_with("boundary.") || key.starts_with("operator."))
-        throw std::invalid_argument("external tensor provider has no authored face-law option contract");
+        throw std::invalid_argument(
+            "external tensor provider has no authored face-law option contract");
   if (controls.boundary_count != 0 && controls.boundary_count != 2 * Dim)
     throw std::invalid_argument("authored tensor boundary rank differs from native topology");
   std::array<PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
@@ -61,11 +62,12 @@ PhysicalBoundaryConditions<Dim> hierarchy_tensor_boundary_(
       if (controls.boundary_count != 0) {
         const int law = controls.boundary_kinds[static_cast<std::size_t>(ordinal)];
         if ((law == 0) != topology.is_periodic(face))
-          throw std::invalid_argument("authored tensor boundary contradicts periodic mesh topology");
+          throw std::invalid_argument(
+              "authored tensor boundary contradicts periodic mesh topology");
         if (law != 0)
           faces[static_cast<std::size_t>(ordinal)] = {
-              law == 1 ? PhysicalBoundaryKind::dirichlet : PhysicalBoundaryKind::neumann,
-              Real(0), law == 1 ? Real(1) : Real(0), law == 1 ? Real(0) : Real(1)};
+              law == 1 ? PhysicalBoundaryKind::dirichlet : PhysicalBoundaryKind::neumann, Real(0),
+              law == 1 ? Real(1) : Real(0), law == 1 ? Real(0) : Real(1)};
         continue;
       }
       if (topology.is_physical(face))
@@ -101,7 +103,8 @@ PreparedHierarchyTensorState prepare_hierarchy_tensor_solver_(
       const field_type& level_state = runtime_->hierarchy().state(level);
       const Geometry<Dim> level_geometry =
           facade_->prepared_amr_level_geometry(static_cast<int>(level));
-      const PhysicalBoundaryConditions<Dim> boundary = hierarchy_tensor_boundary_(level_geometry, selection.options);
+      const PhysicalBoundaryConditions<Dim> boundary =
+          hierarchy_tensor_boundary_(level_geometry, selection.options);
       request.levels.push_back({level_geometry, boundary, level_state.layout(),
                                 level_state.distribution(), level_state.local_rank()});
       boundaries.push_back({level_geometry, boundary});
@@ -450,9 +453,9 @@ field_type& persistent_scratch_(ScratchKind kind, std::int64_t value_id, int sub
   try {
     runtime_owner = scratch_prototype_owner_(prototype);
   } catch (const std::invalid_argument& error) {
-    throw std::invalid_argument(std::string(error.what()) + " (value=" +
-        std::to_string(value_id) + ", subslot=" + std::to_string(subslot) +
-        ", level=" + std::to_string(active_level_) + ")");
+    throw std::invalid_argument(std::string(error.what()) + " (value=" + std::to_string(value_id) +
+                                ", subslot=" + std::to_string(subslot) +
+                                ", level=" + std::to_string(active_level_) + ")");
   }
   const ScratchKey key{kind, active_level_, runtime_owner, value_id, subslot};
   auto found = scratches_.find(key);
@@ -484,6 +487,8 @@ int scratch_prototype_owner_(const field_type& prototype) const {
       throw std::logic_error("AMR Program scratch prototype aliases multiple runtime owners");
     owner = candidate;
   };
+  if (const auto stored = continuation_field_storage_owner_(prototype))
+    record(*stored);
   for (int runtime_block = 0; runtime_block < n_blocks(); ++runtime_block) {
     const field_type* const active = live_attempt_state_(runtime_block, active_level_);
     const field_type* const accepted =
@@ -499,8 +504,10 @@ int scratch_prototype_owner_(const field_type& prototype) const {
   // Independent hierarchy fields have no contributing block owner and retain their solve-key API.
   if (hierarchy_tensor_selection_ && hierarchy_tensor_solver_ && active_level_ >= 0 &&
       active_level_ < hierarchy_tensor_solver_->level_count() &&
-      hierarchy_tensor_solver_->execution_path() == HierarchyTensorSolverExecutionPath::DirectProvider &&
-      hierarchy_tensor_solver_->provider_identity() == hierarchy_tensor_selection_->provider_identity &&
+      hierarchy_tensor_solver_->execution_path() ==
+          HierarchyTensorSolverExecutionPath::DirectProvider &&
+      hierarchy_tensor_solver_->provider_identity() ==
+          hierarchy_tensor_selection_->provider_identity &&
       hierarchy_tensor_topology_epoch_ == runtime_->topology_epoch() &&
       hierarchy_tensor_materialization_generation_ == runtime_->materialization_generation() &&
       &prototype == &hierarchy_tensor_solver_->solution(active_level_)) {

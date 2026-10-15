@@ -448,6 +448,8 @@ set(POPS_CPP_STANDARD_TESTS
   test_profiler
   test_cache_manager
   test_continuation_image
+  test_continuation_field_migration
+  test_continuation_distributed_migration
   test_bundle_v14
   test_distributed_algebra_v14
   test_distributed_gc_v14
@@ -830,6 +832,12 @@ pops_add_gtest_suite(
   EXTRA_LIBS pops_runtime_amr
   LABELS unit runtime amr fast)
 
+pops_test_source(_src test_composite_physical_measure)
+pops_add_gtest_suite(
+  NAME test_composite_physical_measure
+  SOURCES "${_src}"
+  LABELS unit numerics nd fast)
+
 pops_test_source(_src test_program_reflux_ledger)
 pops_add_gtest_suite(
   NAME test_program_reflux_ledger
@@ -1044,6 +1052,8 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_world_communicator 1 2)
 
   set(POPS_MPI_RANKS_test_continuation_image 2)
+  set(POPS_MPI_RANKS_test_continuation_field_migration 2 3)
+  set(POPS_MPI_RANKS_test_continuation_distributed_migration 2 3)
   set(POPS_MPI_RANKS_test_bundle_v14 2 3)
   set(POPS_MPI_RANKS_test_distributed_algebra_v14 2 3)
   set(POPS_MPI_RANKS_test_distributed_gc_v14 2 3)
@@ -1202,6 +1212,8 @@ if(POPS_HAS_MPI)
   # architecture gate compares this projection and these CMake registrations exactly.
   set(POPS_CPP_MPI_VARIANT_TESTS
     test_continuation_image
+    test_continuation_field_migration
+    test_continuation_distributed_migration
     test_bundle_v14
     test_distributed_algebra_v14
     test_distributed_gc_v14
@@ -1345,11 +1357,15 @@ if(POPS_HAS_MPI)
           ${_test} ${_np}
           GTEST_FILTER
             "test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction:test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore")
+      elseif(_test STREQUAL "test_continuation_distributed_migration")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER "ContinuationDistributedMigration.*")
       elseif(_test STREQUAL "test_program_runtime")
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally:ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional:ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock:ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox:ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal:ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource:ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep:ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication:ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption:ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching:ProgramRuntime.MovingIntervalsPublishRealGeometryStateAndLedgerThenParentRollback:ProgramRuntime.MovingIntervalsRejectStaleDurationSweepsCollectivelyBeforePublication:ProgramRuntime.MovingIntervalsUseProjectedPhysicalFluxAndSpaceTimeSourceExactlyOnce:ProgramRuntime.MovingIntervalsRefuseFiniteUnrecoverablePhysicalStateBeforePublication:ProgramRuntime.MovingIntervalProjectionEvaluatesBodiesWithinIssuedDuration:ProgramRuntime.IndependentMovingCodec*:ProgramRuntime.IndependentMovingCaptureRejectsNonterminalOrNestedStaging:ProgramRuntime.ExplicitVectorPairing*:ProgramRuntime.CompensatedVectorPairing*:ProgramRuntime.IntegralCandidate*:ProgramRuntime.IntegralCapture*:ProgramRuntime.IntegralFeedback*:ProgramRuntime.IndependentTypedIntegralCapture*")
+            "ProgramRuntime.ContinuationRegridHooksBelongToTheExactArtifactInstallation:ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally:ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional:ProgramRuntime.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock:ProgramRuntime.NestedChildCommitThenParentRejectRestoresDurationAndExchangeMailbox:ProgramRuntime.UniformPathPreflightPreservesScratchOnRankLocalRefusal:ProgramRuntime.ProgramStateStorageDoesNotAdvertiseAnImplicitPoissonSource:ProgramRuntime.CflWithoutPoissonProviderPublishesTheProgramStep:ProgramRuntime.CflExplicitPoissonWithoutProviderRefusesBeforeProgramPublication:ProgramRuntime.CflRetainsImplicitPoissonProviderAndStageStateConsumption:ProgramRuntime.CflRejectsRankLocalPoissonRequirementsBeforeBranching:ProgramRuntime.MovingIntervalsPublishRealGeometryStateAndLedgerThenParentRollback:ProgramRuntime.MovingIntervalsRejectStaleDurationSweepsCollectivelyBeforePublication:ProgramRuntime.MovingIntervalsUseProjectedPhysicalFluxAndSpaceTimeSourceExactlyOnce:ProgramRuntime.MovingIntervalsRefuseFiniteUnrecoverablePhysicalStateBeforePublication:ProgramRuntime.MovingIntervalProjectionEvaluatesBodiesWithinIssuedDuration:ProgramRuntime.IndependentMovingCodec*:ProgramRuntime.IndependentMovingCaptureRejectsNonterminalOrNestedStaging:ProgramRuntime.ExplicitVectorPairing*:ProgramRuntime.CompensatedVectorPairing*:ProgramRuntime.IntegralCandidate*:ProgramRuntime.IntegralCapture*:ProgramRuntime.IntegralFeedback*:ProgramRuntime.IndependentTypedIntegralCapture*")
       elseif(_test STREQUAL "test_program_context_contract")
         pops_add_mpi_rank_test(
           ${_test} ${_np}
@@ -1359,7 +1375,7 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance:GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords:GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically:GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences:GeneratedAmrSystemBlock.CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry:GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry:GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts:GeneratedAmrSystemBlock.CflPublishesCoordinateAuxiliaryBeforeSpeedAndRetainsInvalidGuards")
+            "GeneratedAmrSystemBlock.ProgramStateConsumesEmbeddedMeasureWithoutInventingFlux:GeneratedAmrSystemBlock.ProgramStatePhysicalExtensionHasNoBoundaryLinearization:GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance:GeneratedAmrSystemBlock.AcceptedExchangeCheckpointIsExactAndRejectsMalformedRecords:GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically:GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences:GeneratedAmrSystemBlock.CellIntegralBootstrapRejectsMpiProgramMismatchBeforeValidRetry:GeneratedAmrSystemBlock.GaussianBootstrapRejectsMpiProfileMismatchBeforeValidRetry:GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts:GeneratedAmrSystemBlock.CflPublishesCoordinateAuxiliaryBeforeSpeedAndRetainsInvalidGuards")
       else()
         pops_add_mpi_rank_test(${_test} ${_np})
       endif()

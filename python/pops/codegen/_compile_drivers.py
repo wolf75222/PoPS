@@ -18,6 +18,7 @@ from pops.codegen.toolchain import (
     _pops_import_lib,
     pops_header_signature,
     pops_loader_build_flags,
+    normalize_native_compiler_command,
 )
 from pops.codegen.cache import (
     _artifact_cache_lock,
@@ -163,6 +164,7 @@ def compile_native(
                                 if native_components or toolchain_capture is not None else [])
             cmd = [cc, *flags, *dependency_flags, "-I", include, *component_flags,
                    cpp, "-o", so_path, *native_link_flags]
+        cmd = normalize_native_compiler_command(cmd)
         from pops.codegen.model_compile_evidence import paths, retain
         try:
             verify_native_toolchain(toolchain_capture)
@@ -314,7 +316,8 @@ def compile_model(
     if so_path is None:
         so_path = _identity_cache_so_path(spec_identity)
         with _artifact_cache_lock(so_path):
-            if model_source_policy == "recompile": guard_recompile(so_path)
+            if model_source_policy == "recompile":
+                guard_recompile(so_path)
             if os.path.exists(so_path) and model_source_policy != "recompile":
                 verify_cached_artifact(
                     so_path, semantic_identity=semantic_identity, spec_identity=spec_identity
@@ -334,14 +337,17 @@ def compile_model(
     else:
         so_path = _artifact_distinct_so_path(so_path, spec_identity)
     with _artifact_cache_lock(so_path):
-        if model_source_policy == "recompile": guard_recompile(so_path)
+        if model_source_policy == "recompile":
+            guard_recompile(so_path)
         staging = _artifact_cache_staging_path(so_path)
         try:
             return _compile_and_authenticate(staging, so_path)
         finally:
             for leftover in (staging, artifact_sidecar_path(staging), *paths(staging)):
-                try: os.remove(leftover)
-                except FileNotFoundError: pass
+                try:
+                    os.remove(leftover)
+                except FileNotFoundError:
+                    pass
 
 
 # compile_problem -- compile a pops.time.Program into a problem.so
@@ -734,6 +740,8 @@ def _compile_problem_impl(
                     else item
                     for item in cmd
                 ]
+                cmd = normalize_native_compiler_command(cmd)
+                reported_cmd = normalize_native_compiler_command(reported_cmd)
                 compile_command = _redact_compile_command(
                     reported_cmd,
                     tmp_cpp=cpp,

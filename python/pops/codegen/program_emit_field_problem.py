@@ -54,6 +54,9 @@ def guard_candidate_allocations(rows: list[str]) -> list[str]:
 
 def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: Any,
                              *, target: str) -> None:
+    from .program_emit_temporal_field import emit_temporal_field_assembly
+    if emit_temporal_field_assembly(value, var, lines, prelude, target=target):
+        return
     if target not in ("system", "amr_system") or prelude is None:
         raise NotImplementedError("field expression storage requires a supported native Program body")
     hierarchy = target == "amr_system"

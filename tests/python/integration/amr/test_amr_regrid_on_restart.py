@@ -357,12 +357,12 @@ def _accepted_tagging_hysteresis(payload):
         assert cursor <= len(encoded), "accepted-state string is truncated"
 
     version = encoded[:8]
-    assert version in (b"POPSAND4", b"POPSAND5", b"POPSAND6", b"POPSAND7", b"POPSAND9", b"POPSANDA")
+    assert version in (b"POPSAND4", b"POPSAND5", b"POPSAND6", b"POPSAND7", b"POPSAND9", b"POPSANDA", b"POPSANDB", b"POPSANDC", b"POPSANDD", b"POPSANDE")
     cursor = 8
     cursor += 8  # native dimension
     skip_string()  # exact spatial contract
     cursor += 2 * 8  # topology epoch, materialization generation
-    if version in (b"POPSAND9", b"POPSANDA"):
+    if version in (b"POPSAND9", b"POPSANDA", b"POPSANDB", b"POPSANDC", b"POPSANDD", b"POPSANDE"):
         read_size()  # committed attempt; legacy inspection does not synthesize authority
     level_count = read_size()
     cursor += level_count * 40
@@ -379,19 +379,21 @@ def _accepted_tagging_hysteresis(payload):
         for _identity in range(4):
             skip_string()
         cursor += 2 * 8  # depth, component count
-        if version == b"POPSANDA":
+        if version in (b"POPSANDA", b"POPSANDB", b"POPSANDC", b"POPSANDD", b"POPSANDE"):
             cursor += 8  # exact declared history halo
     history_slot_count = read_size()
     for _ in range(history_slot_count):
         skip_string()
         cursor += 5 * 8  # level, slot, outgoing dt, initialized, fill count
-        if version in (b"POPSAND7", b"POPSAND9", b"POPSANDA"):
+        if version in (b"POPSAND7", b"POPSAND9", b"POPSANDA", b"POPSANDB", b"POPSANDC", b"POPSANDD", b"POPSANDE"):
             cursor += 4 * 8  # exact typed publication identity
+        if version in (b"POPSANDB", b"POPSANDC", b"POPSANDD", b"POPSANDE"):
+            cursor += 4 * 8  # exact reconstruction ancestry digest
     pending_count = read_size()
     for _ in range(pending_count):
         skip_string()
         cursor += 12 * 8  # two encoded i32, four u64, three i64, two real, consumed
-        if version in (b"POPSAND9", b"POPSANDA"):
+        if version in (b"POPSAND9", b"POPSANDA", b"POPSANDB", b"POPSANDC", b"POPSANDD", b"POPSANDE"):
             cursor += 6 * 8  # qualification and source sample
             skip_string()
     assert cursor <= len(encoded), "accepted-state pending history remaps are truncated"

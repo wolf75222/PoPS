@@ -33,7 +33,7 @@ def scalar_signature(kind) -> ValueSignature:
 
 def new_typed(program, signature, op, inputs, attrs, *, point=None, name=None) -> ProgramValue:
     attrs = dict(attrs)
-    if signature["vtype"] in ("product", "variant", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted"):
+    if signature["vtype"] in ("product", "variant", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted", "field_topology"):
         attrs["signature"] = signature
         if point is None:
             point = signature.get("point")

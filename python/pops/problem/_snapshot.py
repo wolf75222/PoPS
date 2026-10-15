@@ -12,8 +12,12 @@ the immutable value, hashing, construction, validation, and attachment lifecycle
 """
 from __future__ import annotations
 
-import json
+from pops._structural_data import canonical_json as _encode_json, json_containers
 from typing import Any
+import weakref
+from types import FunctionType
+
+import pops.identity.semantic as _semantic_module
 
 from pops.identity import Identity, canonical_sha256
 from pops.identity.semantic import semantic_identity, semantic_value
@@ -43,7 +47,7 @@ class AuthoringSnapshot:
     schema_version = SNAPSHOT_SCHEMA_VERSION
     __slots__ = (
         "_canonical_json", "_hash", "_semantic_canonical_json", "_semantic_identity",
-        "_artifact_canonical_json", "_artifact_hash",
+        "_artifact_canonical_json", "_artifact_hash", "__weakref__",
     )
 
     def __init__(
@@ -65,20 +69,22 @@ class AuthoringSnapshot:
             raise ValueError("AuthoringSnapshot payload cannot define reserved key 'schema_version'")
         out = dict(canonical_payload)
         out["schema_version"] = self.schema_version
-        canonical_json = json.dumps(
-            out, sort_keys=False, separators=(",", ":"), allow_nan=False)
+        canonical_json = _encode_json(
+            out, sort_keys=False, allow_nan=False)
         object.__setattr__(self, "_canonical_json", canonical_json)
-        object.__setattr__(self, "_hash", canonical_sha256(out))
+        full_hash = canonical_sha256(out)
+        object.__setattr__(self, "_hash", full_hash)
 
         # Case builders always supply their closed scientific projection. Direct construction is
         # a low-level provenance seam: there the caller's explicit payload is also the semantic
         # declaration, after the strict snapshot projector has made it an inert value.
         semantic_source = canonical_payload if semantic_payload is None else semantic_payload
         semantic_data = semantic_value(semantic_source, where="AuthoringSnapshot semantic payload")
-        semantic_json = json.dumps(
-            semantic_data, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        semantic_json = _encode_json(
+            semantic_data, sort_keys=True, allow_nan=False)
         object.__setattr__(self, "_semantic_canonical_json", semantic_json)
-        object.__setattr__(self, "_semantic_identity", semantic_identity(semantic_data))
+        semantic_key = semantic_identity(semantic_data)
+        object.__setattr__(self, "_semantic_identity", semantic_key)
 
         # This is a separately versioned preimage, not a scrub of the full canonical dict. The
         # Case builder supplies an explicit parameter/model projection; standalone snapshots use
@@ -97,10 +103,21 @@ class AuthoringSnapshot:
             "problem_snapshot_schema_version": self.schema_version,
             "payload": canonical_artifact_payload,
         }
-        artifact_json = json.dumps(
-            artifact_envelope, sort_keys=False, separators=(",", ":"), allow_nan=False)
+        artifact_json = _encode_json(
+            artifact_envelope, sort_keys=False, allow_nan=False)
         object.__setattr__(self, "_artifact_canonical_json", artifact_json)
-        object.__setattr__(self, "_artifact_hash", canonical_sha256(artifact_envelope))
+        artifact_hash = canonical_sha256(artifact_envelope)
+        object.__setattr__(self, "_artifact_hash", artifact_hash)
+        # Only the closed builtin JSON language has an exact JSON decode preimage.
+        # Subclasses, tuples, non-string keys and floats must take the
+        # complete validator; user hooks never establish a construction receipt.
+        if all(_plain_json_data(value) for value in (out, semantic_data, artifact_envelope)):
+            _remember_snapshot(self, (
+                canonical_json, full_hash, semantic_json,
+                semantic_key.domain, semantic_key.schema_version,
+                semantic_key.algorithm, semantic_key.digest,
+                artifact_json, artifact_hash,
+            ))
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError("AuthoringSnapshot is immutable")
@@ -112,7 +129,7 @@ class AuthoringSnapshot:
         """The canonical, JSON-ready dict of the frozen assembly (stamped with the schema version)."""
         # Decode afresh so callers receive an ordinary JSON-ready deep copy with no route back into
         # the frozen cache identity.
-        return json.loads(self._canonical_json)
+        return json_containers(self._canonical_json)
 
     @property
     def hash(self) -> Any:
@@ -126,7 +143,7 @@ class AuthoringSnapshot:
 
     def semantic_to_dict(self) -> dict[str, Any]:
         """Return a detached copy of the exact semantic-identity payload."""
-        return json.loads(self._semantic_canonical_json)
+        return json_containers(self._semantic_canonical_json)
 
     @property
     def artifact_hash(self) -> str:
@@ -139,7 +156,7 @@ class AuthoringSnapshot:
 
     def artifact_to_dict(self) -> dict[str, Any]:
         """Return a detached JSON-ready copy of the versioned artifact projection."""
-        return json.loads(self._artifact_canonical_json)
+        return json_containers(self._artifact_canonical_json)
 
     def __eq__(self, other: Any) -> bool:
         return isinstance(other, AuthoringSnapshot) and self.hash == other.hash
@@ -150,6 +167,133 @@ class AuthoringSnapshot:
     def __repr__(self) -> str:
         return "AuthoringSnapshot(hash=%s..., semantic_identity=%s..., artifact_hash=%s...)" % (
             self.hash[:12], self.semantic_identity.hexdigest[:12], self.artifact_hash[:12])
+
+
+# An identity-keyed weak table is deliberate: AuthoringSnapshot.__hash__/__eq__
+# use authored hashes, which object.__setattr__ can replace. No table key or
+# receipt retains a snapshot or its mutable Identity instance.
+_SNAPSHOT_RECEIPTS: dict[int, tuple[Any, tuple[Any, ...], tuple[int, ...]]] = {}
+_SNAPSHOT_SLOTS = (
+    "_canonical_json", "_hash", "_semantic_canonical_json", "_semantic_identity",
+    "_artifact_canonical_json", "_artifact_hash",
+)
+_SNAPSHOT_HOOKS = (*_SNAPSHOT_SLOTS, "to_dict", "semantic_to_dict", "artifact_to_dict",
+                   "hash", "semantic_identity", "artifact_hash", "__getattribute__")
+_IDENTITY_SLOTS = ("domain", "schema_version", "algorithm", "digest")
+_IDENTITY_HOOKS = (*_IDENTITY_SLOTS, "__getattribute__", "__eq__")
+
+
+def _implementation_tokens(values: Any) -> tuple[Any, ...]:
+    tokens = []
+    for value in values:
+        tokens.append(value)
+        if type(value) is FunctionType:
+            tokens.append(value.__code__)
+        elif type(value) is property:
+            for accessor in (value.fget, value.fset, value.fdel):
+                tokens.append(accessor)
+                if type(accessor) is FunctionType:
+                    tokens.append(accessor.__code__)
+    return tuple(tokens)
+
+
+def _snapshot_protocol_tokens() -> tuple[Any, ...]:
+    return _implementation_tokens((
+        *(AuthoringSnapshot.__dict__.get(name) for name in _SNAPSHOT_HOOKS),
+        *(Identity.__dict__.get(name) for name in _IDENTITY_HOOKS),
+        _encode_json, json_containers, canonical_sha256, semantic_identity,
+        _semantic_module.semantic_value, _semantic_module.make_identity,
+    ))
+
+
+_SNAPSHOT_PROTOCOL = _snapshot_protocol_tokens()
+
+
+def _plain_json_data(value: Any) -> bool:
+    """Prove the closed JSON/CBOR intersection without user protocols.
+
+    Binary64 values are already exact scalar records at this boundary: the
+    canonical CBOR codec deliberately refuses raw floats, including signed zero.
+    """
+    active: set[int] = set()
+    complete: set[int] = set()
+    work = [(False, value)]
+    while work:
+        leaving, item = work.pop()
+        if leaving:
+            active.remove(id(item))
+            complete.add(id(item))
+            continue
+        kind = type(item)
+        if item is None or kind in (str, int, bool):
+            continue
+        if kind not in (dict, list):
+            return False
+        key = id(item)
+        if key in active:
+            return False
+        if key in complete:
+            continue
+        active.add(key)
+        work.append((True, item))
+        if kind is dict:
+            if any(type(key) is not str for key in item):
+                return False
+            work.extend((False, child) for child in item.values())
+        else:
+            work.extend((False, child) for child in item)
+    return True
+
+
+def _snapshot_receipt_values(snapshot: Any) -> tuple[Any, ...] | None:
+    if type(snapshot) is not AuthoringSnapshot:
+        return None
+    tokens = _snapshot_protocol_tokens()
+    if len(tokens) != len(_SNAPSHOT_PROTOCOL) or any(
+            actual is not expected for actual, expected in zip(tokens, _SNAPSHOT_PROTOCOL, strict=True)):
+        return None
+    values = tuple(object.__getattribute__(snapshot, name) for name in _SNAPSHOT_SLOTS)
+    semantic = values[3]
+    if type(semantic) is not Identity:
+        return None
+    parts = tuple(object.__getattribute__(semantic, name) for name in _IDENTITY_SLOTS)
+    result = (*values[:3], *parts, *values[4:])
+    expected_types = (str, str, str, str, int, str, bytes, str, str)
+    if any(type(value) is not kind for value, kind in zip(result, expected_types, strict=True)):
+        return None
+    return result
+
+
+def _snapshot_receipt_versions() -> tuple[int, ...] | None:
+    values = (AuthoringSnapshot.schema_version, SNAPSHOT_SCHEMA_VERSION,
+              ARTIFACT_SCHEMA_VERSION, _semantic_module.SEMANTIC_SCHEMA_VERSION)
+    return values if all(type(value) is int for value in values) else None
+
+
+def _remember_snapshot(snapshot: Any, expected: tuple[Any, ...]) -> None:
+    current = _snapshot_receipt_values(snapshot)
+    versions = _snapshot_receipt_versions()
+    if current is None or versions is None or current != expected:
+        return
+    key = id(snapshot)
+
+    def release(reference: Any) -> None:
+        entry = _SNAPSHOT_RECEIPTS.get(key)
+        if entry is not None and entry[0] is reference:
+            del _SNAPSHOT_RECEIPTS[key]
+
+    _SNAPSHOT_RECEIPTS[key] = (weakref.ref(snapshot, release), expected, versions)
+
+
+def _has_exact_snapshot_receipt(snapshot: Any) -> bool:
+    entry = _SNAPSHOT_RECEIPTS.get(id(snapshot))
+    if entry is None or entry[0]() is not snapshot:
+        return False
+    # Every byte and scalar is compared, including Identity fields copied by
+    # value. Object identity only selects the receipt; it is never its verdict.
+    current = _snapshot_receipt_values(snapshot)
+    versions = _snapshot_receipt_versions()
+    return current is not None and versions is not None and current == entry[1] and versions == entry[2]
 
 
 @_definition_fingerprint_scope()
@@ -265,19 +409,32 @@ def validate_problem_snapshot(snapshot: Any) -> str:
         raise TypeError(
             "problem_snapshot must be a pops.problem.AuthoringSnapshot, not %r"
             % type(snapshot).__name__)
+    if _has_exact_snapshot_receipt(snapshot):
+        return snapshot.hash
+    return _validate_problem_snapshot_full(snapshot)
+
+
+def _validate_problem_snapshot_full(snapshot: AuthoringSnapshot) -> str:
     snapshot_hash = snapshot.hash
     if not isinstance(snapshot_hash, str) or len(snapshot_hash) != 64 \
             or any(char not in "0123456789abcdef" for char in snapshot_hash):
         raise ValueError("AuthoringSnapshot.hash must be exactly 64 lowercase hexadecimal characters")
-    canonical_json = json.dumps(
-        snapshot.to_dict(), sort_keys=False, separators=(",", ":"), allow_nan=False)
-    expected = canonical_sha256(json.loads(canonical_json))
+    # The decoder already returns the exact builtin JSON value language. An
+    # encode/decode roundtrip cannot add authority and copies deep snapshots
+    # twice before hashing the same CBOR preimage.
+    canonical_data = snapshot.to_dict()
+    if not _plain_json_data(canonical_data):
+        canonical_data = json_containers(_encode_json(canonical_data, sort_keys=False, allow_nan=False))
+    expected = canonical_sha256(canonical_data)
     if snapshot_hash != expected:
         raise ValueError("AuthoringSnapshot.hash does not match its canonical payload")
     semantic = snapshot.semantic_identity
     if not isinstance(semantic, Identity) or semantic.domain != "semantic":
         raise TypeError("AuthoringSnapshot.semantic_identity must be a semantic Identity")
-    expected_semantic = semantic_identity(snapshot.semantic_to_dict())
+    semantic_data = snapshot.semantic_to_dict()
+    if not _plain_json_data(semantic_data):
+        semantic_data = json_containers(_encode_json(semantic_data, sort_keys=False, allow_nan=False))
+    expected_semantic = semantic_identity(semantic_data)
     if semantic != expected_semantic:
         raise ValueError("AuthoringSnapshot.semantic_identity does not match its semantic payload")
     artifact_hash = snapshot.artifact_hash
@@ -286,6 +443,8 @@ def validate_problem_snapshot(snapshot: Any) -> str:
         raise ValueError(
             "AuthoringSnapshot.artifact_hash must be exactly 64 lowercase hexadecimal characters")
     artifact_data = snapshot.artifact_to_dict()
+    if not _plain_json_data(artifact_data):
+        artifact_data = json_containers(_encode_json(artifact_data, sort_keys=False, allow_nan=False))
     if not isinstance(artifact_data, dict) or set(artifact_data) != {
             "artifact_schema_version", "problem_snapshot_schema_version", "payload"}:
         raise ValueError("AuthoringSnapshot artifact projection has an invalid envelope")
@@ -295,9 +454,7 @@ def validate_problem_snapshot(snapshot: Any) -> str:
         raise ValueError("AuthoringSnapshot artifact projection names a different snapshot schema")
     if not isinstance(artifact_data["payload"], dict):
         raise TypeError("AuthoringSnapshot artifact projection payload must be a mapping")
-    artifact_json = json.dumps(
-        artifact_data, sort_keys=False, separators=(",", ":"), allow_nan=False)
-    expected_artifact = canonical_sha256(json.loads(artifact_json))
+    expected_artifact = canonical_sha256(artifact_data)
     if artifact_hash != expected_artifact:
         raise ValueError(
             "AuthoringSnapshot.artifact_hash does not match its canonical artifact projection")

@@ -1,4 +1,4 @@
-"""True Dim1 S04 HyQMOM orders2/4, smooth and discontinuous FV profiles."""
+"""True Dim1 S04 HyQMOM orders2/4/6, smooth and discontinuous FV profiles."""
 import pytest
 
 from examples.api_v02.models_M15_orders import build_m15_orders
@@ -9,7 +9,7 @@ from tests.python.support.public_native_profile import native_profile
 pytestmark=[pytest.mark.compiler,pytest.mark.kokkos,pytest.mark.native_loader]
 
 
-@pytest.mark.parametrize("order",(2,4))
+@pytest.mark.parametrize("order",(2,4,6))
 @pytest.mark.parametrize("regime",("smooth","riemann"))
 def test_native_hyqmom_multiple_orders_and_regimes(order,regime,isolated_native_cache,
                                                  native_cxx,kokkos_root,record_property):

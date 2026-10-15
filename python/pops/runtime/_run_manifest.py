@@ -55,8 +55,15 @@ class RunManifest:
             raise TypeError("RunManifest controls must be a mapping")
         exact = dict(controls)
         expected = {"t_end", "step_transaction", "max_steps", "output_mode"}
-        if set(exact) != expected:
-            raise ValueError("RunManifest controls keys must be exactly %s" % sorted(expected))
+        if set(exact) not in (expected, expected | {"stop_condition"}):
+            raise ValueError(
+                "RunManifest controls keys must be exactly %s with optional stop_condition"
+                % sorted(expected))
+        if "stop_condition" in exact and (
+            exact["stop_condition"] != "one_accepted_step"
+            or type(exact["max_steps"]) is not int or exact["max_steps"] != 1
+        ):
+            raise ValueError("RunManifest one_accepted_step requires exactly one accepted step")
         object.__setattr__(self, "schema_version", RUN_MANIFEST_SCHEMA_VERSION)
         object.__setattr__(self, "bind_identity", Identity.from_data(bind_identity.to_data()))
         object.__setattr__(self, "continuation_identity", (
@@ -66,6 +73,9 @@ class RunManifest:
         object.__setattr__(self, "start_time", _finite_float(start_time, where="start_time"))
         object.__setattr__(self, "start_macro_step", _strict_int(
             start_macro_step, where="start_macro_step"))
+        if "stop_condition" in exact and not _finite_float(
+            exact["t_end"], where="controls.t_end") > self.start_time:
+            raise ValueError("RunManifest one_accepted_step requires a future bound")
         output_mode = exact["output_mode"]
         if not isinstance(output_mode, str) or not output_mode:
             raise TypeError("RunManifest output_mode must be a non-empty string")
@@ -77,6 +87,7 @@ class RunManifest:
                 exact["step_transaction"], "controls.step_transaction"),
             "max_steps": _strict_int(exact["max_steps"], where="controls.max_steps"),
             "output_mode": output_mode,
+            **({"stop_condition": exact["stop_condition"]} if "stop_condition" in exact else {}),
         }))
         object.__setattr__(self, "run_identity", make_identity("run", self._identity_payload()))
 
@@ -95,6 +106,8 @@ class RunManifest:
                 "step_transaction": thaw_data(self.controls["step_transaction"]),
                 "max_steps": self.controls["max_steps"],
                 "output_mode": self.controls["output_mode"],
+                **({"stop_condition": self.controls["stop_condition"]}
+                   if "stop_condition" in self.controls else {}),
             },
         }
 
@@ -157,7 +170,7 @@ class RunManifest:
 
 
 def begin_run(engine: Any, *, t_end: Any, step_transaction: Any, max_steps: Any,
-              output_dir: Any) -> RunManifest:
+              output_dir: Any, stop_condition: str | None = None) -> RunManifest:
     snapshot = getattr(engine, "bound_snapshot", None)
     if snapshot is None:
         raise RuntimeError("run requires a completed pops.bind transaction")
@@ -173,6 +186,7 @@ def begin_run(engine: Any, *, t_end: Any, step_transaction: Any, max_steps: Any,
             "t_end": t_end, "step_transaction": step_transaction, "max_steps": max_steps,
             # A path is placement/provenance, not semantic execution identity.
             "output_mode": "explicit-root" if output_dir is not None else "current-directory",
+            **({"stop_condition": stop_condition} if stop_condition is not None else {}),
         },
     )
     engine._last_run_manifest = manifest

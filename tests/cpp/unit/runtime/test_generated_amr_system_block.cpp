@@ -180,11 +180,9 @@ struct AmrProgramHistoryRemapCollectiveTestAccess {
     return context.runtime_state().hist_.histories.at(key).at(static_cast<std::size_t>(slot));
   }
 
-  static std::vector<std::uint8_t> seed_and_serialize_flux_history(context_type& context,
-                                                                   std::string_view name,
-                                                                   int rhs_identity,
-                                                                   int raw_provider,
-                                                                   std::string temporal_family) {
+  static std::vector<std::uint8_t> seed_and_serialize_flux_history(
+      context_type& context, std::string_view name, int rhs_identity, int raw_provider,
+      std::string temporal_family, ::pops::ExactWeight weight = {1, 1}) {
     using Provider = typename context_type::FluxBasisProvider;
     if (raw_provider < 0 || raw_provider > static_cast<int>(Provider::DiffusiveFace))
       throw std::invalid_argument("test flux provider is invalid");
@@ -197,8 +195,8 @@ struct AmrProgramHistoryRemapCollectiveTestAccess {
     basis->point = {"clock.macro", 0, 0, 0, rhs_identity, {0, 1}, 0.5, 0.0, {}, {}, {}};
     basis->window = {{0, 0, {0, 1}, 0.0}, {0, 0, {1, 1}, 0.5}};
     typename context_type::FluxExpression expression;
-    expression.emplace(1,
-                       typename context_type::FluxExpressionTerm{std::move(basis), {{1, {1, 1}}}});
+    expression.emplace(
+        1, typename context_type::FluxExpressionTerm{std::move(basis), {{1, std::move(weight)}}});
     const auto key = context.history_key_(std::string(name), 0);
     auto& slots = context.history_flux_expressions_.at(key);
     slots.front() = std::move(expression);
@@ -223,6 +221,16 @@ struct AmrProgramHistoryRemapCollectiveTestAccess {
     for (const auto& slot : slots)
       sizes.push_back(slot.size());
     return sizes;
+  }
+
+  static ::pops::ExactWeight restored_flux_weight(const context_type& context,
+                                                  std::string_view name,
+                                                  std::span<const std::uint8_t> bytes) {
+    const auto restored = context.prepare_history_flux_payload_restore_(bytes);
+    return restored.at(context.history_key_(std::string(name), 0))
+        .front()
+        .begin()
+        ->second.coefficient.at(1);
   }
 
   static std::string restored_flux_family(const context_type& context, std::string_view name,
@@ -263,7 +271,7 @@ void expect_collective_exception(const pops::ExecutionLane& lane, Function&& fun
                                  std::string_view serial_diagnostic = {}) {
   if (lane.size() == 1)
     expect_exception_diagnostic<SerialException>(std::forward<Function>(function),
-                                                  serial_diagnostic);
+                                                 serial_diagnostic);
   else
     expect_exception_diagnostic<std::runtime_error>(std::forward<Function>(function),
                                                     mpi_diagnostic);
@@ -272,8 +280,8 @@ void expect_collective_exception(const pops::ExecutionLane& lane, Function&& fun
 // Retain the very lane installed in these constructor-time bootstrap fixtures. The runtime
 // is still assembling, so creating an execution provider just to inspect its size is too early.
 template <int Dim>
-std::shared_ptr<pops::ExecutionLane> install_amr_authority_with_lane(
-    pops::AmrSystem<Dim>& system, std::string_view identity) {
+std::shared_ptr<pops::ExecutionLane> install_amr_authority_with_lane(pops::AmrSystem<Dim>& system,
+                                                                     std::string_view identity) {
   auto lane = std::make_shared<pops::ExecutionLane>(
       pops::ExecutionLane::duplicate_world_collectively(identity));
   const PopsExecutionContextV1 raw = pops::component::test_support::host_execution_context();
@@ -283,8 +291,8 @@ std::shared_ptr<pops::ExecutionLane> install_amr_authority_with_lane(
       raw.accumulation_precision, raw.reduction_precision, raw.stream_handle, raw.stream_identity,
       raw.communicator_f_handle, raw.communicator_datatype_f_handle, raw.communicator_identity,
       raw.communicator_datatype_identity);
-  auto execution = std::make_shared<const pops::component::PreparedExecutionContextV1>(
-      parent.for_lane(*lane));
+  auto execution =
+      std::make_shared<const pops::component::PreparedExecutionContextV1>(parent.for_lane(*lane));
   system.install_prepared_boundary_execution_context(lane, std::move(execution));
   return lane;
 }
@@ -506,8 +514,19 @@ std::size_t cell_count(const pops::Extent<Dim>& shape) {
 
 std::vector<std::uint8_t> as_legacy_flux2(std::vector<std::uint8_t> bytes,
                                           std::string_view temporal_family) {
-  if (bytes.size() < 8 || bytes.front() != static_cast<std::uint8_t>('3'))
-    throw std::logic_error("typed history fixture lacks its POPSFLX3 tag");
+  if (bytes.size() < 8 || bytes.front() != static_cast<std::uint8_t>('5'))
+    throw std::logic_error("typed history fixture lacks its POPSFLX5 tag");
+  pops::runtime::program::checkpoint_detail::Writer wide_writer, old_writer;
+  wide_writer.string(pops::ExactWeight(1).encode());
+  old_writer.i64(1);
+  old_writer.i64(1);
+  const auto wide = std::move(wide_writer).take(), old = std::move(old_writer).take();
+  const auto weight = std::search(bytes.begin(), bytes.end(), wide.begin(), wide.end());
+  if (weight == bytes.end())
+    throw std::logic_error("fixture lacks its exact unit coefficient");
+  const auto position = std::distance(bytes.begin(), weight);
+  bytes.erase(weight, weight + wide.size());
+  bytes.insert(bytes.begin() + position, old.begin(), old.end());
   const auto first =
       std::search(bytes.begin(), bytes.end(), temporal_family.begin(), temporal_family.end());
   if (first == bytes.end() || std::distance(bytes.begin(), first) < 8)
@@ -857,11 +876,16 @@ TEST(GeneratedAmrSystemBlock, ComposedProgramHalosPreserveHyperbolicReconstructi
   for (const auto* limiter : {"none", "weno5"}) {
     const auto uniform =
         pops::prepare_generated_system_block(pops::CompiledSystemBlockPreparation<Dim, Model>{
-            "composed-state", model, {limiter, "rusanov", "conservative", "explicit"},
-            geometry, {}, {}, {}});
+            "composed-state",
+            model,
+            {limiter, "rusanov", "conservative", "explicit"},
+            geometry,
+            {},
+            {},
+            {}});
     const auto adaptive = pops::prepare_compiled_amr_system_block<Dim>(
-        "composed-state", model, limiter, "rusanov", "conservative", "imex", 1.4, 1, 1,
-        0.0, static_cast<double>(pops::kWenoEpsilon), false, "test.composed-state/native_model");
+        "composed-state", model, limiter, "rusanov", "conservative", "imex", 1.4, 1, 1, 0.0,
+        static_cast<double>(pops::kWenoEpsilon), false, "test.composed-state/native_model");
     const int expected = std::string_view(limiter) == "none" ? 2 : 3;
     for (int axis = 0; axis < Dim; ++axis) {
       EXPECT_EQ(uniform.ghosts[axis], expected);
@@ -879,9 +903,9 @@ TEST(GeneratedAmrSystemBlock, ProgramStateRouteDoesNotInstantiateHyperbolicPhysi
   EXPECT_EQ(prepared.provider_identity,
             "pops.generated.amr.program-state.nd/" + std::to_string(Dim));
   EXPECT_EQ(prepared.staircase_provider_identity,
-            "pops.generated.amr.program-state.staircase-unavailable.nd/" + std::to_string(Dim));
+            "pops.generated.amr.program-state.staircase-geometry.nd/" + std::to_string(Dim));
   EXPECT_EQ(prepared.cut_cell_provider_identity,
-            "pops.generated.amr.program-state.cut-cell-unavailable.nd/" + std::to_string(Dim));
+            "pops.generated.amr.program-state.cut-cell-geometry.nd/" + std::to_string(Dim));
   EXPECT_EQ(prepared.reconstruction_order, 1);
   EXPECT_EQ(prepared.physical_boundary_authority,
             pops::PreparedAmrPhysicalBoundaryAuthority::program_spatial_operator);
@@ -907,13 +931,14 @@ TEST(GeneratedAmrSystemBlock, ProgramStateRouteDoesNotInstantiateHyperbolicPhysi
 }
 
 TEST(GeneratedAmrSystemBlock, CoordinatedFacePreflightDoesNotAuthenticateTheBody) {
-  const std::string identity = "pops.numerics.coordinated-face.v1.v1:sha256:" + std::string(64, 'a');
-  pops::CompiledAmrSystemBlockRoutes routes{
-      "none", "coordinated_face:v1:" + identity, "conservative", "explicit"};
+  const std::string identity =
+      "pops.numerics.coordinated-face.v1.v1:sha256:" + std::string(64, 'a');
+  pops::CompiledAmrSystemBlockRoutes routes{"none", "coordinated_face:v1:" + identity,
+                                            "conservative", "explicit"};
   EXPECT_NO_THROW(pops::validate_compiled_amr_system_block_route_syntax(routes));
   EXPECT_NO_THROW(pops::validate_compiled_amr_system_block_routes(routes, {}, {}, identity));
   EXPECT_THROW(pops::validate_compiled_amr_system_block_routes(routes), std::runtime_error);
-  const auto foreign = identity.substr(0, identity.size()-1) + "b";
+  const auto foreign = identity.substr(0, identity.size() - 1) + "b";
   EXPECT_THROW(pops::validate_compiled_amr_system_block_routes(routes, {}, {}, foreign),
                std::invalid_argument);
   EXPECT_THROW(pops::validate_compiled_amr_system_block_routes(routes, "stencil", {}, identity),
@@ -921,7 +946,7 @@ TEST(GeneratedAmrSystemBlock, CoordinatedFacePreflightDoesNotAuthenticateTheBody
   EXPECT_THROW(pops::validate_compiled_amr_system_block_routes(routes, {}, "face", identity),
                std::invalid_argument);
   for (const auto& malformed : {std::string("coordinated_face:v1:"),
-                               std::string("coordinated_face:v1:") + identity + "0"}) {
+                                std::string("coordinated_face:v1:") + identity + "0"}) {
     auto changed = routes;
     changed.riemann = malformed;
     EXPECT_THROW(pops::validate_compiled_amr_system_block_route_syntax(changed),
@@ -929,8 +954,7 @@ TEST(GeneratedAmrSystemBlock, CoordinatedFacePreflightDoesNotAuthenticateTheBody
   }
   auto changed = routes;
   changed.riemann = "coordinated_face:v2:" + identity;
-  EXPECT_THROW(pops::validate_compiled_amr_system_block_route_syntax(changed),
-               std::runtime_error);
+  EXPECT_THROW(pops::validate_compiled_amr_system_block_route_syntax(changed), std::runtime_error);
   changed = routes;
   changed.limiter = "minmod";
   EXPECT_THROW(pops::validate_compiled_amr_system_block_route_syntax(changed),
@@ -952,30 +976,31 @@ TEST(GeneratedAmrSystemBlock, SourceRoutePreflightDefersAuthenticationToCompiled
     for (const bool source_face : {false, true}) {
       const pops::CompiledAmrSystemBlockRoutes routes{
           source_stencil ? "source_stencil:" + stencil_identity : "minmod",
-          source_face ? "source_face:" + face_identity : "rusanov",
-          "conservative", "explicit"};
+          source_face ? "source_face:" + face_identity : "rusanov", "conservative", "explicit"};
       EXPECT_NO_THROW(pops::validate_compiled_amr_system_block_route_syntax(routes));
       EXPECT_NO_THROW(pops::validate_compiled_amr_system_block_routes(
           routes, source_stencil ? stencil_identity : "", source_face ? face_identity : ""));
       if (source_stencil || source_face)
         EXPECT_THROW(pops::validate_compiled_amr_system_block_routes(routes), std::runtime_error);
       if (source_stencil)
-        EXPECT_THROW(pops::validate_compiled_amr_system_block_routes(
-                         routes, "c" + stencil_identity.substr(1), source_face ? face_identity : ""),
-                     std::invalid_argument);
+        EXPECT_THROW(
+            pops::validate_compiled_amr_system_block_routes(
+                routes, "c" + stencil_identity.substr(1), source_face ? face_identity : ""),
+            std::invalid_argument);
       if (source_face)
-        EXPECT_THROW(pops::validate_compiled_amr_system_block_routes(
-                         routes, source_stencil ? stencil_identity : "", "c" + face_identity.substr(1)),
-                     std::invalid_argument);
+        EXPECT_THROW(
+            pops::validate_compiled_amr_system_block_routes(
+                routes, source_stencil ? stencil_identity : "", "c" + face_identity.substr(1)),
+            std::invalid_argument);
     }
   }
 }
 
 TEST(GeneratedAmrSystemBlock, SourceRoutePreflightRefusesMalformedIdentityAndInvalidControls) {
   const std::string valid_identity(64, 'a');
-  for (const auto& malformed : {std::string{}, std::string(63, 'a'), std::string(65, 'a'),
-                              std::string(64, 'A'), std::string(64, 'g'),
-                              valid_identity + ":suffix", std::string(63, 'a') + '\0'}) {
+  for (const auto& malformed :
+       {std::string{}, std::string(63, 'a'), std::string(65, 'a'), std::string(64, 'A'),
+        std::string(64, 'g'), valid_identity + ":suffix", std::string(63, 'a') + '\0'}) {
     EXPECT_THROW(pops::validate_compiled_amr_system_block_route_syntax(
                      {"source_stencil:" + malformed, "rusanov", "conservative", "explicit"}),
                  std::invalid_argument);
@@ -983,11 +1008,12 @@ TEST(GeneratedAmrSystemBlock, SourceRoutePreflightRefusesMalformedIdentityAndInv
                      {"minmod", "source_face:" + malformed, "conservative", "explicit"}),
                  std::invalid_argument);
   }
-  pops::CompiledAmrSystemBlockRoutes routes{
-      "source_stencil:" + valid_identity, "source_face:" + valid_identity,
-      "conservative", "explicit"};
+  pops::CompiledAmrSystemBlockRoutes routes{"source_stencil:" + valid_identity,
+                                            "source_face:" + valid_identity, "conservative",
+                                            "explicit"};
   const auto expect_invalid = [](auto value) {
-    EXPECT_THROW(pops::validate_compiled_amr_system_block_route_syntax(value), std::invalid_argument);
+    EXPECT_THROW(pops::validate_compiled_amr_system_block_route_syntax(value),
+                 std::invalid_argument);
   };
   auto changed = routes;
   changed.limiter = "source_face:" + valid_identity;
@@ -1636,6 +1662,91 @@ TEST(GeneratedAmrSystemBlock, CutCellCapabilityExecutesAtExactRank) {
   EXPECT_NO_THROW((void)system.evaluate_prepared_amr_level(point<Dim>(0)));
 }
 
+TEST(GeneratedAmrSystemBlock, ProgramStateConsumesEmbeddedMeasureWithoutInventingFlux) {
+  constexpr int Dim = pops::kNativeDimension;
+  for (const std::string mode : {"staircase", "cutcell"}) {
+    pops::AmrSystemConfig<Dim> config;
+    for (int axis = 0; axis < Dim; ++axis) {
+      config.shape[axis] = 8;
+      // x - 1/2 is an affine physical plane, not a periodic sawtooth.
+      config.periodicity[axis] = false;
+    }
+    pops::AmrSystem<Dim> system(config);
+    pops::test::install_amr_runtime_authority(system, "tests.program-state/geometry/" + mode);
+    system.install_block_state_route("state", "tests.program-state/state");
+    std::vector<std::string> identities;
+    for (int face = 0; face < 2 * Dim; ++face)
+      identities.push_back("tests.program-state/geometry-face/" + std::to_string(face));
+    system.install_hyperbolic_boundary("state", "tests.program-state/geometry-boundary", 1,
+                                       std::vector<std::string>(2 * Dim, "foextrap"),
+                                       std::vector<double>(2 * Dim, 0.0), identities, {"Scalar"},
+                                       "tests.program-state/state");
+    system.install_prepared_amr_block(pops::prepare_compiled_amr_system_block<Dim>(
+        "state", ProgramStateModel<Dim>{}, "state_storage", "unavailable", "conservative",
+        "explicit", 1.4, 1, 1));
+    system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, mode);
+    system.set_conservative_state("state", std::vector<double>(cell_count(config.shape), 1.0));
+    const double initial_mass = system.mass("state");
+    EXPECT_NEAR(initial_mass, 0.5, 1.e-12);
+    publish_centered_fine_level(system);
+    system.refresh_prepared_amr_levels();
+    EXPECT_NEAR(system.mass("state"), initial_mass, 1.e-12);
+    EXPECT_EQ(system.effective_options_report().eb.geometry_mode, mode);
+    EXPECT_ANY_THROW((void)system.evaluate_prepared_amr_level(point<Dim>(0)));
+  }
+}
+
+TEST(GeneratedAmrSystemBlock, ProgramStatePhysicalExtensionHasNoBoundaryLinearization) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 8;
+    config.periodicity[axis] = false;
+  }
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.program-state/physical-extension");
+  system.install_block_state_route("state", "tests.program-state/state");
+  std::vector<std::string> identities;
+  for (int face = 0; face < 2 * Dim; ++face)
+    identities.push_back("tests.program-state/physical-face/" + std::to_string(face));
+  system.install_hyperbolic_boundary(
+      "state", "tests.program-state/boundary", 1, std::vector<std::string>(2 * Dim, "foextrap"),
+      std::vector<double>(2 * Dim, 0.0), identities, {"Scalar"}, "tests.program-state/state");
+  system.install_prepared_amr_block(pops::prepare_compiled_amr_system_block<Dim>(
+      "state", ProgramStateModel<Dim>{}, "state_storage", "unavailable", "conservative", "explicit",
+      1.4, 1, 1));
+  system.set_conservative_state("state", std::vector<double>(cell_count(config.shape), 3.0));
+  system.refresh_prepared_amr_levels();
+  auto& state = system.prepared_amr_block_state(0, 0);
+  state.set_val(pops::Real(-99));
+  for (std::size_t local = 0; local < state.local_size(); ++local) {
+    const auto values = state.fab(local).view();
+    pops::for_each_cell(state.box(local), [=] POPS_HD(const pops::Index<Dim>& cell) {
+      values(cell, 0) = pops::Real(3);
+    });
+  }
+  EXPECT_TRUE(system.requires_prepared_amr_block_boundary_session(0));
+  EXPECT_FALSE(system.has_prepared_amr_block_boundary_linearization(0));
+  EXPECT_NO_THROW(system.prepare_generated_amr_block_level_state(0, point<Dim>(0), state));
+  const auto domain = system.prepared_amr_level_geometry(0).domain();
+  for (std::size_t local = 0; local < state.local_size(); ++local) {
+    const auto values = state.fab(local).view();
+    const auto error = pops::for_each_cell_reduce_max(
+        state.fab(local).grown_box(), [=] POPS_HD(const pops::Index<Dim>& cell) {
+          int physical_axes = 0;
+          for (int axis = 0; axis < Dim; ++axis)
+            physical_axes += cell[axis] < domain.lo[axis] || cell[axis] > domain.hi[axis];
+          // Independent face extensions do not select a corner composition.
+          // Such corners stay untouched until an authored stencil requests one.
+          const pops::Real expected = physical_axes > 1 ? pops::Real(-99) : pops::Real(3);
+          return Kokkos::abs(values(cell, 0) - expected);
+        });
+    EXPECT_DOUBLE_EQ(error, 0.0);
+  }
+  EXPECT_NEAR(system.mass("state"), 3.0, 1.e-12);
+  EXPECT_ANY_THROW((void)system.evaluate_prepared_amr_level(point<Dim>(0)));
+}
+
 TEST(GeneratedAmrSystemBlock, DiffusiveEmbeddedRoutesRefuseWithoutFaceGeometry) {
   constexpr int Dim = pops::kNativeDimension;
   for (const std::string mode : {"staircase", "cutcell"}) {
@@ -1745,7 +1856,8 @@ TEST(GeneratedAmrSystemBlock, ProgramContextOwnsOneExactHierarchyTensorAuthority
     pops::MultiFab<Dim> detached(solution);
     EXPECT_THROW((void)context->scalar_scratch(37, 0, detached, 1, 1), std::invalid_argument);
     if (level != 0)
-      EXPECT_THROW((void)context->scalar_scratch(38, 0, *first_solution, 1, 1), std::invalid_argument);
+      EXPECT_THROW((void)context->scalar_scratch(38, 0, *first_solution, 1, 1),
+                   std::invalid_argument);
   });
 }
 
@@ -2146,11 +2258,13 @@ TEST(GeneratedAmrSystemBlock, ExplicitFieldTopologyIsIndependentOfPeriodicTransp
       stage.set_val(pops::Real(3));
       if (one_sided_periodic) {
         expect_collective_exception<std::invalid_argument>(
-            context->prepared_execution_lane(), [&] {
-          auto outcome =
-              context->solve_fields_from_state_at(point<Dim>(0), "field/tracer", 0, stage);
-          (void)outcome.consume(pops::SolveConsumption::kFailRun);
-        }, "periodic boundaries must be paired", "periodic boundaries must be paired");
+            context->prepared_execution_lane(),
+            [&] {
+              auto outcome =
+                  context->solve_fields_from_state_at(point<Dim>(0), "field/tracer", 0, stage);
+              (void)outcome.consume(pops::SolveConsumption::kFailRun);
+            },
+            "periodic boundaries must be paired", "periodic boundaries must be paired");
       } else {
         auto outcome = context->solve_fields_from_state_at(point<Dim>(0), "field/tracer", 0, stage);
         ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
@@ -2473,10 +2587,12 @@ TEST(GeneratedAmrSystemBlock, SpatialHierarchyTraversalRequiresReleasedLevelEnve
   EXPECT_EQ(visits, (std::array<int, 2>{2, 2}));
   EXPECT_THROW(context->with_program_attempt_level(0, [] {}), std::logic_error);
   const auto& lane = context->prepared_execution_lane();
-  EXPECT_EQ(pops::all_reduce_max(pops::reduce_max_local(system.engine()->hierarchy().state(0)), lane),
-            pops::Real(1));
-  EXPECT_EQ(pops::all_reduce_max(pops::reduce_max_local(system.engine()->hierarchy().state(1)), lane),
-            pops::Real(1));
+  EXPECT_EQ(
+      pops::all_reduce_max(pops::reduce_max_local(system.engine()->hierarchy().state(0)), lane),
+      pops::Real(1));
+  EXPECT_EQ(
+      pops::all_reduce_max(pops::reduce_max_local(system.engine()->hierarchy().state(1)), lane),
+      pops::Real(1));
 }
 
 TEST(GeneratedAmrSystemBlock, ProgramContextRetainsAndInterpolatesExactLevelHistory) {
@@ -2562,7 +2678,7 @@ TEST(GeneratedAmrSystemBlock, FluxHistoryMigratesDeclaredFamiliesAndPreservesNat
       context->install_flux_temporal_families({{0, 3000, 0, family}});
     const auto current =
         Access::seed_and_serialize_flux_history(*context, "tracer.rate", 3000, 0, family);
-    EXPECT_EQ(history_flux_tag(current), UINT64_C(0x504f5053464c5833));
+    EXPECT_EQ(history_flux_tag(current), UINT64_C(0x504f5053464c5835));
     EXPECT_EQ(Access::restored_flux_family(*context, "tracer.rate", current), family);
     if (!declared)
       return;
@@ -2619,7 +2735,7 @@ TEST(GeneratedAmrSystemBlock, EmptyStateHistoryFluxRegistryIsExplicitAndMissingP
   ASSERT_EQ(system.history_fill_count("tracer.prior", 0), 1);
   const auto accepted = Access::serialize_flux_registry(*context);
   ASSERT_FALSE(accepted.empty());
-  EXPECT_EQ(history_flux_tag(accepted), UINT64_C(0x504f5053464c5833));
+  EXPECT_EQ(history_flux_tag(accepted), UINT64_C(0x504f5053464c5835));
   EXPECT_EQ(Access::restored_flux_slot_sizes(*context, "tracer.prior", accepted), empty_slots);
   // Missing provenance is not equivalent to the authenticated zero-term slots.
   EXPECT_THROW((void)Access::restored_flux_slot_sizes(*context, "tracer.prior", {}),
@@ -3195,16 +3311,16 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
       }
     EXPECT_THROW(pops::runtime::program::serialize_amr_program_accepted_state(unearned_lag),
                  std::invalid_argument);
-    // Cursor-walk the authenticated ANDA layout to its pending section. The history key also
+    // Cursor-walk the authenticated ANDE layout to its pending section. The history key also
     // occurs in earlier slot payloads, so raw searching could mutate the wrong record.
     const std::string& pending_key = pending_after_regrid.pending_history_remaps.front().key;
-    constexpr std::array<std::uint8_t, 8> expected_magic{'P', 'O', 'P', 'S', 'A', 'N', 'D', 'A'};
+    constexpr std::array<std::uint8_t, 8> expected_magic{'P', 'O', 'P', 'S', 'A', 'N', 'D', 'E'};
     ASSERT_GE(pending_bytes.size(), expected_magic.size());
     ASSERT_TRUE(std::equal(expected_magic.begin(), expected_magic.end(), pending_bytes.begin()));
     const auto advance = [&](std::size_t& position, std::uint64_t count, std::size_t width = 1) {
       if (position > pending_bytes.size() || width == 0 ||
           count > (pending_bytes.size() - position) / width)
-        throw std::out_of_range("ANDA test cursor exceeds the checkpoint payload");
+        throw std::out_of_range("ANDE test cursor exceeds the checkpoint payload");
       position += static_cast<std::size_t>(count) * width;
     };
     const auto read_word = [&](std::size_t& position) {
@@ -3223,7 +3339,7 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
       const auto count = read_word(position);
       if (minimum_record_bytes == 0 ||
           count > (pending_bytes.size() - position) / minimum_record_bytes)
-        throw std::out_of_range("ANDA test record count exceeds the checkpoint payload");
+        throw std::out_of_range("ANDE test record count exceeds the checkpoint payload");
       return count;
     };
     std::size_t cursor = expected_magic.size();
@@ -3243,9 +3359,10 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
         skip_string(cursor);
       advance(cursor, 24);  // depth, components and ghost depth are three encoded uint64 words
     }
-    for (auto count = read_count(cursor, 80); count > 0; --count) {
+    for (auto count = read_count(cursor, 112); count > 0; --count) {
       skip_string(cursor);
-      advance(cursor, 72);  // five legacy words plus four exact sample-identity words
+      // Five provenance words, four temporal coordinates, four reconstruction digest words.
+      advance(cursor, 104);
     }
     const std::size_t pending_count_offset = cursor;
     ASSERT_EQ(read_count(cursor, 160), 1u);
@@ -3634,11 +3751,13 @@ TEST(GeneratedAmrSystemBlock, CflPublishesCoordinateAuxiliaryBeforeSpeedAndRetai
   };
   auto probe = std::make_shared<Probe>();
   system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<Dim>{
-      "tests.cfl.control", AuxiliaryProviderKind::input,
+      "tests.cfl.control",
+      AuxiliaryProviderKind::input,
       {std::vector<AuxiliaryEvaluationEvent>{AuxiliaryEvaluationEvent::initialization,
                                              AuxiliaryEvaluationEvent::before_stability},
        AuxiliaryFreshness::once},
-      {{control_key, contract, shape}}, {}});
+      {{control_key, contract, shape}},
+      {}});
   system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<Dim>{
       "tests.cfl.coordinate",
       AuxiliaryProviderKind::derived,
@@ -3671,20 +3790,21 @@ TEST(GeneratedAmrSystemBlock, CflPublishesCoordinateAuxiliaryBeforeSpeedAndRetai
                     std::size_t remainder = linear;
                     pops::Index<Dim> index{};
                     for (int axis = 0; axis < Dim; ++axis) {
-                      index[axis] = output.origin[axis] +
-                                    static_cast<int>(remainder % output.extents[axis]);
+                      index[axis] =
+                          output.origin[axis] + static_cast<int>(remainder % output.extents[axis]);
                       remainder /= output.extents[axis];
                     }
                     const auto coordinate = (pops::Real(index[0]) + pops::Real(.5)) * spacing;
                     const auto invalid = inject ? control(index, control_component) : pops::Real(0);
-                    output(index, component) = invalid == 1 ? pops::Real(-1) :
-                        invalid == 2 ? std::numeric_limits<pops::Real>::infinity() :
-                        pops::Real(2) + coordinate + tick;
+                    output(index, component) = invalid == 1 ? pops::Real(-1)
+                                               : invalid == 2
+                                                   ? std::numeric_limits<pops::Real>::infinity()
+                                                   : pops::Real(2) + coordinate + tick;
                   });
             }
           })});
-  system.install_auxiliary_consumer_plan(
-      AuxiliaryConsumerProviderPlan<Dim>{"tests.tracer/physical_flux", {{{key, contract, shape}, 0}}});
+  system.install_auxiliary_consumer_plan(AuxiliaryConsumerProviderPlan<Dim>{
+      "tests.tracer/physical_flux", {{{key, contract, shape}, 0}}});
   system.seal_auxiliary_providers();
   pops::add_compiled_model<Dim>(system, "tracer", AuxiliaryCflModel<Dim>{});
   const std::vector<double> initial(cell_count(config.shape), 1.);
@@ -3876,8 +3996,8 @@ TEST(GeneratedAmrSystemBlock, CellIntegralBootstrapReprojectionPreservesConstant
     config.periodicity[axis] = true;
   }
   pops::AmrSystem<Dim> system(config);
-  const auto lane = install_amr_authority_with_lane(
-      system, "tests.generated-amr/exact-cell-integral-runtime");
+  const auto lane =
+      install_amr_authority_with_lane(system, "tests.generated-amr/exact-cell-integral-runtime");
   system.install_block_state_route("tracer", route);
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   pops::test::install_prepared_threshold_union(
@@ -3886,16 +4006,22 @@ TEST(GeneratedAmrSystemBlock, CellIntegralBootstrapReprojectionPreservesConstant
   system.bind_bootstrap_subject(route, "tracer", "analytic_expression");
   const pops::analytic::AnalyticOpcodeRows opcodes{{"constant", "input", "mul"}};
   const pops::analytic::AnalyticLiteralRows literals{{1.0, double(2 * Dim), 0.0}};
-  expect_collective_exception<std::invalid_argument>(*lane, [&] {
-    system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
-                                          "exact_cell_integral", {{"input"}}, {{64.0}});
-  }, "rank-local analytic validation failed collectively");
+  expect_collective_exception<std::invalid_argument>(
+      *lane,
+      [&] {
+        system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
+                                              "exact_cell_integral", {{"input"}}, {{64.0}});
+      },
+      "rank-local analytic validation failed collectively");
   system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell", "exact_cell_integral",
                                         opcodes, literals);
-  expect_collective_exception<std::invalid_argument>(*lane, [&] {
-    system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
-                                          "exact_cell_integral", opcodes, literals);
-  }, "rank-local analytic validation failed collectively");
+  expect_collective_exception<std::invalid_argument>(
+      *lane,
+      [&] {
+        system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
+                                              "exact_cell_integral", opcodes, literals);
+      },
+      "rank-local analytic validation failed collectively");
   system.begin_bootstrap_plan();
   system.set_program_block_map({0});
   for (int level = 0; level < 2; ++level) {
@@ -4030,8 +4156,8 @@ TEST(GeneratedAmrSystemBlock, GaussianBootstrapReprojectionPreservesExactNeutral
     config.periodicity[axis] = true;
   }
   pops::AmrSystem<Dim> system(config);
-  const auto lane = install_amr_authority_with_lane(
-      system, "tests.generated-amr/exact-gaussian-runtime");
+  const auto lane =
+      install_amr_authority_with_lane(system, "tests.generated-amr/exact-gaussian-runtime");
   system.install_block_state_route("tracer", route);
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   pops::test::install_prepared_threshold_union(
@@ -4051,20 +4177,29 @@ TEST(GeneratedAmrSystemBlock, GaussianBootstrapReprojectionPreservesExactNeutral
   profile.background = Real(1) - integral;
   auto invalid = profile;
   invalid.inverse_width = Real(0);
-  expect_collective_exception<std::invalid_argument>(*lane, [&] {
-    system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
-                                          "conservative_cell_average", invalid);
-  }, "rank-local analytic validation failed collectively");
-  expect_collective_exception<std::invalid_argument>(*lane, [&] {
-    system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
-                                          "conservative_cell_average", {{"constant"}}, {{1.0}});
-  }, "rank-local analytic validation failed collectively");
+  expect_collective_exception<std::invalid_argument>(
+      *lane,
+      [&] {
+        system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
+                                              "conservative_cell_average", invalid);
+      },
+      "rank-local analytic validation failed collectively");
+  expect_collective_exception<std::invalid_argument>(
+      *lane,
+      [&] {
+        system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
+                                              "conservative_cell_average", {{"constant"}}, {{1.0}});
+      },
+      "rank-local analytic validation failed collectively");
   system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
                                         "conservative_cell_average", profile);
-  expect_collective_exception<std::invalid_argument>(*lane, [&] {
-    system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
-                                          "conservative_cell_average", profile);
-  }, "rank-local analytic validation failed collectively");
+  expect_collective_exception<std::invalid_argument>(
+      *lane,
+      [&] {
+        system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
+                                              "conservative_cell_average", profile);
+      },
+      "rank-local analytic validation failed collectively");
   system.begin_bootstrap_plan();
   system.set_program_block_map({0});
   for (int level = 0; level < 2; ++level) {
@@ -4192,4 +4327,29 @@ TEST(GeneratedAmrSystemBlock, GaussianBootstrapRejectsMpiProfileMismatchBeforeVa
     moment += static_cast<long double>(value) - 1;
   }
   EXPECT_LE(std::abs(moment / state.size()), Real(128) * std::numeric_limits<Real>::epsilon());
+}
+
+TEST(GeneratedAmrSystemBlock, FluxHistoryWideWeightsRetainCanonicalBytes) {
+  constexpr int Dim = pops::kNativeDimension;
+  using Access = pops::runtime::program::detail::AmrProgramHistoryRemapCollectiveTestAccess<Dim>;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/wide-exact-history");
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  auto context = pops::test::install_forward_euler_program_context(system, false);
+  context->register_history("tracer.rate", 1, 1, 0, "tracer.U", "cell.conservative",
+                            "test.clock.macro", "dense.linear");
+  for (const auto& weight :
+       {pops::ExactWeight::from_double(1e-6, 512),
+        pops::ExactWeight::from_double(.3, 512) / pops::ExactWeight::from_double(.07, 512)}) {
+    const auto bytes =
+        Access::seed_and_serialize_flux_history(*context, "tracer.rate", 3000, 0, "", weight);
+    EXPECT_EQ(history_flux_tag(bytes), UINT64_C(0x504f5053464c5835));
+    EXPECT_EQ(Access::restored_flux_weight(*context, "tracer.rate", bytes), weight);
+    EXPECT_EQ(Access::serialize_flux_registry(*context), bytes);
+  }
 }

@@ -8,8 +8,8 @@ def emit_authenticated_history_read(program, value, var, lines, *, target):
     if not any(node.op == "history_interval_begin" and node.inputs[0].id == value.id
                for node in all_ops(program)):
         return False
-    if target != "system" or "ncomp" in value.attrs:
-        raise NotImplementedError("HistoryInterval requires a strict Uniform full-state history read")
+    if target not in ("system", "amr_system") or "ncomp" in value.attrs:
+        raise NotImplementedError("HistoryInterval requires a strict native full-state history read")
     key, name, lag = value.id, json.dumps(value.attrs["history"]), int(value.attrs["lag"])
     lines += [
         f"pops::MultiFab<pops::kNativeDimension>* history_interval_carrier_{key} = nullptr;",
@@ -26,16 +26,17 @@ def emit_authenticated_history_read(program, value, var, lines, *, target):
 
 
 def emit_interval(program, value, var, lines, *, target, block_idx=None):
-    if target != "system":
-        raise NotImplementedError("Interval version 1 requires Uniform; AMR is not qualified")
+    if target not in ("system", "amr_system"):
+        raise NotImplementedError("Interval requires an authenticated native invocation")
     from pops.intervals import validate_intervals
     validate_intervals(program)
     key = value.id
     if value.op.startswith("history_interval_"):
-        return _emit_history_interval(program, value, var, lines, block_idx=block_idx)
+        return _emit_history_interval(program, value, var, lines, block_idx=block_idx, target=target)
     if value.op == "interval_begin":
         clock = json.dumps(value.attrs["clock"])
         lines += [
+            f"[[maybe_unused]] const auto* interval_owner_{key} = &ctx;",
             f"pops::runtime::program::PreparedResourceAttempt interval_attempt_{key};",
             f"pops::runtime::multiblock::BoundaryEvaluationPoint interval_point_{key};",
             f"std::exception_ptr interval_error_{key};",
@@ -43,7 +44,9 @@ def emit_interval(program, value, var, lines, *, target, block_idx=None):
             "  const auto interval_scope = ctx.stage_evaluation_scope(0, 1);",
             f"  interval_point_{key} = ctx.boundary_evaluation_point(0);",
             f"  interval_attempt_{key} = ctx.resource_attempt();",
-            f"  if (!interval_attempt_{key}.visible() || interval_point_{key}.clock != {clock})",
+            f"  if (!interval_attempt_{key}.visible() || interval_point_{key}.clock != {clock}",
+            f"      || !std::isfinite(interval_point_{key}.physical_time)",
+            f"      || !std::isfinite(interval_point_{key}.dt) || !(interval_point_{key}.dt > 0))",
             '    throw std::logic_error("Interval has no matching live clock/attempt");',
             f"}} catch (...) {{ interval_error_{key} = std::current_exception(); }}",
             f"if (pops::all_reduce_max(interval_error_{key} ? 1L : 0L, ctx.prepared_execution_lane()) != 0) {{",
@@ -71,7 +74,7 @@ def emit_interval(program, value, var, lines, *, target, block_idx=None):
         d, b, e = var[duration.id], var[begin.id], var[end.id]
         lines += [f"bool interval_valid_{key} = false;", "try {",
             "  const auto interval_scope = ctx.stage_evaluation_scope(0, 1);",
-            f"  interval_valid_{key} = interval_attempt_{root}.visible()",
+            f"  interval_valid_{key} = interval_owner_{root} == &ctx && interval_attempt_{root}.visible()",
             f"    && interval_attempt_{root}.same_attempt(ctx.resource_attempt())",
             f"    && interval_point_{root} == ctx.boundary_evaluation_point(0)",
             f"    && std::isfinite({b}) && std::isfinite({d}) && std::isfinite({e})",
@@ -82,7 +85,7 @@ def emit_interval(program, value, var, lines, *, target, block_idx=None):
         var[key] = f"interval_checked_{key}"
 
 
-def _emit_history_interval(program, value, var, lines, *, block_idx):
+def _emit_history_interval(program, value, var, lines, *, block_idx, target):
     key = value.id
     if value.op == "history_interval_begin":
         source = value.inputs[0]
@@ -98,6 +101,8 @@ def _emit_history_interval(program, value, var, lines, *, block_idx):
         quoted = [json.dumps(x) for x in (name, state_ref.qualified_id,
                   history_space_identity(program, name), row["clock"], interpolation)]
         n, state, space, clock, interp = quoted
+        storage_key = n if target == "system" else f"history_interval_storage_{key}"
+        lines += [f"std::string {storage_key};"] if target == "amr_system" else []
         lines += [
             f"pops::runtime::program::PreparedResourceAttempt history_interval_attempt_{key};",
             f"pops::runtime::multiblock::BoundaryEvaluationPoint history_interval_point_{key};",
@@ -108,10 +113,11 @@ def _emit_history_interval(program, value, var, lines, *, block_idx):
             f"auto history_interval_proof_{key} = [&]() {{",
             "  const auto& history = ctx.runtime_state().hist_;",
             "  pops::ExactContractBuilder exact;",
-            f"  const bool cold = pops::runtime::program::interaction_history_selected(history, {n}, {lag},",
+            f"  const bool cold = pops::runtime::program::interaction_history_selected(history, {storage_key}, {lag},",
             f"      ctx.sys_block({owner_index}), {state}, {space}, {clock}, {interp}, exact);",
-            f"  if (cold || &{var[source.id]} != &history.histories.at({n}).at({lag})",
-            f"      || history.validated_samples({n}).at({lag}).kind != pops::runtime::program::HistorySampleKind::Publication)",
+            f"  if (cold || &{var[source.id]} != &history.histories.at({storage_key}).at({lag})",
+            f"      || (history.validated_samples({storage_key}).at({lag}).kind != pops::runtime::program::HistorySampleKind::Publication",
+            f"          && history.validated_samples({storage_key}).at({lag}).kind != pops::runtime::program::HistorySampleKind::Reconstruction))",
             '    throw std::logic_error("HistoryInterval requires an exact retained publication");',
             "  return std::move(exact).release();",
             "};",
@@ -122,8 +128,9 @@ def _emit_history_interval(program, value, var, lines, *, block_idx):
             f"  history_interval_attempt_{key} = ctx.resource_attempt();",
             f"  if (!history_interval_attempt_{key}.visible() || history_interval_point_{key}.clock != {clock})",
             '    throw std::logic_error("HistoryInterval has no matching live clock/attempt");',
+            *([f"  {storage_key} = ctx.history_storage_key({n}, {owner_index});"] if target == "amr_system" else []),
             f"  history_interval_snapshot_{key} = history_interval_proof_{key}();",
-            f"  history_interval_sample_{key} = ctx.runtime_state().hist_.validated_samples({n}).at({lag});",
+            f"  history_interval_sample_{key} = ctx.runtime_state().hist_.validated_samples({storage_key}).at({lag});",
             # HistorySampleIdentity encodes binary64 independently of the selected
             # Real precision. Reject lossy conversion before any consumer or peer
             # leaves the collective issuance phase.

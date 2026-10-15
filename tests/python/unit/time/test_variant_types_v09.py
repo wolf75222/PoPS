@@ -155,7 +155,7 @@ def test_iteration_propagates_typed_payload_before_copying_failed_state():
     commit(p, u, recovered)
     source = emit_cpp_program(p)
     jump = source.index("goto typed_iteration_done_")
-    assert jump < source.index("copy(next_", jump)
+    assert jump < source.index("copy_with_provenance(next_", jump)
     assert p._ir_hash() == detach_compiled_program(p)._ir_hash()
     assert p.to_graph().to_data() == detach_compiled_program(p).to_graph().to_data()
 
@@ -200,10 +200,11 @@ def test_array_of_variants_snapshots_fields_and_preserves_exact_instance():
     commit(p, u, p.match(projected, field=lambda t, x: x,
                         number=lambda t, x: t.value("numeric", t.float64(x)*u.n)))
     source = emit_cpp_program(p)
-    assert "std::variant<" in source
+    assert "pops_algebra_finite::Record" in source and "std::any_cast<" in source
     assert "_snapshot" in source and "ctx.scratch_state_like" in source
     assert "array_read_" in source
-    assert "emplace<" in source and "std::get<" in source
+    assert "std::any_cast<std::int64_t>" in source
+    assert "replicated Variant has an invalid discriminant" in source
     assert p._ir_hash() == detach_compiled_program(p)._ir_hash()
 
 
@@ -236,7 +237,7 @@ def test_typed_failure_in_finite_region_exits_before_publication(operation):
     assert p._ir_hash() == detach_compiled_program(p)._ir_hash()
 
 
-def test_nested_arrays_and_variants_use_distinct_native_loop_indices():
+def test_nested_arrays_and_variants_use_independent_native_traversal_frames():
     p, u = fixture("nested-arrays")
     d = p.range_set(2, capacity=2, ownership="replicated")
     inner = p.map(d, lambda t,i:t.index_value(i))
@@ -246,7 +247,9 @@ def test_nested_arrays_and_variants_use_distinct_native_loop_indices():
     p.at(outer,p.index(d,0))
     commit(p,u,u.n)
     source = emit_cpp_program(p)
-    assert "element_i_0" in source and "element_i_1" in source
+    assert "struct UniformFrame" in source and "switch (frame.schema)" in source
+    assert "frame.cursor++" in source and "stack[top++] = UniformFrame" in source
+    assert "replicated nested Array has an invalid buffer" in source
     assert p.to_graph().to_data() == detach_compiled_program(p).to_graph().to_data()
 
 

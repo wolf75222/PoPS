@@ -95,6 +95,13 @@ std::shared_ptr<hierarchy_tensor_solver_type> retain_hierarchy_field_solver(
   return hierarchy_field_resources_.at(key).solver;
 }
 
+/// Borrow an already checked-out level, or select its exact synchronized envelope.
+/// Composite callbacks may visit every level while the barrier owns the root envelope.
+template <class Function>
+void with_program_attempt_level_or_current(int selected, Function&& function) const {
+  with_current_or_prepared_attempt_level_(selected, std::forward<Function>(function));
+}
+
 /// Build authority by visiting the synchronized attempt envelopes themselves.
 /// Resource-only level selection is insufficient to authenticate a physical point.
 AmrFieldResidualAuthority original_hierarchy_field_authority(

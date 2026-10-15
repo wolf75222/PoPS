@@ -81,14 +81,34 @@ target_compile_definitions(_pops PRIVATE POPS_VERSION="${PROJECT_VERSION}")
 # clang) qui rejette -std=c++23 (bug reel : "error: invalid value 'c++23'") ou, pire, compile avec un
 # __VERSION__ different -> rejet ABI. dsl.py prefere ce chemin s'il existe encore sur la machine.
 target_compile_definitions(_pops PRIVATE POPS_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
+include("${CMAKE_SOURCE_DIR}/cmake/PopsCompilerIncludeContract.cmake")
 
 # Closed Kokkos development manifest selected by the host build.  Runtime codegen reauthenticates
 # these files before replaying their include paths; it never guesses from sys.prefix/conda.
-target_compile_definitions(_pops PRIVATE
-  POPS_KOKKOS_ABI="${POPS_NATIVE_KOKKOS_ABI}"
-  POPS_KOKKOS_INCLUDE="${POPS_NATIVE_KOKKOS_INCLUDE}"
-  POPS_KOKKOS_HEADER_PATHS="${POPS_NATIVE_KOKKOS_HEADER_PATHS}"
-  POPS_KOKKOS_HEADER_HASHES="${POPS_NATIVE_KOKKOS_HEADER_HASHES}")
+include("${CMAKE_SOURCE_DIR}/cmake/PopsNativeContractHeader.cmake")
+set(_pops_native_contract_header
+    "${CMAKE_CURRENT_BINARY_DIR}/native-contract/pops_native_contract_strings.hpp")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/native-contract")
+file(WRITE "${_pops_native_contract_header}" "#pragma once\n")
+_pops_append_native_contract_string(
+  "${_pops_native_contract_header}" POPS_KOKKOS_ABI "${POPS_NATIVE_KOKKOS_ABI}")
+_pops_append_native_contract_string(
+  "${_pops_native_contract_header}" POPS_KOKKOS_INCLUDE "${POPS_NATIVE_KOKKOS_INCLUDE}")
+_pops_append_native_contract_string(
+  "${_pops_native_contract_header}" POPS_KOKKOS_HEADER_PATHS "${POPS_NATIVE_KOKKOS_HEADER_PATHS}")
+_pops_append_native_contract_string(
+  "${_pops_native_contract_header}" POPS_KOKKOS_HEADER_HASHES "${POPS_NATIVE_KOKKOS_HEADER_HASHES}")
+_pops_append_native_contract_string(
+  "${_pops_native_contract_header}" POPS_KOKKOS_STANDARD "${CMAKE_CXX_STANDARD}")
+_pops_append_native_contract_string(
+  "${_pops_native_contract_header}" POPS_KOKKOS_COMPILE_OPTIONS "${POPS_NATIVE_KOKKOS_OPTIONS}")
+_pops_append_native_contract_string(
+  "${_pops_native_contract_header}" POPS_KOKKOS_COMPILE_DEFINITIONS "${POPS_NATIVE_KOKKOS_DEFINITIONS}")
+_pops_append_native_contract_string(
+  "${_pops_native_contract_header}" POPS_KOKKOS_LINK_OPTIONS "${POPS_NATIVE_KOKKOS_LINK_OPTIONS}")
+_pops_append_native_contract_string(
+  "${_pops_native_contract_header}" POPS_KOKKOS_COMPILE_FEATURES "${POPS_NATIVE_KOKKOS_FEATURES}")
+target_include_directories(_pops PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/native-contract")
 
 # Contrat MPI::MPI_CXX exact du build, bake dans le module : includes, options/definitions de
 # compilation, options/libraries de lien, chemins et hashes de mpi.h/libraries, plus l'empreinte ABI

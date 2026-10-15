@@ -21,7 +21,7 @@ PUBLIC_METADATA = {
     "__version__", "__abi_version__", "__release_contract_sha256__", "__public_api_version__",
     "__semantic_ir_version__", "__normalization_version__", "__component_registry_version__",
     "__checkpoint_schema_version__", "__cxx_std__", "__cxx_compiler__", "__has_kokkos__",
-    "__kokkos_contract__", "__native_dimension__",
+    "__kokkos_contract__", "__native_dimension__", "__compiler_include_contract__",
     "__has_mpi__", "__has_parallel_hdf5__", "__native_loader_contract__", "__mpi_contract__",
     "__max_runtime_params__",
 }

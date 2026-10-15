@@ -3,6 +3,13 @@
 
 #pragma once
 
+#include <pops/runtime/program/history_transfer_expression.hpp>
+#include <pops/runtime/program/temporal_sample_source.hpp>
+#include <pops/runtime/program/composite_integral_kernel.hpp>
+#include <pops/runtime/program/field_topology_view.hpp>
+#include <pops/runtime/program/field_bundle_port.hpp>
+#include <pops/runtime/program/amr_finite_value_lifetime.hpp>
+
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/identity/sha256.hpp>
@@ -12,6 +19,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
+#include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp>
 #include <pops/numerics/spatial/nd/face_frequency.hpp>
@@ -24,6 +32,8 @@
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
 #include <pops/runtime/program/amr_history_flux_snapshot_execution.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
+#include <pops/runtime/program/continuation_authority.hpp>
+#include <pops/runtime/program/continuation_forest_distributed_migration.hpp>
 #include <pops/runtime/program/prepared_amr_spatial_residual.hpp>
 #include <pops/runtime/program/prepared_amr_field_residual.hpp>
 #include <pops/runtime/program/prepared_condensed_sampling.hpp>
@@ -33,6 +43,7 @@
 #include <pops/runtime/program/program_value_authority.hpp>
 #include <pops/runtime/program/prepared_program_field_stages.hpp>
 #include <pops/runtime/program/prepared_hierarchy_barrier.hpp>
+#include <pops/runtime/program/hierarchy_control_failure.hpp>
 #include <pops/runtime/program/spatial_direct_interaction.hpp>
 #include <pops/runtime/program/prepared_tensor_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
@@ -45,6 +56,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -77,7 +89,7 @@ template <int Dim>
 struct AmrProgramHistoryRemapCollectiveTestAccess;
 template <int Dim>
 struct AmrInteractionHistorySnapshotTestAccess;
-}
+}  // namespace detail
 
 template <int Dim>
 struct ProgramSpatialSnapshot {
@@ -119,35 +131,40 @@ class AmrProgramContext {
   }
   PreparedIntegralCapture capture_integral_candidate(const std::string& identity,
                                                      const std::string& units) const {
-    return PreparedIntegralCapture::prepare_(this, [&] { return resource_attempt(); },
-        [&] { return boundary_evaluation_point(0); },
-        identity, units, [&] {
+    return PreparedIntegralCapture::prepare_(
+        this, [&] { return resource_attempt(); }, [&] { return boundary_evaluation_point(0); },
+        identity, units,
+        [&] {
           const auto& ledger = facade_->program_runtime_state_().accepted_exchanges_;
-          return PreparedIntegralCapture::ReadImage{ledger.integral(identity),ledger.checkpoint(true)};
-        }, prepared_execution_lane());
+          return PreparedIntegralCapture::ReadImage{ledger.integral(identity),
+                                                    ledger.checkpoint(true)};
+        },
+        prepared_execution_lane());
   }
-  Real integral_candidate_value(const PreparedIntegralCapture& capture,
-      const std::string& identity, const std::string& units) const {
-    return static_cast<Real>(capture.consume_(this, [&] { return resource_attempt(); },
-        [&] { return boundary_evaluation_point(0); },
-        identity, units, [&] {
+  Real integral_candidate_value(const PreparedIntegralCapture& capture, const std::string& identity,
+                                const std::string& units) const {
+    return static_cast<Real>(capture.consume_(
+        this, [&] { return resource_attempt(); }, [&] { return boundary_evaluation_point(0); },
+        identity, units,
+        [&] {
           const auto& ledger = facade_->program_runtime_state_().accepted_exchanges_;
-          return PreparedIntegralCapture::ReadImage{ledger.integral(identity),ledger.checkpoint(true)};
-        }, prepared_execution_lane()));
+          return PreparedIntegralCapture::ReadImage{ledger.integral(identity),
+                                                    ledger.checkpoint(true)};
+        },
+        prepared_execution_lane()));
   }
   Real consume_external_trace(const std::string& integral_identity,
                               const AcceptedExchangeLedger::TraceSelection& selection,
                               Real scale) const {
-    return static_cast<Real>(facade_->consume_program_external_trace(
-        integral_identity, selection, scale));
+    return static_cast<Real>(
+        facade_->consume_program_external_trace(integral_identity, selection, scale));
   }
   bool is_external_trace_face(int axis, int side, const Index<Dim>& cell) const {
     if (axis < 0 || axis >= Dim || (side != 0 && side != 1))
       throw std::invalid_argument("external trace face has invalid axis or side");
     const auto boundary = side == 0 ? BoundarySide::lower : BoundarySide::upper;
     return !facade_->prepared_amr_boundary_topology().is_periodic(Face<Dim>{axis, boundary}) &&
-           cell[axis] == (side == 0 ? geometry().domain().lo[axis]
-                                   : geometry().domain().hi[axis]);
+           cell[axis] == (side == 0 ? geometry().domain().lo[axis] : geometry().domain().hi[axis]);
   }
 
   /// Geometry acquisition can enter the prepared hierarchy collective phase.
@@ -239,10 +256,10 @@ class AmrProgramContext {
     const field_type* state = nullptr;
   };
 
-private:
+ private:
   struct RhsInputTraceRecord;
 
-public:
+ public:
   class RhsInputTrace;
 
   struct RhsGroupRequest {
@@ -348,7 +365,8 @@ public:
   class StageEvaluationScope {
    public:
     StageEvaluationScope(const AmrProgramContext& owner, std::int64_t numerator,
-                         std::int64_t denominator) : owner_(&owner), prior_(owner.stage_time_) {
+                         std::int64_t denominator)
+        : owner_(&owner), prior_(owner.stage_time_) {
       owner.set_stage_time(numerator, denominator);
     }
     StageEvaluationScope(const StageEvaluationScope&) = delete;
@@ -361,12 +379,13 @@ public:
         owner_->active_operator_snapshot_.reset();
       }
     }
+
    private:
     const AmrProgramContext* owner_;
     ::pops::amr::Rational prior_;
   };
-  [[nodiscard]] StageEvaluationScope stage_evaluation_scope(
-      std::int64_t numerator, std::int64_t denominator) const {
+  [[nodiscard]] StageEvaluationScope stage_evaluation_scope(std::int64_t numerator,
+                                                            std::int64_t denominator) const {
     return StageEvaluationScope(*this, numerator, denominator);
   }
 
@@ -452,7 +471,7 @@ public:
       local_error = std::current_exception();
     }
     collectively_rethrow_exception(local_error, lane,
-                                  "AMR Program operator session storage allocation failed");
+                                   "AMR Program operator session storage allocation failed");
   }
 
   template <class Resource, class Matches, class... Args>
@@ -487,6 +506,7 @@ public:
   // Class-scope responsibility fragments preserve the public nested-type identities and member
   // layout of AmrProgramContext while making each semantic authority independently auditable.
 #include <pops/runtime/program/amr_program_context_spatial.inc>
+#include <pops/runtime/program/amr_program_context_finite_values.inc>
 #include <pops/runtime/program/program_context_value_authority.inc>
 #include <pops/runtime/program/amr_program_context_value_authority.inc>
 #include <pops/runtime/program/amr_program_context_rhs_input_trace.inc>
@@ -498,6 +518,7 @@ public:
 #include <pops/runtime/program/amr_program_context_flux_expression_public.inc>
 #include <pops/runtime/program/amr_program_context_spatial_operations.inc>
 #include <pops/runtime/program/amr_program_context_spatial_history_snapshot.inc>
+#include <pops/runtime/program/amr_program_context_temporal_field.inc>
 #include <pops/runtime/program/amr_program_context_spatial_interaction.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_public.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_solver.inc>
@@ -507,7 +528,6 @@ public:
 #include <pops/runtime/program/amr_program_context_cell_temporal_configuration.inc>
 #include <pops/runtime/program/amr_program_context_flux_basis_definitions.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_definitions.inc>
-#include <pops/runtime/program/amr_program_context_history_checkpoint_definitions.inc>
 #include <pops/runtime/program/amr_program_context_cell_temporal_level_runtime.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_definitions.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_services.inc>
@@ -516,6 +536,8 @@ public:
 #include <pops/runtime/program/amr_program_context_mapping_continuation.inc>
 #include <pops/runtime/program/amr_program_context_flux_family.inc>
 #include <pops/runtime/program/amr_program_context_flux_basis.inc>
+#include <pops/runtime/program/amr_program_context_stencil_flux.inc>
+#include <pops/runtime/program/amr_program_context_stencil_input.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_runtime.inc>
 #include <pops/runtime/program/amr_program_context_shared_flux.inc>
 #include <pops/runtime/program/amr_program_context_path_rhs.inc>
@@ -524,9 +546,22 @@ public:
 #include <pops/runtime/program/amr_program_context_general_field_services.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_services.inc>
 #include <pops/runtime/program/amr_program_context_spatial_operations_services.inc>
+#include <pops/runtime/program/amr_program_context_affine_history.inc>
+#include <pops/runtime/program/amr_program_context_affine_measure.inc>
+#include <pops/runtime/program/amr_program_context_affine_finalization.inc>
+#include <pops/runtime/program/amr_program_context_continuation_level.inc>
+#include <pops/runtime/program/amr_program_context_continuation_forest.inc>
+#include <pops/runtime/program/amr_program_context_continuation_regrid.inc>
+#include <pops/runtime/program/amr_program_context_continuation_regrid_child.inc>
+#include <pops/runtime/program/amr_program_context_field_bundle.inc>
+#include <pops/runtime/program/amr_program_context_field_allocation.inc>
+#include <pops/runtime/program/amr_program_context_continuation_field_storage.inc>
+#include <pops/runtime/program/amr_program_context_continuation_checkpoint.inc>
+#include <pops/runtime/program/amr_program_context_history_checkpoint_definitions.inc>
 
   void reached_duration(double) const {
-    throw std::logic_error("computed Program frontier version 1 cannot remap AMR interval exchanges");
+    throw std::logic_error(
+        "computed Program frontier version 1 cannot remap AMR interval exchanges");
   }
 
   template <int TestDim>
@@ -547,6 +582,8 @@ public:
   mutable ::pops::amr::Rational stage_time_{0, 1};
   mutable std::string primary_clock_;
   mutable ClockScheduleState clock_schedule_;
+  // Complete immutable accepted forest: macro root (-1), then each hierarchy level.
+  mutable std::map<int, ContinuationStore<Dim>> amr_continuation_accepted_;
   mutable std::uint64_t boundary_generation_ = 0;
   mutable std::uint64_t resource_epoch_ = std::numeric_limits<std::uint64_t>::max();
   mutable std::uint64_t resource_generation_ = std::numeric_limits<std::uint64_t>::max();
@@ -576,9 +613,12 @@ public:
   mutable std::map<std::int64_t, HierarchyFieldResource> hierarchy_field_resources_;
   mutable bool interaction_history_declarations_sealed_ = false;
   mutable std::map<std::int64_t, InteractionHistoryDeclaration> interaction_history_declarations_;
-  mutable std::map<InteractionHistorySourceKey, std::shared_ptr<const InteractionHistorySnapshot>> interaction_history_snapshots_;
-  mutable std::map<std::int64_t, std::shared_ptr<const ClosedOriginalFieldSource>> closed_original_sources_;
-  mutable std::map<std::int64_t, std::shared_ptr<const ClosedInteractionTower>> closed_interactions_;
+  mutable std::map<InteractionHistorySourceKey, std::shared_ptr<const InteractionHistorySnapshot>>
+      interaction_history_snapshots_;
+  mutable std::map<std::int64_t, std::shared_ptr<const ClosedOriginalFieldSource>>
+      closed_original_sources_;
+  mutable std::map<std::int64_t, std::shared_ptr<const ClosedInteractionTower>>
+      closed_interactions_;
   mutable std::map<std::string, std::vector<ProgramFieldLevel>> staged_field_publications_;
   mutable std::unique_ptr<hierarchy_tensor_solver_type> hierarchy_tensor_solver_;
   mutable std::vector<HierarchyTensorLevelBoundary> hierarchy_tensor_boundaries_;
@@ -612,11 +652,13 @@ public:
   mutable std::map<std::tuple<std::size_t, int, FluxBasisProvider>, std::string>
       declared_flux_temporal_families_;
   mutable std::map<std::string, AmrProgramPendingHistoryRemap> pending_history_remaps_;
+  HistoryTransferRegistry history_transfers_;
   mutable DeferredHistoryLagScratches deferred_history_lag_scratches_;
   mutable std::vector<std::size_t> active_flux_basis_counts_;
   mutable std::uint64_t next_active_flux_basis_identity_ = 0;
   mutable std::vector<std::size_t> prepared_rhs_basis_bounds_;
   mutable std::vector<std::size_t> prepared_coefficient_term_bounds_;
+  mutable std::size_t max_exact_coefficient_bytes_ = ::pops::ExactWeight::default_max_bytes;
   mutable ::pops::amr::ClockWindow active_subcycling_window_{};
   mutable std::uint64_t active_subcycling_attempt_ = 0;
   mutable std::unique_ptr<multiblock_subcycling_type> multiblock_subcycling_;

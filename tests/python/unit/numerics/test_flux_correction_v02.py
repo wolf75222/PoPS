@@ -30,7 +30,8 @@ def test_t12_replaces_one_native_face_ledger_and_retains_true_candidate_stage():
     assert len(rows)==1 and rows[0][0] is final and rows[0][1]=={1:Fraction(1)}
     source=emit_cpp_program(plan.time,model_graph=ProgramModelGraph.from_resolved_blocks(plan.blocks))
     assert "PreparedStencilInput" in source
-    assert source.count("ctx.stage_exchange_batch(")==1
+    assert source.count("ctx.capture_stencil_exchanges(")==2
+    assert source.count("ctx.publish_stencil_exchanges(")==1
     assert "stencil_parameter_" in source
 
 

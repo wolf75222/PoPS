@@ -28,11 +28,7 @@ void materialize_active_flux_expression_(
           term.coefficient.size() != 1 || term.coefficient.begin()->first != 1)
         throw std::invalid_argument(
             "AMR Program final flux coefficient is not a supported exact dt integral");
-      const ::pops::amr::Rational weight = term.coefficient.begin()->second;
-      if (weight.denominator <= 0 ||
-          ::pops::amr::Rational{weight.numerator, weight.denominator} != weight)
-        throw std::invalid_argument(
-            "AMR Program final flux coefficient lost its canonical rational metadata");
+      const ::pops::ExactWeight weight = term.coefficient.begin()->second;
       const FluxBasis& basis = *term.basis;
       if (basis.window.begin.level != active_level_ || basis.window.end.level != active_level_ ||
           basis.point.clock.empty() || basis.point.level != active_level_ ||
@@ -43,7 +39,8 @@ void materialize_active_flux_expression_(
            basis.provider != FluxBasisProvider::PreparedDefaultFlux &&
            basis.provider != FluxBasisProvider::ExactFace &&
            basis.provider != FluxBasisProvider::NamedCell &&
-           basis.provider != FluxBasisProvider::DiffusiveFace) ||
+           basis.provider != FluxBasisProvider::DiffusiveFace &&
+           basis.provider != FluxBasisProvider::GeneratedFace) ||
           (basis.provider != FluxBasisProvider::ExactFace &&
            basis.point.stage != basis.rhs_identity) ||
           basis.window.begin.macro_step != active_subcycling_window_.begin.macro_step ||
@@ -86,27 +83,46 @@ void materialize_active_flux_expression_(
           };
           const std::size_t coarse_count = static_cast<std::size_t>(
               std::count_if(entries.begin(), entries.end(), same_coarse_face));
-          const bool exact_operator_pack =
-              coarse_count == stage_identities.size() &&
-              std::all_of(expression.begin(), expression.end(), [&](const auto& item) {
-                const auto& basis = *item.second.basis;
-                const auto family = declared_flux_temporal_family_(basis);
-                const std::string legacy_stage = family.empty()
-                    ? flux_expression_stage_identity_(basis, item.second.coefficient.begin()->second)
-                    : std::string{};
-                return std::any_of(entries.begin(), entries.end(), [&](const auto& entry) {
-                  if (!same_coarse_face(entry))
-                    return false;
-                  if (family.empty())
-                    return entry.key.stage == legacy_stage;
-                  // Preserve both full stage strings and both emitted coefficients.
-                  // The same declared operator may have another exact quadrature
-                  // after history migration; its stored stage must bind its own measure.
-                  return entry.key.temporal_family == family &&
-                         entry.key.stage ==
-                             flux_expression_stage_identity_(basis, entry.measure.stage_weight);
-                });
-              });
+          bool exact_operator_pack = false;
+          if (declared_flux_temporal_families_.empty()) {
+            // Legacy producers have no separate spatial authority. Preserve the
+            // complete operator/stage/weight identity instead of inventing one.
+            exact_operator_pack =
+                coarse_count == stage_identities.size() &&
+                std::all_of(
+                    stage_identities.begin(), stage_identities.end(), [&](const auto& stage) {
+                      return std::any_of(entries.begin(), entries.end(), [&](const auto& entry) {
+                        return same_coarse_face(entry) && entry.key.stage == stage;
+                      });
+                    });
+          } else {
+            std::set<std::string> fine_families, coarse_families;
+            for (const auto& [source_identity, source_term] : expression) {
+              (void)source_identity;
+              const auto& source = *source_term.basis;
+              const bool contributes = std::any_of(
+                  source.faces.begin(), source.faces.end(), [&](const auto& source_face) {
+                    return source_face.role == fragment_role_type::Fine &&
+                           source_face.axis == face.axis &&
+                           source_face.coarse_face == face.coarse_face;
+                  });
+              if (contributes)
+                fine_families.emplace(declared_flux_temporal_family_(source));
+            }
+            for (const auto& entry : entries) {
+              if (!same_coarse_face(entry))
+                continue;
+              ::pops::amr::reflux::validate_face_flux_fragment(entry.key, entry.measure);
+              require_declared_flux_fragment_stage_(runtime_block, entry);
+              coarse_families.emplace(entry.key.temporal_family);
+            }
+            // A physical flux family is independent of the number, dates and
+            // identities of its local evaluations. Retain every original stage
+            // and weight. Metric reflux independently verifies each family's
+            // unit quadrature, exact temporal coverage, physical duration and
+            // complete coarse/fine geometry before applying the correction.
+            exact_operator_pack = !fine_families.empty() && fine_families == coarse_families;
+          }
           if (!exact_operator_pack) {
             std::string expected;
             for (const auto& stage : stage_identities) {
@@ -125,7 +141,8 @@ void materialize_active_flux_expression_(
                 "AMR Program coarse/fine flux operator identities differ before face-flux "
                 "publication: expected " +
                 std::to_string(stage_identities.size()) + " stage(s), observed " +
-                std::to_string(coarse_count) + " [expected: " + expected + "; observed: " + observed + "]");
+                std::to_string(coarse_count) + " [expected: " + expected +
+                "; observed: " + observed + "]");
           }
         }
       }
@@ -151,7 +168,7 @@ void materialize_active_flux_expression_(
     std::size_t stage_index = 0;
     for (const auto& [identity, term] : expression) {
       const FluxBasis& basis = *term.basis;
-      const ::pops::amr::Rational weight = term.coefficient.begin()->second;
+      const ::pops::ExactWeight weight = term.coefficient.begin()->second;
       const double duration = active_flux_interval_duration_(basis.window);
       const ::pops::amr::Rational stage_phase =
           basis.window.begin.phase +

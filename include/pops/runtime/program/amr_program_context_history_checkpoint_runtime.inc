@@ -1,4 +1,7 @@
-void apply_multiblock_reflux_(multiblock_reflux_context_type& context) const {
+void apply_multiblock_reflux_(
+    multiblock_reflux_context_type& context,
+    const std::map<std::pair<int, std::array<int, Dim>>,
+                   ::pops::amr::reflux::MetricRefluxTemporalContract>* expected = nullptr) const {
   if (context.flux.published_size() == 0)
     return;
   const Geometry<Dim> geometry =
@@ -44,10 +47,17 @@ void apply_multiblock_reflux_(multiblock_reflux_context_type& context) const {
           "AMR Program reflux ledger lacks its block-qualified coarse face: owner=" + query.owner +
           " axis=" + std::to_string(query.axis) +
           " published=" + std::to_string(context.flux.published_size()));
+    const ::pops::amr::reflux::MetricRefluxTemporalContract* temporal = nullptr;
+    if (expected) {
+      std::array<int, Dim> face{};
+      for (int axis = 0; axis < Dim; ++axis)
+        face[axis] = interface.coarse_face[axis];
+      temporal = &expected->at({interface.axis, face});
+    }
     const auto reflux =
         facade_->prepared_amr_multiblock_hierarchy_().topology_runtime().reconcile_reflux_for_owner(
             context.flux, query, context.block_identity, state_identity, context.face_mapping,
-            budget, payload_axpy_);
+            budget, payload_axpy_, temporal);
     const std::vector<Real> correction = ::pops::amr::reflux::coarse_cell_reflux_correction(
         reflux, cell_measure_(geometry), interface.side, payload_axpy_);
     apply_reflux_payload_(context.parent, interface.coarse_cell, correction);
@@ -58,7 +68,7 @@ static std::optional<std::pair<int, std::string>> decode_history_key_(std::strin
   return checkpoint_detail::decode_history_key(key);
 }
 
-AmrProgramAcceptedState<Dim> accepted_state_() const {
+AmrProgramAcceptedState<Dim> accepted_state_(bool include_continuation = true) const {
   require_facade_execution_();
   AmrProgramAcceptedState<Dim> state;
   state.spatial_contract = runtime_->spatial_contract();
@@ -170,6 +180,8 @@ AmrProgramAcceptedState<Dim> accepted_state_() const {
     std::sort(state.accepted_interface_flux.begin(), state.accepted_interface_flux.end(),
               [](const auto& left, const auto& right) { return left.key < right.key; });
   }
+  if (include_continuation)
+    state.continuation_levels = continuation_checkpoint_levels_();
   return state;
 }
 
@@ -201,7 +213,8 @@ void import_accepted_state_(bool force) const {
     throw std::runtime_error("AMR Program accepted-state import received an empty image");
   AmrProgramAcceptedState<Dim> state;
   try {
-    state = deserialize_amr_program_accepted_state<Dim>(bytes, &interface_flux_ledger_->budget());
+    state = deserialize_amr_program_accepted_state<Dim>(bytes, &interface_flux_ledger_->budget(),
+                                                        max_exact_coefficient_bytes_);
   } catch (const std::exception& exception) {
     throw std::runtime_error("AMR Program accepted-state import cannot decode the native image: " +
                              std::string(exception.what()));
@@ -246,8 +259,9 @@ void import_accepted_state_(bool force) const {
         pending.prior_topology_epoch + 1 != pending.published_topology_epoch ||
         pending.prior_materialization_generation + 1 !=
             pending.published_materialization_generation ||
-        pending.consumed || !checkpoint_detail::pending_qualification_valid(
-            pending, runtime_->topology_epoch(), runtime_->materialization_generation()) ||
+        pending.consumed ||
+        !checkpoint_detail::pending_qualification_valid(pending, runtime_->topology_epoch(),
+                                                        runtime_->materialization_generation()) ||
         runtime_state().hist_.slot_sample.at(pending.key).at(1) != pending.source_sample ||
         pending.temporal_denominator != 1 ||
         (pending.temporal_numerator != 1 && pending.temporal_numerator != 2) ||
@@ -258,7 +272,7 @@ void import_accepted_state_(bool force) const {
   }
   AmrProgramAcceptedState<Dim> expected;
   try {
-    expected = accepted_state_();
+    expected = accepted_state_(false);
   } catch (const std::exception& exception) {
     throw std::runtime_error(
         "AMR Program accepted-state import cannot construct live history provenance: " +
@@ -310,6 +324,7 @@ void import_accepted_state_(bool force) const {
   auto interface_budget = interface_flux_ledger_->budget();
   auto restored_interface_flux = std::make_unique<interface_flux_ledger_type>(
       restore_amr_program_interface_flux_ledger(state, std::move(interface_budget)));
+  auto restored_continuation = continuation_take_restart_levels_(state.continuation_levels, bytes);
   clock_schedule_.restore_accepted_ticks(state.logical_clock_ticks, accepted_macro_step);
   static_assert(std::is_nothrow_swappable_v<decltype(history_flux_expressions_)>);
   static_assert(std::is_nothrow_swappable_v<decltype(accepted_temporal_partition_)>);
@@ -335,6 +350,7 @@ void import_accepted_state_(bool force) const {
   interface_flux_commit_guard_.reset();
   interface_flux_ledger_.swap(restored_interface_flux);
   accepted_synchronization_events_.swap(state.synchronization_events);
+  continuation_publish_restart_levels_(std::move(restored_continuation));
   retire_multiblock_subcycling_engine_();
   accepted_subcycling_attempt_ = *state.accepted_attempt;
   allocated_subcycling_attempt_ =
@@ -375,28 +391,36 @@ void refresh_accepted_hierarchy_state_after_remap_(
           throw std::logic_error("AMR Program accepted history remap crossed an active attempt");
         RemapCandidate staged{pending_history_remaps_, {}};
         if (descriptor.prior_topology_epoch == std::numeric_limits<std::uint64_t>::max() ||
-            descriptor.prior_materialization_generation == std::numeric_limits<std::uint64_t>::max() ||
+            descriptor.prior_materialization_generation ==
+                std::numeric_limits<std::uint64_t>::max() ||
             descriptor.prior_topology_epoch + 1 != descriptor.published_topology_epoch ||
-            descriptor.prior_materialization_generation + 1 != descriptor.published_materialization_generation ||
+            descriptor.prior_materialization_generation + 1 !=
+                descriptor.published_materialization_generation ||
             descriptor.published_topology_epoch != runtime_->topology_epoch() ||
-            descriptor.published_materialization_generation != runtime_->materialization_generation())
+            descriptor.published_materialization_generation !=
+                runtime_->materialization_generation())
           throw std::runtime_error("AMR Program history remap has a stale publication edge");
         // This is live metadata of the native-prepared image, not the facade's old accepted
         // getter (which intentionally refuses an image after topology publication).
-        const auto metadata = checkpoint_detail::history_metadata(
-            runtime_state().hist_, facade_->program_block_map(), runtime_->hierarchy().num_levels());
+        const auto metadata =
+            checkpoint_detail::history_metadata(runtime_state().hist_, facade_->program_block_map(),
+                                                runtime_->hierarchy().num_levels());
         const auto ring_contract = [&](const std::string& key) {
           const auto decoded = decode_history_key_(key);
           if (!decoded)
             throw std::runtime_error("AMR Program pending history remap has an invalid ring key");
           return checkpoint_detail::pending_ring_contract(
               metadata.histories, metadata.history_slots, decoded->second, decoded->first,
-              {decoded->first, static_cast<std::int64_t>(facade_->macro_step()), {0, 1}, facade_->time()});
+              {decoded->first,
+               static_cast<std::int64_t>(facade_->macro_step()),
+               {0, 1},
+               facade_->time()});
         };
         for (auto& [key, marker] : staged.pending)
           checkpoint_detail::requalify_retained_pending_history(
               marker, key, descriptor, ring_contract(key),
-              runtime_state().hist_.slot_sample.at(key).at(1), runtime_state().hist_.store_pending.at(key));
+              runtime_state().hist_.slot_sample.at(key).at(1),
+              runtime_state().hist_.store_pending.at(key));
         if (descriptor.child_physical_layout_changed && descriptor.child_published &&
             (descriptor.temporal_numerator == 1 || descriptor.temporal_numerator == 2) &&
             descriptor.temporal_denominator == 1 && descriptor.integral_only) {
@@ -423,17 +447,26 @@ void refresh_accepted_hierarchy_state_after_remap_(
                   "AMR Program deferred history remap would supersede a pending lag");
             const double source_dt = static_cast<double>(dts[1]);
             AmrProgramPendingHistoryRemap marker{
-                    key, descriptor.parent_level, descriptor.child_level,
-                    descriptor.prior_topology_epoch, descriptor.prior_materialization_generation,
-                    descriptor.published_topology_epoch,
-                    descriptor.published_materialization_generation, descriptor.accepted_macro_step,
-                    descriptor.temporal_numerator, descriptor.temporal_denominator, source_dt,
-                    source_dt / static_cast<double>(descriptor.temporal_numerator), false};
+                key,
+                descriptor.parent_level,
+                descriptor.child_level,
+                descriptor.prior_topology_epoch,
+                descriptor.prior_materialization_generation,
+                descriptor.published_topology_epoch,
+                descriptor.published_materialization_generation,
+                descriptor.accepted_macro_step,
+                descriptor.temporal_numerator,
+                descriptor.temporal_denominator,
+                source_dt,
+                source_dt / static_cast<double>(descriptor.temporal_numerator),
+                false};
             marker.qualified_topology_epoch = descriptor.published_topology_epoch;
-            marker.qualified_materialization_generation = descriptor.published_materialization_generation;
+            marker.qualified_materialization_generation =
+                descriptor.published_materialization_generation;
             marker.source_sample = runtime_state().hist_.slot_sample.at(key).at(1);
             if (marker.source_sample.kind != HistorySampleKind::Publication)
-              throw std::runtime_error("AMR Program deferred remap requires an earned source sample identity");
+              throw std::runtime_error(
+                  "AMR Program deferred remap requires an earned source sample identity");
             marker.retained_ring_contract = ring_contract(key);
             staged.pending.emplace(key, std::move(marker));
           }
@@ -672,8 +705,9 @@ void validate_accepted_history_remap_metadata_() const {
   const std::size_t live_levels = runtime_->hierarchy().num_levels();
   if (live_levels == 0)
     throw std::runtime_error("AMR Program accepted history remap has no live hierarchy level");
-  std::map<std::string, std::tuple<int, int, int, int, std::string, std::string,
-                                  std::string, std::string, Extent<Dim>>> declarations;
+  std::map<std::string, std::tuple<int, int, int, int, std::string, std::string, std::string,
+                                   std::string, Extent<Dim>>>
+      declarations;
   for (const auto& [key, ring] : manager.histories) {
     const auto decoded = decode_history_key_(key);
     if (!decoded || decoded->first < 0 || static_cast<std::size_t>(decoded->first) >= live_levels ||
@@ -712,9 +746,10 @@ void validate_accepted_history_remap_metadata_() const {
           if (slot.ghosts()[axis] != declared_depth)
             throw std::runtime_error("AMR history slot differs from its explicit halo declaration");
     }
-    const auto declaration = std::make_tuple(owner, depth, ring.front().ncomp(), declared_depth,
-        manager.state_identity.at(key), manager.space_identity.at(key),
-        manager.clock_identity.at(key), manager.interpolation_identity.at(key), ghosts);
+    const auto declaration = std::make_tuple(
+        owner, depth, ring.front().ncomp(), declared_depth, manager.state_identity.at(key),
+        manager.space_identity.at(key), manager.clock_identity.at(key),
+        manager.interpolation_identity.at(key), ghosts);
     const auto [retained, inserted] = declarations.emplace(decoded->second, declaration);
     if (!inserted && retained->second != declaration)
       throw std::runtime_error("AMR history declared storage differs between levels");
@@ -755,11 +790,16 @@ void validate_accepted_history_remap_() const {
     request.text("pops.amr.history-ranked-contract.v1").scalar(manager.histories.size());
     for (const auto& [key, ring] : manager.histories) {
       const auto decoded = decode_history_key_(key);
-      request.text(key).scalar(decoded->first).scalar(manager.owner.at(key))
-          .scalar(manager.depth.at(key)).scalar(ring.front().ncomp())
+      request.text(key)
+          .scalar(decoded->first)
+          .scalar(manager.owner.at(key))
+          .scalar(manager.depth.at(key))
+          .scalar(ring.front().ncomp())
           .scalar(manager.ghost_depth.at(key))
-          .text(manager.state_identity.at(key)).text(manager.space_identity.at(key))
-          .text(manager.clock_identity.at(key)).text(manager.interpolation_identity.at(key));
+          .text(manager.state_identity.at(key))
+          .text(manager.space_identity.at(key))
+          .text(manager.clock_identity.at(key))
+          .text(manager.interpolation_identity.at(key));
       for (int axis = 0; axis < Dim; ++axis)
         request.scalar(ring.front().ghosts()[axis]);
     }
@@ -770,14 +810,16 @@ void validate_accepted_history_remap_() const {
   const auto& lane = prepared_execution_lane();
   collectively_rethrow_exception(request_error, lane,
                                  "AMR history ranked requests failed collectively");
-  if (!all_ranks_agree_exact_ordered_byte_pairs({{"history-ranked-contract", request_contract}}, lane))
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"history-ranked-contract", request_contract}},
+                                                lane))
     throw std::runtime_error("AMR history declared ranked requests differ between peers");
   // Native façade access may be collective. Obtain every reference first, before any
   // rank-local storage mismatch can stop one peer from reaching a later-level getter.
   for (const auto& [key, ring] : manager.histories) {
     (void)ring;
     const auto decoded = decode_history_key_(key);
-    live_fields.push_back(&facade_->prepared_amr_block_state(manager.owner.at(key), decoded->first));
+    live_fields.push_back(
+        &facade_->prepared_amr_block_state(manager.owner.at(key), decoded->first));
   }
   std::size_t live_index = 0;
   for (const auto& [key, ring] : manager.histories) {
@@ -852,8 +894,7 @@ void refresh_resources_after_accepted_history_remap_(
         RemappedFluxCandidate staged;
         staged.replace_sequence_sources =
             history_flux_regrid_source_epoch_ != descriptor.source_topology_epoch ||
-            history_flux_regrid_source_generation_ !=
-                descriptor.source_materialization_generation;
+            history_flux_regrid_source_generation_ != descriptor.source_materialization_generation;
         if (staged.replace_sequence_sources) {
           if (resource_epoch_ != descriptor.source_topology_epoch ||
               resource_generation_ != descriptor.source_materialization_generation ||
@@ -880,7 +921,12 @@ void refresh_resources_after_accepted_history_remap_(
           const bool parent_source =
               entry.source == AmrProgramHistoryRemapSource::ParentDeferred ||
               entry.source == AmrProgramHistoryRemapSource::ParentAlignedState ||
-              entry.source == AmrProgramHistoryRemapSource::ParentAlignedScalarOutput;
+              entry.source == AmrProgramHistoryRemapSource::ParentAlignedScalarOutput ||
+              entry.source == AmrProgramHistoryRemapSource::ParentReconstructed;
+          if (entry.temporal_transfer.has_value() !=
+              (entry.source == AmrProgramHistoryRemapSource::ParentReconstructed))
+            throw std::runtime_error(
+                "AMR history remap temporal matrix differs from its authority");
           if (parent_source && entry.parent_key.empty())
             throw std::runtime_error("AMR Program history flux remap has no parent provenance key");
           if (!parent_source && !entry.parent_key.empty())
@@ -918,12 +964,14 @@ void refresh_resources_after_accepted_history_remap_(
               throw std::runtime_error("AMR output history projection lacks exact sample metadata");
             for (std::size_t slot = 0; slot < ring.size(); ++slot) {
               if (ring[slot].ncomp() != ring.front().ncomp())
-                throw std::runtime_error("AMR output history projection changed its component width");
+                throw std::runtime_error(
+                    "AMR output history projection changed its component width");
               validate_history_sample_provenance(manager.slot_sample.at(key)[slot],
-                                                manager.initialized.at(key),
-                                                manager.slot_dt.at(key).at(slot));
+                                                 manager.initialized.at(key),
+                                                 manager.slot_dt.at(key).at(slot));
               if (!manager.slot_sample.at(key)[slot].authenticated())
-                throw std::runtime_error("AMR output history projection has an unauthenticated sample");
+                throw std::runtime_error(
+                    "AMR output history projection has an unauthenticated sample");
             }
           }
           const auto planned = plan.find(key);
@@ -943,7 +991,8 @@ void refresh_resources_after_accepted_history_remap_(
               planned != plan.end() &&
               (planned->second->source == AmrProgramHistoryRemapSource::ParentDeferred ||
                planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedState ||
-               planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedScalarOutput);
+               planned->second->source == AmrProgramHistoryRemapSource::ParentAlignedScalarOutput ||
+               planned->second->source == AmrProgramHistoryRemapSource::ParentReconstructed);
           if (!source_from_parent && retained != retained_registry.end() &&
               retained->second.size() == ring.size()) {
             staged.expressions.emplace(key, retained->second);
@@ -951,12 +1000,10 @@ void refresh_resources_after_accepted_history_remap_(
             if (!source_from_parent) {
               std::string prior_keys;
               for (const auto& [prior_key, expressions] : history_flux_expressions_)
-                prior_keys += " [" + prior_key + ":" +
-                              std::to_string(expressions.size()) + "]";
+                prior_keys += " [" + prior_key + ":" + std::to_string(expressions.size()) + "]";
               throw std::runtime_error(
                   "AMR Program history flux remap lacks its retained history provenance for " +
-                  key + " (ring depth " + std::to_string(ring.size()) +
-                  ", plan source " +
+                  key + " (ring depth " + std::to_string(ring.size()) + ", plan source " +
                   (planned == plan.end()
                        ? std::string("unplanned")
                        : std::to_string(static_cast<int>(planned->second->source))) +
@@ -988,8 +1035,9 @@ void refresh_resources_after_accepted_history_remap_(
                 const std::size_t slots = ring.size();
                 const int components = ring.front().ncomp();
                 if ((!legacy && !issued) ||
-                    (legacy && (slots != 2 || components != 1 ||
-                                manager.state_identity.at(key) != "scalar-history:" + decoded->second)) ||
+                    (legacy &&
+                     (slots != 2 || components != 1 ||
+                      manager.state_identity.at(key) != "scalar-history:" + decoded->second)) ||
                     manager.depth.at(key) != static_cast<int>(slots) ||
                     manager.depth.at(parent_key) != static_cast<int>(slots) ||
                     !manager.initialized.at(key) || !manager.initialized.at(parent_key) ||
@@ -1011,34 +1059,66 @@ void refresh_resources_after_accepted_history_remap_(
                     !std::all_of(manager.slot_sample.at(key).begin(),
                                  manager.slot_sample.at(key).end(),
                                  [](const auto& sample) { return sample.authenticated(); }) ||
-                    !std::all_of(ring.begin(), ring.end(),
-                                 [components](const auto& slot) { return slot.ncomp() == components; }))
+                    !std::all_of(ring.begin(), ring.end(), [components](const auto& slot) {
+                      return slot.ncomp() == components;
+                    }))
                   throw std::runtime_error(
                       "AMR scalar output history remap lacks its exact parent capability");
               }
             }
+            const auto project_basis = [&](const auto& original) {
+              if (!original)
+                throw std::logic_error("AMR parent history projection has no flux basis");
+              auto basis = std::make_shared<FluxBasis>(*original);
+              if (!basis->history_snapshot)
+                throw std::invalid_argument(
+                    "AMR parent history transfer lacks its authenticated complete face source");
+              const auto projection_key =
+                  std::make_pair(basis->history_snapshot->identity, decoded->first);
+              auto projection = projections.find(projection_key);
+              if (projection == projections.end())
+                projection =
+                    projections
+                        .emplace(projection_key, project_history_flux_snapshot_(
+                                                     basis->history_snapshot, decoded->first))
+                        .first;
+              basis->history_snapshot = projection->second;
+              return basis;
+            };
             auto projected_slots = parent->second;
-            for (auto& expression : projected_slots)
-              for (auto& [identity, term] : expression) {
-                (void)identity;
-                if (!term.basis)
-                  throw std::logic_error("AMR parent history projection has no flux basis");
-                auto basis = std::make_shared<FluxBasis>(*term.basis);
-                if (!basis->history_snapshot)
-                  throw std::invalid_argument(
-                      "AMR parent history transfer lacks its authenticated complete face source");
-                const auto projection_key =
-                    std::make_pair(basis->history_snapshot->identity, decoded->first);
-                auto projection = projections.find(projection_key);
-                if (projection == projections.end())
-                  projection =
-                      projections
-                          .emplace(projection_key, project_history_flux_snapshot_(
-                                                       basis->history_snapshot, decoded->first))
-                          .first;
-                basis->history_snapshot = projection->second;
-                term.basis = std::move(basis);
+            if (planned->second->temporal_transfer)
+              projected_slots = distinct_history_flux_sources(parent->second, project_basis);
+            else
+              for (auto& expression : projected_slots)
+                for (auto& [identity, term] : expression) {
+                  (void)identity;
+                  term.basis = project_basis(term.basis);
+                }
+            if (const auto& temporal = planned->second->temporal_transfer) {
+              if (temporal->rows.size() != projected_slots.size())
+                throw std::runtime_error(
+                    "AMR history flux transfer changed the complete ring width");
+              std::vector<FluxExpression> reconstructed(projected_slots.size());
+              for (std::size_t slot = 0; slot < reconstructed.size(); ++slot) {
+                const auto& row = temporal->rows[slot];
+                if (row.weights.size() != projected_slots.size())
+                  throw std::runtime_error("AMR history flux transfer has an incomplete row");
+                validate_history_transfer_weights(row);
+                contract.scalar(row.time).scalar(row.interval);
+                append_history_transfer_weight_contract(contract, row);
+                for (std::size_t column = 0; column < row.weights.size(); ++column) {
+                  const auto weight =
+                      history_transfer_exact_weight(row, column, max_exact_coefficient_bytes_);
+                  contract.scalar(row.weights[column]);
+                  if (!projected_slots[column].empty() && weight != ::pops::ExactWeight{0, 1})
+                    add_flux_expression_(reconstructed[slot],
+                                         scaled_flux_expression_(projected_slots[column],
+                                                                 ExactPolynomial{{0, weight}}));
+                }
+                require_flux_expression_budget_(reconstructed[slot]);
               }
+              projected_slots = std::move(reconstructed);
+            }
             staged.expressions.emplace(key, std::move(projected_slots));
           }
           const auto& slots = staged.expressions.at(key);

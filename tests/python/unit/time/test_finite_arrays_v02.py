@@ -41,7 +41,8 @@ def test_arrays_map_scan_reduce_and_loop_carry_are_native_and_body_is_recorded_o
     source = _source(p, q)
     assert "std::int64_t(9007199254740995)" in source
     assert "std::bit_cast<std::int64_t>" in source
-    assert "std::shared_ptr<const std::vector<Element>>" in source
+    assert "pops_algebra_finite::make_values" in source
+    assert "pops/runtime/program/finite_structural_storage.hpp" in source
     assert "finite array allocation capacity exhausted" in source
     assert "for (std::int64_t finite_" in source
     assert "pops_finite_instance_version" not in source
@@ -116,12 +117,17 @@ def test_map_captures_ancestor_constant_but_refuses_sibling_and_preserves_branch
     assert "branch_choice_" in source
 
 
-def test_amr_array_invocation_is_explicitly_unqualified():
-    from pops.codegen.program_emit_finite_arrays import emit_finite_op
-    p,q = _fixture("amr_refusal")
-    d = p.range_set(1,capacity=1,ownership="replicated")
-    with pytest.raises(NotImplementedError,match="AMR level invocation"):
-        emit_finite_op(p,d,{},None,[],[],{},None,"amr_system")
+def test_amr_array_invocation_uses_the_native_level_scope():
+    p,q = _fixture("amr_finite")
+    d = p.range_set(3,capacity=3,ownership="replicated")
+    values = p.map(d, lambda b, i: b.float64(b.index_value(i)))
+    total = p.reduce(values, p.float64(0), lambda b, s, x: s+x, order="ascending")
+    p.record_scalar("sum", total)
+    p.commit(q.next,p.value("accepted",q.n,at=q.next.point))
+    source = emit_cpp_program(p, target="amr_system")
+    assert "ctx.continuation_new_domain(" in source
+    assert "auto _finite_value_scope = ctx.finite_value_scope();" in source
+    assert "ctx.advance_hierarchy(" in source
 
 
 def test_array_projection_retains_the_exact_element_point():
@@ -147,3 +153,32 @@ def test_domain_index_and_array_reads_check_the_native_realm_before_collectives(
     assert ".domain->visible()" in source
     assert "finite domain instance" in source
     assert "same live domain instance" in source
+
+
+@pytest.mark.parametrize("capacity", (2**31, 2**53+3, 2**63-1))
+def test_int64_capacity_is_exact_metadata_for_small_runtime_arrays(capacity):
+    from pops.time._program.finite_arrays import IndexFamily
+    p, q = _fixture("int64_capacity")
+    family = IndexFamily(capacity)
+    domain = p.range_set(3, family=family)
+    empty = p.range_set(0, family=domain)
+    values = p.map(domain, lambda b, i: b.index_value(i)+1)
+    p.reduce(values, p.int64(0), lambda b, s, x: s+x, order="ascending")
+    p.map(empty, lambda b, i: b.int64(1)//b.int64(0))
+    assert domain.attrs["signature"]["capacity"] == capacity
+    assert empty.attrs["signature"]["capacity"] == capacity
+    source = _source(p, q)
+    assert str(capacity) in source
+    assert "std::size_t((" in source  # allocation follows domain->size, never capacity
+
+
+@pytest.mark.parametrize("capacity", (-1, True, 2**63, 1.0))
+def test_domain_capacity_outside_int64_is_rejected_without_authoring_mutation(capacity):
+    from pops.time._program.finite_arrays import IndexFamily
+    p, _ = _fixture("invalid_int64_capacity")
+    before = p._ir_hash()
+    with pytest.raises(ValueError, match="exact Int64"):
+        p.range_set(0, capacity=capacity, ownership="replicated")
+    with pytest.raises(ValueError, match="exact Int64"):
+        IndexFamily(capacity)
+    assert p._ir_hash() == before

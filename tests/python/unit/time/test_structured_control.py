@@ -49,7 +49,7 @@ def test_nested_product_fold_preserves_two_blocks_and_simultaneous_swaps():
     assert p.validate()
     source = emit_cpp_program(p)
     assert source.count("for (; iteration_") == 2
-    assert "ctx.scratch_state" in source and "PureFieldAlgebra::copy" in source
+    assert "ctx.scratch_state" in source and "ctx.copy_with_provenance" in source
     assert "std::int64_t" in source
     assert p.to_graph().to_data() == detach_compiled_program(p).to_graph().to_data()
 
@@ -62,8 +62,8 @@ def test_swap_same_authority_stages_uses_two_phase_copy():
     source = emit_cpp_program(p)
     line = source.index("for (; iteration_")
     tail = source[line:]
-    assert tail.index("copy(next_") < tail.index("copy(carry_")
-    assert tail.count("copy(next_") == 2
+    assert tail.index("copy_with_provenance(next_") < tail.index("copy_with_provenance(carry_")
+    assert tail.count("copy_with_provenance(next_") == 2
     assert "structured control field allocation" in source
     assert "structured control field copy" in source
     assert source.index("structured control field allocation") < source.index("auto& carry_")
@@ -221,8 +221,11 @@ def test_iteration_step_result_and_nested_capture_propagate_without_failed_updat
     recovered = p.match(outer, ok=lambda t, x: x["u"], err=lambda t, e: a.n)
     _commit(p, a, recovered)
     source = emit_cpp_program(p)
-    failure = source.index("break; }", source.index("matched_status_"))
-    copy = source.index("copy(next_", failure)
+    import re
+    status = re.search(r"std::int64_t (matched_\w+_status)", source)
+    assert status is not None
+    failure = source.index("break; }", status.start())
+    copy = source.index("copy_with_provenance(next_", failure)
     assert failure < copy
     assert source.count("= failure.code;") == 3
     assert source.count("= failure.origin;") == 3

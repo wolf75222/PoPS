@@ -16,11 +16,15 @@ if TYPE_CHECKING:
 
 
 def _freeze(value):
-    if isinstance(value, Mapping):
-        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
-    if isinstance(value, (list, tuple)):
-        return tuple(_freeze(item) for item in value)
-    return value
+    from pops._structural_data import transform
+    def describe(node):
+        if isinstance(node, Mapping):
+            keys = tuple(node)
+            return tuple(node.values()), lambda children: MappingProxyType(dict(zip(keys, children)))
+        if isinstance(node, (list, tuple)):
+            return node, tuple
+        return None, node
+    return transform(value, describe)
 
 
 @dataclass(frozen=True, init=False, eq=False)
@@ -43,28 +47,39 @@ class ValueType:
     @classmethod
     def from_data(cls, data):
         """Read scalar/product/sum types without fabricating dependent authorities."""
-        if not isinstance(data, Mapping):
-            raise TypeError("value type data must be a mapping")
-        kind = data.get("vtype")
-        if kind in ("bool", "int64", "scalar"):
-            allowed = {"vtype", "block", "space", "state_ref", "field_context", "point"}
-            if set(data) - allowed or any(v is not None for k, v in data.items() if k != "vtype"):
-                raise ValueError("dependent type data requires authenticated authority reconstruction")
-            return {"bool": Bool, "int64": Int64, "scalar": Float64}[kind]
-        if kind in ("product", "variant") and set(data) == {"vtype", "members"}:
-            members = data["members"]
-            if len({key for key, _ in members}) != len(members):
-                raise ValueError("duplicate structural type member")
-            constructor = Product if kind == "product" else Variant
-            return constructor(**{key: cls.from_data(child) for key, child in members})
-        raise ValueError("dependent type data requires authenticated authority reconstruction")
+        from pops._structural_data import transform
+        def describe(node):
+            if not isinstance(node, Mapping):
+                raise TypeError("value type data must be a mapping")
+            kind = node.get("vtype")
+            if kind in ("bool", "int64", "scalar"):
+                allowed = {"vtype", "block", "space", "state_ref", "field_context", "point"}
+                if set(node) - allowed or any(v is not None for k, v in node.items() if k != "vtype"):
+                    raise ValueError("dependent type data requires authenticated authority reconstruction")
+                return None, {"bool": Bool, "int64": Int64, "scalar": Float64}[kind].signature
+            if kind in ("product", "variant") and set(node) == {"vtype", "members"}:
+                members = node["members"]
+                names = tuple(key for key, _ in members)
+                if any(not isinstance(key, str) or not key for key in names):
+                    raise TypeError("type member names must be non-empty strings")
+                if len(set(names)) != len(names):
+                    raise ValueError("duplicate structural type member")
+                if kind == "variant" and not names:
+                    raise ValueError("Variant requires at least one tag")
+                rows = sorted(members) if kind == "variant" else members
+                keys = tuple(key for key, _ in rows)
+                return tuple(child for _, child in rows), lambda children: {
+                    "vtype": kind, "members": tuple(zip(keys, children))}
+            raise ValueError("dependent type data requires authenticated authority reconstruction")
+        return cls(transform(data, describe))
 
     def matches(self, value):
         from pops.time.value_signatures import same_signature
         return same_signature(instantiate(self, value.point).signature, type_of(value).signature)
 
     def __eq__(self, other):
-        return isinstance(other, ValueType) and self.to_data() == other.to_data()
+        from pops.time.value_signatures import same_signature
+        return isinstance(other, ValueType) and same_signature(self.signature, other.signature)
 
 
 def _scalar(kind):
@@ -89,14 +104,20 @@ def as_type(value):
 
 def instantiate(value_type, point):
     """Bind only undeclared scalar evaluation points; exact field/index authorities stay exact."""
-    def bind(signature: ValueSignature):
+    from pops._structural_data import transform
+    def describe(signature):
         result = dict(signature)
         if result["vtype"] in ("scalar", "bool", "int64") and result.get("point") is None:
             result["point"] = point
         if result["vtype"] in ("product", "variant"):
-            result["members"] = tuple((key, bind(child)) for key, child in cast("ValueSignature", result)["members"])
-        return result
-    return ValueType(bind(as_type(value_type).signature))
+            members = result["members"]
+            keys = tuple(key for key, _ in members)
+            def build(children):
+                result["members"] = tuple(zip(keys, children))
+                return result
+            return tuple(child for _, child in members), build
+        return None, result
+    return ValueType(transform(as_type(value_type).signature, describe))
 
 
 def _members(kind, fields):

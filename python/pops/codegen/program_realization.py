@@ -1,31 +1,21 @@
 """Authenticate Program-owned balances and prepare their private storage carrier."""
 from collections.abc import Mapping
-import json
-
-from pops.time.values import ProgramValue
-
-
-def _leaves(value):
-    if isinstance(value, ProgramValue):
-        yield value
-    elif isinstance(value, Mapping):
-        for item in value.values():
-            yield from _leaves(item)
-    elif isinstance(value, (tuple, list)):
-        for item in value:
-            yield from _leaves(item)
-
 
 def _data(value):
-    if isinstance(value, Mapping):
-        return {str(key): _data(item) for key, item in value.items()}
-    if isinstance(value, (tuple, list)):
-        return [_data(item) for item in value]
-    return value
+    from pops._structural_data import transform_tree
+    def describe(node):
+        if isinstance(node, Mapping):
+            keys = tuple(str(key) for key in node)
+            return tuple(node.values()), lambda children: dict(zip(keys, children, strict=False))
+        if isinstance(node, (tuple, list)):
+            return node, list
+        return None, node
+    return transform_tree(value, describe)
 
 
 def _key(value):
-    return json.dumps(_data(value), sort_keys=True, separators=(",", ":"), allow_nan=False)
+    from pops._structural_data import canonical_json
+    return canonical_json(_data(value), allow_nan=False)
 
 
 def _methods(numerics):
@@ -56,20 +46,6 @@ def validate_program_realizations(numerics, program):
         if len(commits) != 1:
             raise ValueError("ProgramRealization target has no native Program commit")
         commit = commits[0]
-        live = set()
-        def visit(value):
-            if value.id in live:
-                return
-            live.add(value.id)
-            support_only = value.attrs.get("support_only_inputs", ())
-            for index, dependency in enumerate(value.inputs):
-                if index not in support_only:
-                    visit(dependency)
-            for name, attribute in value.attrs.items():
-                if not name.endswith("_block"):
-                    for dependency in _leaves(attribute):
-                        visit(dependency)
-        visit(commit)
         expected = {_key(use.to_data()): use for use in method.uses}
         counts = {key: [] for key in expected}
         owned_occurrences = {_key(use.occurrence.to_data()) for use in method.uses}
@@ -88,11 +64,17 @@ def validate_program_realizations(numerics, program):
             if key in counts:
                 counts[key].append(value)
         from .realization_delivery import delivered_frontiers
-        for key, outputs in counts.items():
+        for outputs in counts.values():
             if not outputs:
                 raise ValueError("ProgramRealization Use needs exactly one owned SSA delivery; found 0")
             output_ids = {value.id for value in outputs}
-            frontiers = delivered_frontiers(commit, lambda node: node.id in output_ids)
+            # A fresh face residual consumes state/field data; it does not
+            # deliver the older residuals used to construct those data. In
+            # particular an elliptic operator is a numerical dependency, not a
+            # second accepted transport occurrence. A matched residual itself
+            # remains a delivery before this dependency frontier is applied.
+            frontiers = delivered_frontiers(commit, lambda node, output_ids=output_ids: node.id in output_ids,
+                stop_at=lambda node: node.op == "stencil_flux_divergence")
             if not frontiers or any(not frontier for frontier in frontiers):
                 raise ValueError("ProgramRealization owned output does not reach its exact state commit")
             if any(len(frontier) != 1 for frontier in frontiers):

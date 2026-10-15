@@ -627,27 +627,35 @@ def _dependencies(value):
     for i, child in enumerate(value.inputs):
         if i not in support_only:
             found[child.id] = child
-    def visit(item):
+    pending = list(reversed(tuple(child for key, child in value.attrs.items() if key not in ignored)))
+    seen_metadata = set()
+    while pending:
+        item = pending.pop()
         if isinstance(item, ProgramValue):
             found[item.id] = item
-        elif isinstance(item, Mapping):
-            for child in item.values(): visit(child)
-        elif isinstance(item, (tuple, list)):
-            for child in item: visit(child)
-    for key, child in value.attrs.items():
-        if key not in ignored: visit(child)
+        elif isinstance(item, (Mapping, tuple, list)):
+            if id(item) in seen_metadata:
+                continue
+            seen_metadata.add(id(item))
+            children = tuple(item.values()) if isinstance(item, Mapping) else item
+            pending.extend(reversed(children))
     return tuple(found.values())
 
 
 def _scientific_ancestor(value, seen=None):
     seen = set() if seen is None else seen
-    value = value.prog._canonical_value(value)
-    if value.id in seen:
-        return False
-    seen.add(value.id)
-    return (ANNOTATION in value.attrs
-            or bool(value.attrs.get("schema", {}).get("scientific", ()))
-            or any(_scientific_ancestor(child, seen) for child in _dependencies(value)))
+    pending = [value]
+    while pending:
+        value = pending.pop()
+        value = value.prog._canonical_value(value)
+        if value.id in seen:
+            continue
+        seen.add(value.id)
+        if (ANNOTATION in value.attrs
+                or bool(value.attrs.get("schema", {}).get("scientific", ()))):
+            return True
+        pending.extend(reversed(_dependencies(value)))
+    return False
 
 
 def _scientific_reachability(values):

@@ -27,3 +27,34 @@ def test_lowering_rejects_a_live_authoring_program():
     program = Program("mutable")
     with pytest.raises(TypeError, match="detached compiled Program"):
         emit_program_graph(program.to_graph(), lowering_program=program)
+
+
+def test_detached_graph_reuse_rechecks_identity_and_releases_dead_programs():
+    import gc
+    import weakref
+    from pops.time._program.graph_conversion import _detached_graphs
+
+    program = Program("cached")
+    program.int64(3)
+    detached = detach_compiled_program(program)
+    first = detached.to_graph()
+    assert detached.to_graph() is first
+    # Even an out-of-contract edit through object.__setattr__ must not turn the
+    # conversion cache into permission to bypass the lowering identity check.
+    object.__setattr__(detached, "name", "altered")
+    second = detached.to_graph()
+    assert second.graph_hash != first.graph_hash
+    with pytest.raises(ValueError, match="does not match"):
+        emit_program_graph(first, lowering_program=detached)
+    weak = weakref.ref(detached)
+    del detached
+    gc.collect()
+    assert weak() is None
+    assert all(item[1] is not second for item in _detached_graphs.values())
+
+
+def test_authoring_graph_is_refreshed_after_new_equations():
+    program = Program("mutable_equations")
+    first = program.to_graph()
+    program.int64(3)
+    assert program.to_graph().graph_hash != first.graph_hash

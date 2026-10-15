@@ -126,6 +126,10 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
     serialized = program._serialize(include_provenance=False)
     expected = {"name", "version", "clock", "nodes", "commits", "block_order"}
     optional = {
+        "max_exact_coefficient_bytes",
+        "flux_expression_budget",
+        "terminal_failure_byte_capacity",
+        "terminal_failure_aggregate_byte_capacity",
         "histories",
         "history_contracts",
         "history_persistence",
@@ -158,6 +162,10 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
         "block_order": serialized["block_order"],
     }
     for key in (
+        "max_exact_coefficient_bytes",
+        "flux_expression_budget",
+        "terminal_failure_byte_capacity",
+        "terminal_failure_aggregate_byte_capacity",
         "histories",
         "history_contracts",
         "history_persistence",
@@ -195,55 +203,51 @@ def _drop_program_presentation(value: Any, program_clock_owner: Any) -> Any:
     clock owners are preserved because they are genuine cross-authority
     references.
     """
-    if isinstance(value, Mapping):
-        normalized = dict(value)
-        if program_clock_owner is not None and normalized == program_clock_owner:
-            return None
-        if (
-            set(normalized) == {"schema_version", "name", "owner"}
-            and normalized.get("schema_version") == 1
-            and normalized.get("owner") == program_clock_owner
-        ):
-            normalized["owner"] = None
-        if (
-            set(normalized) in (
-                {"schema_version", "name", "partitions"},
-                {"schema_version", "name", "partitions", "identity"},
-            )
-            and normalized.get("schema_version") == 1
-            and isinstance(normalized.get("partitions"), Mapping)
-        ):
-            normalized.pop("name")
-        return {
-            key: _drop_program_presentation(item, program_clock_owner)
-            for key, item in normalized.items()
-        }
-    if isinstance(value, (list, tuple)):
-        return [
-            _drop_program_presentation(item, program_clock_owner)
-            for item in value
-        ]
-    return value
+    from pops._structural_data import equal, transform_tree
+
+    def describe(value):
+        if isinstance(value, Mapping):
+            normalized = dict(value)
+            if program_clock_owner is not None and equal(normalized, program_clock_owner):
+                return None, None
+            if (set(normalized) == {"schema_version", "name", "owner"}
+                    and normalized.get("schema_version") == 1
+                    and equal(normalized.get("owner"), program_clock_owner)):
+                normalized["owner"] = None
+            if (set(normalized) in (
+                    {"schema_version", "name", "partitions"},
+                    {"schema_version", "name", "partitions", "identity"})
+                    and normalized.get("schema_version") == 1
+                    and isinstance(normalized.get("partitions"), Mapping)):
+                normalized.pop("name")
+            return tuple(normalized.values()), lambda items: dict(zip(normalized, items, strict=True))
+        if isinstance(value, (list, tuple)):
+            return value, list
+        return None, value
+    return transform_tree(value, describe)
 
 
 def semantic_value(value: Any, *, where: str) -> Any:
     """Normalize the closed value language accepted by semantic identities."""
-    if value is None or isinstance(value, (bool, int, str, bytes)):
-        return value
-    if isinstance(value, float):
-        return {"binary64": value.hex()}
-    if isinstance(value, Mapping):
-        if any(not isinstance(key, str) or not key for key in value):
-            raise TypeError("%s mapping keys must be non-empty strings" % where)
-        return {key: semantic_value(item, where="%s.%s" % (where, key))
-                for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [semantic_value(item, where="%s[%d]" % (where, index))
-                for index, item in enumerate(value)]
-    if isinstance(value, (set, frozenset)):
-        items = [semantic_value(item, where="%s{item}" % where) for item in value]
-        return sorted(items, key=lambda item: (len(canonical_bytes(item)), canonical_bytes(item)))
-    raise TypeError("%s contains unsupported semantic value %s" % (where, type(value).__name__))
+    from pops._structural_data import transform_tree_context
+
+    def describe(value, where):
+        if value is None or isinstance(value, (bool, int, str, bytes)):
+            return None, value
+        if isinstance(value, float):
+            return None, {"binary64": value.hex()}
+        if isinstance(value, Mapping):
+            if any(not isinstance(key, str) or not key for key in value):
+                raise TypeError("%s mapping keys must be non-empty strings" % where)
+            return tuple((item, "%s.%s" % (where, key)) for key, item in value.items()), \
+                lambda items: dict(zip(value, items, strict=True))
+        if isinstance(value, (list, tuple)):
+            return tuple((item, "%s[%d]" % (where, i)) for i, item in enumerate(value)), list
+        if isinstance(value, (set, frozenset)):
+            return tuple((item, "%s{item}" % where) for item in value), \
+                lambda items: sorted(items, key=lambda item: (len(canonical_bytes(item)), canonical_bytes(item)))
+        raise TypeError("%s contains unsupported semantic value %s" % (where, type(value).__name__))
+    return transform_tree_context(value, describe, where)
 
 
 def _semantic_node(row: Any) -> dict[str, Any]:

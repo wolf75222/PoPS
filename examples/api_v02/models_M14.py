@@ -42,7 +42,8 @@ def _poisson_matrix(cells, spacing):
     return matrix
 
 
-def _reference(initial, *, dt, steps, capacitance, frozen_voltage=False):
+def _reference(initial, *, dt, steps, capacitance, frozen_voltage=False,
+               mirrored_reservoir=False):
     """NumPy face loop and dense Poisson solve, independent of PoPS kernels and providers."""
     state = initial.copy()
     cells = state.shape[-1]; spacing = 1/cells
@@ -58,9 +59,11 @@ def _reference(initial, *, dt, steps, capacitance, frozen_voltage=False):
         gradient = (extended[2:]-extended[:-2])/(2*spacing)
         voltage = (INITIAL_WALL_CHARGE if frozen_voltage else wall)/capacitance
         electric = -gradient-voltage
-        # A face-prescribed reservoir uses the centered Dirichlet reconstruction:
-        # (interior + exterior)/2 = prescribed face value.
-        ghost = np.concatenate((2*RESERVOIR[:,None]-state[:,0,:1],state[:,0],state[:,0,-1:]),axis=1)
+        # Inflow is the exterior Riemann trace. The centered ghost extension is
+        # used only as an explicit negative oracle for the former boundary defect.
+        exterior = (2*RESERVOIR[:,None]-state[:,0,:1]
+                    if mirrored_reservoir else RESERVOIR[:,None])
+        ghost = np.concatenate((exterior,state[:,0],state[:,0,-1:]),axis=1)
         faces = np.empty((4,cells+1))
         for face in range(cells+1):
             left,right = ghost[:,face],ghost[:,face+1]
@@ -172,6 +175,8 @@ def build_m14(cells=(16,1), *, capacitance=CAPACITANCE, reject=False, receipt=Fa
     initial = np.stack((ions,2*ions,electrons,3*electrons))[:,None,:]
     reference = _reference(initial,dt=dt,steps=steps,capacitance=capacitance)
     frozen = _reference(initial,dt=dt,steps=steps,capacitance=capacitance,frozen_voltage=True)[0]
+    mirrored = _reference(initial,dt=dt,steps=steps,capacitance=capacitance,
+                          mirrored_reservoir=True)[0]
     initial_total = float(np.mean(initial[0]-initial[2])+INITIAL_WALL_CHARGE)
     def check(runtime):
         actual = state_array(runtime,"fluid",initial.shape)
@@ -194,14 +199,16 @@ def build_m14(cells=(16,1), *, capacitance=CAPACITANCE, reject=False, receipt=Fa
         work_error = abs(circuit_work-expected_work)
         outgoing = float(min(np.min(actual[1]/actual[0]),np.min(actual[3]/actual[2])))
         feedback_gap = float(np.max(abs(expected-frozen)))
+        mirrored_gap = float(np.max(abs(expected-mirrored)))
         passed = bool(np.isfinite(actual).all() and np.min(actual[[0,2]])>0 and outgoing>0
             and state_error<2.e-9 and charge_error<2.e-10 and total_error<2.e-10
             and poisson_error<2.e-8 and work_error<2.e-10 and feedback_gap>1.e-8
-            and abs(charge_wall-INITIAL_WALL_CHARGE)>1.e-5)
+            and abs(charge_wall-INITIAL_WALL_CHARGE)>1.e-5 and mirrored_gap>1.e-5)
         return dict(passed=passed,metrics_owner=True,full_FV_Poisson_oracle_defect=state_error,
             capacitor_and_reservoir_defect=charge_error,volume_surface_charge_defect=total_error,
             capacitor_work_defect=work_error,Poisson_residual=poisson_error,
             minimum_outgoing_velocity=outgoing,live_voltage_vs_frozen_defect=feedback_gap,
+            prescribed_trace_vs_mirrored_ghost_defect=mirrored_gap,
             wall_charge=float(charge_wall),wall_voltage=float(charge_wall/capacitance))
     spec = CaseSpec(case,layout,_initial(case,block[U],initial),{"fluid":block[U]},steps*dt,dt,check,
         "M14: open cold ion/electron Euler-Poisson sheath; prescribed left reservoir, absorbing right wall in checked strictly outgoing regime; homogeneous Dirichlet Green solve plus exact live Q/C harmonic lifting; four joint forward-Euler windows, accepted species face charges update capacitor and reservoir once; full independent FV/Poisson/circuit oracle, no thermal equilibrium or total-energy conservation claim")

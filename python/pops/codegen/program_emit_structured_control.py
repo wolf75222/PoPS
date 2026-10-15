@@ -1,10 +1,14 @@
 """Lower typed products and bounded regions through genuine PoPS field/context operations."""
 from __future__ import annotations
+from typing import Any
 
 import json
 
 from pops.time._program.structured_control import value_signature
-from .program_emit_finite_arrays import FINITE_OPS, finite_cpp_type
+from pops.time._program.versioned_values import VERSIONED_OPS
+from pops.time.field_representation import FIELD_REPRESENTATION_OPS
+from pops.time._program.distributed_arrays import GLOBAL_OPS as _DISTRIBUTED, local_effects
+from .program_emit_finite_arrays import FINITE_OPS
 
 
 STRUCTURED_OPS = frozenset((
@@ -21,13 +25,14 @@ STRUCTURED_OPS = frozenset((
 # A checked execution-effect profile, not a model/solver catalog. These operations have either
 # no recoverable failure or lane-uniform native status handling. Extend only after checking the
 # emitter's failure rendezvous, never simply because an operation is numerically useful.
-from pops.time._program.versioned_values import VERSIONED_OPS
-from pops.time._program.distributed_arrays import GLOBAL_OPS as _DISTRIBUTED, local_effects
-_REGION_SAFE_OPS = STRUCTURED_OPS | FINITE_OPS | (VERSIONED_OPS - {'continuation_open', 'continuation_publish'}) | frozenset((
+_REGION_SAFE_OPS = FIELD_REPRESENTATION_OPS | STRUCTURED_OPS | FINITE_OPS | (VERSIONED_OPS - {'continuation_open', 'continuation_publish'}) | frozenset((
     "state", "linear_combine", "pointwise_expression", "scalar_op", "compare", "reduce",
     "cfl", "hmin", "branch", "scalar_field", "where", "cell_compare",
     "field_component", "vector_field", "requested_dt",
     "scalar_isfinite", "scalar_expression", "provenance_bind",
+    # PreparedStencilFlux converges allocation, halo, kernel and validity failures;
+    # guarded capture retains its exchanges across the region's lexical lifetime.
+    "stencil_flux_divergence", "acceptance_guard",
 ))
 
 
@@ -104,18 +109,29 @@ def emit_region_laplacian(value, var, lines, *, owner, target):
 
 
 def _leaves(signature, tokens, path=()):
-    if signature["vtype"] == "product":
-        for key, child in signature["members"]:
-            yield from _leaves(child, tokens[key] if tokens is not None else None, path + (key,))
-    else:
-        yield path, signature, tokens
+    stack = [(signature, tokens, path)]
+    while stack:
+        item, token, location = stack.pop()
+        if item["vtype"] == "product":
+            stack.extend((child, token[key] if token is not None else None, location + (key,))
+                         for key, child in reversed(item["members"]))
+        else:
+            yield location, item, token
 
 
-def _repack(signature, leaves, path=()):
-    if signature["vtype"] == "product":
-        return {key: _repack(child, leaves, path + (key,))
-                for key, child in signature["members"]}
-    return leaves[path]
+def _repack(signature, leaves, path=()) -> Any:
+    result: list[Any] = [None]
+    stack: list[tuple[Any, Any, Any, Any]] = [(signature, result, 0, path)]
+    while stack:
+        item, parent, key, location = stack.pop()
+        if item["vtype"] == "product":
+            output = {}
+            parent[key] = output
+            stack.extend((child, output, name, location + (name,))
+                         for name, child in reversed(item["members"]))
+        else:
+            parent[key] = leaves[location]
+    return result[0]
 
 
 def _cpp_type(kind):
@@ -134,141 +150,37 @@ class _DeferredField(str):
 
 
 def _storage_width(signature) -> int:
-    if signature["vtype"] in ("product", "variant"):
-        return sum(_storage_width(child) for _, child in signature["members"])
-    return 1
+    stack, count = [signature], 0
+    while stack:
+        item = stack.pop()
+        if item["vtype"] in ("product", "variant"):
+            stack.extend(child for _, child in item["members"])
+        elif item["vtype"] == "result":
+            stack.append(item["success"])
+        else:
+            count += 1
+    return count
 
 
 def _variant_tag(signature, tag):
     return tuple(key for key, _ in signature["members"]).index(tag)
 
 
-def _variant_copy(signature, destination, source, lines, *, references):
-    _uniform_int(source["tag"], lines, "Variant discriminant differs across execution lane")
-    lines.append("%s = %s;" % (destination["tag"], source["tag"]))
-    lines.append("switch (%s) {" % source["tag"])
-    for index, (tag, payload) in enumerate(signature["members"]):
-        lines.append("case %d: {" % index)
-        body = []
-        (_assign_output if references else _copy)(payload, destination["payloads"][tag],
-                                                 source["payloads"][tag], body)
-        lines.extend("  " + line for line in body)
-        lines.append("  break; }")
-    lines.append('default: throw std::logic_error("invalid native Variant discriminant");')
-    lines.append("}")
-
-
 def _copy(signature, destination, source, lines):
-    if signature["vtype"] == "product":
-        for key, child in signature["members"]:
-            _copy(child, destination[key], source[key], lines)
-        return
-    if signature["vtype"] == "variant":
-        _variant_copy(signature, destination, source, lines, references=False)
-        return
-    source_leaves = dict((path, token) for path, _, token in _leaves(signature, source))
-    body = []
-    has_field = False
-    for path, leaf, target in _leaves(signature, destination):
-        value = source_leaves[path]
-        if leaf["vtype"] == "variant":
-            _variant_copy(leaf, target, value, body, references=False)
-        elif leaf["vtype"] in ("state", "rhs", "scalar_field"):
-            if isinstance(target, _DeferredField):
-                pointer = target[2:-1]
-                # Allocation takes place only for the active payload, with the exact source
-                # geometry. Every rank converges before any later field-copy collective.
-                body += ["%s = &ctx.scratch_state(%d, %d, %s);"
-                         % (pointer, target.node_id, target.slot, value)]
-            # Field copies must not evaluate 0 * uninitialized scratch contents.
-            body.append("pops::PureFieldAlgebra::copy(%s, %s);" % (target, value))
-            has_field = True
-        else:
-            body.append("%s = %s;" % (target, value))
-    if not has_field:
-        lines.extend(body)
-        return
-    # Copies are rank-local operations. Fatal host/device failures must converge before the
-    # next loop condition/reduction; they are deliberately not recoverable mathematical Failure.
-    lines += ["{", "std::exception_ptr structured_copy_error;", "try {"]
-    lines.extend("  " + line for line in body)
-    lines += ["} catch (...) { structured_copy_error = std::current_exception(); }",
-              "try { Kokkos::fence(); } catch (...) { if (!structured_copy_error) structured_copy_error = std::current_exception(); }",
-              'pops::collectively_rethrow_exception(structured_copy_error, ctx.prepared_execution_lane(), "structured control field copy");', "}"]
+    from .program_structural_control import copy_structure
+    copy_structure(signature, destination, source, lines, references=False)
 
 
 def _slots(signature, sources, node_id, prefix, lines, *, slot_offset=0, pointers=False,
            deferred=False):
-    if signature["vtype"] == "variant":
-        tag_token = "%s_tag_%d" % (prefix, node_id)
-        lines.append("std::int64_t %s = -1;" % tag_token)
-        payloads = {}
-        offset = slot_offset
-        for index, (tag, child) in enumerate(signature["members"]):
-            payloads[tag] = _slots(child, None, node_id, "%s_arm%d" % (prefix, index), lines,
-                                  slot_offset=offset, pointers=True,
-                                  deferred=deferred or not pointers)
-            offset += _storage_width(child)
-        return {"tag": tag_token, "payloads": payloads}
-    if signature["vtype"] == "result":
-        code = "%s_status_%d" % (prefix, node_id)
-        origin = "%s_origin_%d" % (prefix, node_id)
-        lines.append("std::int64_t %s = 0;" % code)
-        lines.append("std::int64_t %s = 0;" % origin)
-        return {"code": code, "origin": origin, "value": _slots(signature["success"], None, node_id,
-                                               prefix, lines, pointers=True)}
-    leaves = {}
-    offset = slot_offset
-    for n, (path, leaf, source) in enumerate(_leaves(signature, sources)):
-        token = "%s_%d_%d" % (prefix, node_id, n)
-        if leaf["vtype"] == "variant":
-            leaves[path] = _slots(leaf, source, node_id, token, lines,
-                                  slot_offset=offset, pointers=pointers, deferred=deferred)
-        elif leaf["vtype"] in ("state", "rhs", "scalar_field"):
-            if pointers:
-                lines.append("pops::MultiFab<pops::kNativeDimension>* %s = nullptr;" % token)
-                leaves[path] = (_DeferredField("(*%s)" % token, node_id, offset) if deferred
-                                else "(*%s)" % token)
-            else:
-                lines += ["pops::MultiFab<pops::kNativeDimension>* %s_storage = nullptr;" % token,
-                          "std::exception_ptr %s_error;" % token,
-                          "try { %s_storage = &ctx.scratch_state(%d, %d, %s); }"
-                          % (token, node_id, offset, source),
-                          "catch (...) { %s_error = std::current_exception(); }" % token,
-                          "try { Kokkos::fence(); } catch (...) { if (!%s_error) %s_error = std::current_exception(); }" % (token, token),
-                          'pops::collectively_rethrow_exception(%s_error, ctx.prepared_execution_lane(), "structured control field allocation");' % token,
-                          "auto& %s = *%s_storage;" % (token, token)]
-                leaves[path] = token
-        else:
-            lines.append("%s %s{};" % (finite_cpp_type(leaf), token))
-            leaves[path] = token
-        offset += _storage_width(leaf)
-    return _repack(signature, leaves)
+    from .program_structural_control import make_slots
+    return make_slots(signature, sources, node_id, prefix, lines,
+                      slot_offset=slot_offset, pointers=pointers, deferred=deferred)
 
 
 def _assign_output(signature, output, source, lines):
-    """Publish references/scalars only along the selected success path."""
-    if signature["vtype"] == "variant":
-        _variant_copy(signature, output, source, lines, references=True)
-        return
-    if signature["vtype"] == "result":
-        lines.append("%s = %s;" % (output["code"], source["code"]))
-        lines.append("%s = %s;" % (output["origin"], source["origin"]))
-        lines.append("if (%s == 0) {" % output["code"])
-        body = []
-        _assign_output(signature["success"], output["value"], source["value"], body)
-        lines.extend("  " + line for line in body)
-        lines.append("}")
-        return
-    sources = {path: token for path, _, token in _leaves(signature, source)}
-    for path, leaf, out in _leaves(signature, output):
-        token = sources[path]
-        if leaf["vtype"] == "variant":
-            _variant_copy(leaf, out, token, lines, references=True)
-        elif leaf["vtype"] in ("state", "rhs", "scalar_field"):
-            lines.append("%s = &%s;" % (out[2:-1], token))
-        else:
-            lines.append("%s = %s;" % (out, token))
+    from .program_structural_control import copy_structure
+    copy_structure(signature, output, source, lines, references=True)
 
 
 def _failure_type(value, var, lines):
@@ -281,7 +193,10 @@ def _failure_type(value, var, lines):
 
 def _require_success(code, origin, var, lines, message):
     _uniform_int(code, lines, "Result code differs across execution lane")
-    if var.get(("failure_capture",)):
+    if var.get(("hierarchy_failure_capture",)):
+        lines.append("if (%s != 0) throw pops::runtime::program::hierarchy_control_failure(%s, %s);"
+                     % (code, code, origin))
+    elif var.get(("failure_capture",)):
         lines.append("if (%s != 0) throw %s{%s, %s};"
                      % (code, var[("structured_failure_type",)], code, origin))
     else:
@@ -381,6 +296,7 @@ def _emit_loop(program, value, var, model, lines, prelude, block_idx, field_plan
     body.append("  for (;;) {")
     sub = dict(var)
     sub[("failure_capture",)] = True
+    sub.pop(("hierarchy_failure_capture",), None)
     if typed_errors is not None:
         sub[("typed_failure_capture",)] = (typed_errors, error_slots, status, 1, exit_label)
     sub[value.attrs["cond_argument"].id] = current
@@ -401,7 +317,7 @@ def _emit_loop(program, value, var, model, lines, prelude, block_idx, field_plan
         _uniform_int(next_value["tag"], inner, "iteration Result differs across execution lane")
         inner.append("if (%s != %d) {" % (next_value["tag"], _variant_tag(step_signature, "ok")))
         failure_body = []
-        _propagate_typed_error(dict(step_signature["members"])["err"],
+        _propagate_typed_error(program, dict(step_signature["members"])["err"],
                                next_value["payloads"]["err"], sub, failure_body, block_idx, target)
         inner.extend("  " + line for line in failure_body)
         inner.append("}")
@@ -453,6 +369,7 @@ def _emit_capture(program, value, var, model, lines, prelude, block_idx, field_p
     lines.append("try {")
     sub = dict(var)
     sub[("failure_capture",)] = True
+    sub.pop(("hierarchy_failure_capture",), None)
     body = []
     _emit_region(program, value.attrs["body_block"], sub, model, body, prelude,
                  block_idx, field_plans, target)
@@ -492,11 +409,11 @@ def _inject_error(destination_signature, destination, source_signature, source, 
         _assign_output(source_signature, destination["payloads"]["user"], source, lines)
 
 
-def _propagate_typed_error(signature, tokens, var, lines, block_idx, target):
+def _propagate_typed_error(program, signature, tokens, var, lines, block_idx, target):
     capture = var.get(("typed_failure_capture",))
     if capture is None:
         from .program_emit_typed_failure import emit_terminal_failure
-        emit_terminal_failure(signature, tokens, lines, block_idx, target)
+        emit_terminal_failure(program, signature, tokens, lines, block_idx, target)
         return
     error_signature, error_slots, outer_tag, outer_index, label = capture
     _inject_error(error_signature, error_slots, signature, tokens, lines)
@@ -527,6 +444,7 @@ def _emit_typed_capture(program, value, var, model, lines, prelude, block_idx, f
     failure_type = _failure_type(value, var, lines)
     sub = dict(var)
     sub[("failure_capture",)] = True
+    sub.pop(("hierarchy_failure_capture",), None)
     sub[("typed_failure_capture",)] = (errors, output["payloads"]["err"], output["tag"], err_index, label)
     # The complete recovery boundary is outlined. Its output slots and shared
     # exception type remain in the caller; all control-transfer labels and the
@@ -552,7 +470,7 @@ def _emit_typed_capture(program, value, var, model, lines, prelude, block_idx, f
         _uniform_int(source["tag"], body, "Result discriminant differs across execution lane")
         body.append("if (%s == %d) {" % (source["tag"], _variant_tag(source_signature, "err")))
         error_body = []
-        _propagate_typed_error(source_errors, source["payloads"]["err"], sub, error_body, block_idx, target)
+        _propagate_typed_error(program, source_errors, source["payloads"]["err"], sub, error_body, block_idx, target)
         body.extend("  " + line for line in error_body)
         body.append("}")
         source = source["payloads"]["ok"]
@@ -651,12 +569,12 @@ def emit_structured_op(program, value, var, model, lines, prelude, block_idx, fi
         _uniform_int(source["tag"], lines, "Result discriminant differs across execution lane")
         lines.append("if (%s != %d) {" % (source["tag"], _variant_tag(signature, "ok")))
         body = []
-        _propagate_typed_error(dict(signature["members"])["err"], source["payloads"]["err"], var, body, block_idx, target)
+        _propagate_typed_error(program, dict(signature["members"])["err"], source["payloads"]["err"], var, body, block_idx, target)
         lines.extend("  " + line for line in body)
         lines.append("}")
         var[value.id] = source["payloads"]["ok"]
     elif op == "product":
-        var[value.id] = {key: var[item.id] for key, item in zip(value.attrs["fields"], value.inputs)}
+        var[value.id] = {key: var[item.id] for key, item in zip(value.attrs["fields"], value.inputs, strict=True)}
     elif op == "product_get":
         var[value.id] = var[value.inputs[0].id][value.attrs["field"]]
     elif op in ("region_argument", "region_index"):

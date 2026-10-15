@@ -43,7 +43,10 @@ def test_result_boundary_lowers_capture_and_checked_scalar_failure():
     source = emit_cpp_program(p)
     assert 'catch (const pops::runtime::program::StepAttemptRejected&' in source
     assert 'isfinite' in source
-    assert 'typed_capture_arm0' in source and 'typed_capture_arm1' in source
+    # The closed sum now uses flat native storage; both active discriminants
+    # must still be published by the actual success/failure paths.
+    assert f'typed_capture_{r.id}_s0 = 0;' in source
+    assert f'typed_capture_{r.id}_s0 = 1;' in source
 
 
 def test_field_algebra_uses_original_authority_and_native_storage():

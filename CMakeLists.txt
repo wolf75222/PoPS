@@ -326,6 +326,13 @@ foreach(_pops_kokkos_include IN LISTS _pops_kokkos_include_dirs)
 endforeach()
 list(REMOVE_DUPLICATES _pops_kokkos_normalized_includes)
 
+# Kokkos may share a prefix with a different CPU-only installation required by
+# MPI/HDF5/FFTW. Transitive imported includes come after pops' direct includes;
+# promote the authenticated selection here so those prefixes cannot shadow it.
+# Keep this build-only: exported consumers resolve their own Kokkos target.
+target_include_directories(pops SYSTEM BEFORE INTERFACE
+  "$<BUILD_INTERFACE:${_pops_kokkos_normalized_includes}>")
+
 # The test-native DSO compiler must replay the same finite target graph as the
 # host executable.  Kokkos's in-tree facade carries these usage requirements
 # through component targets, while installed Kokkos commonly exposes them on
@@ -351,11 +358,15 @@ function(_pops_normalize_kokkos_replay_records
           "Kokkos ${_pops_kokkos_property} exposes a nested or malformed CXX expression: "
           "${_pops_kokkos_record}")
       endif()
-    elseif(_pops_kokkos_record MATCHES "^\\$<\\$<COMPILE_LANGUAGE:CXX>:(.*)>$")
-      set(_pops_kokkos_record "${CMAKE_MATCH_1}")
-    elseif(_pops_kokkos_record MATCHES "^\\$<\\$<COMPILE_LANGUAGE:CXX>:(.*)$")
-      set(_pops_kokkos_record "${CMAKE_MATCH_1}")
+    elseif(_pops_kokkos_record MATCHES "^\\$<\\$<(COMPILE|LINK)_LANGUAGE:CXX>:(.*)>$")
+      set(_pops_kokkos_record "${CMAKE_MATCH_2}")
+    elseif(_pops_kokkos_record MATCHES "^\\$<\\$<(COMPILE|LINK)_LANGUAGE:CXX>:(.*)$")
+      set(_pops_kokkos_record "${CMAKE_MATCH_2}")
       set(_pops_kokkos_cxx_wrapper_open TRUE)
+    elseif(_pops_kokkos_record MATCHES "^\\$<BUILD_INTERFACE:(.*)>$")
+      set(_pops_kokkos_record "${CMAKE_MATCH_1}")
+    elseif(_pops_kokkos_record MATCHES "^\\$<INSTALL_INTERFACE:.*>$")
+      continue()
     elseif(_pops_kokkos_record MATCHES "\\$<")
       message(FATAL_ERROR
         "Kokkos ${_pops_kokkos_property} exposes a non-replayable expression: "
@@ -379,24 +390,67 @@ function(_pops_normalize_kokkos_replay_records
     message(FATAL_ERROR
       "Kokkos ${_pops_kokkos_property} exposes an unterminated CXX expression")
   endif()
-  list(REMOVE_DUPLICATES _pops_kokkos_normalized_records)
+  # Preserve option ordering, including repeated option/operand pairs. CMake's
+  # transitive target walk already visits each concrete target once.
   set(${_pops_kokkos_out} "${_pops_kokkos_normalized_records}" PARENT_SCOPE)
+endfunction()
+
+# PoPS kernels use standard constexpr value types (for example std::array).
+# NVCC otherwise accepts their host-only constexpr accessors with warning 20013
+# and may emit a device self-loop instead of the mathematical kernel. Enable the
+# CUDA language facility and reject all remaining cross-execution-space calls.
+# These requirements belong to both the native SDK and every generated DSO;
+# record them in the same authenticated replay contract as Kokkos requirements.
+function(_pops_cuda_language_options _pops_out)
+  set(_pops_options "")
+  if(Kokkos_ENABLE_CUDA AND Kokkos_CXX_COMPILER_ID STREQUAL "NVIDIA")
+    set(_pops_options
+      "--expt-relaxed-constexpr"
+      "--Werror=cross-execution-space-call"
+      "SHELL:-Xcudafe --diag_error=20013")
+  endif()
+  set(${_pops_out} "${_pops_options}" PARENT_SCOPE)
 endfunction()
 
 _pops_collect_kokkos_target_property(
   Kokkos::kokkos INTERFACE_COMPILE_DEFINITIONS _pops_kokkos_compile_definitions)
 _pops_collect_kokkos_target_property(
   Kokkos::kokkos INTERFACE_COMPILE_OPTIONS _pops_kokkos_compile_options)
+_pops_cuda_language_options(_pops_cuda_options)
+target_compile_options(pops INTERFACE ${_pops_cuda_options})
+list(APPEND _pops_kokkos_compile_options ${_pops_cuda_options})
+_pops_collect_kokkos_target_property(
+  Kokkos::kokkos INTERFACE_LINK_OPTIONS _pops_kokkos_link_options)
+_pops_collect_kokkos_target_property(
+  Kokkos::kokkos INTERFACE_COMPILE_FEATURES _pops_kokkos_compile_features)
 _pops_normalize_kokkos_replay_records(
   "compile definitions" "${_pops_kokkos_compile_definitions}"
   _pops_kokkos_normalized_compile_definitions)
 _pops_normalize_kokkos_replay_records(
   "compile options" "${_pops_kokkos_compile_options}"
   _pops_kokkos_normalized_compile_options)
+_pops_normalize_kokkos_replay_records(
+  "link options" "${_pops_kokkos_link_options}"
+  _pops_kokkos_normalized_link_options)
+_pops_normalize_kokkos_replay_records(
+  "compile features" "${_pops_kokkos_compile_features}"
+  _pops_kokkos_normalized_compile_features)
 
 set(_pops_kokkos_header_paths "")
 set(_pops_kokkos_header_hashes "")
-set(_pops_kokkos_abi_material "")
+set(_pops_kokkos_abi_material
+  "compiler=${CMAKE_CXX_COMPILER}\nstandard=${CMAKE_CXX_STANDARD}\n")
+foreach(_pops_kokkos_kind compile_option compile_definition link_option compile_feature)
+  if(_pops_kokkos_kind STREQUAL "compile_definition")
+    set(_pops_kokkos_replay_values "${_pops_kokkos_normalized_compile_definitions}")
+  else()
+    set(_pops_kokkos_replay_values "${_pops_kokkos_normalized_${_pops_kokkos_kind}s}")
+  endif()
+  foreach(_pops_kokkos_replay_value IN LISTS _pops_kokkos_replay_values)
+    string(APPEND _pops_kokkos_abi_material
+      "${_pops_kokkos_kind}=${_pops_kokkos_replay_value}\n")
+  endforeach()
+endforeach()
 foreach(_pops_kokkos_include IN LISTS _pops_kokkos_normalized_includes)
   if(_pops_kokkos_include MATCHES "[|;\r\n]")
     message(FATAL_ERROR "Kokkos include cannot be serialized exactly: ${_pops_kokkos_include}")
@@ -423,6 +477,8 @@ string(SHA256 POPS_NATIVE_KOKKOS_ABI "${_pops_kokkos_abi_material}")
 list(JOIN _pops_kokkos_normalized_includes "|" POPS_NATIVE_KOKKOS_INCLUDE)
 list(JOIN _pops_kokkos_normalized_compile_definitions "|" POPS_NATIVE_KOKKOS_DEFINITIONS)
 list(JOIN _pops_kokkos_normalized_compile_options "|" POPS_NATIVE_KOKKOS_OPTIONS)
+list(JOIN _pops_kokkos_normalized_link_options "|" POPS_NATIVE_KOKKOS_LINK_OPTIONS)
+list(JOIN _pops_kokkos_normalized_compile_features "|" POPS_NATIVE_KOKKOS_FEATURES)
 list(JOIN _pops_kokkos_header_paths "|" POPS_NATIVE_KOKKOS_HEADER_PATHS)
 list(JOIN _pops_kokkos_header_hashes "|" POPS_NATIVE_KOKKOS_HEADER_HASHES)
 # Pool Ninja taille 1 des TU de production du module Python (_pops) : serialisation anti-OOM de

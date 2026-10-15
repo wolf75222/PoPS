@@ -18,6 +18,7 @@ __all__ = (
     "__native_dimension__",
     "__cxx_std__",
     "__cxx_compiler__",
+    "__compiler_include_contract__",
     "__has_kokkos__",
     "__kokkos_contract__",
     "__has_mpi__",
@@ -51,6 +52,7 @@ __checkpoint_schema_version__: int
 __native_dimension__: Literal[1, 2, 3]
 __cxx_std__: int
 __cxx_compiler__: str
+__compiler_include_contract__: str
 __has_kokkos__: bool
 __kokkos_contract__: dict[str, object] | None
 __has_mpi__: bool

@@ -138,3 +138,32 @@ def test_nested_set_members_sort_by_their_complete_canonical_bytes():
     value = frozenset((("aa", 2), ("b", 1), frozenset((3, 1))))
     members = sorted((canonical_bytes(item) for item in value), key=lambda item: (len(item), item))
     assert canonical_bytes(value) == b"\xd9\x01\x02\x83" + b"".join(members)
+
+
+def test_buffered_encoding_keeps_exact_paths_and_call_local_string_cache():
+    shared = {"same": "before"}
+    first = canonical_bytes([shared, shared])
+    shared["same"] = "after"
+    second = canonical_bytes([shared, shared])
+    assert first != second
+    assert second == b"\x82" + 2 * canonical_bytes(shared)
+    # Crossing the encoding-cache capacity must never limit the value language.
+    large = {f"key-{i}": f"value-{i}" for i in range(4200)}
+    assert canonical_bytes(large) == canonical_bytes(dict(reversed(tuple(large.items()))))
+    with pytest.raises(TypeError, match=r"float at \$\.outer\[1\]\.leaf"):
+        canonical_bytes({"outer": [0, {"leaf": 1.25}]})
+    with pytest.raises(ValueError, match=r"string at \$\.outer\[0\]\{key\}"):
+        canonical_bytes({"outer": [{"\ud800": "invalid"}]})
+
+
+def test_string_subclass_encoding_hooks_are_not_memoized():
+    class Text(str):
+        calls = 0
+
+        def encode(self, *args, **kwargs):
+            self.calls += 1
+            return super().encode(*args, **kwargs)
+
+    value = Text("shared")
+    assert canonical_bytes([value, value]) == canonical_bytes(["shared", "shared"])
+    assert value.calls == 2

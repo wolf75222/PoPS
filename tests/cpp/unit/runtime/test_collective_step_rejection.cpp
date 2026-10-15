@@ -81,19 +81,22 @@ TEST(CollectiveStepRejection, WireRetainsEveryTypedFieldAndCallerDiagnosticRequi
 TEST(CollectiveStepRejection, TypedPayloadKeepsExactBytesAndCannotBecomeLegacyOnTruncation) {
   const std::string payload("\0\xff\x80payload", 10);
   program::StepAttemptRejected original(pops::SolveStatus::kInvalidEvaluation,
-      program::StepAttemptDisposition::kReject, 42, "stage", "typed", "closed-type", payload);
+                                        program::StepAttemptDisposition::kReject, 42, "stage",
+                                        "typed", "closed-type", payload);
   for (const auto contract : contracts) {
     const auto encoded = wire::encode(original, contract);
     const auto restored = wire::decode(encoded, contract);
     EXPECT_EQ(restored.typed_failure_schema, "closed-type");
     EXPECT_EQ(restored.typed_failure_payload, payload);
     for (std::size_t size = 0; size < encoded.size(); ++size)
-      EXPECT_THROW(wire::decode(std::string_view(encoded).substr(0, size), contract), std::runtime_error);
+      EXPECT_THROW(wire::decode(std::string_view(encoded).substr(0, size), contract),
+                   std::runtime_error);
     EXPECT_THROW(wire::decode(encoded + "x", contract), std::runtime_error);
   }
   auto lane = pops::ExecutionLane::duplicate_world_collectively("test.typed-failure.wire");
   try {
-    program::collective_step_rejection_phase(lane.communicator(), contracts[0], "fatal", [&] { throw original; });
+    program::collective_step_rejection_phase(lane.communicator(), contracts[0], "fatal",
+                                             [&] { throw original; });
     FAIL() << "typed error was lost";
   } catch (const program::StepAttemptRejected& caught) {
     EXPECT_EQ(caught.typed_failure_schema(), "closed-type");
@@ -201,7 +204,6 @@ TEST(CollectiveStepRejection, MalformedTypedDiagnosticFailsCollectivelyBeforeRet
   }
 }
 
-
 TEST(CollectiveStepRejection, TypedFailureAggregateCapacityIncludesEveryEncodedByte) {
   constexpr int Dim = pops::kNativeDimension;
   using Kind = program::ContinuationKind;
@@ -230,11 +232,12 @@ TEST(CollectiveStepRejection, TypedFailureAggregateCapacityIncludesEveryEncodedB
       type.children = {boolean, integer};
       type.names = {"flag", "exact"};
     }
-    const std::string schema = record ? "test.typed-capacity.product.v1"
-                                      : "test.typed-capacity.boolean.v1";
+    const std::string schema =
+        record ? "test.typed-capacity.product.v1" : "test.typed-capacity.boolean.v1";
     const auto value_at = [record](int rank) {
       auto flag = Value::boolean(rank % 2 == 0);
-      if (!record) return flag;
+      if (!record)
+        return flag;
       return Value::product({flag, Value::integer((INT64_C(1) << 60) + rank)});
     };
     const auto prepare = [&] { return std::make_tuple(type, value_at(lane.rank()), schema); };
@@ -242,8 +245,7 @@ TEST(CollectiveStepRejection, TypedFailureAggregateCapacityIncludesEveryEncodedB
       std::string bytes;
       bool caught_typed = false;
       try {
-        program::reject_typed_failure<Dim>(lane, prepare, prototypes,
-                                           {ample, aggregate_capacity});
+        program::reject_typed_failure<Dim>(lane, prepare, prototypes, {ample, aggregate_capacity});
       } catch (const program::StepAttemptRejected& failure) {
         caught_typed = true;
         EXPECT_EQ(failure.status(), pops::SolveStatus::kInvalidEvaluation);
@@ -284,12 +286,69 @@ TEST(CollectiveStepRejection, TypedFailureAggregateCapacityIncludesEveryEncodedB
       } catch (const program::StepAttemptRejected&) {
         ADD_FAILURE() << "one byte below actual aggregate size published a typed rejection";
       } catch (const std::exception& error) {
-        fatal_capacity = std::string(error.what()).find("aggregate diagnostic capacity")
-                         != std::string::npos;
+        fatal_capacity =
+            std::string(error.what()).find("aggregate diagnostic capacity") != std::string::npos;
         EXPECT_TRUE(fatal_capacity) << error.what();
       }
       EXPECT_EQ(pops::all_reduce_sum(fatal_capacity ? 1L : 0L, lane.communicator()),
                 static_cast<long>(lane.size()));
     }
   }
+}
+
+TEST(CollectiveStepRejection, DeepTypedFailureKeepsCompletePayloadAndRejectsInsufficientWorkspace) {
+  constexpr int Dim = pops::kNativeDimension;
+  using Value = program::ContinuationValue<Dim>;
+  using Kind = program::ContinuationKind;
+  auto lane = pops::ExecutionLane::duplicate_world_collectively("test.typed-failure.deep");
+  program::ContinuationType type{Kind::Int64};
+  auto value = Value::integer((INT64_C(1) << 60) + lane.rank());
+  const auto leaf = value;
+  for (int depth = 0; depth < 2048; ++depth) {
+    program::ContinuationType parent{Kind::Product};
+    parent.names.push_back("detail");
+    parent.children.push_back(std::move(type));
+    type = std::move(parent);
+    value = Value::product({std::move(value)});
+  }
+  constexpr std::uint64_t ample = 8 * 1024 * 1024;
+  const std::string schema = "test.deep-typed-failure@1";
+  const program::ContinuationCodec<Dim>::Prototypes prototypes =
+      [](int) -> const pops::MultiFab<Dim>& { throw std::logic_error("no fields"); };
+  const auto prepare = [&] { return std::make_tuple(type, value, schema); };
+  bool complete = false;
+  try {
+    program::reject_typed_failure<Dim>(lane, prepare, prototypes, {ample, ample});
+  } catch (const program::StepAttemptRejected& error) {
+    complete = true;
+    EXPECT_EQ(error.typed_failure_schema(), schema);
+    const auto& bytes = error.typed_failure_payload();
+    ASSERT_GT(bytes.size(), 25u);
+    std::size_t cursor = 17;
+    program::ContinuationCodec<Dim> codec(type, schema, ample, prototypes);
+    for (int rank = 0; rank < lane.size(); ++rank) {
+      const auto size =
+          program::typed_failure_detail::word(std::string_view(bytes).substr(cursor, 8));
+      cursor += 8;
+      const auto* begin = reinterpret_cast<const std::uint8_t*>(bytes.data() + cursor);
+      auto restored = codec.decode(std::vector<std::uint8_t>(begin, begin + size)).root;
+      for (int depth = 0; depth < 2048; ++depth)
+        restored = restored->members().at(0);
+      EXPECT_EQ(restored->integer(), (INT64_C(1) << 60) + rank);
+      cursor += size;
+    }
+    EXPECT_EQ(cursor, bytes.size());
+    EXPECT_NE(std::string(error.what()).find("...="), std::string::npos);
+  }
+  EXPECT_TRUE(complete);
+  bool refused_before_typed_publication = false;
+  try {
+    program::reject_typed_failure<Dim>(lane, prepare, prototypes, {1, ample});
+  } catch (const program::StepAttemptRejected&) {
+    ADD_FAILURE() << "insufficient capacity published a truncated typed failure";
+  } catch (const std::exception&) {
+    refused_before_typed_publication = true;
+  }
+  EXPECT_TRUE(refused_before_typed_publication);
+  EXPECT_EQ(leaf->integer(), (INT64_C(1) << 60) + lane.rank());
 }

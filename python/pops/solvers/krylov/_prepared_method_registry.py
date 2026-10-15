@@ -6,6 +6,7 @@ Builtin presets and external methods use the same append-only registry and exact
 numerical execution remains entirely native C++.
 """
 from __future__ import annotations
+from pops.identity.scalar import parse_canonical_integer
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -260,10 +261,10 @@ def _richardson_options(options: Mapping[str, Any]) -> Mapping[str, Any]:
     if isinstance(raw, Mapping):
         kind = raw.get("kind")
         if kind == "integer" and set(raw) == {"kind", "value"}:
-            relaxation_literal = ScalarLiteral("integer", int(raw["value"]))
+            relaxation_literal = ScalarLiteral("integer", parse_canonical_integer(raw["value"]))
         elif kind == "rational" and set(raw) == {"kind", "numerator", "denominator"}:
             relaxation_literal = ScalarLiteral(
-                "rational", (int(raw["numerator"]), int(raw["denominator"]))
+                "rational", (parse_canonical_integer(raw["numerator"]), parse_canonical_integer(raw["denominator"]))
             )
         elif kind in ("decimal", "binary64") and set(raw) == {"kind", "value"}:
             relaxation_literal = ScalarLiteral(kind, raw["value"])
@@ -325,10 +326,10 @@ def _emit_richardson(_node: Any, options: Mapping[str, Any]) -> str:
     prepared = _richardson_options(options)["relaxation"]
     kind = prepared["kind"]
     if kind == "integer":
-        literal = ScalarLiteral("integer", int(prepared["value"]))
+        literal = ScalarLiteral("integer", parse_canonical_integer(prepared["value"]))
     elif kind == "rational":
         literal = ScalarLiteral(
-            "rational", (int(prepared["numerator"]), int(prepared["denominator"]))
+            "rational", (parse_canonical_integer(prepared["numerator"]), parse_canonical_integer(prepared["denominator"]))
         )
     else:
         literal = ScalarLiteral(kind, prepared["value"])

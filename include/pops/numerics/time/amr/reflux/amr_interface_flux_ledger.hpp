@@ -1,5 +1,7 @@
 #pragma once
 
+#include <pops/math/exact_weight.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -15,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include <pops/amr/reflux/face_flux_ledger.hpp>
 #include <pops/core/identity/prepared_provider.hpp>
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 
@@ -79,10 +82,11 @@ struct InterfaceFluxFragmentKey {
 /// same flux into reflux a second time. Substep duration is the authored local
 /// dt, never reconstructed from rounded physical timestamps.
 struct InterfaceFluxFragmentMeasure {
-  Rational stage_weight{1, 1};
+  ::pops::ExactWeight stage_weight{1, 1};
   double face_measure = 0.0;
   double substep_duration = 0.0;
   bool stage_weight_resolved = true;
+  std::optional<reflux::AffineIntervalPublication> affine_publication;
 };
 
 template <class Payload>
@@ -143,8 +147,12 @@ inline InterfaceFluxAccumulationKey interface_flux_accumulation_key(
 /// conversion.
 inline double interface_flux_fragment_scale(const InterfaceFluxFragmentKey& key,
                                             const InterfaceFluxFragmentMeasure& measure) {
-  return interface_flux_orientation_sign(key.orientation) * measure.stage_weight.value() *
-         measure.substep_duration;
+  const double integrated_weight =
+      (measure.stage_weight * ::pops::ExactWeight::from_double(measure.substep_duration,
+                                                               measure.stage_weight.budget_bytes()))
+          .value();
+  const double source = interface_flux_orientation_sign(key.orientation) * integrated_weight;
+  return measure.affine_publication ? source * measure.affine_publication->increment_scale : source;
 }
 
 /// Artifact- and hierarchy-authenticated capacity for one accepted root window.  The ledger retains
@@ -204,6 +212,25 @@ inline void validate_interface_flux_fragment(const InterfaceFluxFragmentKey& key
       std::abs(reconstructed_duration - measure.substep_duration) > timestamp_tolerance)
     throw std::invalid_argument(
         "AMR interface-flux fragment requires consistent finite positive geometry/time");
+  if (!std::isfinite(interface_flux_fragment_scale(key, measure)))
+    throw std::invalid_argument("AMR interface-flux integrated scale is not finite");
+  if (measure.affine_publication) {
+    const auto& publication = *measure.affine_publication;
+    reflux::validate_affine_interval_publication(publication);
+    const double source_time =
+        publication.source_start + key.clock.phase.value() * publication.source_duration;
+    const double source_begin =
+        publication.source_start + key.interval.begin.phase.value() * publication.source_duration;
+    const double source_end =
+        publication.source_start + key.interval.end.phase.value() * publication.source_duration;
+    const double tolerance = 16 * std::numeric_limits<double>::epsilon() *
+                             std::max({1.0, std::abs(source_time), publication.source_duration});
+    if (std::abs(source_time - key.clock.physical_time) > tolerance ||
+        std::abs(source_begin - begin_time) > tolerance ||
+        std::abs(source_end - end_time) > tolerance)
+      throw std::invalid_argument(
+          "affine interface publication does not authenticate its source quadrature");
+  }
 }
 
 /// Transactional store for refined multi-block interface fluxes.  Pending
@@ -489,7 +516,7 @@ class TransactionalInterfaceFluxLedger {
     pending_.swap(prepared.pending_);
   }
 
-  void resolve_pending_stage_weight(std::size_t index, Rational stage_weight) {
+  void resolve_pending_stage_weight(std::size_t index, ::pops::ExactWeight stage_weight) {
     if (!in_transaction())
       throw std::runtime_error(
           "AMR interface-flux stage-weight resolution requires an active transaction");
@@ -501,8 +528,31 @@ class TransactionalInterfaceFluxLedger {
     Entry& entry = pending_[index];
     if (entry.measure.stage_weight_resolved)
       throw std::logic_error("AMR interface-flux stage weight was already resolved");
-    entry.measure.stage_weight = stage_weight;
-    entry.measure.stage_weight_resolved = true;
+    auto candidate = entry.measure;
+    candidate.stage_weight = std::move(stage_weight);
+    candidate.stage_weight_resolved = true;
+    // Exact weight/duration arithmetic can reject its declared storage budget.
+    // Publish metadata only after validation, retaining the unresolved fragment
+    // and its payload byte-for-byte on failure.
+    validate_(entry.key, candidate);
+    entry.measure = std::move(candidate);
+  }
+
+  /// Transport accepted audit measures without relabelling source samples. The
+  /// enclosing accepted transaction owns rollback of this completed ledger.
+  void finalize_affine_publication(const reflux::AffineIntervalPublication& publication) {
+    if (in_transaction())
+      throw std::logic_error(
+          "affine interface publication requires a completed provisional ledger");
+    reflux::validate_affine_interval_publication(publication);
+    auto candidate = published_;
+    for (auto& entry : candidate) {
+      if (entry.measure.affine_publication)
+        throw std::logic_error("interface increment was already finalized");
+      entry.measure.affine_publication = publication;
+      validate_(entry.key, entry.measure);
+    }
+    published_.swap(candidate);
   }
 
   template <class Axpy>
@@ -539,11 +589,18 @@ class TransactionalInterfaceFluxLedger {
     exact.scalar(entry.key.orientation)
         .scalar(static_cast<std::uint64_t>(entry.key.left_block))
         .scalar(static_cast<std::uint64_t>(entry.key.right_block))
-        .scalar(entry.measure.stage_weight.numerator)
-        .scalar(entry.measure.stage_weight.denominator)
+        .bytes(entry.measure.stage_weight.encode())
         .scalar(entry.measure.face_measure)
         .scalar(entry.measure.substep_duration)
-        .scalar(entry.measure.stage_weight_resolved);
+        .scalar(entry.measure.stage_weight_resolved)
+        .scalar(entry.measure.affine_publication.has_value());
+    if (entry.measure.affine_publication) {
+      const auto& publication = *entry.measure.affine_publication;
+      exact.scalar(publication.source_start)
+          .scalar(publication.source_duration)
+          .scalar(publication.accepted_duration)
+          .scalar(publication.increment_scale);
+    }
     if constexpr (requires(ExactContractBuilder& candidate) { candidate.scalar(entry.payload); }) {
       exact.scalar(entry.payload);
     } else if constexpr (requires { entry.payload.size(); }) {

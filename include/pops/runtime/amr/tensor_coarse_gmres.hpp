@@ -39,7 +39,7 @@ template <int Dim>
 class TensorCoarseGmres {
  public:
   using field_type = MultiFab<Dim>;
-  using coefficient_fields = std::array<const field_type*, static_cast<std::size_t>(Dim * Dim)>;
+  using coefficient_fields = std::array<const field_type*, static_cast<std::size_t>(Dim* Dim)>;
   using stencil_type = elliptic::nd::CartesianTensorOperator<
       Dim, elliptic::nd::CartesianTensorDivergenceSign::negative_divergence,
       elliptic::nd::SplitCartesianTensorCoefficients<Dim>>;
@@ -52,7 +52,7 @@ class TensorCoarseGmres {
     elliptic::nd::CartesianTensorStencilOptions options;
     std::string contract;
     CoarsePreconditionerKind preconditioner;
-    std::array<field_type, static_cast<std::size_t>(Dim * Dim)> coefficients;
+    std::array<field_type, static_cast<std::size_t>(Dim* Dim)> coefficients;
     std::optional<field_type> packed_coefficients{};
     field_type inverse_diagonal;
     OperatorEvaluationSnapshot snapshot{};
@@ -62,32 +62,46 @@ class TensorCoarseGmres {
          const HaloSchedule<Dim>& halo_value, const PreparedPhysicalBoundary<Dim>& boundary_value,
          elliptic::nd::CartesianTensorStencilOptions stencil_options, std::string_view owner,
          CoarsePreconditionerKind preconditioner_kind)
-        : geometry(geometry_value), halo(&halo_value), boundary(&boundary_value),
-          options(stencil_options), contract(owner), preconditioner(preconditioner_kind),
-          inverse_diagonal(prototype.layout(), prototype.distribution(), prototype.local_rank(),
-                           1, Extent<Dim>{}),
+        : geometry(geometry_value),
+          halo(&halo_value),
+          boundary(&boundary_value),
+          options(stencil_options),
+          contract(owner),
+          preconditioner(preconditioner_kind),
+          inverse_diagonal(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
+                           Extent<Dim>{}),
           distribution(prototype.distribution().replicated()
                            ? PreparedVectorDistribution<Dim>::replicated()
                            : PreparedVectorDistribution<Dim>::distributed()) {
       ExactContractBuilder parameters;
-      parameters.text(contract).text(distribution.layout_contract(prototype))
-          .scalar(options.zero_flux_faces).scalar(options.dirichlet_faces)
+      parameters.text(contract)
+          .text(distribution.layout_contract(prototype))
+          .scalar(options.zero_flux_faces)
+          .scalar(options.dirichlet_faces)
           .scalar(options.arithmetic_diagonal);
       if (preconditioner != CoarsePreconditionerKind::diagonal)
         parameters.text("tensor-coarse-preconditioner-v1").scalar(preconditioner);
       if (preconditioner == CoarsePreconditionerKind::tensor_diagonal_mg)
         parameters.text("tensor-diagonal-mg-fixed-vcycle@1")
-            .scalar(2).scalar(2).scalar(2).scalar(50)
+            .scalar(2)
+            .scalar(2)
+            .scalar(2)
+            .scalar(50)
             .text("red-black-gauss-seidel/harmonic-faces/constant-injection/nonsingular");
       for (int axis = 0; axis < Dim; ++axis) {
-        parameters.scalar(geometry.domain().lo[axis]).scalar(geometry.domain().hi[axis])
-            .scalar(geometry.lower()[axis]).scalar(geometry.upper()[axis])
+        parameters.scalar(geometry.domain().lo[axis])
+            .scalar(geometry.domain().hi[axis])
+            .scalar(geometry.lower()[axis])
+            .scalar(geometry.upper()[axis])
             .scalar(boundary->conditions().spacing()[axis]);
         for (BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
           const Face<Dim> face{axis, side};
           const auto& value = boundary->conditions().at(face);
           parameters.scalar(boundary->conditions().topology().is_periodic(face))
-              .scalar(value.kind).scalar(value.value).scalar(value.alpha).scalar(value.beta);
+              .scalar(value.kind)
+              .scalar(value.value)
+              .scalar(value.alpha)
+              .scalar(value.beta);
         }
       }
       contract = std::move(parameters).release();
@@ -118,6 +132,8 @@ class TensorCoarseGmres {
     }
   };
 
+ public:
+  // CUDA launch stubs name these types outside the enclosing class.
   struct CopyKernel {
     FieldView<Real, Dim> out;
     FieldView<const Real, Dim> in;
@@ -127,9 +143,7 @@ class TensorCoarseGmres {
   struct ApplyKernel {
     FieldView<Real, Dim> out;
     stencil_type stencil;
-    POPS_HD void operator()(const Index<Dim>& index) const {
-      out(index, 0) = stencil.image(index);
-    }
+    POPS_HD void operator()(const Index<Dim>& index) const { out(index, 0) = stencil.image(index); }
   };
 
   struct DiagonalKernel {
@@ -139,8 +153,8 @@ class TensorCoarseGmres {
       const Real diagonal = stencil.diagonal(index);
       const Real inverse = Real(1) / diagonal;
       constexpr Real infinity = std::numeric_limits<Real>::infinity();
-      const bool valid = diagonal > Real(0) && diagonal < infinity && inverse > Real(0) &&
-                         inverse < infinity;
+      const bool valid =
+          diagonal > Real(0) && diagonal < infinity && inverse > Real(0) && inverse < infinity;
       out(index, 0) = valid ? inverse : std::numeric_limits<Real>::quiet_NaN();
       return valid ? Real(0) : Real(1);
     }
@@ -155,6 +169,7 @@ class TensorCoarseGmres {
     }
   };
 
+ private:
   struct ApplySession {
     struct Storage {
       std::shared_ptr<const Data> data;
@@ -164,7 +179,8 @@ class TensorCoarseGmres {
       bool prepared = false;
 
       Storage(std::shared_ptr<const Data> source, const ExecutionLane& execution_lane)
-          : data(std::move(source)), lane(&execution_lane),
+          : data(std::move(source)),
+            lane(&execution_lane),
             ghosts(data->coefficients[0].layout(), data->coefficients[0].distribution(),
                    data->coefficients[0].local_rank(), 1, data->coefficients[0].ghosts()) {}
     };
@@ -178,8 +194,8 @@ class TensorCoarseGmres {
       if (!state.data->snapshot.valid())
         throw std::logic_error("tensor coarse GMRES has no real coefficient snapshot");
       if (!state.prepared) {
-        const bool remote = all_reduce_max(state.data->halo->has_remote_jobs() ? 1L : 0L,
-                                           *state.lane) != 0;
+        const bool remote =
+            all_reduce_max(state.data->halo->has_remote_jobs() ? 1L : 0L, *state.lane) != 0;
         if (remote) {
           HaloExchangeContext context{};
           context.context_generation = 1;
@@ -197,8 +213,8 @@ class TensorCoarseGmres {
         if (!state.prepared || !state.data->snapshot.valid())
           throw std::logic_error("tensor coarse GMRES operator is unprepared");
         for (std::size_t local = 0; local < in.local_size(); ++local)
-          for_each_cell(in.box(local), CopyKernel{state.ghosts.fab(local).view(),
-                                                 in.fab(local).view()});
+          for_each_cell(in.box(local),
+                        CopyKernel{state.ghosts.fab(local).view(), in.fab(local).view()});
         Kokkos::fence();
       } catch (...) {
         copy_failed = 1;
@@ -213,9 +229,8 @@ class TensorCoarseGmres {
           fill_boundary(state.ghosts, *state.data->halo);
         fill_physical_boundary(state.ghosts, *state.data->boundary);
         for (std::size_t local = 0; local < out.local_size(); ++local)
-          for_each_cell(out.box(local),
-                        ApplyKernel{out.fab(local).view(),
-                                    state.data->stencil(local, state.ghosts)});
+          for_each_cell(out.box(local), ApplyKernel{out.fab(local).view(),
+                                                    state.data->stencil(local, state.ghosts)});
         Kokkos::fence();
         return PreparedApplyResult::success();
       } catch (...) {
@@ -304,11 +319,11 @@ class TensorCoarseGmres {
     std::shared_ptr<const Data> data;
     PreparedLinearPreconditionerSessionCallbacks<Dim> callbacks;
     TensorMgPreconditionSession(std::shared_ptr<const Data> source, const ExecutionLane& lane)
-        : data(std::move(source)), callbacks(elliptic::mg::make_tensor_diagonal_mg_sessions<Dim>(
+        : data(std::move(source)),
+          callbacks(elliptic::mg::make_tensor_diagonal_mg_sessions<Dim>(
               std::shared_ptr<const field_type>(data, &data->coefficients[0]),
-              std::shared_ptr<const field_type>(data, &*data->packed_coefficients),
-              data->geometry, data->boundary->conditions(), data->distribution,
-              2, 2, 2, 50)(lane)) {}
+              std::shared_ptr<const field_type>(data, &*data->packed_coefficients), data->geometry,
+              data->boundary->conditions(), data->distribution, 2, 2, 2, 50)(lane)) {}
     void prepare() {
       if (!data->snapshot.valid())
         throw std::logic_error("tensor coarse GMRES diagonal MG is unprepared");
@@ -330,17 +345,21 @@ class TensorCoarseGmres {
     static constexpr PreparedProviderIdentity provider_identity() noexcept {
       return {"pops.tensor-fac.coarse-fixed-tensor-diagonal-mg", 1};
     }
-    void serialize_exact_parameters(ExactContractBuilder& contract) const { contract.text(data->contract); }
-    TensorMgPreconditionSession make_session(const ExecutionLane& lane) const { return {data, lane}; }
+    void serialize_exact_parameters(ExactContractBuilder& contract) const {
+      contract.text(data->contract);
+    }
+    TensorMgPreconditionSession make_session(const ExecutionLane& lane) const {
+      return {data, lane};
+    }
   };
 
  public:
   TensorCoarseGmres(const field_type& prototype, const Geometry<Dim>& geometry,
-                   const HaloSchedule<Dim>& halo,
-                   const PreparedPhysicalBoundary<Dim>& homogeneous_boundary,
-                   elliptic::nd::CartesianTensorStencilOptions options,
-                   const ExecutionLane& parent, std::string_view exact_owner, int restart,
-                   CoarsePreconditionerKind preconditioner = CoarsePreconditionerKind::diagonal)
+                    const HaloSchedule<Dim>& halo,
+                    const PreparedPhysicalBoundary<Dim>& homogeneous_boundary,
+                    elliptic::nd::CartesianTensorStencilOptions options,
+                    const ExecutionLane& parent, std::string_view exact_owner, int restart,
+                    CoarsePreconditionerKind preconditioner = CoarsePreconditionerKind::diagonal)
       : parent_(&parent), restart_(restart) {
     long failed = 0;
     try {
@@ -373,8 +392,8 @@ class TensorCoarseGmres {
     const long maximum_kind = all_reduce_max(kind, parent);
     if (minimum_kind != maximum_kind)
       throw std::invalid_argument("tensor coarse GMRES preconditioner differs across ranks");
-    if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{"tensor-fac-capture-directory", capture_root_}}, parent))
+    if (!all_ranks_agree_exact_ordered_byte_pairs({{"tensor-fac-capture-directory", capture_root_}},
+                                                  parent))
       throw std::invalid_argument("tensor FAC capture directory differs across ranks");
 #ifdef POPS_HAS_MPI
     const auto parent_communicator = ExecutionCommunicator::borrowed(
@@ -393,19 +412,23 @@ class TensorCoarseGmres {
             return PreparedLinearPreconditionerProvider<Dim>(PreconditionSource{data_});
           }();
           return typename PreparedAffineLinearProblem<Dim>::ConstructionInputs{
-              std::cref(prototype), PreparedAffineOperatorProvider<Dim>(ApplySource{data_}),
-              PreparedLinearPreconditioner<Dim>(
-                  prototype, std::move(provider),
-                  data_->distribution),
-              LinearOperatorProperties::general(), footprint,
+              std::cref(prototype),
+              PreparedAffineOperatorProvider<Dim>(ApplySource{data_}),
+              PreparedLinearPreconditioner<Dim>(prototype, std::move(provider),
+                                                data_->distribution),
+              LinearOperatorProperties::general(),
+              footprint,
               PreparedNullspacePolicy<Dim>::nonsingular(),
-              [data = data_] { return data->snapshot; }, {}, data_->distribution, {}};
+              [data = data_] { return data->snapshot; },
+              {},
+              data_->distribution,
+              {}};
         });
     workspace_ = KrylovWorkspace<Dim>::make_shared_collectively(
         parent_communicator, "pops.tensor-fac.coarse-gmres.workspace", [&] {
           return typename KrylovWorkspace<Dim>::ConstructionInputs{
-              data_->contract, std::cref(prototype), gmres_krylov_method<Dim>(restart_), footprint,
-              data_->distribution, {}};
+              data_->contract, std::cref(prototype), gmres_krylov_method<Dim>(restart_),
+              footprint,       data_->distribution,  {}};
         });
   }
 
@@ -439,9 +462,10 @@ class TensorCoarseGmres {
           for (std::size_t slot = 0; slot < inputs.size(); ++slot)
             inputs[slot] = std::as_const(data_->coefficients[slot]).fab(local).view();
           for_each_cell(data_->packed_coefficients->fab(local).grown_box(),
-              [=] POPS_HD(const Index<Dim>& index) {
-                for (int slot = 0; slot < Dim * Dim; ++slot) out(index, slot) = inputs[slot](index, 0);
-              });
+                        [=] POPS_HD(const Index<Dim>& index) {
+                          for (int slot = 0; slot < Dim * Dim; ++slot)
+                            out(index, slot) = inputs[slot](index, 0);
+                        });
         }
         Kokkos::fence();
       }
@@ -472,16 +496,16 @@ class TensorCoarseGmres {
     KrylovControls<Dim> controls{gmres_krylov_method<Dim>(restart_), Real(0), tau, maximum};
     controls.physical_norm = KrylovPhysicalNorm::component_linf;
     controls.diagnostic_trace = trace_.get();
-    return ::pops::detail::solve_prepared_affine_in_place(
-        *problem_, *workspace_, correction, rhs, controls);
+    return ::pops::detail::solve_prepared_affine_in_place(*problem_, *workspace_, correction, rhs,
+                                                          controls);
   }
 
   /// Failure evidence only, after the caller's unchanged original-stencil check. Every enabled
   /// rank enters this post-solve phase; I/O failure cannot change the numerical disposition.
   /// Files are exclusive, bounded, exact binary64 bit strings, and never scientific checkpoints.
   void capture_failure(const field_type& correction, const field_type& rhs,
-                       const SolveReport& report, Real original_residual, Real reference,
-                       Real tau, int maximum, int outer_ordinal) const {
+                       const SolveReport& report, Real original_residual, Real reference, Real tau,
+                       int maximum, int outer_ordinal) const {
     if (!trace_)
       return;
     long failed = 0;
@@ -498,8 +522,10 @@ class TensorCoarseGmres {
           values += amount;
         }
       };
-      count(rhs); count(correction);
-      for (const auto& field : data_->coefficients) count(field);
+      count(rhs);
+      count(correction);
+      for (const auto& field : data_->coefficients)
+        count(field);
       if (data_->contract.size() > 65536 || report.reason.size() > 65536 ||
           parent_->identity().size() > 65536 || correction.layout().size() > 4096 ||
           trace_->overflow)
@@ -510,37 +536,60 @@ class TensorCoarseGmres {
       const auto text = [&](std::string_view value) {
         constexpr char digits[] = "0123456789abcdef";
         output << value.size() << ' ';
-        for (const unsigned char c : value) output << digits[c >> 4] << digits[c & 15];
+        for (const unsigned char c : value)
+          output << digits[c >> 4] << digits[c & 15];
         output << '\n';
       };
-      output << "POPS_TENSOR_COARSE_CAPTURE 1\n" << Dim << ' ' << sizeof(Real) << ' '
-             << parent_->rank() << ' ' << parent_->size() << '\n';
+      output << "POPS_TENSOR_COARSE_CAPTURE 1\n"
+             << Dim << ' ' << sizeof(Real) << ' ' << parent_->rank() << ' ' << parent_->size()
+             << '\n';
       output << outer_ordinal << ' ' << restart_ << ' ' << maximum << ' '
              << static_cast<unsigned>(data_->preconditioner) << '\n';
-      bits(tau); output << ' '; bits(reference); output << ' '; bits(original_residual);
-      output << '\n' << static_cast<unsigned>(report.status) << ' '
-             << static_cast<unsigned>(report.action) << ' ' << report.iters << '\n';
-      bits(report.residual_norm); output << ' '; bits(report.reference_residual_norm);
-      output << '\n'; text(report.reason); text(data_->contract); text(parent_->identity());
+      bits(tau);
+      output << ' ';
+      bits(reference);
+      output << ' ';
+      bits(original_residual);
+      output << '\n'
+             << static_cast<unsigned>(report.status) << ' ' << static_cast<unsigned>(report.action)
+             << ' ' << report.iters << '\n';
+      bits(report.residual_norm);
+      output << ' ';
+      bits(report.reference_residual_norm);
+      output << '\n';
+      text(report.reason);
+      text(data_->contract);
+      text(parent_->identity());
       const auto& s = data_->snapshot;
-      for (const auto x : s.authority) output << x << ' ';
+      for (const auto x : s.authority)
+        output << x << ' ';
       output << s.revision << ' ' << s.macro_step << ' ' << s.stage_numerator << ' '
              << s.stage_denominator << ' ' << s.dt_bits << ' ' << s.physical_time_bits << ' '
              << s.topology_revision << ' ';
-      for (const auto x : s.topology) output << x << ' ';
-      for (const auto x : s.resources) output << x << ' ';
+      for (const auto x : s.topology)
+        output << x << ' ';
+      for (const auto x : s.resources)
+        output << x << ' ';
       output << '\n';  // Raw coarse snapshot; no source-time/dt inference from unused zero fields.
       for (int axis = 0; axis < Dim; ++axis) {
         output << data_->geometry.domain().lo[axis] << ' ' << data_->geometry.domain().hi[axis]
-               << ' '; bits(data_->geometry.lower()[axis]); output << ' ';
-        bits(data_->geometry.upper()[axis]); output << ' '; bits(data_->geometry.spacing(axis));
+               << ' ';
+        bits(data_->geometry.lower()[axis]);
+        output << ' ';
+        bits(data_->geometry.upper()[axis]);
+        output << ' ';
+        bits(data_->geometry.spacing(axis));
         output << '\n';
         for (BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
           const Face<Dim> face{axis, side};
           const auto& law = data_->boundary->conditions().at(face);
           output << data_->boundary->conditions().topology().is_periodic(face) << ' '
                  << static_cast<unsigned>(law.kind) << ' ';
-          bits(law.value); output << ' '; bits(law.alpha); output << ' '; bits(law.beta);
+          bits(law.value);
+          output << ' ';
+          bits(law.alpha);
+          output << ' ';
+          bits(law.beta);
           output << '\n';
         }
       }
@@ -549,7 +598,8 @@ class TensorCoarseGmres {
       output << correction.distribution().replicated() << ' ' << correction.layout().size() << '\n';
       for (int axis = 0; axis < Dim; ++axis)
         output << correction.rank_space().origin()[axis] << ' '
-               << correction.rank_space().extent()[axis] << ' ' << correction.local_rank()[axis] << ' ';
+               << correction.rank_space().extent()[axis] << ' ' << correction.local_rank()[axis]
+               << ' ';
       output << '\n';
       for (std::size_t box = 0; box < correction.layout().size(); ++box) {
         for (int axis = 0; axis < Dim; ++axis) {
@@ -565,19 +615,22 @@ class TensorCoarseGmres {
         const auto& c = trace_->cycles[index];
         output << c.begin_iteration << ' ' << c.end_iteration << ' ' << c.dimension << ' '
                << c.second_passes << ' ' << c.end_flags << ' ';
-        for (const Real value : {c.initial_residual, c.final_residual, c.beta,
-                                c.equation_scale, c.preconditioner_scale}) {
-          bits(value); output << ' ';
+        for (const Real value : {c.initial_residual, c.final_residual, c.beta, c.equation_scale,
+                                 c.preconditioner_scale}) {
+          bits(value);
+          output << ' ';
         }
         for (const auto& value : {c.estimate, c.estimate_threshold}) {
-          output << static_cast<unsigned>(value.state()) << ' '; bits(value.mantissa());
+          output << static_cast<unsigned>(value.state()) << ' ';
+          bits(value.mantissa());
           output << ' ' << value.exponent() << ' ';
         }
         output << '\n';
       }
       const auto field = [&](std::string_view name, const field_type& value) {
         output << name << ' ' << value.ncomp() << ' ' << value.local_size();
-        for (int axis = 0; axis < Dim; ++axis) output << ' ' << value.ghosts()[axis];
+        for (int axis = 0; axis < Dim; ++axis)
+          output << ' ' << value.ghosts()[axis];
         output << '\n';
         for (std::size_t local = 0; local < value.local_size(); ++local) {
           const auto& fab = value.fab(local);
@@ -585,11 +638,13 @@ class TensorCoarseGmres {
           fab.copy_to_host(host);
           output << value.local_global_indices()[local] << ' ' << host.size() << '\n';
           for (std::size_t index = 0; index < host.size(); ++index) {
-            bits(host(index)); output << '\n';
+            bits(host(index));
+            output << '\n';
           }
         }
       };
-      field("rhs", rhs); field("candidate", correction);
+      field("rhs", rhs);
+      field("candidate", correction);
       for (std::size_t slot = 0; slot < data_->coefficients.size(); ++slot)
         field("coefficient-" + std::to_string(slot), data_->coefficients[slot]);
       output << "END\n";
@@ -598,33 +653,42 @@ class TensorCoarseGmres {
       const std::string payload = std::move(output).str();
       if (payload.size() > maximum_bytes)
         throw std::length_error("tensor FAC diagnostic byte budget exceeded");
-      const std::string path = capture_root_ + "/coarse-rank-" +
-                               std::to_string(parent_->rank()) + ".txt";
+      const std::string path =
+          capture_root_ + "/coarse-rank-" + std::to_string(parent_->rank()) + ".txt";
       descriptor = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
-      if (descriptor < 0) throw std::runtime_error("tensor FAC capture exclusive open failed");
+      if (descriptor < 0)
+        throw std::runtime_error("tensor FAC capture exclusive open failed");
       std::size_t offset = 0;
       while (offset < payload.size()) {
         const auto count = ::write(descriptor, payload.data() + offset, payload.size() - offset);
-        if (count < 0 && errno == EINTR) continue;
-        if (count <= 0) throw std::runtime_error("tensor FAC capture write failed");
+        if (count < 0 && errno == EINTR)
+          continue;
+        if (count <= 0)
+          throw std::runtime_error("tensor FAC capture write failed");
         offset += static_cast<std::size_t>(count);
       }
       if (::fsync(descriptor) != 0 || ::fchmod(descriptor, 0444) != 0)
         throw std::runtime_error("tensor FAC capture durability failed");
-      const int close_status = ::close(descriptor); descriptor = -1;
-      if (close_status != 0) throw std::runtime_error("tensor FAC capture close failed");
+      const int close_status = ::close(descriptor);
+      descriptor = -1;
+      if (close_status != 0)
+        throw std::runtime_error("tensor FAC capture close failed");
       descriptor = ::open(capture_root_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
       if (descriptor < 0 || ::fsync(descriptor) != 0)
         throw std::runtime_error("tensor FAC capture directory sync failed");
-      const int directory_close = ::close(descriptor); descriptor = -1;
-      if (directory_close != 0) throw std::runtime_error("tensor FAC capture directory close failed");
+      const int directory_close = ::close(descriptor);
+      descriptor = -1;
+      if (directory_close != 0)
+        throw std::runtime_error("tensor FAC capture directory close failed");
     } catch (...) {
-      if (descriptor >= 0) ::close(descriptor);
-      failed = 1;  // Keep partial/existing bytes; their failed diagnostic disposition stays explicit.
+      if (descriptor >= 0)
+        ::close(descriptor);
+      failed =
+          1;  // Keep partial/existing bytes; their failed diagnostic disposition stays explicit.
     }
     const long any_failed = all_reduce_max(failed, *parent_);
-    std::fprintf(stderr, "pops_tensor_fac_capture rank=%d outer=%d status=%s\n",
-                 parent_->rank(), outer_ordinal, any_failed ? "failed" : "complete");
+    std::fprintf(stderr, "pops_tensor_fac_capture rank=%d outer=%d status=%s\n", parent_->rank(),
+                 outer_ordinal, any_failed ? "failed" : "complete");
   }
 
  private:

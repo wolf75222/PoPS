@@ -76,17 +76,33 @@ def test_requests_import_and_csr_keep_exact_domain_occurrences():
     assert imported.attrs['signature']['family']==Q.attrs['signature']['family']
 
 
-@pytest.mark.parametrize('capacity',(0,-1,True,2**31))
+@pytest.mark.parametrize('capacity',(-1,True,2**63,1.0))
 def test_bad_capacity_is_not_coerced(capacity):
     p=Program('capacity');d=Distributed(p)
-    with pytest.raises(ValueError,match='exact Int32'):d.domain((0,1),capacity=capacity)
+    with pytest.raises(ValueError,match='exact Int64'):d.domain((0,1),capacity=capacity)
     assert not p._values
 
 
-def test_outer_amr_calendar_is_refused():
+@pytest.mark.parametrize('capacity',(0,2**31,2**53+3,2**63-1))
+def test_domain_cardinality_capacity_is_independent_of_transport_capacity(capacity):
+    p=Program('large_domain_capacity');d=Distributed(p)
+    domain=d.domain((0,0,0),capacity=capacity)
+    successor=d.domain((0,0,0),family=domain)
+    assert successor.attrs['signature']['capacity']==capacity
+    source,_=emitted(p)
+    assert '.issue(0,%d,'%capacity in source
+    # Transport/storage budgets remain independent positive Int64 contracts.
+    with pytest.raises(ValueError,match='exact Int64'):
+        d.local_map(domain,lambda b,i:b.variant(Result(Int64,Int64),'ok',b.int64(1)),
+                    byte_capacity=2**63)
+
+
+def test_outer_amr_calendar_uses_native_registry():
     p=Program('amr');d=Distributed(p);D=d.domain((0,1),capacity=1)
-    with pytest.raises(NotImplementedError,match='AMR invocation calendar'):
-        emit_distributed_op(p,D,{},None,[],[],{},None,'amr_system')
+    lines=[]
+    var={v.id:'std::int64_t(%s)'%v.attrs['value'] for v in p._values if v.op=='int64_constant'}
+    emit_distributed_op(p,D,var,None,lines,[],{},None,'amr_system')
+    assert 'ctx.distributed_registry()' in '\n'.join(lines)
 
 
 def test_equations_are_part_of_serialized_identity_and_detach():
@@ -141,3 +157,23 @@ def test_distributed_local_primitive_refuses_a_replicated_region(operation, nest
         else:
             action()
     assert p._ir_hash() == before
+
+
+@pytest.mark.parametrize('budget',(2**31,2**53+3,2**63-1))
+def test_wide_distributed_budgets_are_declared_without_allocating_their_capacity(budget):
+    from pops.time._program.detach import detach_compiled_program
+    p=Program('wide_transport');d=Distributed(p,storage_bytes=budget,storage_versions=budget)
+    domain=d.domain((0,0,0),capacity=0)
+    value=d.local_map(domain,lambda b,i:b.variant(Result(Int64,Int64),'ok',b.int64(17)),byte_capacity=budget)
+    source,_=emitted(p)
+    assert '.configure(%d,%d)'%(budget,budget) in source
+    assert value.attrs['byte_capacity']==budget
+    assert p.to_graph().to_data()==detach_compiled_program(p).to_graph().to_data()
+
+
+@pytest.mark.parametrize('budget',(0,-1,True,2**63,1.5))
+def test_invalid_wide_budget_is_rejected_before_authoring_changes(budget):
+    p=Program('invalid_budget');before=p._ir_hash()
+    with pytest.raises(ValueError,match='positive exact Int64'):
+        Distributed(p,storage_bytes=budget)
+    assert p._ir_hash()==before

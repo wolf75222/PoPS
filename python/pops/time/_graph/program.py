@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import hashlib
-import json
+from pops._structural_data import canonical_json
 from dataclasses import dataclass
 from typing import Any
 
@@ -58,7 +58,7 @@ class ProgramGraph:
         object.__setattr__(self, "cadence", cadence)
         available: dict[int, Any] = {}
         validate_nodes(self.nodes, self.clocks, available, where="ProgramGraph")
-        payload = json.dumps(self.to_data(), sort_keys=True, separators=(",", ":"))
+        payload = canonical_json(self.to_data())
         object.__setattr__(self, "graph_hash", hashlib.sha256(payload.encode()).hexdigest())
 
     def ref(self, node: Any) -> ValueRef:

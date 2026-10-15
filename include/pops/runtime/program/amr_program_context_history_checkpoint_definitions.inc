@@ -7,6 +7,9 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
   explicit AcceptedContextSnapshot(AmrProgramContext& owner)
       : owner_(&owner),
         clock_schedule_(owner.clock_schedule_),
+        continuation_accepted_(owner.amr_continuation_accepted_),
+        continuation_retention_(
+            owner.continuation_prepare_forest_retention_(continuation_accepted_)),
         resource_epoch_(owner.resource_epoch_),
         resource_generation_(owner.resource_generation_),
         history_epoch_(owner.history_epoch_),
@@ -33,6 +36,9 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
   AcceptedContextSnapshot(const AcceptedContextSnapshot& accepted)
       : owner_(accepted.owner_),
         clock_schedule_(accepted.clock_schedule_),
+        continuation_accepted_(accepted.continuation_accepted_),
+        continuation_retention_(
+            owner_->continuation_prepare_forest_retention_(continuation_accepted_)),
         resource_epoch_(accepted.resource_epoch_),
         resource_generation_(accepted.resource_generation_),
         history_epoch_(accepted.history_epoch_),
@@ -61,11 +67,13 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
   }
 
   void publish_restore() noexcept override {
+    owner_->revoke_finite_values_on_rollback();
     owner_->revoke_interaction_history_snapshots_();
     owner_->runtime_state().invalidate_resources();
     owner_->cancel_mapping_hierarchy_();
     owner_->staged_field_publications_.clear();
     static_assert(std::is_nothrow_swappable_v<ClockScheduleState>);
+    static_assert(std::is_nothrow_swappable_v<decltype(continuation_accepted_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(history_levels_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(history_flux_expressions_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(history_flux_regrid_sources_)>);
@@ -82,6 +90,10 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
     static_assert(std::is_nothrow_swappable_v<decltype(discarded_scratches_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(discarded_subcycling_contract_)>);
     std::swap(owner_->clock_schedule_, clock_schedule_);
+    owner_->amr_continuation_accepted_.swap(continuation_accepted_);
+    owner_->continuation_install_forest_retention_(std::move(continuation_retention_));
+    owner_->continuation_discard_restart_levels_();
+    owner_->continuation_revoke_attempt_();
     owner_->resource_epoch_ = resource_epoch_;
     owner_->resource_generation_ = resource_generation_;
     owner_->history_epoch_ = history_epoch_;
@@ -127,6 +139,8 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
  private:
   AmrProgramContext* owner_ = nullptr;
   ClockScheduleState clock_schedule_;
+  std::map<int, ContinuationStore<Dim>> continuation_accepted_;
+  LevelContinuationForestRetention continuation_retention_;
   std::uint64_t resource_epoch_ = std::numeric_limits<std::uint64_t>::max();
   std::uint64_t resource_generation_ = std::numeric_limits<std::uint64_t>::max();
   std::uint64_t history_epoch_ = std::numeric_limits<std::uint64_t>::max();
@@ -134,10 +148,8 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
   std::map<std::string, int> history_levels_;
   std::map<std::string, std::vector<FluxExpression>> history_flux_expressions_;
   std::map<std::string, std::vector<FluxExpression>> history_flux_regrid_sources_;
-  std::uint64_t history_flux_regrid_source_epoch_ =
-      std::numeric_limits<std::uint64_t>::max();
-  std::uint64_t history_flux_regrid_source_generation_ =
-      std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t history_flux_regrid_source_epoch_ = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t history_flux_regrid_source_generation_ = std::numeric_limits<std::uint64_t>::max();
   std::map<std::string, AmrProgramPendingHistoryRemap> pending_history_remaps_;
   DeferredHistoryLagScratches deferred_history_lag_scratches_;
   CellTemporalPartitionAcceptedState accepted_temporal_partition_;

@@ -2,9 +2,10 @@
 
 All step, residual, iteration and quadrature bodies below author PoPS IR. Python
 and NumPy only prepare initial arrays and independently assess native results.
-These finite profiles are not qualifications of every PDE in the T01--T12 corpus;
-``LIMITS`` records the remaining family obligations, and ``require_complete``
-refuses them explicitly. No custom emitter or model-name dispatch is registered.
+These finite profiles are not qualifications of every PDE in the T01--T12 corpus.
+``LIMITS`` records scientific properties still unestablished; ``require_complete``
+checks selected equation-component coverage separately. No custom emitter or
+model-name dispatch is registered in the engine.
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ from pops.time import (ComputedDt, FailRun, FixedDt, LocalResidual, RejectAttemp
 from pops.time.expressions import ProgramExpression, ProgramScalar
 from pops.solvers import LocalNewton
 
-from .common import CaseSpec, MissingCapabilityError, non_owner_metrics, state_array
+from .common import CaseSpec, non_owner_metrics, state_array
 from .coverage import OBLIGATIONS
 from .models_M01_M14 import _domain, _initial, _fv, _poisson, _live_field_evaluator
 
@@ -631,11 +632,9 @@ def build_t12_finite_edge():
         profile="T12: one shared finite edge per cell, occurrence-qualified total interval realization, replace rather than add, both incidence deliveries rebuilt and version checked; Cartesian/AMR face-ledger replacement remains unqualified")
 
 
-def build_method(method, *, require_complete=False, **kwargs):
-    if method not in READY:raise ValueError("unknown method " + str(method))
-    if require_complete:
-        raise MissingCapabilityError(method,required=OBLIGATIONS[method],
-            profile="finite executable method profile; full corpus-family qualification is not implemented")
-    if method == "T04":
-        return build_t04_global(**kwargs)
-    return globals()["build_"+method.lower()](**kwargs)
+def build_method(method, *, profile=None, require_complete=False, **kwargs):
+    from .profile_dispatch import build_profile
+    key = str(method).upper()
+    if key not in READY:
+        raise ValueError("unknown method " + str(method))
+    return build_profile(key, profile=profile, require_complete=require_complete, **kwargs)

@@ -6,6 +6,7 @@ JSON-ready data.  It is deliberately independent from snapshot lifecycle and has
 from __future__ import annotations
 
 import json
+from pops._structural_data import canonical_json
 import math
 import types
 from collections.abc import Mapping
@@ -98,6 +99,10 @@ def _canonical(
                 item, projection_cache=projection_cache, **kwargs),
             dependency_cache=projection_cache,
         )
+    if isinstance(value, (list, tuple, set, frozenset, Mapping)):
+        return _canonical_containers(
+            value, path=path, active=active, handle_resolver=handle_resolver,
+            artifact=artifact, projection_cache=projection_cache)
     marker = id(value)
     if marker in active:
         raise ValueError("AuthoringSnapshot cannot encode a reference cycle at %s" % path)
@@ -108,6 +113,87 @@ def _canonical(
             artifact=artifact, projection_cache=projection_cache)
     finally:
         active.remove(marker)
+
+
+def _canonical_containers(value, *, path, active, handle_resolver, artifact, projection_cache):
+    """Walk finite authoring containers with the existing authority/hook context.
+
+    Non-container leaves retain the authenticated object projection below. Work
+    items preserve hook order and check a mapping key before visiting its value.
+    """
+    result: list[Any] = [None]
+    entered = set()
+    pending: list[tuple[str, Any, Any, Any, Any]] = [("visit", value, path, result, 0)]
+    try:
+        while pending:
+            action, node, location, destination, index = pending.pop()
+            if action == "leave":
+                active.remove(node)
+                entered.remove(node)
+                continue
+            if action == "sort":
+                destination.sort(key=lambda item: canonical_json(item, allow_nan=False))
+                continue
+            if action == "key":
+                token = canonical_json(node[0], sort_keys=False, allow_nan=False)
+                if token in destination:
+                    raise ValueError(
+                        "AuthoringSnapshot mapping at %s contains distinct keys with the same "
+                        "canonical identity" % location)
+                destination.add(token)
+                continue
+            if (not isinstance(node, (list, tuple, set, frozenset, Mapping)) or
+                    isinstance(node, (bool, int, Fraction, Decimal, float, str, bytes, complex,
+                                      Enum, types.ModuleType, type, types.FunctionType,
+                                      types.MethodType, types.BuiltinFunctionType))):
+                destination[index] = _canonical(
+                    node, path=location, active=active, handle_resolver=handle_resolver,
+                    artifact=artifact, projection_cache=projection_cache)
+                continue
+            if type(node).__module__.split(".", 1)[0] == "numpy":
+                raise TypeError(
+                    "AuthoringSnapshot cannot encode numpy runtime data at %s; declare metadata, not arrays"
+                    % location)
+            marker = id(node)
+            if marker in active:
+                raise ValueError("AuthoringSnapshot cannot encode a reference cycle at %s" % location)
+            active.add(marker)
+            entered.add(marker)
+            # Keep the source object alive until its identity leaves the active set.
+            pending.append(("leave", marker, node, None, None))
+            if isinstance(node, Mapping):
+                if type(node) is dict and all(isinstance(key, str) for key in node):
+                    output = {}
+                    destination[index] = output
+                    for key, child in reversed(tuple(node.items())):
+                        pending.append(("visit", child, "%s.%s" % (location, key), output, key))
+                else:
+                    items = tuple(node.items())
+                    entries, keys = [[None, None] for _ in items], set()
+                    destination[index] = {"$mapping": {
+                        "type": "%s.%s" % (type(node).__module__, type(node).__qualname__),
+                        "entries": entries}}
+                    for row, (key, child) in reversed(tuple(zip(entries, items, strict=True))):
+                        pending.append(("visit", child, "%s{%r}" % (location, key), row, 1))
+                        pending.append(("key", row, location, keys, None))
+                        pending.append(("visit", key, "%s{key}" % location, row, 0))
+            else:
+                children = list(node)
+                output = [None] * len(children)
+                if isinstance(node, list):
+                    destination[index] = output
+                elif isinstance(node, tuple):
+                    destination[index] = {"$tuple": output}
+                else:
+                    destination[index] = {"$set" if isinstance(node, set) else "$frozenset": output}
+                    pending.append(("sort", None, None, output, None))
+                for n in range(len(children) - 1, -1, -1):
+                    child_path = ("%s{item}" % location if isinstance(node, (set, frozenset))
+                                  else "%s[%d]" % (location, n))
+                    pending.append(("visit", children[n], child_path, output, n))
+        return result[0]
+    finally:
+        active.difference_update(entered)
 
 
 def _canonical_compound(

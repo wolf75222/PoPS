@@ -405,13 +405,20 @@ def build_m28(cells=24, *, amplitude=.04, nonuniform=False):
         "M28: Dim1 real ALE volumes with oscillating analytic nodes, endpoint swept measures and one shared Reynolds interval; GCL/uniform-state and total inventory checks, no AMR-remap surrogate")
 
 
-def build_m24(cells=(16,4)):
-    """Smooth non-equilibrium two-phase transport; straight path, Gauss2."""
+def build_m24(cells=(16,4), *, pressure_relaxation=0., velocity_relaxation=0.):
+    """Seven-equation BN with an explicitly chosen interphase relaxation law.
+
+    S18 supplies the convective variant pI=p1,uI=u2. Nonzero coefficients
+    below select an additional pressure/drag law; it is not attributed to S18.
+    Interphase momentum and total energy are delivered with opposite signs.
+    """
+    if any(not np.isfinite(c) or c < 0 for c in (pressure_relaxation, velocity_relaxation)):
+        raise ValueError("relaxation coefficients must be finite and nonnegative")
     frame,layout=_domain("M24_periodic_planar",cells)
     model=pops.Model("M24_Baer_Nunziato_convective",frame=frame)
     names=("alpha","r1","r2","m1","m2","e1","e2")
     u=model.state("two_phase",components=names)
-    flux_values,bx,_=bn_equations(tuple(u))
+    flux_values,bx,(v1s,v2s,p1s,p2s)=bn_equations(tuple(u))
     flux=model.flux("phase_fluxes",state=u,frame=frame,
         components={frame.axes[0]:flux_values,frame.axes[1]:(0.,)*7})
     product=model.nonconservative_product("interface_products",state=u,
@@ -429,11 +436,19 @@ def build_m24(cells=(16,4)):
             result=pm.maximum(result,vmax+pm.sqrt(gamma*(gamma-1)*emax))
         return result
     path=SymbolicPath(product,frame=frame,quadrature=((.5-1/(2*np.sqrt(3)),.5),(.5+1/(2*np.sqrt(3)),.5)),speed=speed)
-    rate=model.rate("two_phase_balance",equation=pm.ddt(u)==-pm.div(flux)-product)
+    volume_exchange = pressure_relaxation*(p1s-p2s)
+    drag = velocity_relaxation*(v2s-v1s)
+    work = -p1s*volume_exchange+v2s*drag
+    exchange = model.source("interphase_relaxation", on=u,
+        value=(volume_exchange, 0., 0., drag, -drag, work, -work))
+    rate=model.rate("two_phase_balance",equation=pm.ddt(u)==-pm.div(flux)-product+exchange)
+    transport, relaxation = rate.select(flux, product), rate.select(exchange)
     method=PathConservativeFiniteVolume(flux=flux,path=path,variables=variables.Conservative(u),
         reconstruction=reconstruction.FirstOrder(),riemann=riemann.Rusanov())
     case=pops.Case("M24_path_conservative");block=case.block("mixture",model)
-    plan=DiscretizationPlan();plan.rates.add(rate,method);case.numerics(plan,block=block)
+    from pops.numerics import StateStorage
+    plan=DiscretizationPlan();plan.rates.add(transport,method)
+    plan.rates.add(relaxation,StateStorage());case.numerics(plan,block=block)
     dt=.0005;steps=4
     _ssprk2(case,block,u,lambda p,q,point,label:rate(q),dt,name="M24_SSPRK2")
     x,y=np.meshgrid((np.arange(cells[0])+.5)/cells[0],(np.arange(cells[1])+.5)/cells[1])
@@ -442,8 +457,10 @@ def build_m24(cells=(16,4)):
     p1=1+.02*np.cos(2*np.pi*x);p2=.9+.03*np.sin(2*np.pi*x)
     initial=np.array([a,r1,r2,r1*v1,r2*v2,a*p1/.4+.5*r1*v1*v1,(1-a)*p2/.6+.5*r2*v2*v2])
     from .continuum_oracles import advance_m24
-    expected=advance_m24(initial,dt=dt,steps=steps)
-    refined_path=advance_m24(initial,dt=dt,steps=steps,path_points=4)
+    coefficients=dict(pressure_relaxation=pressure_relaxation,velocity_relaxation=velocity_relaxation)
+    expected=advance_m24(initial,dt=dt,steps=steps,**coefficients)
+    refined_path=advance_m24(initial,dt=dt,steps=steps,path_points=4,**coefficients)
+    unrelaxed=advance_m24(initial,dt=dt,steps=steps)
     def check(runtime):
         q=state_array(runtime,"mixture",initial.shape)
         if q is None:return non_owner_metrics()
@@ -454,18 +471,21 @@ def build_m24(cells=(16,4)):
         margin=float(min(np.min(q[0]),np.min(1-q[0]),np.min(q[1]),np.min(q[2]),np.min(p1),np.min(p2)))
         error=float(np.max(abs(q-expected)))
         path_error=float(np.max(abs(q-refined_path)))
+        relaxation_gap=float(np.max(abs(q-unrelaxed)))
         return dict(passed=error<2e-11 and path_error<2e-10 and defect<2e-11 and margin>0 and change>1e-8,
             discrete_reference_max_error=error,refined_path_max_error=path_error,
-            mixture_inventory_defect=defect,admissibility_margin=margin,state_change=change)
+            mixture_inventory_defect=defect,admissibility_margin=margin,state_change=change,
+            relaxation_gap=relaxation_gap,pressure_relaxation=pressure_relaxation,
+            velocity_relaxation=velocity_relaxation)
     return CaseSpec(case,layout,_initial(case,block[u],initial),{"mixture":block[u]},dt*steps,dt,check,
-        "M24: full seven-equation convective BN, pI=p1,uI=u2, gamma=(1.4,1.6), straight conserved-state path Gauss2, planar periodic FV/SSPRK2; phase disappearance and relaxation excluded")
+        "M24: seven-equation BN, pI=p1,uI=u2, gamma=(1.4,1.6), straight conserved-state path Gauss2, "
+        "periodic FV/SSPRK2; authored pressure/drag relaxation coefficients="+str(coefficients))
 
 
-def build_model(identifier):
-    if identifier=="M22":return build_m22()
-    if identifier=="M23":return build_m23()
-    if identifier=="M24":return build_m24()
-    if identifier=="M25":return build_m25()
-    if identifier=="M28":return build_m28()
-    raise MissingCapabilityError(identifier,required=("complete authored spatial native reception",),
-        profile="M23/M25/M28 spatial continuum and geometry profiles")
+def build_model(identifier, *, profile=None, require_complete=False, **kwargs):
+    from .profile_dispatch import build_profile
+    key = str(identifier).upper()
+    if key not in {"M22", "M23", "M24", "M25", "M28"}:
+        raise MissingCapabilityError(key, required=("unknown continuum model identifier",),
+            profile="M22/M23/M24/M25/M28 selected continuum and geometry profiles")
+    return build_profile(key, profile=profile, require_complete=require_complete, **kwargs)

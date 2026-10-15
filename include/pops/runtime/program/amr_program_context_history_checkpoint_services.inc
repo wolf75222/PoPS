@@ -27,7 +27,8 @@ void store_history_(const std::string& name, const field_type& value) const {
           throw std::out_of_range("AMR Program history is not registered on the active level");
         require_same_field_contract_(found->second.front(), value, "AMR Program history store");
         if (found->second.front().ghosts() != value.ghosts())
-          throw std::invalid_argument("AMR Program history store fields have different declared halos");
+          throw std::invalid_argument(
+              "AMR Program history store fields have different declared halos");
         if (!std::isfinite(current_dt_) || !(current_dt_ > 0.0))
           throw std::logic_error("AMR Program history store has no positive exact interval");
         const auto flux_found = history_flux_expressions_.find(staged.key);
@@ -69,7 +70,8 @@ void store_history_(const std::string& name, const field_type& value) const {
 
   const auto found = manager.histories.find(candidate.key);
   const auto flux_found = history_flux_expressions_.find(candidate.key);
-  for (const auto& slot : found->second) program_values_.revoke_buffer_(slot);
+  for (const auto& slot : found->second)
+    program_values_.revoke_buffer_(slot);
   // Public history() references name individual ring elements.  Keep those elements at stable
   // addresses.  A MultiFab valid-copy has no allocation path after its exact field contract has
   // been prepared above; nevertheless, converge a device/local exception before metadata moves.
@@ -148,7 +150,8 @@ void rotate_histories_(std::optional<std::string> clock_identity) const {
       "AMR Program history rotation");
   for (const std::string& key : candidate.selected) {
     auto& ring = manager.histories.at(key);
-    for (const auto& slot : ring) program_values_.revoke_buffer_(slot);
+    for (const auto& slot : ring)
+      program_values_.revoke_buffer_(slot);
     for (std::size_t slot = ring.size(); slot-- > 1;)
       std::swap(ring[slot], ring[slot - 1]);
     auto& dts = manager.slot_dt.at(key);
@@ -245,8 +248,10 @@ void require_current_boundary_point_exact_(
     const runtime::multiblock::BoundaryEvaluationPoint& point, std::string_view operation) const {
   require_rate_identity_(point.stage);
   const double physical_time = current_interval_start_time_ + stage_time_.value() * current_dt_;
-  if (primary_clock_.empty() || !std::isfinite(current_dt_) || !(current_dt_ > 0.0) ||
-      point.clock != primary_clock_ ||
+  const bool topology_point = continuation_regrid_phase() && current_dt_ == 0.0 &&
+                              current_interval_start_time_ == require_continuation_regrid_().time;
+  if (primary_clock_.empty() || !std::isfinite(current_dt_) ||
+      (!(current_dt_ > 0.0) && !topology_point) || point.clock != primary_clock_ ||
       point.tick != static_cast<std::int64_t>(facade_->macro_step()) ||
       point.level != active_level_ || point.substep != logical_substep_ ||
       point.stage_fraction != stage_time_ || point.dt != current_dt_ ||

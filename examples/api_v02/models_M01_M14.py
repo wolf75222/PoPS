@@ -22,7 +22,7 @@ from pops.layouts import Uniform
 from pops.lib.initial import BindArray
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import (CoordinatedFace, CoordinatedFiniteVolume, Diffusion,
-                           DiscretizationPlan, FaceBalance, ScharfetterGummel,
+                           DiscretizationPlan, FaceBalance,
                            TensorDiffusion, reconstruction, riemann, variables)
 from pops.numerics.spatial import FiniteVolume
 from pops.physics.diffusion import DiffusiveBoundary
@@ -30,7 +30,7 @@ from pops.projection import ConservativeCellAverage
 from pops.solvers import CG
 from pops.time import FailRun, FixedDt
 
-from .common import CaseSpec, MissingCapabilityError, non_owner_metrics, state_array
+from .common import CaseSpec, non_owner_metrics, state_array
 
 
 READY = ("M01", "M02", "M03", "M04", "M05", "M06", "M07", "M08", "M09", "M10", "M11", "M12", "M13", "M14")
@@ -244,8 +244,20 @@ def build_m04(cells=(16,8)):
     amp=.2*np.sinc(1/cells[0])*np.sinc(1/cells[1]);initial=(1+amp*np.cos(2*np.pi*(x+y)))[None]
     exact=(1+amp*np.exp(-4*np.pi**2*sum(map(sum,K))*end)*np.cos(2*np.pi*(x+y-sum(velocity)*end)))[None]
     subject=block[U]
+    from .continuum_transport_oracles import anisotropic_ssprk2
+    discrete=anisotropic_ssprk2(initial[0],velocity=velocity,tensor=K,
+        lengths=(1.,1.),dt=dt,steps=2)[None]
+    base=_periodic_metrics(initial,minimum=.79,reference=exact,error_limit=.002)
+    def check(runtime):
+        out=base(runtime)
+        actual=state_array(runtime,"fluid",initial.shape)
+        if actual is not None:
+            error=float(np.max(abs(actual-discrete)))
+            out["full_tensor_discrete_error"]=error
+            out["passed"]=bool(out["passed"] and error<3.e-12)
+        return out
     return CaseSpec(case,layout,_initial(case,subject,initial),{"fluid":subject},end,dt,
-        _periodic_metrics(initial,minimum=.79,reference=exact,error_limit=.002),
+        check,
         "M04: full SPD oblique tensor [[.02,.006],[.006,.015]], 2D periodic transport+conduction; separate spatial realizations combined in each SSPRK2 stage, no positivity theorem for TensorDiffusion")
 
 
@@ -415,7 +427,7 @@ def build_m06(cells=(24,8)):
         "M06: one-phase Stefan melting front, H=T+fraction,L=c=k=1, latent plateau retained, heat Dirichlet traces, exact enthalpy initial cell averages at physical t=.1; genuine x conduction on a Dim2 y-invariant mesh, SSPRK2 and shared boundary heat ledger")
 
 
-def build_m07(cells=(24,8)):
+def build_m07(cells=(24,8), *, nonstationary=False):
     frame,layout=_domain("M07_periodic_lake",cells)
     model=pops.Model("M07_dry_safe_Saint_Venant",frame=frame);U=model.state("lake",components=("h","q","z"));h,q,z=U
     velocity=pm.where(h>0,lambda:q/h,lambda:0.)
@@ -442,17 +454,38 @@ def build_m07(cells=(24,8)):
     plan=DiscretizationPlan();plan.rates.add(rate,CoordinatedFiniteVolume(face=face));case.numerics(plan,block=block)
     dt,end=.02/max(cells),.04/max(cells)
     _ssprk2(case,block,U,lambda p,u,point,label:rate(u),dt,name="M07_SSPRK2")
-    x=(np.arange(cells[0])+.5)/cells[0];bed=.4+.4*np.cos(2*np.pi*x);height=np.maximum(.6-bed,0.)
-    initial=np.stack([np.broadcast_to(v,(cells[1],cells[0])) for v in (height,np.zeros_like(x),bed)])
+    x=(np.arange(cells[0])+.5)/cells[0];bed=.4+.4*np.cos(2*np.pi*x)
+    surface=.6+.04*np.sin(4*np.pi*x) if nonstationary else .6
+    height=np.maximum(surface-bed,0.)
+    discharge=.12*height*(1+.2*np.sin(2*np.pi*x)) if nonstationary else np.zeros_like(x)
+    initial=np.stack([np.broadcast_to(v,(cells[1],cells[0])) for v in (height,discharge,bed)])
+    from .models_drift_wetdry_oracles import wet_dry_rhs, ssprk2
+    def reference(mode):
+        return ssprk2(initial,lambda q:wet_dry_rhs(q,1/cells[0],source_mode=mode),dt=dt)
+    expected=reference("both")
+    controls={mode:float(np.max(abs(expected-reference(mode))))
+              for mode in ("omit_left","omit_right","swap","none")}
+    no_op_gap=float(np.max(abs(expected-initial)))
     def check(runtime):
         actual=state_array(runtime,"fluid",initial.shape)
         if actual is None:return non_owner_metrics()
         defect=float(np.max(abs(actual-initial)))
-        return {"metrics_owner":True,"equilibrium_defect":defect,"dry_cells":int(np.count_nonzero(initial[0]==0)),
-                "minimum_depth":float(np.min(actual[0])),"passed":bool(np.isfinite(actual).all() and defect<3.e-11 and np.min(actual[0])>=-1.e-12)}
+        error=float(np.max(abs(actual-expected)))
+        mass=float(abs(np.mean(actual[0]-initial[0])))
+        bed_error=float(np.max(abs(actual[2]-initial[2])))
+        active=(no_op_gap>1.e-5 and min(controls.values())>1.e-5) if nonstationary else defect<3.e-11
+        return {"metrics_owner":True,"equilibrium_defect":defect,
+                "full_state_reference_error":error,"mass_defect":mass,"frozen_bed_error":bed_error,
+                "no_op_error":no_op_gap,"omitted_or_swapped_source_errors":controls,
+                "nonstationary":nonstationary,"dry_cells":int(np.count_nonzero(initial[0]==0)),
+                "minimum_depth":float(np.min(actual[0])),
+                "passed":bool(np.isfinite(actual).all() and error<3.e-11 and mass<3.e-12
+                              and bed_error<3.e-13 and active and np.min(actual[0])>=-1.e-12)}
     subject=block[U]
     return CaseSpec(case,layout,_initial(case,subject,initial),{"fluid":subject},end,dt,check,
-        "M07: Saint-Venant x transport with frozen bed, periodic Dim2 embedding, wet/dry lake at rest; explicit dry branch and hydrostatic Rusanov shared face plus two bed-source deliveries; no epsilon floor")
+        "M07: Saint-Venant x transport with frozen bed, periodic Dim2 embedding, "
+        +( "nonstationary wet/dry transport" if nonstationary else "wet/dry lake at rest")
+        +"; explicit dry branch and hydrostatic Rusanov shared face plus two bed-source deliveries; independent pressure-corrected FV oracle; no epsilon floor")
 
 
 def _poisson(case,phi,rhs):
@@ -511,8 +544,24 @@ def build_m08(cells=(16,16)):
     _ssprk2(case,block,U,_live_field_evaluator(field,phi,model,block,U,rate),dt,name="M08_SSPRK2")
     x,y=np.meshgrid(2*np.pi*(np.arange(cells[0])+.5)/cells[0],2*np.pi*(np.arange(cells[1])+.5)/cells[1])
     initial=(np.sinc(1/cells[0])*np.sin(x)+.3*np.sinc(2/cells[1])*np.cos(2*y))[None];subject=block[U]
+    from .continuum_transport_oracles import guiding_center_ssprk2
+    discrete,last_stage=guiding_center_ssprk2(initial[0],lengths=lengths,dt=dt,steps=2)
+    base=_field_metrics(initial,cells,lengths,rhs_offset=0.)
+    def check(runtime):
+        out=base(runtime)
+        actual=state_array(runtime,"fluid",initial.shape)
+        stage=runtime.history_global("stage1_state",1)
+        potential=runtime.history_global("stage1_potential",1)
+        if actual is not None:
+            error=float(np.max(abs(actual[0]-discrete)))
+            stage_error=float(np.max(abs(np.asarray(stage).reshape(initial.shape)[0]-last_stage[0])))
+            potential_error=float(np.max(abs(np.asarray(potential).reshape(initial.shape[1:])-last_stage[1])))
+            out.update(discrete_transport_error=error,stage1_state_error=stage_error,
+                       stage1_potential_error=potential_error)
+            out["passed"]=bool(out["passed"] and max(error,stage_error,potential_error)<3.e-10)
+        return out
     return CaseSpec(case,layout,_initial(case,subject,initial),{"fluid":subject},end,dt,
-        _field_metrics(initial,cells,lengths,rhs_offset=0.),
+        check,
         "M08: 2D periodic guiding center q_t+div(q*(-phi_y,phi_x))=0,-Delta phi=q; q is a signed mean-zero density/charge fluctuation, not a received nonnegative total density; mean-zero shared gauge, fresh Poisson at both SSPRK2 stages, retained stage residual")
 
 
@@ -538,22 +587,88 @@ def build_m09(cells=(16,16)):
         "M09: compressible 2D ideal Euler-Poisson, fixed neutralizing background=1, alpha=1,Bz=.3, full Lorentz and electric work, live stage fields; explicit FV/SSPRK2, NOT the Hoffart midpoint/Schur method or an exact total-energy certificate")
 
 
+def scharfetter_gummel_face(*, diffusion=.1, mobility=.1):
+    """The fitted face equation is a closed Python algebra, including B(0).
+
+    B(z)=z/(exp(z)-1); each branch avoids evaluating an overflowing exponential
+    or a removable zero denominator. No precompiled fitted-flux entry is used.
+    """
+    from pops.numerics.stencil_flux import StencilFlux
+    if not np.isfinite(diffusion) or diffusion <= 0 or not np.isfinite(mobility) or mobility < 0:
+        raise ValueError("fitted face requires finite D>0 and mobility>=0")
+    def bernoulli(z):
+        square=z*z
+        return pm.where(abs(z)<1.e-4,
+            lambda:1-z/2+square*(1/12+square*(-1/720+square/30240)),
+            lambda:pm.where(z>50,
+                lambda:z*pm.exp(-z)/(1-pm.exp(-z)),
+                lambda:pm.where(z < -50,
+                    lambda:-z/(1-pm.exp(z)),lambda:z/pm.expm1(z))))
+    def face(sample,spacing,axis):
+        left=tuple(-int(d==axis) for d in range(2));right=(0,0)
+        nl,nr=sample(left,0),sample(right,0)
+        jump=mobility/diffusion*(sample(right,0,field=0)-sample(left,0,field=0))
+        outgoing=diffusion*bernoulli(jump)/spacing[axis]
+        incoming=diffusion*bernoulli(-jump)/spacing[axis]
+        frequency=(outgoing+incoming)/spacing[axis]
+        return (outgoing*nl-incoming*nr,),pm.where(
+            pm.minimum(nl,nr)>=0,lambda:frequency,lambda:-1.)
+    return StencilFlux(dimension=2,components=1,radius=1,field_components=(1,),body=face)
+
+
 def build_m10(cells=(16,8)):
+    from pops.model import FieldSpace, PhysicalDimension, PhysicalSupport
+    from pops.numerics import StateStorage
     lengths=(2*np.pi,2*np.pi);frame,layout=_domain("M10_periodic",cells,lengths=lengths)
-    model=pops.Model("M10_Nernst_Planck_Poisson",frame=frame);U=model.state("density",components=("n",))
-    potential=model.aux("potential");phi=model.field("solved_potential");D=.1
-    drift=model.drift_flux("electromigration",state=U,mobility=D,potential=potential)
-    diffusion=model.diffusive_flux("Fick",state=U,value=D*pm.grad(U))
-    rate=model.rate("number_balance",equation=pm.ddt(U)==-pm.div(drift)+pm.div(diffusion))
+    support=PhysicalSupport((("x","M10_periodic"),("y","M10_periodic")))
+    unit=PhysicalDimension()
+    model=pops.Model("M10_Nernst_Planck_Poisson",frame=frame)
+    U=model.state("density",components=("n",),support=support,sampling="cell_average",units=(unit,))
+    phi=model.field("solved_potential")
     case=pops.Case("M10_live_Nernst_Planck_Poisson");block=case.block("fluid",model)
-    plan=DiscretizationPlan();plan.rates.add(rate,ScharfetterGummel(drift=drift,flux=diffusion));case.numerics(plan,block=block)
-    field=_poisson(case,phi,U[0]-1);dt,end=.002,.004
-    _ssprk2(case,block,U,_live_field_evaluator(field,phi,model,block,U,rate,potential_target="potential"),dt,name="M10_SSPRK2")
-    x=(np.arange(cells[0])+.5)*2*np.pi/cells[0]
-    initial=np.broadcast_to(1+.1*np.sinc(1/cells[0])*np.cos(x),(1,cells[1],cells[0])).copy();subject=block[U]
-    return CaseSpec(case,layout,_initial(case,subject,initial),{"fluid":subject},end,dt,
-        _field_metrics(initial,cells,lengths,rhs_offset=1.,minimum=.85),
-        "M10: periodic Nernst-Planck-Poisson with D=mobility=.1 and fixed background1; joint Scharfetter-Gummel face, live Poisson at each SSPRK2 stage, nonuniform positive density on genuine Dim2 mesh")
+    face=scharfetter_gummel_face()
+    plan=DiscretizationPlan();plan.states.add(U,StateStorage(ghost_depth=max(face.ghost_extent)))
+    case.numerics(plan,block=block)
+    space=model.module.state_spaces()["density"]
+    phi_space=FieldSpace("potential",components=("phi",),representation="field",layout="cell",
+        centering="cell",sampling="cell",frame=space.frame,clock=space.clock,support=support,units=(unit,))
+    problem=FieldProblem("live_Poisson",unknowns=(phi,),equations=(-pm.laplacian(phi)==U[0]-1,),
+        boundaries=(FieldBoundary(phi,bcs.BoundaryCondition(bcs.AllPhysicalBoundaries(),bcs.Periodic())),),
+        gauge=SharedMeanGauge((phi,)),unknown_spaces={phi:phi_space},coordinate_units=(unit,unit))
+    field=case.field(problem,FieldDiscretization(method=CellCenteredSecondOrder(),boundaries=(),
+        observation_axes=(0,1),solver=CG(max_iter=2000,rel_tol=1.e-12,abs_tol=1.e-13)))
+    dt,end=.002,.004
+    def evaluate(program,state,point,label):
+        observation=field.observe(program.solve(field,values={block[U]:state},at=point).consume(action=FailRun()))
+        potential=observation[field[phi]]
+        program.store_history(label+"_state",state,depth=1)
+        program.store_history(label+"_potential",potential,depth=1)
+        return program.stencil_flux_divergence(label+"_fitted_face",state,flux=face,fields=(potential,))
+    _ssprk2(case,block,U,evaluate,dt,name="M10_SSPRK2")
+    x,y=np.meshgrid((np.arange(cells[0])+.5)*lengths[0]/cells[0],
+                    (np.arange(cells[1])+.5)*lengths[1]/cells[1])
+    initial=(1+.1*np.sinc(1/cells[0])*np.cos(x)+.04*np.sinc(1/cells[1])*np.sin(y))[None]
+    subject=block[U]
+    from .models_drift_wetdry_oracles import ssprk2,drift_diffusion_rhs,periodic_potential
+    expected=ssprk2(initial,lambda q:drift_diffusion_rhs(q,lengths),dt=dt)
+    wrong_sign=ssprk2(initial,lambda q:drift_diffusion_rhs(q,lengths,mobility=-.1),dt=dt)
+    diffusion_only=ssprk2(initial,lambda q:drift_diffusion_rhs(q,lengths,mobility=0),dt=dt)
+    old_phi=periodic_potential(initial[0],lengths)
+    stale=ssprk2(initial,lambda q:drift_diffusion_rhs(q,lengths,potential=old_phi),dt=dt)
+    gaps={"no_op":float(np.max(abs(expected-initial))),
+          "reversed_drift":float(np.max(abs(expected-wrong_sign))),
+          "no_drift":float(np.max(abs(expected-diffusion_only))),
+          "old_potential":float(np.max(abs(expected-stale)))}
+    base=_field_metrics(initial,cells,lengths,rhs_offset=1.,minimum=.85)
+    def check(runtime):
+        metrics=base(runtime);actual=state_array(runtime,"fluid",initial.shape)
+        if actual is None:return metrics
+        error=float(np.max(abs(actual-expected)))
+        metrics.update(full_state_reference_error=error,counterexample_errors=gaps)
+        metrics["passed"]=bool(metrics["passed"] and error<2.e-10 and min(gaps.values())>1.e-9)
+        return metrics
+    return CaseSpec(case,layout,_initial(case,subject,initial),{"fluid":subject},end,dt,check,
+        "M10: periodic Nernst-Planck-Poisson with D=mobility=.1 and fixed background1; complete stable Bernoulli face authored in Python StencilFlux, live typed Poisson at both SSPRK2 stages; independent exponential-integral quadrature/FFT-Poisson oracle and stale/reversed/absent drift counterexamples")
 
 
 def maxwell_stefan_face():
@@ -661,17 +776,10 @@ def build_m14(**kwargs):
 _MISSING={}
 
 
-def build_model(model, *, require_complete=False, **kwargs):
-    """Build a real native case or fail explicitly before inventing a substitute."""
-    if model in _MISSING:
-        required,profile=_MISSING[model]
-        raise MissingCapabilityError(model,required=required,profile=profile)
-    if model not in READY:
+def build_model(model, *, profile=None, require_complete=False, **kwargs):
+    """Build the selected equations, or an explicitly named historical profile."""
+    from .profile_dispatch import build_profile
+    key = str(model).upper()
+    if key not in READY:
         raise ValueError(f"unknown model id {model!r}")
-    if require_complete:
-        from .coverage import OBLIGATIONS
-        required = OBLIGATIONS[model]
-        if required:
-            raise MissingCapabilityError(model, required=required,
-                profile="all scientific obligations of the corpus model family")
-    return globals()["build_"+model.lower()](**kwargs)
+    return build_profile(key, profile=profile, require_complete=require_complete, **kwargs)

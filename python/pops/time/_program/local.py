@@ -149,7 +149,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
 
     @atomic_authoring
     def solve(self, problem: Any, *, solver: Any = None, name: Any = None,
-              values: Any = None, at: Any = None) -> Any:
+              values: Any = None, at: Any = None, temporal: Any = None) -> Any:
         """Build one typed solve through the solver's small Program provider interface.
 
         The Program does not select a PDE family or algorithm.  A solver descriptor prepares an
@@ -161,11 +161,12 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             if not callable(default_solver):
                 raise TypeError("solve: an explicit solver or default_program_solver is required")
             solver = default_solver()
-        if values is not None or at is not None:
+        if values is not None or at is not None or temporal is not None:
             bind_inputs = getattr(problem, "bind_program_inputs", None)
             if not callable(bind_inputs):
                 raise TypeError("solve: values/at require a problem with bind_program_inputs")
-            problem = bind_inputs(program=self, values=values, at=at, solver=solver)
+            options = {} if temporal is None else {"temporal": temporal}
+            problem = bind_inputs(program=self, values=values, at=at, solver=solver, **options)
         if isinstance(solver, str):
             raise TypeError("solve: solver must be a typed descriptor, not %r" % solver)
         prepare = getattr(solver, "prepare_program_solve", None)
@@ -476,11 +477,19 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
     # A ``matrix_free_op`` supplies an exact apply callback. Mathematical shape and hierarchy use
     # are validated by the selected prepared solver provider, not by this generic authoring core.
 
-    def scalar_field(self, name: Any = None, ncomp: Any = None, *, like: Any = None) -> Any:
+    def scalar_field(self, name: Any = None, ncomp: Any = None, *, like: Any = None,
+                     topology: Any = None, initial: Any = None) -> Any:
         """A fresh, zero-initialized scalar field: scratch the apply sub-block uses (e.g. the Laplacian
         output, or a 2-component gradient buffer). ``ncomp`` inherits the exact field prototype's
         width when omitted, or defaults to one without a prototype. An explicit incompatible width
-        is rejected. Lowered through the prototype's block-qualified allocation when present."""
+        is rejected. Lowered through the prototype's block-qualified allocation when present.
+        An explicit target topology instead allocates that target storage and requires an authored
+        Float64 initial value; it never copies or interpolates the prototype's values."""
+        if topology is not None:
+            from pops.time.field_representation import allocate_field_storage
+            return allocate_field_storage(self, like, topology, initial, ncomp=ncomp, name=name)
+        if initial is not None:
+            raise ValueError("scalar_field: initial requires an explicit target topology")
         if ncomp is None:
             ncomp = len(like.space.components) if (isinstance(like, ProgramValue)
                 and like.space is not None and like.vtype == "scalar_field") else 1

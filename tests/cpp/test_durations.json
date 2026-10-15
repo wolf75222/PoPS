@@ -33,6 +33,9 @@
       "test_composite_fac_fft_coarse",
       "test_composite_fac_variable_k",
       "test_composite_general_field",
+      "test_composite_physical_measure",
+      "test_continuation_distributed_migration",
+      "test_continuation_field_migration",
       "test_continuation_image",
       "test_distributed_algebra_v14",
       "test_distributed_gc_v14",
@@ -89,7 +92,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 210,
+    "target_count": 213,
     "unit_seconds": "aggregate CTest wall time per build target",
     "v12_estimate_source": "The edd85c10f6184e7b14b048ee16d5cc39bc606b62 full CTest diagnostic observed approximately 0.7 s history-snapshot, 0.52 s AMR-transition, and 0.5 s collective-rejection aggregate work. Each is conservatively scheduled at 1 s; these are scheduling estimates, not controlled performance measurements.",
     "v18_estimate_source": "Unmeasured analogous-target scheduling estimates: AMR publication uses test_amr_program_diffusion; general composite field uses test_composite_fac_variable_k; physical support transfer uses test_nd_transfer; prepared resource cache uses test_cache_manager. Replace from the next complete CI timing artifact; no local timing measurements are claimed.",
@@ -127,7 +130,9 @@
     },
     "api_v02_v10_estimate_source": "Unmeasured scheduling seed for test_continuation_image: build 60 s exceeds twice the 23.99 s checkpoint_history estimate; runtime 5 s uses the interaction_history_snapshot tier. No provider DSO is compiled. These are not measured CI or native receipts. MPI-only test_distributed_array is declared in the manifest and excluded from these non-MPI duration catalogs by the existing planner. Existing target weights and watchdogs are unchanged; replace the new estimate from complete target timing artifacts.",
     "api_v14_estimate_source": "Unmeasured standalone structural codec/domain runtime contract allowance; 120 s cold build and 10 s runtime per new target. No local or CI timing is claimed; replace from complete receipts.",
-    "api_v14_zero_block_estimate_source": "Unmeasured scheduling estimate: native codec-only target with three serial GTests; declared ranks 1/2/3 are archive data, not MPI execution. Same conservative seed as other v14 structural codec tests; replace only from an authenticated cold-CI measurement."
+    "api_v14_zero_block_estimate_source": "Unmeasured scheduling estimate: native codec-only target with three serial GTests; declared ranks 1/2/3 are archive data, not MPI execution. Same conservative seed as other v14 structural codec tests; replace only from an authenticated cold-CI measurement.",
+    "composite_physical_measure_estimate_source": "Unmeasured scheduling estimate added 2026-10-15 for two Kokkos Fab metric/mask/finite-value contracts: 30 s build and 1 s test. Native local correctness receipts are separate and do not measure cold-CI duration. Existing watchdogs are unchanged.",
+    "api_v02_migration_estimate_source": "Unmeasured cold-CI scheduling estimate: test_continuation_field_migration, test_continuation_distributed_migration use the test_continuation_image tier (5.0 seconds). These compile native continuation codecs and exercise Kokkos/MPI storage, without provider DSO compilation. Local incremental native receipts are separate and are not cold-CI timings. Existing weights and watchdogs remain unchanged."
   },
   "test_amr_compiled_model": 0.01,
   "test_amr_composite_poisson": 1.15,
@@ -338,5 +343,8 @@
   "test_bundle_v14": 10.0,
   "test_distributed_algebra_v14": 10.0,
   "test_distributed_gc_v14": 10.0,
-  "test_state_carriers_zero_block_v14": 10.0
+  "test_state_carriers_zero_block_v14": 10.0,
+  "test_composite_physical_measure": 1.0,
+  "test_continuation_field_migration": 5.0,
+  "test_continuation_distributed_migration": 5.0
 }

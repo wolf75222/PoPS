@@ -1,8 +1,13 @@
 """Shared reception interface; importing a case never compiles or executes it."""
+
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .profile_contracts import ProfileSelection
 
 
 @dataclass(frozen=True)
@@ -15,12 +20,14 @@ class CaseSpec:
     dt: float
     invariants: Callable[[Any], dict[str, Any]]
     profile: str
+    selection: ProfileSelection | None = None
 
     def __post_init__(self):
         if self.dt <= 0 or self.t_end <= 0:
             raise ValueError("a reception case needs a positive step and final time")
         if not self.initial_values and not self.subjects:
             from pops.time._program.finite_state import require_finite_state_program
+
             require_finite_state_program(self.case._time)
         elif not self.initial_values or not self.subjects:
             raise ValueError("initial bindings, subjects and a precise profile are required")
@@ -45,8 +52,11 @@ def state_array(runtime_or_results, block: str, shape):
     """
     import numpy as np
 
-    value = (runtime_or_results[block] if isinstance(runtime_or_results, Mapping)
-             else runtime_or_results.state_global(block))
+    value = (
+        runtime_or_results[block]
+        if isinstance(runtime_or_results, Mapping)
+        else runtime_or_results.state_global(block)
+    )
     return None if value is None else np.asarray(value).reshape(shape)
 
 

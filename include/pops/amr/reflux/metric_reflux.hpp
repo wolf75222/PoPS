@@ -54,6 +54,23 @@ struct MetricRefluxBudget {
   std::size_t max_clock_stage_slices = 0;
 };
 
+/// Expected exact integral of an authored intermediate expression. The caller must
+/// derive this contract from the immutable expression before consulting its ledger.
+/// An absent contract retains the ordinary unit quadrature requirement.
+struct RefluxTemporalInterval {
+  Rational begin{0, 1};
+  Rational end{0, 1};
+  friend bool operator<(const RefluxTemporalInterval& left, const RefluxTemporalInterval& right) {
+    return left.begin == right.begin ? left.end < right.end : left.begin < right.begin;
+  }
+};
+using RefluxTemporalWeights =
+    std::map<std::string, std::map<RefluxTemporalInterval, ::pops::ExactWeight>>;
+struct MetricRefluxTemporalContract {
+  RefluxTemporalWeights coarse;
+  RefluxTemporalWeights fine;
+};
+
 template <class Payload>
 struct MetricFaceReflux {
   Payload coarse_integrated{};
@@ -126,7 +143,7 @@ using StageSlice =
     std::tuple<std::tuple<int, std::int64_t, std::int64_t, std::int64_t>, std::string>;
 
 struct TemporalSliceMeasure {
-  Rational stage_weight{0, 1};
+  ::pops::ExactWeight stage_weight{0, 1};
   Rational substep_begin{0, 1};
   Rational substep_end{0, 1};
   double substep_duration = 0.0;
@@ -179,17 +196,10 @@ inline void register_temporal_family_slice(TemporalStageFamilies& families,
                           temporal_slice_count(families) + other_slice_count, budget);
 }
 
-struct ExactSubstep {
-  Rational begin{0, 1};
-  Rational end{0, 1};
-
-  friend bool operator<(const ExactSubstep& left, const ExactSubstep& right) {
-    return left.begin == right.begin ? left.end < right.end : left.begin < right.begin;
-  }
-};
+using ExactSubstep = RefluxTemporalInterval;
 
 struct SubstepQuadrature {
-  Rational stage_weight_sum{0, 1};
+  ::pops::ExactWeight stage_weight_sum{0, 1};
   double duration = 0.0;
 };
 
@@ -210,8 +220,9 @@ struct AuthenticatedWindow {
   std::size_t substep_count = 0;
 };
 
-inline AuthenticatedWindow authenticated_window(const TemporalSlices& slices, Rational window_begin,
-                                                Rational window_end) {
+inline AuthenticatedWindow authenticated_window(
+    const TemporalSlices& slices, Rational window_begin, Rational window_end,
+    const std::map<RefluxTemporalInterval, ::pops::ExactWeight>* expected = nullptr) {
   std::map<ExactSubstep, SubstepQuadrature> substeps;
   for (const auto& [slice, measure] : slices) {
     (void)slice;
@@ -224,13 +235,21 @@ inline AuthenticatedWindow authenticated_window(const TemporalSlices& slices, Ra
     position->second.stage_weight_sum = position->second.stage_weight_sum + measure.stage_weight;
   }
 
+  if (expected && expected->size() != substeps.size())
+    throw std::runtime_error(
+        "ND metric reflux substeps differ from the authored integral contract");
   Rational cursor = window_begin;
   AuthenticatedWindow result;
   for (const auto& [interval, quadrature] : substeps) {
     if (interval.begin != cursor || !(interval.begin < interval.end))
       throw std::runtime_error(
           "ND metric reflux substeps do not form a contiguous exact clock partition");
-    if (quadrature.stage_weight_sum != Rational{1, 1})
+    if (expected) {
+      const auto weight = expected->find(interval);
+      if (weight == expected->end() || quadrature.stage_weight_sum != weight->second)
+        throw std::runtime_error(
+            "ND metric reflux stage weights differ from the authored integral contract");
+    } else if (quadrature.stage_weight_sum != Rational{1, 1})
       throw std::runtime_error("ND metric reflux stage weights do not close one accepted substep");
     const double phase_span = (interval.end - interval.begin).value();
     if (!(phase_span > 0.0) || !std::isfinite(phase_span))
@@ -258,7 +277,12 @@ inline AuthenticatedWindow authenticated_window(const TemporalSlices& slices, Ra
 template <int Dim>
 void validate_temporal_coverage(const CoarseFaceRefluxKey<Dim>& key,
                                 const TemporalStageFamilies& coarse_families,
-                                const TemporalStageFamilies& fine_families) {
+                                const TemporalStageFamilies& fine_families,
+                                const MetricRefluxTemporalContract* expected = nullptr) {
+  if (expected && (expected->coarse.size() != coarse_families.size() ||
+                   expected->fine.size() != fine_families.size()))
+    throw std::runtime_error(
+        "ND metric reflux families differ from the authored integral contract");
   if (coarse_families.size() != fine_families.size())
     throw std::runtime_error("ND metric reflux coarse and fine spatial provider identities differ");
   for (const auto& [family, coarse_slices] : coarse_families) {
@@ -266,10 +290,15 @@ void validate_temporal_coverage(const CoarseFaceRefluxKey<Dim>& key,
     if (fine == fine_families.end())
       throw std::runtime_error(
           "ND metric reflux coarse and fine spatial provider identities differ");
+    if (expected && (!expected->coarse.contains(family) || !expected->fine.contains(family)))
+      throw std::runtime_error(
+          "ND metric reflux family differs from the authored integral contract");
     const AuthenticatedWindow coarse =
-        authenticated_window(coarse_slices, key.window_begin, key.window_end);
+        authenticated_window(coarse_slices, key.window_begin, key.window_end,
+                             expected ? &expected->coarse.at(family) : nullptr);
     const AuthenticatedWindow refined =
-        authenticated_window(fine->second, key.window_begin, key.window_end);
+        authenticated_window(fine->second, key.window_begin, key.window_end,
+                             expected ? &expected->fine.at(family) : nullptr);
     const std::size_t operations = coarse_slices.size() + fine->second.size();
     if (!roundoff_equal(coarse.duration, refined.duration, operations) ||
         !roundoff_equal(coarse.duration_per_phase, refined.duration_per_phase, operations))
@@ -380,7 +409,8 @@ MetricFaceReflux<Payload> metric_reflux(const TransactionalFaceFluxLedger<Dim, P
                                         const CoarseFaceRefluxKey<Dim>& key,
                                         const RefinementRatio<Dim>& ratio,
                                         const FaceRefinementMapping<Dim>& mapping,
-                                        const MetricRefluxBudget& budget, Axpy&& axpy) {
+                                        const MetricRefluxBudget& budget, Axpy&& axpy,
+                                        const MetricRefluxTemporalContract* expected = nullptr) {
   detail::validate_reflux_key(key);
   detail::validate_reflux_budget(budget);
   if (ledger.published_size() > budget.max_published_entries)
@@ -426,7 +456,7 @@ MetricFaceReflux<Payload> metric_reflux(const TransactionalFaceFluxLedger<Dim, P
 
   detail::require_complete_slices(coarse_slices, expected_coarse, "coarse");
   detail::require_complete_slices(fine_slices, expected_fine, "fine");
-  detail::validate_temporal_coverage(key, coarse_temporal, fine_temporal);
+  detail::validate_temporal_coverage(key, coarse_temporal, fine_temporal, expected);
   if (!detail::roundoff_equal(result.coarse_weighted_measure, result.fine_weighted_measure,
                               ledger.published_size()))
     throw std::runtime_error(

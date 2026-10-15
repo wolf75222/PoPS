@@ -120,7 +120,7 @@ def test_public_evolved_stage_amr_c25_and_initial_carrier(isolated_native_cache,
                 "sha256":hashlib.sha256(bounded_bytes(registry_path)).hexdigest()}
             receipt = {"carrier_registry":registry_pin, "fixture_schema":"pops.evolved-stage-amr-native-fixture@3", "initial_carriers":initial_carriers, "retained_provenance_before_bind":True, "artifact":artifact.artifact_identity.token,
                 "dimension":2, "rank":world_rank(world), "size":world_size(world), "cells":cells, "width":width,
-                "history_protocol":{"wire":"POPSHID1", "raw_slots_after_publication":True,
+                "history_protocol":{"wire":"POPSHID2", "raw_slots_after_publication":True,
                     "latest_slot":1, "previous_slot":0, "depth":2},
                 "newton":CONTROLS, "fd_step":FD_STEP, "acceptance":ACCEPTANCE, "dt":DT,
                 "realization":"FullResidualBasisLU@1", "max_dense_bytes":DENSE_BYTES,

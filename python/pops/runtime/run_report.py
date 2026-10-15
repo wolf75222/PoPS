@@ -1,4 +1,4 @@
-"""Immutable public evidence returned by :func:`pops.run`."""
+"""Immutable public evidence returned by :func:`pops.run` and :func:`pops.step`."""
 from __future__ import annotations
 
 import math
@@ -14,6 +14,7 @@ class RunStopReason(str, Enum):
     """Successful terminal conditions implemented by the public run transition."""
 
     TARGET_TIME_REACHED = "target_time_reached"
+    ACCEPTED_STEP_LIMIT_REACHED = "accepted_step_limit_reached"
 
 
 def _count(value: Any, *, where: str) -> int:
@@ -32,7 +33,7 @@ def _identity(value: Any, *, domain: str, where: str) -> Identity:
 
 @dataclass(frozen=True, slots=True)
 class RunReport:
-    """Observed result of one successful public ``pops.run`` invocation.
+    """Observed result of one successful public ``pops.run`` or ``pops.step`` invocation.
 
     Counts are local to this invocation. ``final_macro_step`` is the cumulative native clock after
     the invocation, while ``rejected_steps`` counts rejected native attempts retried before an

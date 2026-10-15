@@ -21,7 +21,7 @@ def _case(coefficient=2, roundtrip=False):
         f = GraphFunction.from_data(json.loads(json.dumps(f.to_data())))
     p = Program('source_map')
     q = typed_state(p, 'material', state_name='U')
-    q.n
+    _ = q.n
     answer = f(p, x=p.float64(1))
     p.commit(q.next, p.value('answer', answer*q.n, at=q.next.point))
     return p, emit_cpp_program(p)
@@ -79,8 +79,10 @@ def test_mapping_refuses_truncation_instead_of_widening_a_range():
 def test_distributed_local_fold_and_aliases_are_mapped_without_fake_ranges():
     from pops.time._program.distributed_arrays import Distributed
     p = Program('local_mapping')
-    q = typed_state(p, 'material', state_name='U'); q.n
-    d = Distributed(p); domain = d.domain((0, 1, 1, 4), capacity=4)
+    q = typed_state(p, 'material', state_name='U')
+    _ = q.n
+    d = Distributed(p)
+    domain = d.domain((0, 1, 1, 4), capacity=4)
     values = p.map(domain, lambda b,i: b.fold(d.gid(i), 2,
         lambda c,s,k: s+k, max_steps=2), byte_capacity=65536)
     total = p.reduce(values, p.int64(0), lambda b,s,x:s+x,
@@ -111,7 +113,7 @@ def test_multiple_realized_occurrences_retain_the_exact_use_metadata():
     uses = tuple(Use(item, 'cell', 'current_stage', 'inventory') for item in balance.occurrences)
     assert len(uses) == 2
     results = []
-    for i,use in enumerate(uses):
+    for use in uses:
         results.append(Realize('same_name', owns=(use,), bindings={'old':q.n},
             body=lambda b,old:b.value('flux', (-old[0],old[0])), outputs={use:()}).evaluate(p)[use])
     p.commit(q.next, p.value('answer', q.n+p.dt*(results[0]+results[1]), at=q.next.point))
@@ -181,12 +183,12 @@ def test_artifact_spec_binds_map_digest_to_the_full_emitted_source(monkeypatch):
     assert spec['components']['program_source_map'] == source_map(cpp)['map_sha256']
 
 
-def _profile_source_map(identifier):
+def _profile_source_map(identifier, *, builder=None):
     import pops
     from examples.api_v02.reception import build
     from pops.codegen._orchestration_compile import build_program_model_graph
     from pops._balance_due_contract import BalanceDueContract
-    spec = build(identifier)
+    spec = build(identifier) if builder is None else builder()
     plan = pops.resolve(pops.validate(spec.case), layout=spec.layout)
     cpp = emit_cpp_program(plan.time, target=plan.target,
         model_graph=build_program_model_graph(plan), field_plans=plan.field_plans,
@@ -221,10 +223,10 @@ def test_field_operator_bodies_and_same_named_formals_keep_distinct_lambda_regio
     case, layout = build(16)
     tuple_plan = pops.resolve(pops.validate(case), layout=layout)
     scalar_plan, scalar_graph, _ = _guarded_portable_resolved()
-    for plan, graph in ((tuple_plan, ProgramModelGraph.from_resolved_blocks(tuple_plan.blocks)),
+    for plan, model_graph in ((tuple_plan, ProgramModelGraph.from_resolved_blocks(tuple_plan.blocks)),
                         (scalar_plan, scalar_graph)):
         cpp = emit_cpp_program(plan.time, target="amr_system",
-            model_graph=graph, field_plans=plan.field_plans)
+            model_graph=model_graph, field_plans=plan.field_plans)
         data = source_map(cpp)
         assert data['complete'] and not data['unlocated']
         rows = data['operations']
@@ -253,7 +255,7 @@ def test_field_operator_bodies_and_same_named_formals_keep_distinct_lambda_regio
         # removed apply mapping look complete, even when all C++ remains intact.
         import base64
         apply_ids = {row['ssa'] for row in applications}
-        def keep(line):
+        def keep(line, apply_ids=apply_ids):
             marker = line.strip().split(' ', 3)
             if len(marker) == 4 and marker[:2] == ['//', 'pops-source-map@1'] \
                     and marker[2] in ('begin', 'end'):
@@ -287,7 +289,10 @@ def test_binding_alias_does_not_borrow_an_identical_name_from_another_lambda():
     ('T08', 'post_synchronization', 'post_synchronization'),
 ])
 def test_direct_residual_and_post_sync_routes_are_mapped(identifier, channel, opcode):
-    _, data = _profile_source_map(identifier)
+    from examples.api_v02.methods_T01_T12 import build_t06
+    # Pin the local-residual fixture: the reception catalogue independently
+    # selects a larger coupled implicit method that uses a different route.
+    _, data = _profile_source_map(identifier, builder=build_t06 if identifier == 'T06' else None)
     assert data['complete'] and not data['unlocated']
     assert any(r['channel'] == channel and r['op'] == opcode and r['ranges']
                for r in data['operations'])
@@ -312,7 +317,8 @@ def test_coalesced_rhs_outputs_share_only_the_exact_native_group_call():
 
 
 def test_uniform_spatial_residual_diffusion_is_located_at_its_emitted_call():
-    cpp, data = _profile_source_map('T02')
+    from examples.api_v02.methods_T01_T12 import build_t02
+    cpp, data = _profile_source_map('T02', builder=build_t02)
     assert data['complete'] and not data['unlocated']
     rows = [r for r in data['operations'] if r['op'] == 'diffusive_rhs']
     assert rows and all(r['ranges'] for r in rows if r['channel'] != 'install')
@@ -348,3 +354,34 @@ def test_balanced_removal_of_computing_region_is_incomplete_despite_retained_bin
     assert missing['unlocated'][0]['op'] == 'scalar_op'
     assert missing['unlocated'][0]['cpp_bindings'] == ['answer']
     assert missing['unlocated'][0]['status'] == 'not_emitted_or_unmapped'
+
+
+def test_emission_reuses_hash_only_in_current_program_scope(monkeypatch):
+    from pops.codegen.program_source_map import emission_program_hash, emission_scope
+    p, original = _case()
+    original_hash = Program._ir_hash
+    calls = []
+    def counted(program):
+        calls.append(program)
+        return original_hash(program)
+    monkeypatch.setattr(Program, "_ir_hash", counted)
+    assert emit_cpp_program(p) == original
+    assert calls == [p]
+    calls.clear()
+    p.record_scalar("changed_identity", p.float64(2))
+    changed = emit_cpp_program(p)
+    assert changed != original
+    assert calls == [p]
+    other = Program("other")
+    calls.clear()
+    @emission_scope
+    def different_program(program):
+        assert emission_program_hash(program) == original_hash(program)
+        assert emission_program_hash(other) == original_hash(other)
+        raise RuntimeError("end scope")
+    with pytest.raises(RuntimeError, match="end scope"):
+        different_program(p)
+    assert calls == [p, other]
+    calls.clear()
+    assert emission_program_hash(p) == original_hash(p)
+    assert calls == [p]

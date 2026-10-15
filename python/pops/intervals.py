@@ -1,9 +1,10 @@
-"""Issued runtime intervals for the current uniform Program invocation.
+"""Issued runtime intervals with authenticated native clock and attempt authority.
 
 Endpoints are real SSA, with a native attempt/clock sidecar. Immutable root
 intervals may be read in collective branches. Historical windows are reconstructed
-from the actual retained publication; AMR and arbitrary continuation transport remain
-outside this implementation profile.
+from the actual retained publication on uniform or AMR layouts. An independent
+post-synchronization phase can coexist with these reads; its invocation cannot
+capture their native sidecars. Arbitrary continuation transport remains unsupported.
 """
 from dataclasses import dataclass
 
@@ -201,9 +202,12 @@ def validate_intervals(program):
                 raise NotImplementedError("Interval capture is qualified only for collective branches")
             if value.op in {"product", "cache", "synchronize"}:
                 raise NotImplementedError("Interval persistence/transport is not qualified")
-    if any(value.op in {"subcycle", "post_synchronization", "layout_map_export", "layout_map_import"}
+    # The post-synchronization body has its own invocation and native locals.
+    # Merely declaring that phase does not transport an interval into it: the
+    # dependency/ancestry check above rejects actual cross-phase captures.
+    if any(value.op in {"subcycle", "layout_map_export", "layout_map_import"}
            or value.attrs.get("schedule") is not None for value in values):
-        raise NotImplementedError("Interval version 1 requires one unscheduled uniform invocation")
+        raise NotImplementedError("Interval sidecars cannot cross a scheduled continuation")
 
 
 __all__ = ["Interval","HistoryInterval"]

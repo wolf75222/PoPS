@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from fractions import Fraction
 from typing import Any
 
-from pops.identity.scalar import scalar_cpp
+from pops.identity.scalar import scalar_cpp, parse_canonical_integer
 from pops.time.references import block_name, state_name
 from pops.codegen.program_emit_kernels import (
     _PROFILE_SKIP_OPS,
@@ -187,7 +187,7 @@ def _canonical_metadata_int(value: Any, *, where: str) -> int:
         if isinstance(scalar, Mapping) and scalar.get("kind") == "integer" \
                 and isinstance(scalar.get("value"), str):
             try:
-                return int(scalar["value"])
+                return parse_canonical_integer(scalar["value"])
             except ValueError:
                 pass
     raise TypeError("%s must be an exact graph-canonical integer" % where)
@@ -414,6 +414,11 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
     from .program_emit_structured_control import STRUCTURED_OPS, emit_structured_op
     if v.op in STRUCTURED_OPS:
         emit_structured_op(program, v, var, model, lines, prelude, block_idx, field_plans, target)
+        return
+    from pops.time.field_representation import FIELD_REPRESENTATION_OPS
+    if v.op in FIELD_REPRESENTATION_OPS:
+        from .program_emit_field_representation import emit_field_representation
+        emit_field_representation(program, v, var, model, lines, prelude, block_idx, field_plans, target)
         return
     from .program_emit_versioned import VERSIONED_OPS, emit_versioned_op
     if v.op in VERSIONED_OPS:
@@ -985,6 +990,33 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
     elif v.op == "requested_dt":
         var[v.id] = "requested_dt_%d" % v.id
         lines.append("const pops::Real %s = static_cast<pops::Real>(dt);" % var[v.id])
+    elif v.op == "attempt_start":
+        if target != "amr_system" or dict(v.attrs) != {"schema_version": 1}:
+            raise ValueError("attempt_start requires the AMR macro snapshot contract")
+        var[v.id] = "macro_entry_%d" % v.id
+        lines.append("auto& %s = ctx.attempt_start(%d);" % (var[v.id], bidx))
+    elif v.op == "composite_pair":
+        if target != "amr_system" or v.attrs.get("schema_version") != 1:
+            raise ValueError("composite_pair requires the AMR physical-volume contract")
+        left, right = v.inputs
+        var[v.id] = "composite_pair_%d" % v.id
+        weights = ", ".join(repr(float(weight)) for weight in v.attrs["weights"])
+        lines.append("const pops::Real %s = ctx.composite_pair(%d, %s, %s, {%s});" % (
+            var[v.id], bidx, "true" if left.op == "attempt_start" else "false",
+            "true" if right.op == "attempt_start" else "false", weights))
+    elif v.op == "composite_integral":
+        from .program_emit_composite import emit_composite_integral
+        emit_composite_integral(v, var, lines, target=target, block_index=bidx)
+    elif v.op == "accept_increment":
+        if target != "amr_system" or {key: item for key, item in v.attrs.items() if key != "histories"} != {
+                "schema_version": 1, "interval_rule": "affine_macro_publication"}:
+            raise ValueError("accept_increment has an unsupported macro publication contract")
+        from pops.time._program.affine_history import validate_history_contract
+        validate_history_contract(program, v.attrs.get("histories", {}))
+        scale, duration = v.inputs
+        var[v.id] = var[duration.id]
+        lines.append("ctx.accept_increment(static_cast<double>(%s), static_cast<double>(%s));" % (
+            var[scale.id], var[duration.id]))
     elif v.op == "reached_duration":
         if dict(v.attrs) != {"schema_version": 1, "interval_rule": "no_spatial_exchanges"}:
             raise ValueError("computed frontier has an unsupported interval contract")
@@ -1029,9 +1061,13 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             raise ValueError("diffusive delegate requires an explicit resolved block owner")
         from pops.codegen.program_emit_diffusion import _emit_diffusive_rhs
         from pops.codegen.program_partition_stability import has_independent_diffusion_transport
-        defer_bound = (has_independent_diffusion_transport(node_model)
-                       and any(node is v for node in program._values)
-                       and v.attrs.get("schedule") is None)
+        # A rate has no timestep until an actual state consumer supplies its
+        # coefficient. This also applies to a single diffusion partition.
+        defer_bound = (v.id in var.get(("authored_stability_rates",), ()) or (
+                       (v.id in var.get(("consumed_explicit_rates",), ())
+                        or (has_independent_diffusion_transport(node_model)
+                            and any(node is v for node in program._values)))
+                       and v.attrs.get("schedule") is None))
         publications = []
         _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
                             defer_explicit_bound=defer_bound,
@@ -1682,6 +1718,8 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         action = v.attrs["action"]
         from pops.time.solve_outcome import FailRun, RejectAttempt
         message = "acceptance guard %r failed" % v.attrs["guard"]
+        from pops.codegen.program_emit_structured_control import _uniform_int
+        _uniform_int(var[condition.id], lines, "acceptance guard differs across execution lane")
         lines.append("if (!(%s)) {" % var[condition.id])
         if type(action) is RejectAttempt:
             lines.append(
@@ -1755,19 +1793,25 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                      "pops::SolveStatus::kInvalidEvaluation, \"pointwise_expression\", "
                      "\"non-finite scientific expression input or intermediate\");")
         lines.append("}")
+        from pops.codegen.program_emit_affine_expressions import emit_affine_expression
+        emit_affine_expression(v, var, lines, block_index=bidx,
+            explicit=not implicit_spatial_residual and v.id in var.get(("explicit_state_updates",), frozenset()))
     elif v.op == "linear_combine":
         if "cell_field_projection" in v.attrs:
             from pops.time._program.spatial_interaction import validate_cell_field
             validate_cell_field(v)
-            if target != "system":
-                raise NotImplementedError("computed cell sampling currently requires a Uniform layout")
+            if target not in ("system", "amr_system"):
+                raise NotImplementedError("computed cell sampling requires a native state extension")
         from pops.codegen.program_partition_stability import (
-            emit_partition_stability, has_independent_diffusion_transport,
+            consumes_deferred_diffusion, emit_partition_stability,
+            has_independent_diffusion_transport,
         )
         # An authenticated implicit residual is an equation evaluation, not an explicit
         # state advance. Its captured predictor already received its outer-stage bound.
         if (not implicit_spatial_residual and node_model is not None
-                and has_independent_diffusion_transport(node_model)):
+                and v.id in var.get(("explicit_state_updates",), frozenset())
+                and (has_independent_diffusion_transport(node_model)
+                     or consumes_deferred_diffusion(v, var))):
             emit_partition_stability(v, var, lines, block_index=bidx, include_transport=True)
         terms = list(zip(v.inputs, v.attrs["coeffs"], strict=True))
         if (not implicit_spatial_residual
@@ -1798,15 +1842,22 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             # base block-state to shape the scratch: inherit the exact first field input, including
             # every component of a coupled field tuple. A State combine uses the block base as before.
             template = var[terms[0][0].id] if v.vtype == "scalar_field" else var[base.id]
+            field_ghost_depth = 1
+            if "cell_field_projection" in v.attrs:
+                from pops.codegen.program_emit_stencil_inputs import cell_sample_ghost_depth
+                field_ghost_depth = cell_sample_ghost_depth(v)
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.%s(%d, 0, %s%s);"
                          % (var[v.id], "scalar_scratch" if v.vtype == "scalar_field" else "scratch_state",
-                            int(v.id), template, ", (%s).ncomp(), 1" % template
+                            int(v.id), template, ", (%s).ncomp(), %d" % (template,field_ghost_depth)
                             if v.vtype == "scalar_field" else ""))
             output_setup_end = len(lines)
             for inp, coeff in terms:
                 lines.append("ctx.axpy(%s, %s, %s, dt, %s);"
                              % (var[v.id], _coeff_cpp(coeff), var[inp.id],
                                 _coeff_metadata_cpp(coeff)))
+            if "cell_field_projection" in v.attrs:
+                from pops.codegen.program_emit_stencil_inputs import emit_cell_sample_extension
+                emit_cell_sample_extension(v,var,lines,block=bidx,target=target)
     # UNIFIED SCHEDULER (ADC-458, Spec 3 sections 17-18): if this op carries a non-always schedule,
     # wrap the statements it just emitted (lines[_profile_start:]) in the due-test guard + policy
     # branch. Done HERE, after the op lowered itself, so EVERY schedulable node (field solve, rhs,
@@ -1816,8 +1867,17 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
     evaluation_start = (delegated_before_write if delegated_before_write is not None else
                         output_setup_end if output_setup_end is not None else _profile_start)
     lines[evaluation_start:evaluation_start] = evaluation_prelude
+    from .program_emit_stencil_flux import stencil_expression_write
+    stencil_before, stencil_after = stencil_expression_write(
+        v, var, has_output_boundary=output_setup_end is not None)
+    write_start = evaluation_start + len(evaluation_prelude)
+    lines[write_start:write_start] = stencil_before
     from .program_value_authority import instrument_value_cpp
-    instrument_value_cpp(v, var, lines, evaluation_start + len(evaluation_prelude))
+    instrument_value_cpp(v, var, lines, write_start + len(stencil_before))
+    lines.extend(stencil_after)
+    if v.op == "stencil_flux_divergence":
+        from .program_emit_stencil_flux import emit_stencil_exchange_capture
+        lines.extend(emit_stencil_exchange_capture(v, var, block=bidx, target=target))
     _emit_schedule_wrap(program, v, var, lines, _profile_start,
                         output_setup_end=output_setup_end)
     # PER-NODE PROFILING (ADC-459): if this op emitted at least one statement, bracket those

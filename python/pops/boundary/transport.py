@@ -1361,21 +1361,25 @@ class TransportBoundarySet:
 
     @staticmethod
     def _requirements(context: Any) -> dict[Handle, BoundaryStencilRequirement]:
-        from pops.numerics.state_storage import StateStorage
         accumulated: dict[Handle, dict[str, Any]] = {}
         for row in context.rates:
-            # A declared local-source partition shares the evolved state storage;
-            # its validated contract contains no hyperbolic flux or boundary stencil.
-            if isinstance(row.method, StateStorage):
+            protocol = getattr(row.method, "boundary_stencil_requirements", None)
+            if not callable(protocol):
+                raise TypeError("a resolved spatial method must expose boundary_stencil_requirements()")
+            requirement = protocol()
+            if requirement is None:
                 continue
-            state = row.method.variables.options.get("state")
-            _state(state, where="FiniteVolume.variables state")
+            if not isinstance(requirement, Mapping) or set(requirement) != {
+                    "state", "ghost_depth", "formal_order"}:
+                raise TypeError("boundary_stencil_requirements() returned an invalid contract")
+            state = requirement["state"]
+            _state(state, where="boundary stencil state")
             if not state.is_resolved:
-                raise TypeError("resolved FiniteVolume variables retain an authoring state")
+                raise TypeError("a resolved boundary stencil retains an authoring state")
             record = accumulated.setdefault(
                 state, {"ghost_depth": [], "formal_orders": [], "rates": []})
-            record["ghost_depth"].append(row.method.ghost_depth)
-            record["formal_orders"].append(row.method.formal_order)
+            record["ghost_depth"].append(requirement["ghost_depth"])
+            record["formal_orders"].append(requirement["formal_order"])
             record["rates"].append(row.rate.qualified_id)
         return {
             state: BoundaryStencilRequirement(

@@ -4,7 +4,7 @@ Optimization passes (dead-node / CSE / redundant-solve elimination), IR serializ
 / ``_ir_hash``), ``validate``, ``_block_indices``; cost inspection is ``_ProgramInspect``. No _pops."""
 from __future__ import annotations
 
-import json
+from pops._structural_data import canonical_json
 from typing import TYPE_CHECKING, Any
 
 from pops.time._program.constants import _ProgramConstants
@@ -72,13 +72,13 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
         # state identity is semantically required too: two pure reads from distinct state families in
         # one block must never become a common subexpression merely because their local IR matches.
         return (node["op"], node["vtype"],
-                json.dumps(node.get("block"), sort_keys=True, separators=(",", ":")),
-                json.dumps(node.get("state"), sort_keys=True, separators=(",", ":")),
+                canonical_json(node.get("block")),
+                canonical_json(node.get("state")),
                 node["inputs"],
-                json.dumps(node.get("space"), sort_keys=True, separators=(",", ":")),
-                json.dumps(node.get("field_context"), sort_keys=True, separators=(",", ":")),
-                json.dumps(point, sort_keys=True, separators=(",", ":")),
-                json.dumps(node["attrs"], sort_keys=True, separators=(",", ":")))
+                canonical_json(node.get("space")),
+                canonical_json(node.get("field_context")),
+                canonical_json(point),
+                canonical_json(node["attrs"]))
 
     def _live_value_ids(self) -> Any:
         """The set of value ids reverse-reachable from the live roots: the commits plus every flat node
@@ -331,10 +331,11 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
             from pops.time._program.finite_state import require_finite_state_program
             require_finite_state_program(self)
         from pops.time._step.strategy import ComputedDt
-        computed = [v for v in self._values if v.op == "reached_duration"]
+        from pops.codegen.program_lowerability import all_ops
+        computed = [v for v in all_ops(self) if v.op in {"reached_duration", "accept_increment"}]
         if type(self._step_strategy) is ComputedDt:
             if len(computed) != 1:
-                raise ValueError("ComputedDt requires exactly one Program.reached_duration Scalar")
+                raise ValueError("ComputedDt requires exactly one reached_duration or accept_increment")
         elif computed:
             raise ValueError("Program.reached_duration requires ComputedDt")
         seen = set()

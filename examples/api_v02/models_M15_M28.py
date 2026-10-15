@@ -352,26 +352,13 @@ def build_m19(*, cells=16, velocity_cells=8, steps=4, dt=1e-4, collision_frequen
         "M19 1x1v finite-volume Vlasov-Poisson-BGK; typed fibre; native Poisson Green field; moment-conservative positive-domain projected Maxwellian")
 
 
-def build_model(model_id, *, require_complete=False, **kwargs):
-    from examples.api_v02.models_M15_M18 import build_m16, build_m17
-    from examples.api_v02.models_M15_orders import build_m15_orders
-    from examples.api_v02.models_M18_entropy import build_m18_entropy
-    from examples.api_v02.models_M20_M21 import build_m20, build_m21
-    from examples.api_v02.models_M22_M25_M28 import build_m22, build_m23, build_m24, build_m25, build_m28
-    # M15 defaults to S04 order4 on a true Dim1 mesh; order2 uses this same builder.
-    builders = {"M15": build_m15_orders, "M16": build_m16, "M17": build_m17, "M18": build_m18_entropy,
-                "M19": build_m19, "M20": build_m20, "M21": build_m21, "M22": build_m22, "M23": build_m23, "M24": build_m24, "M25": build_m25, "M28": build_m28, "M26": build_m26, "M27": build_m27}
+def build_model(model_id, *, profile=None, require_complete=False, **kwargs):
+    from .profile_dispatch import build_profile
     key = str(model_id).upper()
-    if key not in builders:
+    if key not in {f"M{i:02}" for i in range(15, 29)}:
         raise MissingCapabilityError(key, required=("unknown model identifier; supported IDs are M15 through M28",),
                                      profile="selected closed M15-M28 physical model and numerical method")
-    if require_complete:
-        from .coverage import OBLIGATIONS
-        required = OBLIGATIONS[key]
-        if required:
-            raise MissingCapabilityError(key, required=required,
-                profile="all scientific obligations of the corpus model family")
-    return builders[key](**kwargs)
+    return build_profile(key, profile=profile, require_complete=require_complete, **kwargs)
 
 
 build_case = build_model

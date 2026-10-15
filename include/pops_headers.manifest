@@ -9,6 +9,8 @@
 #
 # api, abi, sdk-root and sdk-support are all installed and authenticated by POPS_HEADER_SIG.
 
+sdk-support pops/math/exact_weight.hpp
+
 api pops/amr/hierarchy/amr_hierarchy.hpp
 api pops/amr/hierarchy/hierarchy_plan.hpp
 api pops/amr/hierarchy/level_layout.hpp
@@ -304,6 +306,10 @@ sdk-support pops/runtime/program/amr_history_flux_snapshot_codec.hpp
 sdk-support pops/runtime/program/amr_history_flux_snapshot_execution.hpp
 sdk-support pops/runtime/program/amr_program_checkpoint.hpp
 sdk-support pops/runtime/program/amr_program_context_cell_temporal_runtime.inc
+sdk-support pops/runtime/program/amr_program_context_affine_finalization.inc
+sdk-support pops/runtime/program/amr_program_context_affine_measure.inc
+sdk-support pops/runtime/program/amr_program_context_affine_history.inc
+sdk-support pops/runtime/program/composite_integral_kernel.hpp
 sdk-support pops/runtime/program/amr_program_context_cell_temporal_configuration.inc
 sdk-support pops/runtime/program/amr_program_context_cell_temporal_level_runtime.inc
 sdk-support pops/runtime/program/amr_program_context_diffusion.inc
@@ -345,6 +351,9 @@ sdk-support pops/runtime/program/amr_program_context_mapping_continuation.inc
 sdk-support pops/runtime/program/amr_program_context_subcycling_runtime.inc
 sdk-support pops/runtime/program/cache_manager.hpp
 sdk-support pops/runtime/program/continuation_image.hpp
+sdk-support pops/runtime/program/continuation_migration_request.hpp
+sdk-support pops/runtime/program/continuation_field_migration.hpp
+sdk-support pops/runtime/program/continuation_forest_migration.hpp
 sdk-support pops/runtime/program/continuation_codec_extended.inc
 sdk-support pops/runtime/program/continuation_closure.hpp
 sdk-support pops/runtime/program/continuation_authority.hpp
@@ -359,6 +368,8 @@ sdk-root pops/runtime/program/external_riemann_brick.hpp
 sdk-support pops/runtime/program/module_metadata.hpp
 sdk-support pops/runtime/program/profiler.hpp
 sdk-root pops/runtime/program/program_context.hpp
+sdk-support pops/runtime/program/field_exchange_expression.hpp
+sdk-support pops/runtime/program/program_context_field_exchanges.inc
 sdk-support pops/runtime/program/program_value_authority.hpp
 sdk-support pops/runtime/program/program_context_value_authority.inc
 sdk-support pops/runtime/program/program_context_value_authority_private.inc
@@ -372,6 +383,7 @@ sdk-support pops/runtime/program/prepared_resource_lifetime.hpp
 sdk-support pops/runtime/program/prepared_integral_capture.hpp
 sdk-support pops/runtime/program/spatial_direct_interaction.hpp
 sdk-support pops/runtime/program/spatial_interaction_history_source.hpp
+sdk-support pops/runtime/program/structural_traversal.hpp
 sdk-support pops/runtime/program/program_cadence_continuation.inc
 sdk-support pops/runtime/program/prepared_condensed_sampling.hpp
 sdk-support pops/runtime/program/prepared_scalar_boundary_session.hpp
@@ -422,3 +434,36 @@ sdk-support pops/runtime/system/system_poisson_options.hpp
 sdk-support pops/runtime/program/prepared_amr_spatial_residual.hpp
 sdk-support pops/runtime/program/amr_program_context_spatial_implicit.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_imex.inc
+sdk-root pops/runtime/program/finite_kokkos.hpp
+sdk-support pops/runtime/program/finite_structural_storage.hpp
+sdk-root pops/runtime/program/host_face_publication.hpp
+sdk-support pops/runtime/program/amr_program_context_stencil_flux.inc
+sdk-support pops/runtime/program/amr_program_context_stencil_input.inc
+sdk-support pops/runtime/program/history_transfer_expression.hpp
+sdk-support pops/runtime/program/temporal_sample_source.hpp
+
+sdk-support pops/runtime/program/amr_program_context_temporal_field.inc
+sdk-support pops/runtime/program/amr_finite_value_lifetime.hpp
+sdk-support pops/runtime/program/amr_program_context_finite_values.inc
+sdk-support pops/runtime/program/amr_program_context_continuation_level.inc
+sdk-support pops/runtime/program/amr_program_context_continuation_forest.inc
+sdk-support pops/runtime/program/amr_program_context_continuation_checkpoint.inc
+sdk-support pops/runtime/program/continuation_decode_context_declarations.inc
+sdk-support pops/runtime/program/continuation_decode_context.inc
+sdk-support pops/runtime/program/field_topology_view.hpp
+sdk-support pops/runtime/program/amr_program_context_continuation_regrid.inc
+sdk-support pops/runtime/program/amr_program_context_continuation_regrid_child.inc
+sdk-support pops/runtime/program/amr_program_context_field_allocation.inc
+sdk-support pops/runtime/program/amr_program_context_continuation_field_storage.inc
+sdk-support pops/runtime/program/field_bundle_port.hpp
+sdk-support pops/runtime/program/amr_program_context_field_bundle.inc
+sdk-support pops/runtime/program/continuation_archive_codec.inc
+sdk-support pops/runtime/program/continuation_transport_wire.inc
+sdk-support pops/runtime/program/continuation_distributed_migration.hpp
+sdk-support pops/runtime/program/continuation_forest_distributed_migration.hpp
+sdk-support pops/runtime/program/hierarchy_control_failure.hpp
+sdk-support pops/runtime/program/amr_program_context_hierarchy_failure.inc
+
+sdk-support pops/runtime/program/field_exchange_expression_codec.inc
+
+sdk-support pops/runtime/program/uniform_history_exchange_checkpoint.hpp

@@ -241,7 +241,8 @@ def capture_program_field_plans(problem: Any, detach: Any, *, target: str,
                     raise ValueError("typed field observation hidden storage axes must be singleton")
         if target == "amr_system":
             resolved_layout = next(row for row in layout_plan.layouts if row.handle == storage.layout)
-            if resolved_layout.capabilities.get("execution") != "synchronous":
+            if resolved_layout.capabilities.get("execution") != "synchronous" and any(
+                    node.attrs.get("temporal_evaluation") is None for node in solves):
                 raise ValueError("general field hierarchy coupling requires explicit synchronous AMR execution; asynchronous or subcycled policies have no declared field-time transfer")
         registration = detach(registration)
         coverage = LoweringCoverageReport((LoweringCoverageRow(

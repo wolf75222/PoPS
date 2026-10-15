@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from pops.identity import canonical_bytes
-from pops.identity.scalar import ScalarLiteral
+from pops.identity.scalar import ScalarLiteral, parse_canonical_integer
 from pops.time._program.serialization import _json_ready
 
 
@@ -32,9 +32,9 @@ def decode_field_literal(data: Any) -> ScalarLiteral:
         raise TypeError("field expression requires an exact numeric literal without raw C++")
     kind = data["kind"]
     if kind == "integer":
-        payload = int(data["value"])
+        payload = parse_canonical_integer(data["value"])
     elif kind == "rational":
-        payload = (int(data["numerator"]), int(data["denominator"]))
+        payload = (parse_canonical_integer(data["numerator"]), parse_canonical_integer(data["denominator"]))
     else:
         payload = data["value"]
     literal = ScalarLiteral(kind, payload, data.get("unit"), data.get("target"))

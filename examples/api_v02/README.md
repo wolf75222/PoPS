@@ -5,14 +5,14 @@ Python deviennent le C++ des artifacts chargés par le runtime PoPS/Kokkos/MPI.
 Les références NumPy sont des contrôles après exécution ; elles ne calculent
 jamais la trajectoire publiée par PoPS.
 
-Le profil public est **`0.2-experimental`**. Il ne certifie pas toute la
-spécification normative 0.2. Les 28 identifiants de modèles et les 12 identifiants
-de méthodes désignent les profils finis décrits par chaque constructeur, avec
-leurs hypothèses et les obligations non qualifiées dans `coverage.py`.
-Les constructeurs de corpus acceptent `require_complete=True` : ils refusent
-explicitement une qualification de famille tant que ces obligations subsistent.
-Ce refus concerne la qualification scientifique, distincte de la possibilité
-de construire et d'exécuter le profil fini avec l'option par défaut.
+Le profil public est **`0.2-experimental`**. Les 28 identifiants de modèles et
+les 12 identifiants de méthodes sélectionnent des contrats explicites dans
+`profile_contracts.py` : équations, composants requis, paramètres, hypothèses
+et récepteurs numériques. Les profils réduits antérieurs sont nommés séparément.
+`require_complete=True` exige tous les composants du contrat sélectionné et
+vérifie leurs sources Python ; cette option ne demande pas une preuve de
+validité dans tous les régimes physiques. La réception native, les garanties
+mathématiques et la CI conservent chacune leurs propres preuves.
 
 ## Écrire et exécuter les équations
 
@@ -78,7 +78,7 @@ env -u PYTHONPATH OMP_NUM_THREADS=1 KOKKOS_NUM_THREADS=1 \
 Configurer auparavant la toolchain et le transport MPI propres à la machine.
 Le `python` de cette commande doit être celui de l'environnement `pops` installé,
 sans surcharge `PYTHONPATH`. Les deux dimensions doivent être installées ensemble :
-M15 et M28 utilisent Dim1, les autres profils Dim2. La campagne est séquentielle,
+M15 utilise Dim1 ; M28 multidimensionnel et les autres profils utilisent Dim2. La campagne est séquentielle,
 avec un processus indépendant et un watchdog par profil.
 
 Le reçu conserve les équations sources, le C++ généré, les bibliothèques et leurs
@@ -135,13 +135,13 @@ les contrôles de l'état natif restent nécessaires.
 * `GraphFunction/call` construit des régions fermées, pas du Python arbitraire.
   Les capacités, effets et échecs font partie du contrat ; une opération sans
   réalisation ou un contrôle collectif non admissible est refusé.
-  Le codec et la fermeture des continuations ont aussi un budget interne de
-  profondeur structurelle de 128, et le parcours du collecteur distribué de
-  256. Ces plafonds d'implémentation ne sont pas des paramètres du frontend.
-* Les valeurs finies de cette route s'exécutent actuellement sur l'hôte dans
-  le vrai runtime PoPS construit avec Kokkos/MPI. Cela ne qualifie pas leurs
-  boucles pour un GPU. Le coût des graphes déroulés et des transposées par
-  coordonnées peut être élevé ; aucune efficacité asymptotique n'est implicite.
+  Les parcours structurels et codecs sont itératifs. Les budgets déclarent
+  la mémoire, les cardinalités et les versions vivantes ; ils ne définissent
+  pas une liste de dimensions ou de modèles physiques acceptés.
+* Les maps scalaires finies et distribuées émettent des noyaux Kokkos dans le
+  runtime PoPS. L'identité du backend, l'exécution GPU et les mesures MPI sont
+  reçues séparément. Le coût d'une dérivée construite par colonnes reste celui
+  de cet algorithme, sauf substitution générique explicitement qualifiée.
 * Le remappage et la repartition déclarés se font sur le communicateur courant.
   Le checkpoint préserve ses fragments et identités ; la reprise avec un autre
   nombre de rangs et la récupération après panne matérielle MPI ne sont pas

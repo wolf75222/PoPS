@@ -11,9 +11,9 @@ bool interaction_history_selected(const HistoryManager<Dim>& history, const std:
                                   int lag, int owner, std::string_view state,
                                   std::string_view space, std::string_view clock,
                                   std::string_view interpolation, ExactContractBuilder& exact) {
-  if (lag < 1 || lag >= history.depth.at(name) ||
-      history.owner.at(name) != owner || history.state_identity.at(name) != state ||
-      history.space_identity.at(name) != space || history.clock_identity.at(name) != clock ||
+  if (lag < 1 || lag >= history.depth.at(name) || history.owner.at(name) != owner ||
+      history.state_identity.at(name) != state || history.space_identity.at(name) != space ||
+      history.clock_identity.at(name) != clock ||
       history.interpolation_identity.at(name) != interpolation)
     throw std::invalid_argument("interaction history differs from its exact State.n keeper seed");
   const auto& samples = history.validated_samples(name);
@@ -29,7 +29,8 @@ bool interaction_history_selected(const HistoryManager<Dim>& history, const std:
     throw std::invalid_argument("interaction history has inconsistent cold/retained lifecycle");
   const auto& selected = samples.at(static_cast<std::size_t>(lag));
   validate_history_sample_provenance(selected, initialized, history.slot_dt.at(name).at(lag));
-  if (!selected.authenticated() || (!cold && selected.kind != HistorySampleKind::Publication))
+  if (!selected.authenticated() || (!cold && selected.kind != HistorySampleKind::Publication &&
+                                    selected.kind != HistorySampleKind::Reconstruction))
     throw std::invalid_argument("interaction history selected sample is unauthenticated");
   exact.text(name).scalar(lag).scalar(cold).scalar(initialized).scalar(pending).scalar(filled);
   history.append_descriptor_contract(name, exact);
@@ -54,17 +55,21 @@ void interaction_history_cold_equal(const MultiFab<Dim, MemorySpace>& retained,
       retained.local_rank() != seed.local_rank() || retained.ncomp() != seed.ncomp())
     throw std::invalid_argument("interaction cold history has foreign seed topology");
   for (std::size_t global = 0; global < seed.layout().size(); ++global) {
-    if (!seed.contains_local(global)) continue;
+    if (!seed.contains_local(global))
+      continue;
     const auto left = retained.fab_global(global).view();
     const auto right = seed.fab_global(global).view();
     for (int component = 0; component < seed.ncomp(); ++component) {
-      const Real mismatch = for_each_cell_reduce_max(seed.layout()[global],
-          [=] POPS_HD(const Index<Dim>& cell) {
+      const Real mismatch =
+          for_each_cell_reduce_max(seed.layout()[global], [=] POPS_HD(const Index<Dim>& cell) {
             return std::bit_cast<InteractionRealWord>(left(cell, component)) ==
-                   std::bit_cast<InteractionRealWord>(right(cell, component)) ? Real(0) : Real(1);
+                           std::bit_cast<InteractionRealWord>(right(cell, component))
+                       ? Real(0)
+                       : Real(1);
           });
       if (mismatch != Real(0))
-        throw std::invalid_argument("interaction cold history is not the exact accepted State.n seed");
+        throw std::invalid_argument(
+            "interaction cold history is not the exact accepted State.n seed");
     }
   }
 }

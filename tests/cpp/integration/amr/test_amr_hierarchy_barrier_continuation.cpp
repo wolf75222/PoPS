@@ -25,7 +25,7 @@ struct Model : pops::nd::ScalarAdvection<Dim> {
 };
 struct Evidence {
   int mode = 0;
-  int gathered = 0, continued = 0, solves = 0, publications = 0, completed = 0;
+  int gathered = 0, continued = 0, solves = 0, publications = 0, completed = 0, recovered = 0;
 };
 struct Fixture {
   std::unique_ptr<System> system;
@@ -78,49 +78,92 @@ Fixture prepare_fixture() {
         context->advance_mapping_hierarchy(
             dt,
             [context, evidence, facade](double) {
-              ++evidence->gathered;
-              context->set_stage_time(1, 2);
-              const auto rank = context->prepared_execution_lane().rank();
-              auto kind = Context::HierarchyBarrierKind::linear_solve;
-              if (evidence->mode == 4 && rank == 0)
-                kind = static_cast<Context::HierarchyBarrierKind>(99);
-              const std::string hash =
-                  evidence->mode == 2 && rank == 0 ? "foreign-program" : kProgram;
-              const std::string dependencies = evidence->mode == 1 && context->level() == 1
-                                                   ? "different-level-inputs"
-                                                   : "gather/state/half-step";
-              if (evidence->mode == 3 && rank == 0)
+              auto evaluate = [context, evidence, facade] {
+                ++evidence->gathered;
+                if (evidence->mode == 9 && context->level() == 1)
+                  throw pops::runtime::program::hierarchy_control_failure(
+                      std::numeric_limits<std::int64_t>::min(), 1);
+                context->set_stage_time(1, 2);
+                const auto rank = context->prepared_execution_lane().rank();
+                auto kind = evidence->mode == 6 ? Context::HierarchyBarrierKind::nonlinear_solve
+                                                : Context::HierarchyBarrierKind::linear_solve;
+                if (evidence->mode == 4 && rank == 0)
+                  kind = static_cast<Context::HierarchyBarrierKind>(99);
+                const std::string hash =
+                    evidence->mode == 2 && rank == 0 ? "foreign-program" : kProgram;
+                const std::string dependencies = evidence->mode == 1 && context->level() == 1
+                                                     ? "different-level-inputs"
+                                                     : "gather/state/half-step";
+                if (evidence->mode == 3 && rank == 0)
+                  context->set_stage_time(0, 1);
+                context->suspend_hierarchy_barrier(
+                    kind, 101, hash, dependencies, 1, 2,
+                    [context, evidence, facade] {
+                      ++evidence->solves;
+                      EXPECT_EQ(context->level(), 0);
+                      EXPECT_EQ(evidence->gathered, facade->n_levels());
+                      EXPECT_EQ(facade->time(), 0.0);
+                      if (evidence->mode == 6)
+                        for (int level = 0; level < facade->n_levels(); ++level)
+                          context->with_program_attempt_level_or_current(level, [&] {
+                            EXPECT_EQ(context->level(), level);
+                            expect_value(context->state(0), pops::Real(7));
+                          });
+                      EXPECT_EQ(context->level(), 0);
+                      for (int level = 0; level < facade->n_levels(); ++level)
+                        expect_value(facade->engine()->hierarchy().state(level), pops::Real(7));
+                      if (evidence->mode == 5) {
+                        context->state(0).set_val(pops::Real(19));
+                        if (context->prepared_execution_lane().rank() == 0)
+                          throw std::runtime_error("injected unique barrier callback failure 91");
+                      }
+                      // engine() above may enter a native collective. Inject a local
+                      // failure only after that common phase; the surrounding rejection
+                      // frontier then converges it before any later collective.
+                      if (evidence->mode == 7 && context->prepared_execution_lane().rank() == 0)
+                        throw pops::runtime::program::hierarchy_control_failure(
+                            std::numeric_limits<std::int64_t>::min(), 1);
+                      if (evidence->mode == 8 && context->prepared_execution_lane().rank() == 0)
+                        throw std::runtime_error(
+                            "terminal failure must not become a captured Result");
+                    },
+                    [context, evidence, facade] {
+                      ++evidence->continued;
+                      EXPECT_EQ(evidence->solves, 1);
+                      context->set_stage_time(3, 4);
+                      context->suspend_hierarchy_barrier(
+                          Context::HierarchyBarrierKind::field_publication, 102, kProgram,
+                          "field/publication/three-quarter-step", 3, 4,
+                          [context, evidence, facade] {
+                            ++evidence->publications;
+                            EXPECT_EQ(context->level(), 0);
+                            EXPECT_EQ(evidence->continued, facade->n_levels());
+                            EXPECT_EQ(facade->time(), 0.0);
+                          },
+                          [context] { context->state(0).set_val(pops::Real(11)); });
+                    });
+              };
+              if (evidence->mode >= 7) {
+                context->push_hierarchy_failure_handler(
+                    100, kProgram, "capture/exact-root",
+                    [context, evidence](std::exception_ptr error) {
+                      try {
+                        std::rethrow_exception(error);
+                      } catch (const pops::runtime::program::StepAttemptRejected& failure) {
+                        const auto words =
+                            pops::runtime::program::hierarchy_control_failure_words(failure);
+                        EXPECT_EQ(words.first, std::numeric_limits<std::int64_t>::min());
+                        EXPECT_EQ(words.second, 1);
+                      }
+                      ++evidence->recovered;
+                      context->state(0).set_val(pops::Real(17));
+                    });
                 context->set_stage_time(0, 1);
-              context->suspend_hierarchy_barrier(
-                  kind, 101, hash, dependencies, 1, 2,
-                  [context, evidence, facade] {
-                    ++evidence->solves;
-                    EXPECT_EQ(context->level(), 0);
-                    EXPECT_EQ(evidence->gathered, facade->n_levels());
-                    EXPECT_EQ(facade->time(), 0.0);
-                    for (int level = 0; level < facade->n_levels(); ++level)
-                      expect_value(facade->engine()->hierarchy().state(level), pops::Real(7));
-                    if (evidence->mode == 5) {
-                      context->state(0).set_val(pops::Real(19));
-                      if (context->prepared_execution_lane().rank() == 0)
-                        throw std::runtime_error("injected unique barrier callback failure 91");
-                    }
-                  },
-                  [context, evidence, facade] {
-                    ++evidence->continued;
-                    EXPECT_EQ(evidence->solves, 1);
-                    context->set_stage_time(3, 4);
-                    context->suspend_hierarchy_barrier(
-                        Context::HierarchyBarrierKind::field_publication, 102, kProgram,
-                        "field/publication/three-quarter-step", 3, 4,
-                        [context, evidence, facade] {
-                          ++evidence->publications;
-                          EXPECT_EQ(context->level(), 0);
-                          EXPECT_EQ(evidence->continued, facade->n_levels());
-                          EXPECT_EQ(facade->time(), 0.0);
-                        },
-                        [context] { context->state(0).set_val(pops::Real(11)); });
-                  });
+                context->suspend_hierarchy_barrier(
+                    Context::HierarchyBarrierKind::control, 100, kProgram, "capture/entry", 0, 1,
+                    [] {}, std::move(evaluate));
+              } else
+                evaluate();
             },
             context, [evidence] { ++evidence->completed; });
       },
@@ -210,4 +253,39 @@ TEST(AmrHierarchyBarrierContinuation, RankLocalUniqueCallbackFailureRollsBackAnd
   *fixture.evidence = Evidence{};
   fixture.system->step(0.125);
   expect_success(fixture);
+}
+
+TEST(AmrHierarchyBarrierContinuation, NonlinearCallbackBorrowsRootAndVisitsOtherExactEnvelopes) {
+  auto fixture = prepare_fixture();
+  fixture.evidence->mode = 6;
+  fixture.system->step(0.125);
+  expect_success(fixture);
+}
+
+TEST(AmrHierarchyBarrierContinuation, RecoverableOnceAndLaterLevelFailuresResumeEveryExactHandler) {
+  for (int mode : {7, 9}) {
+    auto fixture = prepare_fixture();
+    fixture.evidence->mode = mode;
+    fixture.system->step(0.125);
+    EXPECT_EQ(fixture.evidence->recovered, 2);
+    EXPECT_EQ(fixture.evidence->solves, mode == 7 ? 1 : 0);
+    EXPECT_EQ(fixture.evidence->continued, 0);
+    EXPECT_EQ(fixture.evidence->completed, 1);
+    EXPECT_DOUBLE_EQ(fixture.system->time(), 0.125);
+    for (int level = 0; level < fixture.system->n_levels(); ++level)
+      expect_value(fixture.system->engine()->hierarchy().state(level), pops::Real(17));
+  }
+}
+
+TEST(AmrHierarchyBarrierContinuation, TerminalFailureDoesNotInvokeRecoveryAndRollsBack) {
+  auto fixture = prepare_fixture();
+  const auto before = fixture.system->program_accepted_state();
+  fixture.evidence->mode = 8;
+  EXPECT_THROW(fixture.system->step(0.125), std::exception);
+  EXPECT_EQ(fixture.evidence->recovered, 0);
+  EXPECT_EQ(fixture.evidence->completed, 0);
+  EXPECT_EQ(fixture.system->program_accepted_state(), before);
+  EXPECT_DOUBLE_EQ(fixture.system->time(), 0);
+  for (int level = 0; level < fixture.system->n_levels(); ++level)
+    expect_value(fixture.system->engine()->hierarchy().state(level), pops::Real(7));
 }

@@ -3,9 +3,12 @@
 
 #pragma once
 
+#include <pops/math/exact_weight.hpp>
+
 #include <pops/mesh/index/index.hpp>
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -117,16 +120,44 @@ struct FaceFluxFragmentKey {
 /// authenticates temporal coverage; `substep_duration` is its physical duration. Geometry is
 /// multiplied here exactly once because metric reflux compares integrated transport across coarse
 /// and fine faces.
+/// An accepted affine macro increment has two distinct time authorities: where
+/// its provisional density was evaluated, and the interval it finally publishes.
+/// Neither the sampled density nor its source quadrature is relabelled.
+struct AffineIntervalPublication {
+  double source_start = 0.0;
+  double source_duration = 0.0;
+  double accepted_duration = 0.0;
+  double increment_scale = 0.0;
+};
+
+inline void validate_affine_interval_publication(const AffineIntervalPublication& publication) {
+  const double reached = publication.source_start + publication.accepted_duration;
+  if (!std::isfinite(publication.source_start) || !std::isfinite(publication.source_duration) ||
+      !(publication.source_duration > 0.0) || !std::isfinite(publication.accepted_duration) ||
+      !(publication.accepted_duration > 0.0) || !std::isfinite(publication.increment_scale) ||
+      !(publication.increment_scale > 0.0) || !std::isfinite(reached) ||
+      !(reached > publication.source_start) ||
+      publication.accepted_duration != publication.increment_scale * publication.source_duration)
+    throw std::invalid_argument(
+        "affine publication requires finite positive coherent source/accepted intervals");
+}
+
 struct FaceFluxFragmentMeasure {
-  Rational stage_weight{1, 1};
+  ::pops::ExactWeight stage_weight{1, 1};
   Rational substep_begin{0, 1};
   Rational substep_end{0, 1};
   double substep_duration = 0.0;
   double face_measure = 0.0;
+  std::optional<AffineIntervalPublication> affine_publication;
 };
 
 inline double weighted_face_flux_scale(const FaceFluxFragmentMeasure& measure) {
-  return measure.stage_weight.value() * measure.substep_duration * measure.face_measure;
+  const double integrated_weight =
+      (measure.stage_weight * ::pops::ExactWeight::from_double(measure.substep_duration,
+                                                               measure.stage_weight.budget_bytes()))
+          .value();
+  const double source = integrated_weight * measure.face_measure;
+  return measure.affine_publication ? source * measure.affine_publication->increment_scale : source;
 }
 
 template <int Dim>
@@ -162,18 +193,13 @@ void validate_face_flux_fragment(const FaceFluxFragmentKey<Dim>& key,
   if (Rational{key.clock.phase.numerator, key.clock.phase.denominator} != key.clock.phase)
     throw std::invalid_argument("ND face-flux clock phase must retain canonical exact form");
 
-  const double stage_weight = measure.stage_weight.value();
-  if (measure.stage_weight.denominator <= 0 || measure.substep_begin.denominator <= 0 ||
-      measure.substep_end.denominator <= 0 || !std::isfinite(stage_weight) ||
+  if (measure.substep_begin.denominator <= 0 || measure.substep_end.denominator <= 0 ||
       !(measure.substep_begin < measure.substep_end) || key.clock.phase < measure.substep_begin ||
       measure.substep_end < key.clock.phase || !(measure.substep_duration > 0.0) ||
       !std::isfinite(measure.substep_duration) || !(measure.face_measure > 0.0) ||
       !std::isfinite(measure.face_measure))
     throw std::invalid_argument(
         "ND face-flux measure requires finite stage, time, and positive metric weights");
-  if (Rational{measure.stage_weight.numerator, measure.stage_weight.denominator} !=
-      measure.stage_weight)
-    throw std::invalid_argument("ND face-flux stage weight must retain canonical exact form");
   if (Rational{measure.substep_begin.numerator, measure.substep_begin.denominator} !=
           measure.substep_begin ||
       Rational{measure.substep_end.numerator, measure.substep_end.denominator} !=
@@ -181,6 +207,20 @@ void validate_face_flux_fragment(const FaceFluxFragmentKey<Dim>& key,
     throw std::invalid_argument("ND face-flux substep interval must retain canonical exact form");
   if (!std::isfinite(weighted_face_flux_scale(measure)))
     throw std::invalid_argument("ND face-flux weighted metric-time scale is not finite");
+  if (measure.affine_publication) {
+    const auto& publication = *measure.affine_publication;
+    validate_affine_interval_publication(publication);
+    const double source_time =
+        publication.source_start + key.clock.phase.value() * publication.source_duration;
+    const double source_duration =
+        (measure.substep_end - measure.substep_begin).value() * publication.source_duration;
+    const double tolerance = 16 * std::numeric_limits<double>::epsilon() *
+                             std::max({1.0, std::abs(source_time), publication.source_duration});
+    if (std::abs(source_time - key.clock.physical_time) > tolerance ||
+        std::abs(source_duration - measure.substep_duration) > tolerance)
+      throw std::invalid_argument(
+          "affine publication does not authenticate its original source quadrature");
+  }
 }
 
 template <int Dim, class Payload>
@@ -348,6 +388,23 @@ class TransactionalFaceFluxLedger {
 
   const std::vector<Entry>& published_entries(int axis) const {
     return published_[static_cast<std::size_t>(detail::checked_axis(axis, Dim))];
+  }
+
+  /// The enclosing parent transaction owns rollback. Publish a complete validated
+  /// ledger copy; a failed allocation/validation leaves the original intact.
+  void finalize_affine_publication(const AffineIntervalPublication& publication) {
+    if (in_transaction())
+      throw std::logic_error("affine publication requires a completed provisional ledger");
+    validate_affine_interval_publication(publication);
+    auto candidate = published_;
+    for (auto& axis : candidate)
+      for (auto& entry : axis) {
+        if (entry.measure.affine_publication)
+          throw std::logic_error("face increment was already finalized");
+        entry.measure.affine_publication = publication;
+        validate_face_flux_fragment(entry.key, entry.measure);
+      }
+    published_.swap(candidate);
   }
 
   std::size_t discard_published_attempt(std::uint64_t attempt) {

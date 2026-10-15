@@ -12,6 +12,7 @@
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/program/collective_step_rejection.hpp>
 #include <pops/runtime/program/moving_interval_checkpoint.hpp>
+#include <pops/runtime/program/uniform_history_exchange_checkpoint.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -96,26 +97,28 @@ void System<Dim>::step(double dt) {
   const auto communicator = prepared_boundary_execution_lane_
                                 ? prepared_boundary_execution_lane_->communicator()
                                 : world_communicator_view();
-  if (all_reduce_max(
-          solve_outcome_authority_->pending.load(std::memory_order_acquire) == 0 &&
-                  !p_->external_step_transaction_committed_
-              ? 0L
-              : 1L,
-          communicator) != 0)
+  if (all_reduce_max(solve_outcome_authority_->pending.load(std::memory_order_acquire) == 0 &&
+                             !p_->external_step_transaction_committed_
+                         ? 0L
+                         : 1L,
+                     communicator) != 0)
     throw std::runtime_error("System::step has a pending solve or committed parent transaction");
   runtime::program::ProfileScope scope(p_->program_.profiler_, "step");
   p_->program_.profiler_.count("steps");
-  p_->execute_step_transaction(communicator, [&] {
-    p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, dt, "System", communicator);
-    require_continuation_projection();
-    if (solve_outcome_authority_->pending.load(std::memory_order_acquire) != 0)
-      throw std::logic_error("System Program step left a native solve result unconsumed");
-    if (p_->has_pending_field_warm_start())
-      throw std::logic_error("System Program step left an unresolved field warm start");
-  }, [&] {
-    ++solve_outcome_authority_->attempt;
-    rollback_field_publication_transaction();
-  });
+  p_->execute_step_transaction(
+      communicator,
+      [&] {
+        p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, dt, "System", communicator);
+        require_continuation_projection();
+        if (solve_outcome_authority_->pending.load(std::memory_order_acquire) != 0)
+          throw std::logic_error("System Program step left a native solve result unconsumed");
+        if (p_->has_pending_field_warm_start())
+          throw std::logic_error("System Program step left an unresolved field warm start");
+      },
+      [&] {
+        ++solve_outcome_authority_->attempt;
+        rollback_field_publication_transaction();
+      });
   ++solve_outcome_authority_->attempt;
 }
 
@@ -146,8 +149,8 @@ std::string System<Dim>::advance_program_region(double dt) {
     throw;
   }
   if (all_reduce_max(
-          solve_outcome_authority_->pending.load(std::memory_order_acquire) == 0 ? 0L : 1L,
-          lane) != 0) {
+          solve_outcome_authority_->pending.load(std::memory_order_acquire) == 0 ? 0L : 1L, lane) !=
+      0) {
     p_->program_.cancel_cadence_continuation();
     ++solve_outcome_authority_->attempt;
     rollback_field_publication_transaction();
@@ -259,9 +262,9 @@ std::vector<runtime::program::ExchangeRecord> System<Dim>::program_exchange_reco
   return p_->program_.accepted_exchanges_.records();
 }
 
-
 template <int Dim>
-std::vector<std::vector<std::uint8_t>> System<Dim>::capture_state_storage_(bool provisional_capture) const {
+std::vector<std::vector<std::uint8_t>> System<Dim>::capture_state_storage_(
+    bool provisional_capture) const {
   const auto& lane = prepared_boundary_execution_lane();
   using namespace runtime::checkpoint;
   using Bits = std::conditional_t<sizeof(Real) == 8, std::uint64_t, std::uint32_t>;
@@ -271,24 +274,31 @@ std::vector<std::vector<std::uint8_t>> System<Dim>::capture_state_storage_(bool 
   std::vector<ExactOrderedBytePair> authority;
   try {
     const auto phase = p_->lifecycle_.state(p_->macro_step_);
-    const auto depth=step_transaction_depth();
-    const bool provisional=provisional_capture && depth==1 &&
-        p_->external_step_transaction_ && !p_->external_step_transaction_committed_;
+    const auto depth = step_transaction_depth();
+    const bool provisional = provisional_capture && depth == 1 && p_->external_step_transaction_ &&
+                             !p_->external_step_transaction_committed_;
     if ((depth != 0 && !provisional) || p_->external_restart_transaction_ ||
         (phase != "bound" && phase != "running" && phase != "checkpointed"))
-      throw std::logic_error("accepted state storage observation requires bound accepted idle state");
+      throw std::logic_error(
+          "accepted state storage observation requires bound accepted idle state");
     StateCarrierArchive<Dim> image;
     image.real_bits = sizeof(Real) * 8;
-    image.ranks = lane.size(); image.shard = lane.rank(); image.levels = 1;
+    image.ranks = lane.size();
+    image.shard = lane.rank();
+    image.levels = 1;
     image.blocks = p_->blocks_.names();
     if (image.blocks.empty() && !p_->program_.continuation_.configured())
-      throw std::logic_error("accepted state storage observation requires blocks or a complete Continuation");
+      throw std::logic_error(
+          "accepted state storage observation requires blocks or a complete Continuation");
     if (!std::isfinite(p_->t) || p_->macro_step_ < 0)
       throw std::logic_error("accepted state storage observation has an invalid clock");
     ExactContractBuilder contract;
-    contract.text("accepted-state-storage-observation@1").scalar(std::int32_t{Dim})
-        .scalar(p_->t).scalar(std::int64_t{p_->macro_step_});
-    for (const auto& name : image.blocks) contract.text(name);
+    contract.text("accepted-state-storage-observation@1")
+        .scalar(std::int32_t{Dim})
+        .scalar(p_->t)
+        .scalar(std::int64_t{p_->macro_step_});
+    for (const auto& name : image.blocks)
+      contract.text(name);
     invocation = std::move(contract).release();
     authority.emplace_back("accepted-state-storage-observation", invocation);
     Kokkos::fence();
@@ -297,15 +307,19 @@ std::vector<std::vector<std::uint8_t>> System<Dim>::capture_state_storage_(bool 
       for (std::size_t local = 0; local < field.local_size(); ++local) {
         const auto& fab = field.fab(local);
         StateCarrierPatch<Dim> row;
-        row.block = block; row.level = 0; row.patch = field.global_index(local);
+        row.block = block;
+        row.level = 0;
+        row.patch = field.global_index(local);
         row.components = field.ncomp();
         row.owner = field.distribution().replicated() ? -1 : lane.rank();
         for (int axis = 0; axis < Dim; ++axis) {
-          row.lo[axis] = fab.box().lo[axis]; row.hi[axis] = fab.box().hi[axis];
+          row.lo[axis] = fab.box().lo[axis];
+          row.hi[axis] = fab.box().hi[axis];
           row.grown_lo[axis] = fab.grown_box().lo[axis];
           row.grown_hi[axis] = fab.grown_box().hi[axis];
         }
-        auto host = fab.create_host_mirror(); fab.copy_to_host(host);
+        auto host = fab.create_host_mirror();
+        fab.copy_to_host(host);
         row.bits.reserve(host.size());
         for (std::size_t value = 0; value < host.size(); ++value)
           row.bits.push_back(std::bit_cast<Bits>(host(value)));
@@ -314,7 +328,9 @@ std::vector<std::vector<std::uint8_t>> System<Dim>::capture_state_storage_(bool 
     }
     const auto encoded = encode_state_carriers(image);
     shard.assign(reinterpret_cast<const char*>(encoded.data()), encoded.size());
-  } catch (...) { error = std::current_exception(); }
+  } catch (...) {
+    error = std::current_exception();
+  }
   collectively_rethrow_exception(error, lane, "accepted state storage observation staging");
   if (!all_ranks_agree_exact_ordered_byte_pairs(authority, lane))
     throw std::runtime_error("accepted state storage observation differs across ranks");
@@ -322,8 +338,11 @@ std::vector<std::vector<std::uint8_t>> System<Dim>::capture_state_storage_(bool 
   // chunks at the MPI count boundary; ObserverMpiLane::allgather_bytes is not a runtime API.
   std::vector<std::string> shards;
   error = {};
-  try { shards.resize(static_cast<std::size_t>(lane.size())); }
-  catch (...) { error = std::current_exception(); }
+  try {
+    shards.resize(static_cast<std::size_t>(lane.size()));
+  } catch (...) {
+    error = std::current_exception();
+  }
   collectively_rethrow_exception(error, lane, "state carrier source-shard allocation");
   for (int source = 0; source < lane.size(); ++source) {
     std::array<char, 8> length_bytes{};
@@ -337,7 +356,9 @@ std::vector<std::vector<std::uint8_t>> System<Dim>::capture_state_storage_(bool 
         for (unsigned byte = 0; byte < 8; ++byte)
           length_bytes[byte] = static_cast<char>(length >> (8 * byte));
       }
-    } catch (...) { error = std::current_exception(); }
+    } catch (...) {
+      error = std::current_exception();
+    }
     collectively_rethrow_exception(error, lane, "state carrier source-shard length staging");
     broadcast_bytes_inplace(length_bytes.data(), length_bytes.size(), lane, source);
     std::uint64_t length = 0;
@@ -348,9 +369,13 @@ std::vector<std::vector<std::uint8_t>> System<Dim>::capture_state_storage_(bool 
       if (length > std::numeric_limits<std::size_t>::max())
         throw std::length_error("state carrier source shard exceeds destination size_t capacity");
       auto& destination = shards[static_cast<std::size_t>(source)];
-      if (lane.rank() == source) destination = shard;
-      else destination.resize(static_cast<std::size_t>(length));
-    } catch (...) { error = std::current_exception(); }
+      if (lane.rank() == source)
+        destination = shard;
+      else
+        destination.resize(static_cast<std::size_t>(length));
+    } catch (...) {
+      error = std::current_exception();
+    }
     collectively_rethrow_exception(error, lane, "state carrier source-shard payload staging");
     auto& destination = shards[static_cast<std::size_t>(source)];
     broadcast_bytes_inplace(destination.data(), destination.size(), lane, source);
@@ -361,15 +386,20 @@ std::vector<std::vector<std::uint8_t>> System<Dim>::capture_state_storage_(bool 
     auto image = merge_state_carrier_shards<Dim>(shards);
     validate_complete_state_carriers(image);
     result = encode_state_carriers(image);
-  } catch (...) { error = std::current_exception(); }
+  } catch (...) {
+    error = std::current_exception();
+  }
   collectively_rethrow_exception(error, lane, "state carrier capture canonicalization");
   std::vector<std::vector<std::uint8_t>> observation;
   error = {};
   try {
     observation.emplace_back(shard.begin(), shard.end());
     observation.push_back(std::move(result));
-  } catch (...) { error = std::current_exception(); }
-  collectively_rethrow_exception(error, lane, "accepted state storage observation result allocation");
+  } catch (...) {
+    error = std::current_exception();
+  }
+  collectively_rethrow_exception(error, lane,
+                                 "accepted state storage observation result allocation");
   return observation;
 }
 
@@ -380,7 +410,7 @@ std::vector<std::vector<std::uint8_t>> System<Dim>::observe_accepted_state_stora
 
 template <int Dim>
 std::vector<std::uint8_t> System<Dim>::checkpoint_state_carriers() const {
-  auto images=capture_state_storage_(true);
+  auto images = capture_state_storage_(true);
   return std::move(images[1]);
 }
 
@@ -393,112 +423,133 @@ std::uint64_t System<Dim>::checkpoint_state_carriers_capacity() const {
   try {
     std::vector<StateCarrierStorageCapacity<Dim>> blocks;
     if (p_->blocks_.names().empty() && !p_->program_.continuation_.configured())
-      throw std::logic_error(
-          "state carrier capacity requires blocks or a complete Continuation");
+      throw std::logic_error("state carrier capacity requires blocks or a complete Continuation");
     std::uint64_t cells = 0;
     for (const auto& name : p_->blocks_.names()) {
       const auto& field = p_->find(name).U;
       StateCarrierStorageCapacity<Dim> block;
-      block.name = name; block.components = field.ncomp();
-      for (int axis = 0; axis < Dim; ++axis) block.ghosts[axis] = field.ghosts()[axis];
+      block.name = name;
+      block.components = field.ncomp();
+      for (int axis = 0; axis < Dim; ++axis)
+        block.ghosts[axis] = field.ghosts()[axis];
       blocks.push_back(std::move(block));
       std::uint64_t count = 0;
       const auto& layout = field.layout();
       for (std::size_t patch = 0; patch < layout.size(); ++patch) {
         const auto& box = layout[patch];
         const auto n = static_cast<std::uint64_t>(box.numPts());
-        if (n > std::numeric_limits<std::uint64_t>::max()-count)
+        if (n > std::numeric_limits<std::uint64_t>::max() - count)
           throw std::overflow_error("Uniform carrier cells overflow");
         count += n;
       }
       cells = std::max(cells, count);
     }
-    const std::array<std::uint64_t,1> levels{cells};
+    const std::array<std::uint64_t, 1> levels{cells};
     result = state_carriers_byte_capacity<Dim>(levels, blocks);
-  } catch (...) { error = std::current_exception(); }
-  collectively_rethrow_exception(error,lane,"Uniform carrier configured capacity");
+  } catch (...) {
+    error = std::current_exception();
+  }
+  collectively_rethrow_exception(error, lane, "Uniform carrier configured capacity");
   return result;
 }
 
 template <int Dim>
 void System<Dim>::validate_checkpoint_state_carriers(std::span<const std::uint8_t> bytes) const {
-    const auto image = runtime::checkpoint::decode_state_carriers<Dim>(bytes);
-    runtime::checkpoint::validate_complete_state_carriers(image);
-    if (image.real_bits != sizeof(Real)*8 || image.levels != 1 || image.blocks != p_->blocks_.names())
-      throw std::invalid_argument("Uniform carrier storage authority differs");
-    std::size_t at = 0;
-    for (std::size_t block=0;block<image.blocks.size();++block) {
-      const auto& field = p_->find(image.blocks[block]).U;
-      for (std::size_t patch=0;patch<field.layout().size();++patch) {
-        if (at==image.patches.size()) throw std::invalid_argument("Uniform carrier missing patch");
-        const auto& row=image.patches[at++];const auto& valid=field.layout()[patch];
-        if (row.block!=block || row.level!=0 || row.patch!=patch || row.components!=std::uint64_t(field.ncomp()))
-          throw std::invalid_argument("Uniform carrier patch/component authority differs");
-        for (int axis=0;axis<Dim;++axis)
-          if (row.lo[axis]!=valid.lo[axis] || row.hi[axis]!=valid.hi[axis] ||
-              row.grown_lo[axis]!=std::int64_t(valid.lo[axis])-field.ghosts()[axis] ||
-              row.grown_hi[axis]!=std::int64_t(valid.hi[axis])+field.ghosts()[axis])
-            throw std::invalid_argument("Uniform carrier valid/grown geometry differs");
-      }
+  const auto image = runtime::checkpoint::decode_state_carriers<Dim>(bytes);
+  runtime::checkpoint::validate_complete_state_carriers(image);
+  if (image.real_bits != sizeof(Real) * 8 || image.levels != 1 ||
+      image.blocks != p_->blocks_.names())
+    throw std::invalid_argument("Uniform carrier storage authority differs");
+  std::size_t at = 0;
+  for (std::size_t block = 0; block < image.blocks.size(); ++block) {
+    const auto& field = p_->find(image.blocks[block]).U;
+    for (std::size_t patch = 0; patch < field.layout().size(); ++patch) {
+      if (at == image.patches.size())
+        throw std::invalid_argument("Uniform carrier missing patch");
+      const auto& row = image.patches[at++];
+      const auto& valid = field.layout()[patch];
+      if (row.block != block || row.level != 0 || row.patch != patch ||
+          row.components != std::uint64_t(field.ncomp()))
+        throw std::invalid_argument("Uniform carrier patch/component authority differs");
+      for (int axis = 0; axis < Dim; ++axis)
+        if (row.lo[axis] != valid.lo[axis] || row.hi[axis] != valid.hi[axis] ||
+            row.grown_lo[axis] != std::int64_t(valid.lo[axis]) - field.ghosts()[axis] ||
+            row.grown_hi[axis] != std::int64_t(valid.hi[axis]) + field.ghosts()[axis])
+          throw std::invalid_argument("Uniform carrier valid/grown geometry differs");
     }
-    if (at!=image.patches.size()) throw std::invalid_argument("Uniform carrier extra patch");
+  }
+  if (at != image.patches.size())
+    throw std::invalid_argument("Uniform carrier extra patch");
 }
 
 template <int Dim>
 void System<Dim>::restore_checkpoint_state_carriers(std::span<const std::uint8_t> bytes) {
-  using Bits=std::conditional_t<sizeof(Real)==8,std::uint64_t,std::uint32_t>;
-  const auto& lane=prepared_boundary_execution_lane();
-  std::vector<std::pair<MultiFab<Dim>*,std::unique_ptr<MultiFab<Dim>>>> candidates;
+  using Bits = std::conditional_t<sizeof(Real) == 8, std::uint64_t, std::uint32_t>;
+  const auto& lane = prepared_boundary_execution_lane();
+  std::vector<std::pair<MultiFab<Dim>*, std::unique_ptr<MultiFab<Dim>>>> candidates;
   std::exception_ptr error;
   try {
     if (!p_->external_restart_transaction_ || p_->external_step_transaction_committed_)
       throw std::logic_error("Uniform carrier restore requires uncommitted restart transaction");
     validate_checkpoint_state_carriers(bytes);
-    const auto image=runtime::checkpoint::decode_state_carriers<Dim>(bytes);
-    std::size_t begin=0;
-    for (const auto& name:image.blocks) {
-      auto& target=p_->find(name).U;
-      auto candidate=std::make_unique<MultiFab<Dim>>(target.layout(),target.distribution(),target.local_rank(),target.ncomp(),target.ghosts());
-      for (std::size_t local=0;local<target.local_size();++local) {
-        const auto& row=image.patches[begin+target.global_index(local)];
-        const auto& live=target.fab(local);auto prior=live.create_host_mirror();live.copy_to_host(prior);
-        auto& fab=candidate->fab(local);auto host=fab.create_host_mirror();
-        if (row.bits.size()!=host.size()) throw std::invalid_argument("Uniform carrier storage size differs");
-        const auto stride=static_cast<std::size_t>(fab.grown_box().numPts());
-        for (int component=0;component<target.ncomp();++component)
-          for (std::size_t cell=0;cell<static_cast<std::size_t>(fab.box().numPts());++cell) {
-            auto remaining=cell;
-            std::size_t address=std::size_t(component)*stride,axis_stride=1;
-            for (int axis=0;axis<Dim;++axis) {
-              const auto length=static_cast<std::size_t>(fab.box().length(axis));
-              const auto coordinate=std::int64_t(fab.box().lo[axis])+remaining%length;
-              remaining/=length;
-              address+=static_cast<std::size_t>(coordinate-fab.grown_box().lo[axis])*axis_stride;
-              axis_stride*=static_cast<std::size_t>(fab.grown_box().length(axis));
+    const auto image = runtime::checkpoint::decode_state_carriers<Dim>(bytes);
+    std::size_t begin = 0;
+    for (const auto& name : image.blocks) {
+      auto& target = p_->find(name).U;
+      auto candidate =
+          std::make_unique<MultiFab<Dim>>(target.layout(), target.distribution(),
+                                          target.local_rank(), target.ncomp(), target.ghosts());
+      for (std::size_t local = 0; local < target.local_size(); ++local) {
+        const auto& row = image.patches[begin + target.global_index(local)];
+        const auto& live = target.fab(local);
+        auto prior = live.create_host_mirror();
+        live.copy_to_host(prior);
+        auto& fab = candidate->fab(local);
+        auto host = fab.create_host_mirror();
+        if (row.bits.size() != host.size())
+          throw std::invalid_argument("Uniform carrier storage size differs");
+        const auto stride = static_cast<std::size_t>(fab.grown_box().numPts());
+        for (int component = 0; component < target.ncomp(); ++component)
+          for (std::size_t cell = 0; cell < static_cast<std::size_t>(fab.box().numPts()); ++cell) {
+            auto remaining = cell;
+            std::size_t address = std::size_t(component) * stride, axis_stride = 1;
+            for (int axis = 0; axis < Dim; ++axis) {
+              const auto length = static_cast<std::size_t>(fab.box().length(axis));
+              const auto coordinate = std::int64_t(fab.box().lo[axis]) + remaining % length;
+              remaining /= length;
+              address +=
+                  static_cast<std::size_t>(coordinate - fab.grown_box().lo[axis]) * axis_stride;
+              axis_stride *= static_cast<std::size_t>(fab.grown_box().length(axis));
             }
-            if (row.bits[address]!=std::bit_cast<Bits>(prior(address)))
-              throw std::invalid_argument("Uniform carrier valid cells contradict scientific state projection");
+            if (row.bits[address] != std::bit_cast<Bits>(prior(address)))
+              throw std::invalid_argument(
+                  "Uniform carrier valid cells contradict scientific state projection");
           }
-        for (std::size_t value=0;value<host.size();++value)
-          host(value)=std::bit_cast<Real>(static_cast<Bits>(row.bits[value]));
+        for (std::size_t value = 0; value < host.size(); ++value)
+          host(value) = std::bit_cast<Real>(static_cast<Bits>(row.bits[value]));
         fab.copy_from_host(host);
       }
-      begin+=target.layout().size();candidates.emplace_back(&target,std::move(candidate));
+      begin += target.layout().size();
+      candidates.emplace_back(&target, std::move(candidate));
     }
     Kokkos::fence();
-  } catch (...) {error=std::current_exception();}
-  collectively_rethrow_exception(error,lane,"Uniform carrier restore preparation");
-  const std::string_view authority(reinterpret_cast<const char*>(bytes.data()),bytes.size());
-  if (!all_ranks_agree_exact_ordered_byte_pairs({{"Uniform-state-carriers",authority}},lane))
+  } catch (...) {
+    error = std::current_exception();
+  }
+  collectively_rethrow_exception(error, lane, "Uniform carrier restore preparation");
+  const std::string_view authority(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"Uniform-state-carriers", authority}}, lane))
     throw std::invalid_argument("Uniform carrier bytes differ across ranks");
-  error={};
+  error = {};
   try {
-    for (const auto& [target,candidate]:candidates)
-      for (std::size_t local=0;local<target->local_size();++local)
-        Kokkos::deep_copy(target->fab(local).storage(),candidate->fab(local).storage());
+    for (const auto& [target, candidate] : candidates)
+      for (std::size_t local = 0; local < target->local_size(); ++local)
+        Kokkos::deep_copy(target->fab(local).storage(), candidate->fab(local).storage());
     Kokkos::fence();
-  } catch (...) {error=std::current_exception();}
-  collectively_rethrow_exception(error,lane,"Uniform carrier restore publication");
+  } catch (...) {
+    error = std::current_exception();
+  }
+  collectively_rethrow_exception(error, lane, "Uniform carrier restore publication");
 }
 
 template <int Dim>
@@ -522,67 +573,121 @@ Real System<Dim>::consume_program_external_trace(
 }
 
 template <int Dim>
-std::vector<std::uint8_t> System<Dim>::checkpoint_program_exchanges(bool provisional_capture) const {
+std::vector<std::uint8_t> System<Dim>::checkpoint_program_exchanges(
+    bool provisional_capture) const {
   if (!p_->program_.moving_interval_geometry_.empty()) {
-    if ((step_transaction_depth()!=0 && !(provisional_capture && step_transaction_depth()==1)) ||
+    if ((step_transaction_depth() != 0 &&
+         !(provisional_capture && step_transaction_depth() == 1)) ||
         p_->external_restart_transaction_)
       throw std::logic_error("moving geometry checkpoint export requires fully accepted state");
-    if (step_transaction_depth()==1)
-      for (const auto& [identity,geometry]:p_->program_.moving_interval_geometry_)
+    if (step_transaction_depth() == 1)
+      for (const auto& [identity, geometry] : p_->program_.moving_interval_geometry_)
         if (!geometry.last_receipt)
-          throw std::logic_error("moving candidate checkpoint requires a terminal interval receipt");
+          throw std::logic_error(
+              "moving candidate checkpoint requires a terminal interval receipt");
     const auto bytes = runtime::program::checkpoint_moving_intervals(
         p_->program_.accepted_exchanges_, p_->program_.moving_interval_geometry_,
-        [&](int block) -> const MultiFab<Dim>& { return p_->sp.at(static_cast<std::size_t>(block)).U; });
-    validate_checkpoint_moving_geometry(bytes,p_->t,p_->macro_step_);
-    return bytes;
+        [&](int block) -> const MultiFab<Dim>& {
+          return p_->sp.at(static_cast<std::size_t>(block)).U;
+        });
+    validate_checkpoint_moving_geometry(bytes, p_->t, p_->macro_step_);
+    return runtime::program::checkpoint_uniform_history_exchanges(bytes, p_->program_.hist_);
   }
-  return p_->program_.accepted_exchanges_.checkpoint();
+  return runtime::program::checkpoint_uniform_history_exchanges(
+      p_->program_.accepted_exchanges_.checkpoint(), p_->program_.hist_);
 }
 
 template <int Dim>
-void System<Dim>::validate_checkpoint_program_exchanges(
-    std::span<const std::uint8_t> bytes) const {
+void System<Dim>::validate_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes) const {
+  const auto history = runtime::program::read_uniform_history_exchanges(bytes, p_->program_.hist_);
   (void)runtime::program::read_moving_checkpoint(
-      bytes, p_->program_.accepted_exchanges_, p_->program_.moving_interval_geometry_,
-      [&](int block) -> const MultiFab<Dim>& { return p_->sp.at(static_cast<std::size_t>(block)).U; });
+      history.exchanges, p_->program_.accepted_exchanges_, p_->program_.moving_interval_geometry_,
+      [&](int block) -> const MultiFab<Dim>& {
+        return p_->sp.at(static_cast<std::size_t>(block)).U;
+      });
+}
+
+template <int Dim>
+std::vector<std::uint8_t> System<Dim>::remap_checkpoint_program_exchanges(
+    std::span<const std::span<const std::uint8_t>> source_images) const {
+  const auto& lane = prepared_boundary_execution_lane();
+  return runtime::program::rematerialize_uniform_history_exchanges<Dim>(
+      source_images, p_->program_.hist_,
+      [&](int program_block, const runtime::program::FieldExchangeExpressions::Cell& cell) {
+        if (program_block < 0 ||
+            static_cast<std::size_t>(program_block) >= p_->program_.block_map_.size() ||
+            cell.size() != Dim)
+          throw std::invalid_argument(
+              "retained face expression has no installed field owner/dimension");
+        const int block = p_->program_.block_map_.at(static_cast<std::size_t>(program_block));
+        if (block < 0 || static_cast<std::size_t>(block) >= p_->sp.size())
+          throw std::invalid_argument("retained face expression has a foreign runtime owner");
+        Index<Dim> coordinate;
+        for (int d = 0; d < Dim; ++d) {
+          if (cell[d] < std::numeric_limits<int>::min() ||
+              cell[d] > std::numeric_limits<int>::max())
+            throw std::invalid_argument("retained face expression exceeds native coordinate range");
+          coordinate[d] = static_cast<int>(cell[d]);
+        }
+        const auto& field = p_->sp.at(static_cast<std::size_t>(block)).U;
+        for (std::size_t patch = 0; patch < field.local_size(); ++patch)
+          if (field.layout()[field.global_index(patch)].contains(coordinate))
+            return true;
+        return false;
+      },
+      lane.rank(), lane.size());
 }
 
 template <int Dim>
 void System<Dim>::validate_checkpoint_moving_geometry(std::span<const std::uint8_t> bytes,
-                                                     double accepted_time, int macro_step) const {
-  const auto candidate=runtime::program::read_moving_checkpoint(
-      bytes,p_->program_.accepted_exchanges_,p_->program_.moving_interval_geometry_,
-      [&](int block) -> const MultiFab<Dim>& { return p_->sp.at(static_cast<std::size_t>(block)).U; });
-  runtime::program::require_moving_checkpoint_lifecycle(candidate,accepted_time,macro_step);
+                                                      double accepted_time, int macro_step) const {
+  const auto history = runtime::program::read_uniform_history_exchanges(bytes, p_->program_.hist_);
+  const auto candidate = runtime::program::read_moving_checkpoint(
+      history.exchanges, p_->program_.accepted_exchanges_, p_->program_.moving_interval_geometry_,
+      [&](int block) -> const MultiFab<Dim>& {
+        return p_->sp.at(static_cast<std::size_t>(block)).U;
+      });
+  runtime::program::require_moving_checkpoint_lifecycle(candidate, accepted_time, macro_step);
 }
 
 template <int Dim>
 void System<Dim>::restore_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes) {
   const auto& lane = prepared_boundary_execution_lane();
   std::optional<runtime::program::MovingCheckpointCandidate<Dim>> candidate;
+  std::optional<runtime::program::UniformHistoryExchangeImage<Dim>> history;
   std::exception_ptr error;
   try {
     if (!p_->external_restart_transaction_)
       throw std::logic_error("accepted exchange restore requires the native restart transaction");
+    history.emplace(
+        runtime::program::read_uniform_history_exchanges(bytes, p_->program_.hist_, true));
     candidate.emplace(runtime::program::read_moving_checkpoint(
-        bytes, p_->program_.accepted_exchanges_, p_->program_.moving_interval_geometry_,
-        [&](int block) -> const MultiFab<Dim>& { return p_->sp.at(static_cast<std::size_t>(block)).U; }));
+        history->exchanges, p_->program_.accepted_exchanges_,
+        p_->program_.moving_interval_geometry_, [&](int block) -> const MultiFab<Dim>& {
+          return p_->sp.at(static_cast<std::size_t>(block)).U;
+        }));
     if (!candidate->geometry.empty())
-      runtime::program::require_moving_checkpoint_lifecycle(*candidate,p_->t,p_->macro_step_);
+      runtime::program::require_moving_checkpoint_lifecycle(*candidate, p_->t, p_->macro_step_);
     for (const auto& [block, expected] : candidate->states) {
       const auto& restored = p_->sp.at(static_cast<std::size_t>(block)).U;
-      for (std::size_t patch=0; patch<restored.local_size(); ++patch) {
-        auto actual=restored.fab(patch).create_host_mirror(); restored.fab(patch).copy_to_host(actual);
-        auto saved=expected.fab(patch).create_host_mirror(); expected.fab(patch).copy_to_host(saved);
-        runtime::system::marshaling::for_each_host_index(restored.box(patch), [&](const Index<Dim>& index,std::size_t) {
-          for (int component=0; component<restored.ncomp(); ++component) {
-            const auto a=runtime::system::marshaling::storage_ordinal(restored.fab(patch),index,component);
-            const auto b=runtime::system::marshaling::storage_ordinal(expected.fab(patch),index,component);
-            if (actual(a)!=saved(b)) throw std::invalid_argument(
-                "moving checkpoint physical state must be restored together with its geometry/receipt");
-          }
-        });
+      for (std::size_t patch = 0; patch < restored.local_size(); ++patch) {
+        auto actual = restored.fab(patch).create_host_mirror();
+        restored.fab(patch).copy_to_host(actual);
+        auto saved = expected.fab(patch).create_host_mirror();
+        expected.fab(patch).copy_to_host(saved);
+        runtime::system::marshaling::for_each_host_index(
+            restored.box(patch), [&](const Index<Dim>& index, std::size_t) {
+              for (int component = 0; component < restored.ncomp(); ++component) {
+                const auto a = runtime::system::marshaling::storage_ordinal(restored.fab(patch),
+                                                                            index, component);
+                const auto b = runtime::system::marshaling::storage_ordinal(expected.fab(patch),
+                                                                            index, component);
+                if (actual(a) != saved(b))
+                  throw std::invalid_argument(
+                      "moving checkpoint physical state must be restored together with its "
+                      "geometry/receipt");
+              }
+            });
       }
     }
   } catch (...) {
@@ -598,6 +703,8 @@ void System<Dim>::restore_checkpoint_program_exchanges(std::span<const std::uint
     runtime::program::require_moving_checkpoint_agrees_collectively(*candidate, lane);
   p_->program_.accepted_exchanges_.swap(candidate->exchanges);
   p_->program_.moving_interval_geometry_.swap(candidate->geometry);
+  if (!history->histories.empty())
+    p_->program_.hist_.slot_exchanges.swap(history->histories);
 }
 
 template <int Dim>
@@ -783,9 +890,9 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
     throw std::invalid_argument(
         "System::step_cfl inputs or prepared scalar authorities differ between MPI ranks");
 
-  const bool has_default_poisson_source = std::any_of(
-      p_->sp.begin(), p_->sp.end(),
-      [](const auto& block) { return static_cast<bool>(block.add_poisson_rhs); });
+  const bool has_default_poisson_source =
+      std::any_of(p_->sp.begin(), p_->sp.end(),
+                  [](const auto& block) { return static_cast<bool>(block.add_poisson_rhs); });
   if (p_->explicit_default_poisson_requested_ || has_default_poisson_source) {
     SolveOutcome field_outcome = solve_fields();
     const SolveConsumption field_consumption =
@@ -800,8 +907,8 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
         throw runtime::program::StepAttemptRejected(field_report.status, "CFL field evaluation",
                                                     field_report.reason);
       throw std::runtime_error(std::string("System::step_cfl field evaluation failed: status=") +
-                               field_report.status_name() + " action=" + field_report.action_name() +
-                               " reason=" + field_report.reason);
+                               field_report.status_name() + " action=" +
+                               field_report.action_name() + " reason=" + field_report.reason);
     }
   }
 
@@ -826,10 +933,9 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
         const auto& metadata = p_->program_.checkpoint_metadata_;
         point.clock = metadata.primary_clock_identity;
         const bool physical_clock = !point.clock.empty();
-        if (physical_clock &&
-            std::find(metadata.logical_clock_identities.begin(),
-                      metadata.logical_clock_identities.end(), point.clock) ==
-                metadata.logical_clock_identities.end())
+        if (physical_clock && std::find(metadata.logical_clock_identities.begin(),
+                                        metadata.logical_clock_identities.end(),
+                                        point.clock) == metadata.logical_clock_identities.end())
           throw std::invalid_argument("System CFL auxiliary Clock is not installed");
         if (!physical_clock)
           point.clock = "pops.system.accepted-stability";
@@ -850,14 +956,16 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
           if (point.dt > 0)
             auxiliary.qualify_physical_evaluation(point);
           else {
-            runtime::system::AuxiliaryPhysicalEvaluation physical(
-                point.stage_fraction, point.dt, point.physical_time);
+            runtime::system::AuxiliaryPhysicalEvaluation physical(point.stage_fraction, point.dt,
+                                                                  point.physical_time);
             physical.qualify_native_accepted_initial(point);
             auxiliary.physical_evaluation = std::move(physical);
           }
         }
         auxiliary.validate();
-      } catch (...) { publication_point_error = std::current_exception(); }
+      } catch (...) {
+        publication_point_error = std::current_exception();
+      }
       runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
           publication_point_error, &lane, "System CFL auxiliary point failed collectively");
       if (refresh_auxiliary_(auxiliary, {block.stability_consumer_qid}) ==
@@ -993,15 +1101,18 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
   const double prior_courant = p_->active_program_step_courant_;
   p_->active_program_step_courant_ = cfl;
   try {
-    p_->execute_step_transaction(lane.communicator(), [&] {
-      p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, selected, "System",
-                                         lane.communicator());
-      if (solve_outcome_authority_->pending.load(std::memory_order_acquire) != 0)
-        throw std::logic_error("System Program CFL step left a native solve result unconsumed");
-    }, [&] {
-      ++solve_outcome_authority_->attempt;
-      rollback_field_publication_transaction();
-    });
+    p_->execute_step_transaction(
+        lane.communicator(),
+        [&] {
+          p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, selected, "System",
+                                             lane.communicator());
+          if (solve_outcome_authority_->pending.load(std::memory_order_acquire) != 0)
+            throw std::logic_error("System Program CFL step left a native solve result unconsumed");
+        },
+        [&] {
+          ++solve_outcome_authority_->attempt;
+          rollback_field_publication_transaction();
+        });
   } catch (...) {
     p_->active_program_step_courant_ = prior_courant;
     throw;
@@ -1194,13 +1305,15 @@ System<kNativeDimension>::program_exchange_records() const;
 template void System<kNativeDimension>::declare_program_integral(const std::string&, Real);
 template Real System<kNativeDimension>::program_integral(const std::string&) const;
 template Real System<kNativeDimension>::consume_program_external_trace(
-    const std::string&,
-    const runtime::program::AcceptedExchangeLedger::TraceSelection&, Real);
-template std::vector<std::uint8_t> System<kNativeDimension>::checkpoint_program_exchanges(bool) const;
+    const std::string&, const runtime::program::AcceptedExchangeLedger::TraceSelection&, Real);
+template std::vector<std::uint8_t> System<kNativeDimension>::checkpoint_program_exchanges(
+    bool) const;
 template void System<kNativeDimension>::validate_checkpoint_program_exchanges(
     std::span<const std::uint8_t>) const;
+template std::vector<std::uint8_t> System<kNativeDimension>::remap_checkpoint_program_exchanges(
+    std::span<const std::span<const std::uint8_t>>) const;
 template void System<kNativeDimension>::validate_checkpoint_moving_geometry(
-    std::span<const std::uint8_t>,double,int) const;
+    std::span<const std::uint8_t>, double, int) const;
 template void System<kNativeDimension>::restore_checkpoint_program_exchanges(
     std::span<const std::uint8_t>);
 
@@ -1228,9 +1341,12 @@ template EffectiveOptionsReport System<kNativeDimension>::effective_options_repo
 }  // namespace pops
 
 namespace pops {
-template std::vector<std::vector<std::uint8_t>> System<kNativeDimension>::observe_accepted_state_storage() const;
+template std::vector<std::vector<std::uint8_t>>
+System<kNativeDimension>::observe_accepted_state_storage() const;
 template std::vector<std::uint8_t> System<kNativeDimension>::checkpoint_state_carriers() const;
 template std::uint64_t System<kNativeDimension>::checkpoint_state_carriers_capacity() const;
-template void System<kNativeDimension>::validate_checkpoint_state_carriers(std::span<const std::uint8_t>) const;
-template void System<kNativeDimension>::restore_checkpoint_state_carriers(std::span<const std::uint8_t>);
-}
+template void System<kNativeDimension>::validate_checkpoint_state_carriers(
+    std::span<const std::uint8_t>) const;
+template void System<kNativeDimension>::restore_checkpoint_state_carriers(
+    std::span<const std::uint8_t>);
+}  // namespace pops

@@ -246,7 +246,7 @@ def _assert_physical_linear_profile(runtime, level, *, n):
 def _accepted_frame(runtime):
     """Read only the bounded prefix of the actual native A image, never fabricate one."""
     image = bytes(runtime._executor.program_accepted_state())
-    assert image[:8] == b"POPSANDA" and len(image) >= 32
+    assert image[:8] in (b"POPSANDA", b"POPSANDB", b"POPSANDC", b"POPSANDD", b"POPSANDE") and len(image) >= 32
     assert int.from_bytes(image[8:16], "little") == 2
     size = int.from_bytes(image[16:24], "little")
     assert 0 < size <= len(image) - 40
@@ -365,7 +365,7 @@ def _composite_boundary_exchanges(runtime, n, support):
 
 def _accepted_face_fragments(image):
     """Inspect actual scalar A fragments using the native writer's bounded layout."""
-    assert image[:8] == b"POPSANDA" and int.from_bytes(image[8:16], "little") == 2
+    assert image[:8] in (b"POPSANDA", b"POPSANDB", b"POPSANDC", b"POPSANDD", b"POPSANDE") and int.from_bytes(image[8:16], "little") == 2
     tagging, offset = accepted_tagging_hysteresis_span(image, dimension=2)
     cursor = offset + len(tagging)
 

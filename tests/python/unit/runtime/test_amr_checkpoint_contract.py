@@ -1210,3 +1210,75 @@ def test_accepted_halo_exact_extent_refuses_before_restart_transaction(extent):
     payload["amr_accepted_contract"] = json.dumps(contract)
     with pytest.raises(TypeError, match="accepted halo"):
         preflight_contract(_StrongHaloSim(), payload)
+
+
+def _ranked_program_archive():
+    from pops.runtime._amr_checkpoint_program_shards import capture_program_shards
+    archive = {}
+    capture_program_shards(archive, (b"POPSANDF-local-zero", b"POPSANDF-local-one"))
+    archive["program_accepted_state_source_authority"] = np.frombuffer(b"POPSRSA1-native", dtype=np.uint8)
+    return archive
+
+
+def test_ranked_program_archive_selects_local_image_without_mutating_sealed_archive():
+    from pops.runtime._amr_checkpoint_program_shards import select_program_shard
+    archive = _ranked_program_archive()
+    before = {key: value.copy() for key, value in archive.items()}
+    selected = select_program_shard(archive, source_ranks=2, target_ranks=2, target_rank=1)
+    assert selected["program_accepted_state"].tobytes() == b"POPSANDF-local-one"
+    for key in before:
+        np.testing.assert_array_equal(archive[key], before[key])
+    assert selected["program_accepted_state_rank_0"].tobytes() == b"POPSANDF-local-zero"
+
+
+@pytest.mark.parametrize("mutation", (
+    "missing_count", "wrong_count", "wrong_count_type", "missing_shard", "surplus_shard",
+    "rank_alias", "wrong_dtype", "wrong_shape", "canonical_mismatch", "empty_rank",
+    "mixed_framing", "missing_authority", "wrong_authority",
+))
+def test_ranked_program_archive_refuses_ambiguous_or_truncated_images(mutation):
+    from pops.runtime._amr_checkpoint_program_shards import select_program_shard
+    archive = _ranked_program_archive()
+    state = "program_accepted_state"
+    if mutation == "missing_count":
+        del archive[state + "_rank_count"]
+    elif mutation == "wrong_count":
+        archive[state + "_rank_count"] = np.asarray(3, dtype=np.int64)
+    elif mutation == "wrong_count_type":
+        archive[state + "_rank_count"] = np.asarray(2, dtype=np.int32)
+    elif mutation == "missing_shard":
+        del archive[state + "_rank_1"]
+    elif mutation == "surplus_shard":
+        archive[state + "_rank_2"] = archive[state + "_rank_1"]
+    elif mutation == "rank_alias":
+        archive[state + "_rank_01"] = archive.pop(state + "_rank_1")
+    elif mutation == "wrong_dtype":
+        archive[state + "_rank_1"] = np.asarray([1], dtype=np.int64)
+    elif mutation == "wrong_shape":
+        archive[state + "_rank_1"] = np.asarray([[1]], dtype=np.uint8)
+    elif mutation == "canonical_mismatch":
+        archive[state] = archive[state + "_rank_1"]
+    elif mutation == "empty_rank":
+        archive[state + "_rank_1"] = np.asarray([], dtype=np.uint8)
+    elif mutation == "mixed_framing":
+        archive[state + "_rank_1"] = np.frombuffer(b"POPSANDE-other", dtype=np.uint8)
+    elif mutation == "missing_authority":
+        del archive[state + "_source_authority"]
+    elif mutation == "wrong_authority":
+        archive[state + "_source_authority"] = np.frombuffer(b"old", dtype=np.uint8)
+    with pytest.raises(ValueError):
+        select_program_shard(archive, source_ranks=2, target_ranks=2, target_rank=1)
+
+
+def test_ranked_program_forest_never_relabels_rank_zero_on_cardinality_change():
+    from pops.runtime._amr_checkpoint_program_shards import select_program_shard
+    with pytest.raises(ValueError, match="ownership rematerialization"):
+        select_program_shard(_ranked_program_archive(), source_ranks=2, target_ranks=3, target_rank=2)
+
+
+def test_rank_independent_program_archive_keeps_native_rematerialization_route():
+    from pops.runtime._amr_checkpoint_program_shards import capture_program_shards, select_program_shard
+    archive = {}
+    capture_program_shards(archive, (b"POPSANDE-common",) * 2)
+    selected = select_program_shard(archive, source_ranks=2, target_ranks=3, target_rank=2)
+    assert selected["program_accepted_state"].tobytes() == b"POPSANDE-common"

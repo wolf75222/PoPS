@@ -11,12 +11,30 @@ _MAPPED_AMR_FIRST_ABI = 10
 
 def requires_mapped_consumed_field_output(value):
     """Inspect the exact serialized Program, without inferring from its maximum IR version."""
-    if isinstance(value, Mapping):
-        if value.get("contract") == "mapped-consumed-output@1" or value.get("op") == "field_map_pack":
-            return True
-        return any(requires_mapped_consumed_field_output(item) for item in value.values())
-    if isinstance(value, (tuple, list)):
-        return any(requires_mapped_consumed_field_output(item) for item in value)
+    pending = [(value, False)]
+    active, complete = set(), set()
+    while pending:
+        node, leaving = pending.pop()
+        marker = id(node)
+        if leaving:
+            active.remove(marker)
+            complete.add(marker)
+            continue
+        if not isinstance(node, (Mapping, tuple, list)):
+            continue
+        if marker in active:
+            raise ValueError("serialized Program capability metadata contains a cycle")
+        if marker in complete:
+            continue
+        if isinstance(node, Mapping):
+            if node.get("contract") == "mapped-consumed-output@1" or node.get("op") == "field_map_pack":
+                return True
+            children = tuple(node.values())
+        else:
+            children = node
+        active.add(marker)
+        pending.append((node, True))
+        pending.extend((item, False) for item in reversed(children))
     return False
 
 

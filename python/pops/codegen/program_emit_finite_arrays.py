@@ -15,24 +15,39 @@ def finite_cpp_helpers():
     return r'''
 #include <memory>
 #include <vector>
-#include <tuple>
-#include <variant>
+#include <any>
 #include <bit>
 #include <new>
+#include <atomic>
 #include <pops/runtime/program/continuation_authority.hpp>
+#include <pops/runtime/program/finite_kokkos.hpp>
+#include <pops/runtime/program/finite_structural_storage.hpp>
+namespace {
+std::atomic<std::uint64_t> pops_finite_kernel_launches{0};
+std::atomic<std::uint64_t> pops_finite_host_map_invocations{0};
+std::atomic<std::int64_t> pops_finite_kernel_last_failure{-1};
+}
+extern "C" std::uint64_t pops_finite_kokkos_launch_count() {
+  return pops_finite_kernel_launches.load(std::memory_order_relaxed);
+}
+extern "C" std::uint64_t pops_finite_host_map_count() {
+  return pops_finite_host_map_invocations.load(std::memory_order_relaxed);
+}
+extern "C" const char* pops_finite_kokkos_execution_space() {
+  return Kokkos::DefaultExecutionSpace::name();
+}
+extern "C" std::int64_t pops_finite_kokkos_last_failure_index() {
+  return pops_finite_kernel_last_failure.load(std::memory_order_relaxed);
+}
 namespace pops_algebra_finite {
 static_assert(sizeof(pops::Real) == sizeof(std::int64_t) && std::numeric_limits<pops::Real>::is_iec559,
               "finite Float64 arrays require IEEE binary64 native Real");
 using Domain = pops::runtime::program::FiniteDomain;
 using DomainRef = pops::runtime::program::FiniteDomainRef;
-struct Index {
-  DomainRef domain;
-  std::int64_t offset = 0;
-};
-template<class Element> struct Array {
-  DomainRef domain;
-  std::shared_ptr<const std::vector<Element>> values;
-};
+using Index = pops::runtime::program::finite_structural::Index;
+using Record = pops::runtime::program::finite_structural::Record;
+using Array = pops::runtime::program::finite_structural::Array;
+using pops::runtime::program::finite_structural::make_values;
 }
 '''
 
@@ -47,15 +62,15 @@ def finite_cpp_type(signature):
                         element.get("ownership") == "contiguous_distributed")
             return ns + ("Requests" if requests else "ArrayRef<pops::kNativeDimension>")
         return ns + {"index_set":"DomainRef", "index":"Index"}[kind]
+    if kind == "field_topology":
+        return "pops::runtime::program::FieldTopologyView<pops::kNativeDimension>"
     if kind.startswith("continuation_"):
         from .program_emit_versioned import capability_cpp_type
         return capability_cpp_type(signature)
-    if kind == "product":
-        return "std::tuple<%s>" % ", ".join(finite_cpp_type(item) for _,item in signature["members"])
-    if kind == "variant":
-        return "std::variant<%s>" % ", ".join(finite_cpp_type(item) for _,item in signature["members"])
+    if kind in ("product", "variant"):
+        return "pops_algebra_finite::Record"
     if kind == "array":
-        return "pops_algebra_finite::Array<%s>" % finite_cpp_type(signature["element"])
+        return "pops_algebra_finite::Array"
     if kind in ("state", "rhs", "scalar_field"):
         return "std::shared_ptr<pops::MultiFab<pops::kNativeDimension>>"
     return {"scalar":"pops::Real", "int64":"std::int64_t", "bool":"bool",
@@ -63,24 +78,9 @@ def finite_cpp_type(signature):
 
 
 def _packed(signature, token, lines, prefix):
-    if signature["vtype"] == "product":
-        return "std::make_tuple(%s)" % ", ".join(
-            _packed(child, token[key], lines, "%s_member%d" % (prefix, n))
-            for n, (key, child) in enumerate(signature["members"]))
-    if signature["vtype"] == "variant":
-        output = prefix + "_sum"
-        lines.append("%s %s;" % (finite_cpp_type(signature), output))
-        lines.append("switch (%s) {" % token["tag"])
-        for n, (tag, child) in enumerate(signature["members"]):
-            lines.append("case %d: {" % n)
-            body = []
-            packed = _packed(child, token["payloads"][tag], body, "%s_arm%d" % (prefix, n))
-            body.append("%s.emplace<%d>(%s);" % (output, n, packed))
-            lines.extend("  " + line for line in body)
-            lines.append("  break; }")
-        lines.append('default: throw std::logic_error("invalid Variant element discriminant");')
-        lines.append("}")
-        return output
+    if signature["vtype"] in ("product", "variant"):
+        from .program_structural_storage import pack_record
+        return pack_record(signature, token, lines, prefix)
     if signature["vtype"] in ("state", "rhs", "scalar_field"):
         from .program_emit_structured_control import _copy
         output = prefix + "_snapshot"
@@ -89,88 +89,46 @@ def _packed(signature, token, lines, prefix):
                   output, lines)
         _copy(signature, "(*%s)" % output, token, lines)
         return output
-    return token
+    return "%s(%s)" % (finite_cpp_type(signature), token)
 
 
 def _unpacked(signature, token):
-    if signature["vtype"] == "product":
-        return {key:_unpacked(child,"std::get<%d>(%s)" % (n,token))
-                for n,(key,child) in enumerate(signature["members"])}
-    if signature["vtype"] == "variant":
-        return {"tag": "std::int64_t((%s).index())" % token,
-                "payloads": {key: _unpacked(child, "std::get<%d>(%s)" % (n, token))
-                             for n, (key, child) in enumerate(signature["members"])}}
+    if signature["vtype"] in ("product", "variant"):
+        from .program_structural_storage import unpack_record
+        return unpack_record(signature, token)
     if signature["vtype"] in ("state", "rhs", "scalar_field"):
         return "(*(%s))" % token
     return token
 
 
+def _unpacked_cell(signature, token):
+    return _unpacked(signature, "std::any_cast<const %s&>(%s)" % (finite_cpp_type(signature), token))
+
+
+def _store_cell(value, destination, lines, prefix):
+    lines.append("std::any %s;" % prefix)
+    _allocate("std::any(%s)" % value, prefix, lines)
+    lines.append("%s = std::move(%s);" % (destination, prefix))
+
+
 def _uniform_element(signature, token, lines, depth=0):
-    from .program_emit_structured_control import _reject_if, _uniform_int
-    kind = signature["vtype"]
-    if kind == "product":
-        for key,child in signature["members"]:
-            _uniform_element(child,token[key],lines,depth)
-    elif kind == "variant":
-        _uniform_int(token["tag"], lines, "replicated Variant tag differs across execution ranks")
-        _reject_if("%s < 0 || %s >= %d" % (token["tag"], token["tag"], len(signature["members"])),
-                   lines, "replicated Variant has an invalid discriminant")
-        lines.append("switch (%s) {" % token["tag"])
-        for n, (tag, child) in enumerate(signature["members"]):
-            lines.append("case %d: {" % n)
-            body = []
-            _uniform_element(child, token["payloads"][tag], body, depth)
-            lines.extend("  " + line for line in body)
-            lines.append("  break; }")
-        lines.append("}")
-    elif kind == "array":
-        _check_domain(signature, "(%s).domain" % token, lines)
-        _reject_if("!(%s).values || (%s).values->size() != std::size_t((%s).domain->size)" % ((token,)*3),
-                   lines, "replicated nested Array has an invalid buffer")
-        # A nested scope gives each recursive array level its own loop variable.
-        lines.append("{")
-        index = "element_i_%d" % depth
-        lines.append("for (std::int64_t %s = 0; %s < (%s).domain->size; ++%s) {" % (index,index,token,index))
-        body = []
-        _uniform_element(signature["element"], _unpacked(signature["element"],
-                          "(*(%s).values)[std::size_t(%s)]" % (token,index)), body, depth+1)
-        lines.extend("  " + line for line in body)
-        lines.extend(("}", "}"))
-    elif kind == "index_set":
-        _check_domain(signature, token, lines)
-    elif kind in ("state", "rhs", "scalar_field"):
-        # The outer finite index is replicated; each field element retains its actual distributed
-        # MultiFab ownership. Its data must not be compared as if every rank held a replica.
-        # The authoring signature authenticates the state/support, and packing snapshots storage.
-        pass
-    elif kind == "scalar":
-        _reject_if("!std::isfinite(%s)" % token,lines,"replicated array has a nonfinite element")
-        # Compare the exact IEEE payload as signed Int64. This preserves signed zero and
-        # cannot silently erase a NaN through floating min/max; non-finite is rejected first.
-        _uniform_int("std::bit_cast<std::int64_t>(pops::Real(%s))" % token,lines,
-                     "replicated array Float64 bits differ across execution ranks")
-    elif kind in ("int64", "bool"):
-        _uniform_int("std::int64_t(%s)" % token,lines,"replicated array element differs across execution ranks")
-    elif kind == "index":
-        _reject_if("!(%s).domain || !(%s).domain->visible() || (%s).offset < 0 || (%s).offset >= (%s).domain->size" % ((token,)*5),
-                   lines,"replicated array contains an invalid Index")
-        for expression in ("(%s).offset"%token,"(%s).domain->family"%token,
-                           "(%s).domain->version"%token,"(%s).domain->size"%token):
-            _uniform_int(expression,lines,"replicated Index instance differs across execution ranks")
-    else:
-        raise TypeError("unsupported replicated array element type %r" % kind)
+    from .program_uniform_finite import uniform_element
+    uniform_element(signature, token, lines)
 
 
 def _allocate(expression, token, lines):
     """Collective allocation rendezvous before any peer can enter a body collective."""
     from .program_emit_structured_control import _reject_if
-    lines += ["bool %s_exhausted = false;"%token, "std::exception_ptr %s_error;"%token,
+    # A destination may be allocated again (for example refreshing a host mirror
+    # after a device kernel). Keep temporary failure state local to each call.
+    lines += ["{", "bool %s_exhausted = false;"%token, "std::exception_ptr %s_error;"%token,
               "try { %s = %s; }"%(token,expression),
               "catch (const std::bad_alloc&) { %s_exhausted = true; }"%token,
               "catch (const std::length_error&) { %s_exhausted = true; }"%token,
               "catch (...) { %s_error = std::current_exception(); }"%token,
               'pops::collectively_rethrow_exception(%s_error, ctx.prepared_execution_lane(), "finite array allocation");'%token]
     _reject_if("%s_exhausted"%token,lines,"finite array allocation capacity exhausted")
+    lines.append("}")
 
 
 def _check_domain(signature, token, lines):
@@ -187,6 +145,10 @@ def _check_domain(signature, token, lines):
 def _emit_array_region(program,value,var,model,lines,prelude,block_idx,field_plans,target):
     from .program_emit_structured_control import _check_region_effects, _emit_region, _slots, _copy, _storage_width
     _check_region_effects(value.attrs["body_block"])
+    from .program_emit_finite_kokkos import emit_map
+    if emit_map(value, var, lines):
+        return
+    lines.append("pops_finite_host_map_invocations.fetch_add(1, std::memory_order_relaxed);")
     scan = value.op == "finite_scan"
     domain = value.inputs[1] if scan else value.inputs[0]
     signature = value.attrs["array_signature"] if scan else value_signature(value)
@@ -195,8 +157,8 @@ def _emit_array_region(program,value,var,model,lines,prelude,block_idx,field_pla
     _check_domain(value_signature(domain),domain_token,lines)
     prefix = "finite_%d"%value.id
     buffer = prefix+"_buffer"
-    lines.append("std::shared_ptr<std::vector<%s>> %s;"%(finite_cpp_type(element),buffer))
-    _allocate("std::make_shared<std::vector<%s>>(std::size_t((%s)->size))"%(finite_cpp_type(element),domain_token),buffer,lines)
+    lines.append("std::shared_ptr<std::vector<std::any>> %s;" % buffer)
+    _allocate("pops_algebra_finite::make_values(std::size_t((%s)->size))" % domain_token,buffer,lines)
     if scan:
         initial = value.inputs[0]
         state_signature = value_signature(initial)
@@ -216,7 +178,7 @@ def _emit_array_region(program,value,var,model,lines,prelude,block_idx,field_pla
     emitted = result["value"] if scan else result
     _uniform_element(element,emitted,body)
     packed = _packed(element, emitted, body, prefix+"_element")
-    body.append("(*%s)[std::size_t(%s)] = %s;"%(buffer,index,packed))
+    _store_cell(packed, "(*%s)[std::size_t(%s)]" % (buffer, index), body, prefix+"_publication")
     if scan:
         _copy(state_signature,pending,result["state"],body)
         _copy(state_signature,current,pending,body)
@@ -229,12 +191,10 @@ def _emit_array_region(program,value,var,model,lines,prelude,block_idx,field_pla
 
 
 def emit_finite_op(program,value,var,model,lines,prelude,block_idx,field_plans,target):
-    if target != "system":
-        raise NotImplementedError(
-            "finite arrays currently require one Uniform Program invocation; "
-            "AMR level invocation and collective ownership are not qualified")
-    from .program_emit_structured_control import _reject_if, _uniform_int
     op = value.op
+    if target not in ("system", "amr_system"):
+        raise ValueError("finite arrays require a native Program execution target")
+    from .program_emit_structured_control import _reject_if, _uniform_int
     token = "finite_%d"%value.id
     if op in ("finite_map", "finite_scan"):
         _emit_array_region(program,value,var,model,lines,prelude,block_idx,field_plans,target)
@@ -291,7 +251,7 @@ def emit_finite_op(program,value,var,model,lines,prelude,block_idx,field_plans,t
                    "Array access requires the same live domain instance and an in-range Index")
         lines.append("const auto %s = (*(%s).values)[std::size_t((%s).offset)];"%(token,array,index))
         signature = value_signature(value)
-        unpacked = _unpacked(signature,token)
+        unpacked = _unpacked_cell(signature,token)
         def has_field(item):
             if item["vtype"] in ("state", "rhs", "scalar_field"):
                 return True

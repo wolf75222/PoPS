@@ -1,0 +1,3130 @@
+{
+  "schema": "pops-api02-reviewed-components-v1",
+  "profiles": {
+    "M01:periodic-advection": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "transport",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m01",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "face-incidence",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m01",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "advance",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m01",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M02:godunov-burgers": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "burgers-flux",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m02",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "entropy-face",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m02",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "advance",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m02",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M03:stiffened-euler": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "balances",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m03",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "eos",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m03",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "advance",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m03",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M04:oblique-tensor-diffusion": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "transport",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m04",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "tensor-diffusion",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m04",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "composition",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m04",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M05:two-dimensional-navier-stokes": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "euler",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m05",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "stress",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m05",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "heat",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m05",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "spatial",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m05",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M06:one-phase-stefan": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "enthalpy",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m06",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "conduction",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m06",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "boundary",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m06",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "advance",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m06",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M07:wet-dry-hydrostatic": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "water",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m07",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "bed",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m07",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "dry-state",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m07",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "face",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m07",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M08:periodic-guiding-center": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "charge-transport",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m08",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "poisson",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m08",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "freshness",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m08",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M09:magnetic-midpoint-schur": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "euler",
+          "source_symbol": "examples.api_v02.models_magnetic_midpoint:build_m09_midpoint",
+          "source_sha256": "2f34aa926d0e01a832417b2c076813eb873416ef45ef85078dba059264f35911"
+        },
+        {
+          "component": "midpoint",
+          "source_symbol": "examples.api_v02.models_magnetic_midpoint:build_m09_midpoint",
+          "source_sha256": "2f34aa926d0e01a832417b2c076813eb873416ef45ef85078dba059264f35911"
+        },
+        {
+          "component": "current",
+          "source_symbol": "examples.api_v02.models_magnetic_midpoint:build_m09_midpoint",
+          "source_sha256": "2f34aa926d0e01a832417b2c076813eb873416ef45ef85078dba059264f35911"
+        },
+        {
+          "component": "schur",
+          "source_symbol": "examples.api_v02.models_magnetic_midpoint:build_m09_midpoint",
+          "source_sha256": "2f34aa926d0e01a832417b2c076813eb873416ef45ef85078dba059264f35911"
+        },
+        {
+          "component": "original-residual",
+          "source_symbol": "examples.api_v02.models_magnetic_midpoint:build_m09_midpoint",
+          "source_sha256": "2f34aa926d0e01a832417b2c076813eb873416ef45ef85078dba059264f35911"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ],
+        [
+          "examples.api_v02.scientific_krylov_v14",
+          "3c56e085a38e5fdaf74eb42a79e492c49db654073ee8a86ffd8565914e32ee46"
+        ]
+      ]
+    },
+    "M10:scharfetter-gummel-poisson": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "drift-diffusion",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m10",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "poisson",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m10",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "stage-coupling",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m10",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M11:ternary-maxwell-stefan-poisson": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "mixture",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m11",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "friction",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m11",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "mass-constraint",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m11",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        },
+        {
+          "component": "poisson",
+          "source_symbol": "examples.api_v02.models_M01_M14:build_m11",
+          "source_sha256": "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M12:five-ten-moment-maxwell": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "five-moments",
+          "source_symbol": "examples.api_v02.models_M12:build_m12",
+          "source_sha256": "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        },
+        {
+          "component": "ten-moments",
+          "source_symbol": "examples.api_v02.models_M12:build_m12",
+          "source_sha256": "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        },
+        {
+          "component": "maxwell",
+          "source_symbol": "examples.api_v02.models_M12:build_m12",
+          "source_sha256": "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        },
+        {
+          "component": "exchange",
+          "source_symbol": "examples.api_v02.models_M12:build_m12",
+          "source_sha256": "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        },
+        {
+          "component": "constraints",
+          "source_symbol": "examples.api_v02.models_M12:build_m12",
+          "source_sha256": "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M13:streamer-photoionization": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "transport",
+          "source_symbol": "examples.api_v02.models_M13:build_m13",
+          "source_sha256": "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        },
+        {
+          "component": "reactions",
+          "source_symbol": "examples.api_v02.models_M13:build_m13",
+          "source_sha256": "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        },
+        {
+          "component": "poisson",
+          "source_symbol": "examples.api_v02.models_M13:build_m13",
+          "source_sha256": "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        },
+        {
+          "component": "photoionization",
+          "source_symbol": "examples.api_v02.models_M13:build_m13",
+          "source_sha256": "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        },
+        {
+          "component": "invariants",
+          "source_symbol": "examples.api_v02.models_M13:build_m13",
+          "source_sha256": "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M14:cold-sheath-circuit": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "plasma",
+          "source_symbol": "examples.api_v02.models_M14:build_m14",
+          "source_sha256": "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        },
+        {
+          "component": "wall",
+          "source_symbol": "examples.api_v02.models_M14:build_m14",
+          "source_sha256": "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        },
+        {
+          "component": "circuit",
+          "source_symbol": "examples.api_v02.models_M14:build_m14",
+          "source_sha256": "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        },
+        {
+          "component": "charge-ledger",
+          "source_symbol": "examples.api_v02.models_M14:build_m14",
+          "source_sha256": "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M15:hyqmom-order-four": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "moments",
+          "source_symbol": "examples.api_v02.models_M15_orders:build_m15_orders",
+          "source_sha256": "aa12b6f241652b80ef7df2879752cd2ccc09b5b40a2c311d10d5bb95764d693f"
+        },
+        {
+          "component": "closure",
+          "source_symbol": "examples.api_v02.models_M15_orders:build_m15_orders",
+          "source_sha256": "aa12b6f241652b80ef7df2879752cd2ccc09b5b40a2c311d10d5bb95764d693f"
+        },
+        {
+          "component": "admissibility",
+          "source_symbol": "examples.api_v02.models_M15_orders:build_m15_orders",
+          "source_sha256": "aa12b6f241652b80ef7df2879752cd2ccc09b5b40a2c311d10d5bb95764d693f"
+        },
+        {
+          "component": "transport",
+          "source_symbol": "examples.api_v02.models_M15_orders:build_m15_orders",
+          "source_sha256": "aa12b6f241652b80ef7df2879752cd2ccc09b5b40a2c311d10d5bb95764d693f"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ]
+      ]
+    },
+    "M16:hyqmom15-b1": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "moments",
+          "source_symbol": "examples.api_v02.models_M15_M18:build_m16",
+          "source_sha256": "a7ebbda75aa59a17f57ee88973cc821477d96ad9cc50f573608504143d1824fa"
+        },
+        {
+          "component": "magnetic",
+          "source_symbol": "examples.api_v02.models_M15_M18:build_m16",
+          "source_sha256": "a7ebbda75aa59a17f57ee88973cc821477d96ad9cc50f573608504143d1824fa"
+        },
+        {
+          "component": "transport",
+          "source_symbol": "examples.api_v02.models_M15_M18:build_m16",
+          "source_sha256": "a7ebbda75aa59a17f57ee88973cc821477d96ad9cc50f573608504143d1824fa"
+        },
+        {
+          "component": "admissibility",
+          "source_symbol": "examples.api_v02.models_M15_M18:build_m16",
+          "source_sha256": "a7ebbda75aa59a17f57ee88973cc821477d96ad9cc50f573608504143d1824fa"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ]
+      ]
+    },
+    "M17:fan-li15-path": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "moments",
+          "source_symbol": "examples.api_v02.models_M15_M18:build_m17",
+          "source_sha256": "a7ebbda75aa59a17f57ee88973cc821477d96ad9cc50f573608504143d1824fa"
+        },
+        {
+          "component": "nonconservative",
+          "source_symbol": "examples.api_v02.models_M15_M18:build_m17",
+          "source_sha256": "a7ebbda75aa59a17f57ee88973cc821477d96ad9cc50f573608504143d1824fa"
+        },
+        {
+          "component": "path-quadrature",
+          "source_symbol": "examples.api_v02.models_M15_M18:build_m17",
+          "source_sha256": "a7ebbda75aa59a17f57ee88973cc821477d96ad9cc50f573608504143d1824fa"
+        },
+        {
+          "component": "domain",
+          "source_symbol": "examples.api_v02.models_M15_M18:build_m17",
+          "source_sha256": "a7ebbda75aa59a17f57ee88973cc821477d96ad9cc50f573608504143d1824fa"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ]
+      ]
+    },
+    "M18:discrete-entropy-m2": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "moments",
+          "source_symbol": "examples.api_v02.models_M18_entropy:build_m18_entropy",
+          "source_sha256": "bbcc8668e22b1f14c195838590f5fe350ec44cd37bfc273d8a1e4640e26f6b88"
+        },
+        {
+          "component": "entropy",
+          "source_symbol": "examples.api_v02.models_M18_entropy:build_m18_entropy",
+          "source_sha256": "bbcc8668e22b1f14c195838590f5fe350ec44cd37bfc273d8a1e4640e26f6b88"
+        },
+        {
+          "component": "newton",
+          "source_symbol": "examples.api_v02.models_M18_entropy:build_m18_entropy",
+          "source_sha256": "bbcc8668e22b1f14c195838590f5fe350ec44cd37bfc273d8a1e4640e26f6b88"
+        },
+        {
+          "component": "tangent",
+          "source_symbol": "examples.api_v02.models_M18_entropy:build_m18_entropy",
+          "source_sha256": "bbcc8668e22b1f14c195838590f5fe350ec44cd37bfc273d8a1e4640e26f6b88"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M19:distributed-vlasov-poisson-bgk": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "phase-space",
+          "source_symbol": "examples.api_v02.models_kinetic_nd:build_kinetic_nd",
+          "source_sha256": "1bd09f65bd5cd0a808188f5747e2775e92a2e8e7be8ffc660ed432fb68cfec29"
+        },
+        {
+          "component": "vlasov",
+          "source_symbol": "examples.api_v02.models_kinetic_nd:build_kinetic_nd",
+          "source_sha256": "1bd09f65bd5cd0a808188f5747e2775e92a2e8e7be8ffc660ed432fb68cfec29"
+        },
+        {
+          "component": "moments",
+          "source_symbol": "examples.api_v02.models_kinetic_nd:build_kinetic_nd",
+          "source_sha256": "1bd09f65bd5cd0a808188f5747e2775e92a2e8e7be8ffc660ed432fb68cfec29"
+        },
+        {
+          "component": "poisson",
+          "source_symbol": "examples.api_v02.models_kinetic_nd:build_kinetic_nd",
+          "source_sha256": "1bd09f65bd5cd0a808188f5747e2775e92a2e8e7be8ffc660ed432fb68cfec29"
+        },
+        {
+          "component": "bgk",
+          "source_symbol": "examples.api_v02.models_kinetic_nd:build_kinetic_nd",
+          "source_sha256": "1bd09f65bd5cd0a808188f5747e2775e92a2e8e7be8ffc660ed432fb68cfec29"
+        },
+        {
+          "component": "acceptance",
+          "source_symbol": "examples.api_v02.models_kinetic_nd:build_kinetic_nd",
+          "source_sha256": "1bd09f65bd5cd0a808188f5747e2775e92a2e8e7be8ffc660ed432fb68cfec29"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.phase_space_transport",
+          "aac65c0301e7843b4e9047ab2495c49df438d633dd81e0988f1c39bac2515f1c"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M20:distributed-mixture-fokker-planck": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "phase-space",
+          "source_symbol": "examples.api_v02.models_kinetic_nd:build_kinetic_nd",
+          "source_sha256": "1bd09f65bd5cd0a808188f5747e2775e92a2e8e7be8ffc660ed432fb68cfec29"
+        },
+        {
+          "component": "spatial-transport",
+          "source_symbol": "examples.api_v02.models_kinetic_nd:build_kinetic_nd",
+          "source_sha256": "1bd09f65bd5cd0a808188f5747e2775e92a2e8e7be8ffc660ed432fb68cfec29"
+        },
+        {
+          "component": "pairs",
+          "source_symbol": "examples.api_v02.models_kinetic_nd:build_kinetic_nd",
+          "source_sha256": "1bd09f65bd5cd0a808188f5747e2775e92a2e8e7be8ffc660ed432fb68cfec29"
+        },
+        {
+          "component": "drift-diffusion",
+          "source_symbol": "examples.api_v02.models_kinetic_nd:build_kinetic_nd",
+          "source_sha256": "1bd09f65bd5cd0a808188f5747e2775e92a2e8e7be8ffc660ed432fb68cfec29"
+        },
+        {
+          "component": "invariants",
+          "source_symbol": "examples.api_v02.models_kinetic_nd:build_kinetic_nd",
+          "source_sha256": "1bd09f65bd5cd0a808188f5747e2775e92a2e8e7be8ffc660ed432fb68cfec29"
+        },
+        {
+          "component": "pair-fold",
+          "source_symbol": "examples.api_v02.models_kinetic_nd:build_kinetic_nd",
+          "source_sha256": "1bd09f65bd5cd0a808188f5747e2775e92a2e8e7be8ffc660ed432fb68cfec29"
+        },
+        {
+          "component": "acceptance",
+          "source_symbol": "examples.api_v02.models_kinetic_nd:build_kinetic_nd",
+          "source_sha256": "1bd09f65bd5cd0a808188f5747e2775e92a2e8e7be8ffc660ed432fb68cfec29"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.phase_space_transport",
+          "aac65c0301e7843b4e9047ab2495c49df438d633dd81e0988f1c39bac2515f1c"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M21:full-f-geometric-nonboussinesq": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "phase-space",
+          "source_symbol": "examples.api_v02.model_gyrokinetic_nd:build_gyrokinetic_nd",
+          "source_sha256": "caa3bab236be8d0ec5d203cc924b4a02c04aa88de7e8129d363eec2b4bcbb4b5"
+        },
+        {
+          "component": "characteristics",
+          "source_symbol": "examples.api_v02.model_gyrokinetic_nd:build_gyrokinetic_nd",
+          "source_sha256": "caa3bab236be8d0ec5d203cc924b4a02c04aa88de7e8129d363eec2b4bcbb4b5"
+        },
+        {
+          "component": "polarization",
+          "source_symbol": "examples.api_v02.model_gyrokinetic_nd:build_gyrokinetic_nd",
+          "source_sha256": "caa3bab236be8d0ec5d203cc924b4a02c04aa88de7e8129d363eec2b4bcbb4b5"
+        },
+        {
+          "component": "hamiltonian",
+          "source_symbol": "examples.api_v02.model_gyrokinetic_nd:build_gyrokinetic_nd",
+          "source_sha256": "caa3bab236be8d0ec5d203cc924b4a02c04aa88de7e8129d363eec2b4bcbb4b5"
+        },
+        {
+          "component": "ampere",
+          "source_symbol": "examples.api_v02.model_gyrokinetic_nd:build_gyrokinetic_nd",
+          "source_sha256": "caa3bab236be8d0ec5d203cc924b4a02c04aa88de7e8129d363eec2b4bcbb4b5"
+        },
+        {
+          "component": "induction",
+          "source_symbol": "examples.api_v02.model_gyrokinetic_nd:build_gyrokinetic_nd",
+          "source_sha256": "caa3bab236be8d0ec5d203cc924b4a02c04aa88de7e8129d363eec2b4bcbb4b5"
+        },
+        {
+          "component": "collisions",
+          "source_symbol": "examples.api_v02.model_gyrokinetic_nd:build_gyrokinetic_nd",
+          "source_sha256": "caa3bab236be8d0ec5d203cc924b4a02c04aa88de7e8129d363eec2b4bcbb4b5"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.phase_space_transport",
+          "aac65c0301e7843b4e9047ab2495c49df438d633dd81e0988f1c39bac2515f1c"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M22:gray-m1-material": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "material",
+          "source_symbol": "examples.api_v02.models_M22_M25_M28:build_m22",
+          "source_sha256": "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        },
+        {
+          "component": "radiation",
+          "source_symbol": "examples.api_v02.models_M22_M25_M28:build_m22",
+          "source_sha256": "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        },
+        {
+          "component": "exchange",
+          "source_symbol": "examples.api_v02.models_M22_M25_M28:build_m22",
+          "source_sha256": "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        },
+        {
+          "component": "stages",
+          "source_symbol": "examples.api_v02.models_M22_M25_M28:build_m22",
+          "source_sha256": "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M23:hall-ohm-staggered-ct": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "material",
+          "source_symbol": "examples.api_v02.model_hall_mhd_ct:build_hall_mhd_ct",
+          "source_sha256": "cd844c008c64a7020ff67249ad423f910c346ca28a8eabc74f7c6bbd773e5610"
+        },
+        {
+          "component": "stress",
+          "source_symbol": "examples.api_v02.model_hall_mhd_ct:build_hall_mhd_ct",
+          "source_sha256": "cd844c008c64a7020ff67249ad423f910c346ca28a8eabc74f7c6bbd773e5610"
+        },
+        {
+          "component": "ct",
+          "source_symbol": "examples.api_v02.model_hall_mhd_ct:build_hall_mhd_ct",
+          "source_sha256": "cd844c008c64a7020ff67249ad423f910c346ca28a8eabc74f7c6bbd773e5610"
+        },
+        {
+          "component": "hall",
+          "source_symbol": "examples.api_v02.model_hall_mhd_ct:build_hall_mhd_ct",
+          "source_sha256": "cd844c008c64a7020ff67249ad423f910c346ca28a8eabc74f7c6bbd773e5610"
+        },
+        {
+          "component": "ohm",
+          "source_symbol": "examples.api_v02.model_hall_mhd_ct:build_hall_mhd_ct",
+          "source_sha256": "cd844c008c64a7020ff67249ad423f910c346ca28a8eabc74f7c6bbd773e5610"
+        },
+        {
+          "component": "poynting",
+          "source_symbol": "examples.api_v02.model_hall_mhd_ct:build_hall_mhd_ct",
+          "source_sha256": "cd844c008c64a7020ff67249ad423f910c346ca28a8eabc74f7c6bbd773e5610"
+        },
+        {
+          "component": "advance",
+          "source_symbol": "examples.api_v02.model_hall_mhd_ct:build_hall_mhd_ct",
+          "source_sha256": "cd844c008c64a7020ff67249ad423f910c346ca28a8eabc74f7c6bbd773e5610"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.phase_space_transport",
+          "aac65c0301e7843b4e9047ab2495c49df438d633dd81e0988f1c39bac2515f1c"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M24:bn-pressure-velocity-relaxation": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "balances",
+          "source_symbol": "examples.api_v02.models_M22_M25_M28:build_m24",
+          "source_sha256": "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        },
+        {
+          "component": "interface",
+          "source_symbol": "examples.api_v02.models_M22_M25_M28:build_m24",
+          "source_sha256": "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        },
+        {
+          "component": "path",
+          "source_symbol": "examples.api_v02.models_M22_M25_M28:build_m24",
+          "source_sha256": "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        },
+        {
+          "component": "pressure-relaxation",
+          "source_symbol": "examples.api_v02.models_M22_M25_M28:build_m24",
+          "source_sha256": "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        },
+        {
+          "component": "velocity-relaxation",
+          "source_symbol": "examples.api_v02.models_M22_M25_M28:build_m24",
+          "source_sha256": "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        },
+        {
+          "component": "stages",
+          "source_symbol": "examples.api_v02.models_M22_M25_M28:build_m24",
+          "source_sha256": "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M25:gpr-thermomechanical": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "mechanics",
+          "source_symbol": "examples.api_v02.models_M22_M25_M28:build_m25",
+          "source_sha256": "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        },
+        {
+          "component": "distortion",
+          "source_symbol": "examples.api_v02.models_M22_M25_M28:build_m25",
+          "source_sha256": "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        },
+        {
+          "component": "thermal",
+          "source_symbol": "examples.api_v02.models_M22_M25_M28:build_m25",
+          "source_sha256": "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        },
+        {
+          "component": "relaxations",
+          "source_symbol": "examples.api_v02.models_M22_M25_M28:build_m25",
+          "source_sha256": "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        },
+        {
+          "component": "path",
+          "source_symbol": "examples.api_v02.models_M22_M25_M28:build_m25",
+          "source_sha256": "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "M26:aggregation-global-convolution": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "potential",
+          "source_symbol": "examples.api_v02.models_M15_M28:build_m26",
+          "source_sha256": "16256aab1f165ee6aed2096f2120ba58d60474e5b8dbb427b0f933fb21d4ff9c"
+        },
+        {
+          "component": "convolution",
+          "source_symbol": "examples.api_v02.models_M15_M28:build_m26",
+          "source_sha256": "16256aab1f165ee6aed2096f2120ba58d60474e5b8dbb427b0f933fb21d4ff9c"
+        },
+        {
+          "component": "diffusion",
+          "source_symbol": "examples.api_v02.models_M15_M28:build_m26",
+          "source_sha256": "16256aab1f165ee6aed2096f2120ba58d60474e5b8dbb427b0f933fb21d4ff9c"
+        },
+        {
+          "component": "balance",
+          "source_symbol": "examples.api_v02.models_M15_M28:build_m26",
+          "source_sha256": "16256aab1f165ee6aed2096f2120ba58d60474e5b8dbb427b0f933fb21d4ff9c"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ]
+      ]
+    },
+    "M27:cahn-hilliard-fourth-order": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "free-energy",
+          "source_symbol": "examples.api_v02.models_M15_M28:build_m27",
+          "source_sha256": "16256aab1f165ee6aed2096f2120ba58d60474e5b8dbb427b0f933fb21d4ff9c"
+        },
+        {
+          "component": "chemical-potential",
+          "source_symbol": "examples.api_v02.models_M15_M28:build_m27",
+          "source_sha256": "16256aab1f165ee6aed2096f2120ba58d60474e5b8dbb427b0f933fb21d4ff9c"
+        },
+        {
+          "component": "fourth-order",
+          "source_symbol": "examples.api_v02.models_M15_M28:build_m27",
+          "source_sha256": "16256aab1f165ee6aed2096f2120ba58d60474e5b8dbb427b0f933fb21d4ff9c"
+        },
+        {
+          "component": "balance",
+          "source_symbol": "examples.api_v02.models_M15_M28:build_m27",
+          "source_sha256": "16256aab1f165ee6aed2096f2120ba58d60474e5b8dbb427b0f933fb21d4ff9c"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ]
+      ]
+    },
+    "M28:multidimensional-reynolds-ale": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "geometry",
+          "source_symbol": "examples.api_v02.model_ale_nd:build_ale_nd",
+          "source_sha256": "064f9ffa33e689c2eed1129d1028046295e91b357ca0c977c6604b727b57743c"
+        },
+        {
+          "component": "swept-measures",
+          "source_symbol": "examples.api_v02.model_ale_nd:build_ale_nd",
+          "source_sha256": "064f9ffa33e689c2eed1129d1028046295e91b357ca0c977c6604b727b57743c"
+        },
+        {
+          "component": "reynolds",
+          "source_symbol": "examples.api_v02.model_ale_nd:build_ale_nd",
+          "source_sha256": "064f9ffa33e689c2eed1129d1028046295e91b357ca0c977c6604b727b57743c"
+        },
+        {
+          "component": "gcl",
+          "source_symbol": "examples.api_v02.model_ale_nd:build_ale_nd",
+          "source_sha256": "064f9ffa33e689c2eed1129d1028046295e91b357ca0c977c6604b727b57743c"
+        },
+        {
+          "component": "inventory",
+          "source_symbol": "examples.api_v02.model_ale_nd:build_ale_nd",
+          "source_sha256": "064f9ffa33e689c2eed1129d1028046295e91b357ca0c977c6604b727b57743c"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.phase_space_transport",
+          "aac65c0301e7843b4e9047ab2495c49df438d633dd81e0988f1c39bac2515f1c"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "T01:stage-constrained-ssprk2": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "tableau",
+          "source_symbol": "examples.api_v02.methods_T01_T12:build_t01",
+          "source_sha256": "559061a560b74580c8e7a1d39b4806ae21099ed662999c938937328059c76c62"
+        },
+        {
+          "component": "constraints",
+          "source_symbol": "examples.api_v02.methods_T01_T12:build_t01",
+          "source_sha256": "559061a560b74580c8e7a1d39b4806ae21099ed662999c938937328059c76c62"
+        },
+        {
+          "component": "stage-state",
+          "source_symbol": "examples.api_v02.methods_T01_T12:build_t01",
+          "source_sha256": "559061a560b74580c8e7a1d39b4806ae21099ed662999c938937328059c76c62"
+        },
+        {
+          "component": "original-residual",
+          "source_symbol": "examples.api_v02.methods_T01_T12:build_t01",
+          "source_sha256": "559061a560b74580c8e7a1d39b4806ae21099ed662999c938937328059c76c62"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.coverage",
+          "aff43733e35893ea1466a5642f5039c7e49b03a532d13cc89f9782b268ecce05"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.method_amr_reception",
+          "d2bda4a0d61554431483e467e50dc687030bb68c3e0c82644fc93fbbd120f7c3"
+        ],
+        [
+          "examples.api_v02.method_euler_correction",
+          "028b12c411d3d16ea67ddfa141f1989040246c7647cb02c4c881d90dca5c236e"
+        ],
+        [
+          "examples.api_v02.method_interval_transport",
+          "c32b207eb7d5ae9e1cc796b2789c198a288f53dbc21c4b17144d75fccfce93aa"
+        ],
+        [
+          "examples.api_v02.method_krylov",
+          "ca983d754bbd6ab36e3f8583ca759138fa140737e84fa7b290d7a5cf0b57a44b"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "T02:ars222-imex": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "split",
+          "source_symbol": "examples.api_v02.methods_coupled_nonsymmetric:build_t02_imex_second_order",
+          "source_sha256": "5f247cba3d03d5438ef88b0af0e4307020e9bfcb2e441bfd6aef02bb50348859"
+        },
+        {
+          "component": "tableau",
+          "source_symbol": "examples.api_v02.methods_coupled_nonsymmetric:build_t02_imex_second_order",
+          "source_sha256": "5f247cba3d03d5438ef88b0af0e4307020e9bfcb2e441bfd6aef02bb50348859"
+        },
+        {
+          "component": "implicit",
+          "source_symbol": "examples.api_v02.methods_coupled_nonsymmetric:build_t02_imex_second_order",
+          "source_sha256": "5f247cba3d03d5438ef88b0af0e4307020e9bfcb2e441bfd6aef02bb50348859"
+        },
+        {
+          "component": "combination",
+          "source_symbol": "examples.api_v02.methods_coupled_nonsymmetric:build_t02_imex_second_order",
+          "source_sha256": "5f247cba3d03d5438ef88b0af0e4307020e9bfcb2e441bfd6aef02bb50348859"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ],
+        [
+          "examples.api_v02.scientific_krylov_v14",
+          "3c56e085a38e5fdaf74eb42a79e492c49db654073ee8a86ffd8565914e32ee46"
+        ]
+      ]
+    },
+    "T03:dirichlet-extended-strang": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "lifting",
+          "source_symbol": "examples.api_v02.method_splitting_boundary:build_t03_dirichlet",
+          "source_sha256": "72887b42e2d6abcfc50b05374ef221fa7ab7d963366b5f71cb7f9e17e057490b"
+        },
+        {
+          "component": "domains",
+          "source_symbol": "examples.api_v02.method_splitting_boundary:build_t03_dirichlet",
+          "source_sha256": "72887b42e2d6abcfc50b05374ef221fa7ab7d963366b5f71cb7f9e17e057490b"
+        },
+        {
+          "component": "flows",
+          "source_symbol": "examples.api_v02.method_splitting_boundary:build_t03_dirichlet",
+          "source_sha256": "72887b42e2d6abcfc50b05374ef221fa7ab7d963366b5f71cb7f9e17e057490b"
+        },
+        {
+          "component": "clocks",
+          "source_symbol": "examples.api_v02.method_splitting_boundary:build_t03_dirichlet",
+          "source_sha256": "72887b42e2d6abcfc50b05374ef221fa7ab7d963366b5f71cb7f9e17e057490b"
+        },
+        {
+          "component": "composition",
+          "source_symbol": "examples.api_v02.method_splitting_boundary:build_t03_dirichlet",
+          "source_sha256": "72887b42e2d6abcfc50b05374ef221fa7ab7d963366b5f71cb7f9e17e057490b"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.methods_coupled_nonsymmetric",
+          "5f247cba3d03d5438ef88b0af0e4307020e9bfcb2e441bfd6aef02bb50348859"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ],
+        [
+          "examples.api_v02.scientific_krylov_v14",
+          "3c56e085a38e5fdaf74eb42a79e492c49db654073ee8a86ffd8565914e32ee46"
+        ]
+      ]
+    },
+    "T04:global-nonsymmetric-schur": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "blocks",
+          "source_symbol": "examples.api_v02.methods_coupled_nonsymmetric:build_t04_nonsymmetric",
+          "source_sha256": "5f247cba3d03d5438ef88b0af0e4307020e9bfcb2e441bfd6aef02bb50348859"
+        },
+        {
+          "component": "elimination",
+          "source_symbol": "examples.api_v02.methods_coupled_nonsymmetric:build_t04_nonsymmetric",
+          "source_sha256": "5f247cba3d03d5438ef88b0af0e4307020e9bfcb2e441bfd6aef02bb50348859"
+        },
+        {
+          "component": "solver",
+          "source_symbol": "examples.api_v02.methods_coupled_nonsymmetric:build_t04_nonsymmetric",
+          "source_sha256": "5f247cba3d03d5438ef88b0af0e4307020e9bfcb2e441bfd6aef02bb50348859"
+        },
+        {
+          "component": "reconstruction",
+          "source_symbol": "examples.api_v02.methods_coupled_nonsymmetric:build_t04_nonsymmetric",
+          "source_sha256": "5f247cba3d03d5438ef88b0af0e4307020e9bfcb2e441bfd6aef02bb50348859"
+        },
+        {
+          "component": "residual",
+          "source_symbol": "examples.api_v02.methods_coupled_nonsymmetric:build_t04_nonsymmetric",
+          "source_sha256": "5f247cba3d03d5438ef88b0af0e4307020e9bfcb2e441bfd6aef02bb50348859"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ],
+        [
+          "examples.api_v02.scientific_krylov_v14",
+          "3c56e085a38e5fdaf74eb42a79e492c49db654073ee8a86ffd8565914e32ee46"
+        ]
+      ]
+    },
+    "T05:nested-entropy-newton": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "closure",
+          "source_symbol": "examples.api_v02.methods_T01_T12:build_t05",
+          "source_sha256": "559061a560b74580c8e7a1d39b4806ae21099ed662999c938937328059c76c62"
+        },
+        {
+          "component": "outer",
+          "source_symbol": "examples.api_v02.methods_T01_T12:build_t05",
+          "source_sha256": "559061a560b74580c8e7a1d39b4806ae21099ed662999c938937328059c76c62"
+        },
+        {
+          "component": "tangent",
+          "source_symbol": "examples.api_v02.methods_T01_T12:build_t05",
+          "source_sha256": "559061a560b74580c8e7a1d39b4806ae21099ed662999c938937328059c76c62"
+        },
+        {
+          "component": "termination",
+          "source_symbol": "examples.api_v02.methods_T01_T12:build_t05",
+          "source_sha256": "559061a560b74580c8e7a1d39b4806ae21099ed662999c938937328059c76c62"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.coverage",
+          "aff43733e35893ea1466a5642f5039c7e49b03a532d13cc89f9782b268ecce05"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.method_amr_reception",
+          "d2bda4a0d61554431483e467e50dc687030bb68c3e0c82644fc93fbbd120f7c3"
+        ],
+        [
+          "examples.api_v02.method_euler_correction",
+          "028b12c411d3d16ea67ddfa141f1989040246c7647cb02c4c881d90dca5c236e"
+        ],
+        [
+          "examples.api_v02.method_interval_transport",
+          "c32b207eb7d5ae9e1cc796b2789c198a288f53dbc21c4b17144d75fccfce93aa"
+        ],
+        [
+          "examples.api_v02.method_krylov",
+          "ca983d754bbd6ab36e3f8583ca759138fa140737e84fa7b290d7a5cf0b57a44b"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "T06:global-selected-relation": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "arguments",
+          "source_symbol": "examples.api_v02.methods_coupled_nonsymmetric:build_t06_selected_global",
+          "source_sha256": "5f247cba3d03d5438ef88b0af0e4307020e9bfcb2e441bfd6aef02bb50348859"
+        },
+        {
+          "component": "global-relation",
+          "source_symbol": "examples.api_v02.methods_coupled_nonsymmetric:build_t06_selected_global",
+          "source_sha256": "5f247cba3d03d5438ef88b0af0e4307020e9bfcb2e441bfd6aef02bb50348859"
+        },
+        {
+          "component": "branch",
+          "source_symbol": "examples.api_v02.methods_coupled_nonsymmetric:build_t06_selected_global",
+          "source_sha256": "5f247cba3d03d5438ef88b0af0e4307020e9bfcb2e441bfd6aef02bb50348859"
+        },
+        {
+          "component": "residual",
+          "source_symbol": "examples.api_v02.methods_coupled_nonsymmetric:build_t06_selected_global",
+          "source_sha256": "5f247cba3d03d5438ef88b0af0e4307020e9bfcb2e441bfd6aef02bb50348859"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ],
+        [
+          "examples.api_v02.scientific_krylov_v14",
+          "3c56e085a38e5fdaf74eb42a79e492c49db654073ee8a86ffd8565914e32ee46"
+        ]
+      ]
+    },
+    "T07:variable-bdf-authenticated-history": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "startup",
+          "source_symbol": "examples.api_v02.methods_T01_T12:build_t07",
+          "source_sha256": "559061a560b74580c8e7a1d39b4806ae21099ed662999c938937328059c76c62"
+        },
+        {
+          "component": "coefficients",
+          "source_symbol": "examples.api_v02.methods_T01_T12:build_t07",
+          "source_sha256": "559061a560b74580c8e7a1d39b4806ae21099ed662999c938937328059c76c62"
+        },
+        {
+          "component": "history",
+          "source_symbol": "examples.api_v02.methods_T01_T12:build_t07",
+          "source_sha256": "559061a560b74580c8e7a1d39b4806ae21099ed662999c938937328059c76c62"
+        },
+        {
+          "component": "intervals",
+          "source_symbol": "examples.api_v02.methods_T01_T12:build_t07",
+          "source_sha256": "559061a560b74580c8e7a1d39b4806ae21099ed662999c938937328059c76c62"
+        },
+        {
+          "component": "defect",
+          "source_symbol": "examples.api_v02.methods_T01_T12:build_t07",
+          "source_sha256": "559061a560b74580c8e7a1d39b4806ae21099ed662999c938937328059c76c62"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.coverage",
+          "aff43733e35893ea1466a5642f5039c7e49b03a532d13cc89f9782b268ecce05"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.method_amr_reception",
+          "d2bda4a0d61554431483e467e50dc687030bb68c3e0c82644fc93fbbd120f7c3"
+        ],
+        [
+          "examples.api_v02.method_euler_correction",
+          "028b12c411d3d16ea67ddfa141f1989040246c7647cb02c4c881d90dca5c236e"
+        ],
+        [
+          "examples.api_v02.method_interval_transport",
+          "c32b207eb7d5ae9e1cc796b2789c198a288f53dbc21c4b17144d75fccfce93aa"
+        ],
+        [
+          "examples.api_v02.method_krylov",
+          "ca983d754bbd6ab36e3f8583ca759138fa140737e84fa7b290d7a5cf0b57a44b"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "T08:recursive-amr-window": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "recursion",
+          "source_symbol": "examples.api_v02.methods_T01_T12:build_t08",
+          "source_sha256": "559061a560b74580c8e7a1d39b4806ae21099ed662999c938937328059c76c62"
+        },
+        {
+          "component": "subcycling",
+          "source_symbol": "examples.api_v02.methods_T01_T12:build_t08",
+          "source_sha256": "559061a560b74580c8e7a1d39b4806ae21099ed662999c938937328059c76c62"
+        },
+        {
+          "component": "face-history",
+          "source_symbol": "examples.api_v02.methods_T01_T12:build_t08",
+          "source_sha256": "559061a560b74580c8e7a1d39b4806ae21099ed662999c938937328059c76c62"
+        },
+        {
+          "component": "synchronization",
+          "source_symbol": "examples.api_v02.methods_T01_T12:build_t08",
+          "source_sha256": "559061a560b74580c8e7a1d39b4806ae21099ed662999c938937328059c76c62"
+        },
+        {
+          "component": "rollback",
+          "source_symbol": "examples.api_v02.methods_T01_T12:build_t08",
+          "source_sha256": "559061a560b74580c8e7a1d39b4806ae21099ed662999c938937328059c76c62"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.coverage",
+          "aff43733e35893ea1466a5642f5039c7e49b03a532d13cc89f9782b268ecce05"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.method_amr_reception",
+          "d2bda4a0d61554431483e467e50dc687030bb68c3e0c82644fc93fbbd120f7c3"
+        ],
+        [
+          "examples.api_v02.method_euler_correction",
+          "028b12c411d3d16ea67ddfa141f1989040246c7647cb02c4c881d90dca5c236e"
+        ],
+        [
+          "examples.api_v02.method_interval_transport",
+          "c32b207eb7d5ae9e1cc796b2789c198a288f53dbc21c4b17144d75fccfce93aa"
+        ],
+        [
+          "examples.api_v02.method_krylov",
+          "ca983d754bbd6ab36e3f8583ca759138fa140737e84fa7b290d7a5cf0b57a44b"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "T09:spatial-duhamel-interval": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "characteristics",
+          "source_symbol": "examples.api_v02.method_interval_transport:build_interval_transport",
+          "source_sha256": "c32b207eb7d5ae9e1cc796b2789c198a288f53dbc21c4b17144d75fccfce93aa"
+        },
+        {
+          "component": "duhamel",
+          "source_symbol": "examples.api_v02.method_interval_transport:build_interval_transport",
+          "source_sha256": "c32b207eb7d5ae9e1cc796b2789c198a288f53dbc21c4b17144d75fccfce93aa"
+        },
+        {
+          "component": "interval",
+          "source_symbol": "examples.api_v02.method_interval_transport:build_interval_transport",
+          "source_sha256": "c32b207eb7d5ae9e1cc796b2789c198a288f53dbc21c4b17144d75fccfce93aa"
+        },
+        {
+          "component": "joint-uses",
+          "source_symbol": "examples.api_v02.method_interval_transport:build_interval_transport",
+          "source_sha256": "c32b207eb7d5ae9e1cc796b2789c198a288f53dbc21c4b17144d75fccfce93aa"
+        },
+        {
+          "component": "retry",
+          "source_symbol": "examples.api_v02.method_interval_transport:build_interval_transport",
+          "source_sha256": "c32b207eb7d5ae9e1cc796b2789c198a288f53dbc21c4b17144d75fccfce93aa"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "T10:whole-macro-relaxation": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "macro-entry",
+          "source_symbol": "examples.api_v02.method_relaxed_composite:build_t10_composite",
+          "source_sha256": "508903b15171776e352e1bf03a50f60162904e7a62b2c988f74f4cc940e813fd"
+        },
+        {
+          "component": "observable",
+          "source_symbol": "examples.api_v02.method_relaxed_composite:build_t10_composite",
+          "source_sha256": "508903b15171776e352e1bf03a50f60162904e7a62b2c988f74f4cc940e813fd"
+        },
+        {
+          "component": "factor",
+          "source_symbol": "examples.api_v02.method_relaxed_composite:build_t10_composite",
+          "source_sha256": "508903b15171776e352e1bf03a50f60162904e7a62b2c988f74f4cc940e813fd"
+        },
+        {
+          "component": "state-time",
+          "source_symbol": "examples.api_v02.method_relaxed_composite:build_t10_composite",
+          "source_sha256": "508903b15171776e352e1bf03a50f60162904e7a62b2c988f74f4cc940e813fd"
+        },
+        {
+          "component": "exchange-ledger",
+          "source_symbol": "examples.api_v02.method_relaxed_composite:build_t10_composite",
+          "source_sha256": "508903b15171776e352e1bf03a50f60162904e7a62b2c988f74f4cc940e813fd"
+        },
+        {
+          "component": "rollback",
+          "source_symbol": "examples.api_v02.method_relaxed_composite:build_t10_composite",
+          "source_sha256": "508903b15171776e352e1bf03a50f60162904e7a62b2c988f74f4cc940e813fd"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    },
+    "T11:network-mprk22": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "processes",
+          "source_symbol": "examples.api_v02.methods_patankar_network:build_t11_network",
+          "source_sha256": "5f4113ab0000969ea1193c6b2494130109695f5064f5eddf1ca9fdbac99f3d83"
+        },
+        {
+          "component": "weights",
+          "source_symbol": "examples.api_v02.methods_patankar_network:build_t11_network",
+          "source_sha256": "5f4113ab0000969ea1193c6b2494130109695f5064f5eddf1ca9fdbac99f3d83"
+        },
+        {
+          "component": "stages",
+          "source_symbol": "examples.api_v02.methods_patankar_network:build_t11_network",
+          "source_sha256": "5f4113ab0000969ea1193c6b2494130109695f5064f5eddf1ca9fdbac99f3d83"
+        },
+        {
+          "component": "shared-transfers",
+          "source_symbol": "examples.api_v02.methods_patankar_network:build_t11_network",
+          "source_sha256": "5f4113ab0000969ea1193c6b2494130109695f5064f5eddf1ca9fdbac99f3d83"
+        },
+        {
+          "component": "zero-inventories",
+          "source_symbol": "examples.api_v02.methods_patankar_network:build_t11_network",
+          "source_sha256": "5f4113ab0000969ea1193c6b2494130109695f5064f5eddf1ca9fdbac99f3d83"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.methods_coupled_nonsymmetric",
+          "5f247cba3d03d5438ef88b0af0e4307020e9bfcb2e441bfd6aef02bb50348859"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ],
+        [
+          "examples.api_v02.scientific_krylov_v14",
+          "3c56e085a38e5fdaf74eb42a79e492c49db654073ee8a86ffd8565914e32ee46"
+        ]
+      ]
+    },
+    "T12:versioned-amr-face-replacement": {
+      "review_scope": "Selected authored builder and helper composition; source provenance only, no numerical or universal mathematical attestation.",
+      "bindings": [
+        {
+          "component": "candidate",
+          "source_symbol": "examples.api_v02.method_flux_correction_amr:build_t12_amr",
+          "source_sha256": "7453e12fe6a1859e37ad84863a45ae5aa109d6b5a22c02787554bba200ffc29f"
+        },
+        {
+          "component": "selection",
+          "source_symbol": "examples.api_v02.method_flux_correction_amr:build_t12_amr",
+          "source_sha256": "7453e12fe6a1859e37ad84863a45ae5aa109d6b5a22c02787554bba200ffc29f"
+        },
+        {
+          "component": "replacement",
+          "source_symbol": "examples.api_v02.method_flux_correction_amr:build_t12_amr",
+          "source_sha256": "7453e12fe6a1859e37ad84863a45ae5aa109d6b5a22c02787554bba200ffc29f"
+        },
+        {
+          "component": "incidence",
+          "source_symbol": "examples.api_v02.method_flux_correction_amr:build_t12_amr",
+          "source_sha256": "7453e12fe6a1859e37ad84863a45ae5aa109d6b5a22c02787554bba200ffc29f"
+        },
+        {
+          "component": "amr-ledger",
+          "source_symbol": "examples.api_v02.method_flux_correction_amr:build_t12_amr",
+          "source_sha256": "7453e12fe6a1859e37ad84863a45ae5aa109d6b5a22c02787554bba200ffc29f"
+        }
+      ],
+      "dependencies": [
+        [
+          "examples.api_v02.common",
+          "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.continuum_oracles",
+          "e6fd1e68c7c47b47a68382553baa39524e5f5d100d18d9f661e41f1ee7915081"
+        ],
+        [
+          "examples.api_v02.continuum_transport_oracles",
+          "fe32d1e137fab98c69acd9e796b4965b3f4704336ce04d572eef8e7e4f8005f0"
+        ],
+        [
+          "examples.api_v02.maxwell_stefan_equations",
+          "22de4c0f1a464b20b855eeb2b1eab867d67526230dcc7cd9957c5ad31e89e882"
+        ],
+        [
+          "examples.api_v02.method_amr_reception",
+          "d2bda4a0d61554431483e467e50dc687030bb68c3e0c82644fc93fbbd120f7c3"
+        ],
+        [
+          "examples.api_v02.models_M01_M14",
+          "a08b07bb61baea3a3b093cac87c73c453097bfe778c6631739bc9a8ee50b2a8b"
+        ],
+        [
+          "examples.api_v02.models_M12",
+          "cb1a3caf609896ca8a0d40e4b867311a11c350df29d6d7a529b0fe7c494ba60d"
+        ],
+        [
+          "examples.api_v02.models_M13",
+          "c96e125ee4e127d1ff64e6ded9feddbbf07a4507f6ba40821a332e18a8a757ee"
+        ],
+        [
+          "examples.api_v02.models_M14",
+          "14bcce50bbc8e2494acc08d97758d0f62927409cf29c6344fe4a2fa9e7486108"
+        ],
+        [
+          "examples.api_v02.models_M22_M25_M28",
+          "6a1b6161b54d2c60e4aa1baf4b9e2895db330c0801b4a194111e4353d72725ac"
+        ],
+        [
+          "examples.api_v02.models_drift_wetdry_oracles",
+          "98dc0d108d02f59565f3772b15a5847a6a0f1401dd2d50170bb08949f2cd3ae0"
+        ],
+        [
+          "examples.api_v02.profile_contracts",
+          "bab2249d7db06431749e84e11d88173bf10cf3826c1d2c64bce8b85074141aef"
+        ],
+        [
+          "examples.api_v02.profile_dispatch",
+          "e66e267647e287674ceb089413e8a869b50a964b42ec4f6cf8164e3e986ff7e7"
+        ],
+        [
+          "examples.api_v02.reference_coupled_fields",
+          "975ec37cf50c9f16fdca068847608b73cf9790c8d0c90bf824b6a5ef62418d08"
+        ]
+      ]
+    }
+  }
+}

@@ -34,7 +34,7 @@ if TYPE_CHECKING:
         @overload
         def __getitem__(self, key: Literal["members"]) -> Sequence[tuple[str, ValueSignature]]: ...
         @overload
-        def __getitem__(self, key: Literal["element", "success", "base", "schema", "candidate", "envelope", "proposal", "checks", "read", "write", "bundle", "rows", "columns"]) -> ValueSignature: ...
+        def __getitem__(self, key: Literal["element", "success", "base", "schema", "candidate", "envelope", "proposal", "checks", "read", "write", "bundle", "rows", "columns", "field_signature"]) -> ValueSignature: ...
         @overload
         def __getitem__(self, key: Literal["family", "capacity", "byte_capacity"]) -> int: ...
         @overload
@@ -76,7 +76,7 @@ def _validate_signature_shape(signature):
     active = set()
     checked = set()
     child_keys = frozenset(("element", "success", "base", "schema", "candidate", "envelope",
-                            "proposal", "checks", "read", "write", "bundle", "rows", "columns"))
+                            "proposal", "checks", "read", "write", "bundle", "rows", "columns", "field_signature"))
 
     def sequence(value, where):
         if not isinstance(value, (list, tuple)):
@@ -93,15 +93,22 @@ def _validate_signature_shape(signature):
             raise TypeError("signature %s must contain pairs" % where)
         return items
 
-    def visit(record):
+    stack = [(signature, False)]
+    while stack:
+        record, exiting = stack.pop()
+        if exiting:
+            active.remove(id(record))
+            checked.add(id(record))
+            continue
         if not isinstance(record, Mapping) or any(not isinstance(key, str) for key in record):
             raise TypeError("signature records must be mappings with string keys")
         identity = id(record)
         if identity in active:
             raise TypeError("signature structural records cannot be cyclic")
         if identity in checked:
-            return
+            continue
         active.add(identity)
+        stack.append((record, True))
         for key, value in record.items():
             if key in ("vtype", "ownership", "identity"):
                 if not isinstance(value, str):
@@ -113,13 +120,13 @@ def _validate_signature_shape(signature):
                 if type(value) is not int:
                     raise TypeError("signature %s must be an exact integer" % key)
             elif key in child_keys:
-                visit(value)
+                stack.append((value, False))
             elif key == "members":
                 for row in sequence(value, key):
                     name, child = pair(row, key)
                     if not isinstance(name, str):
                         raise TypeError("signature member names must be strings")
-                    visit(child)
+                    stack.append((child, False))
             elif key in ("time_path", "step_path"):
                 path(value, key)
             elif key == "domains":
@@ -146,17 +153,13 @@ def _validate_signature_shape(signature):
                     function = item["function"]
                     if not isinstance(function, Mapping) or any(not isinstance(name, str) for name in function):
                         raise TypeError("signature current dependency function must be a string-keyed record")
-        active.remove(identity)
-        checked.add(identity)
-
-    visit(signature)
 
 
 _LEAVES = frozenset(("state", "rhs", "scalar_field", "scalar", "bool", "int64"))
 
 
 def value_signature(value) -> ValueSignature:
-    if value.vtype in ("product", "variant", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted"):
+    if value.vtype in ("product", "variant", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted", "field_topology"):
         return cast("ValueSignature", value.attrs["signature"])
     if value.vtype == "result":
         return cast("ValueSignature", {"vtype": "result", "success": value.attrs["success_signature"],
@@ -169,4 +172,5 @@ def value_signature(value) -> ValueSignature:
 
 def same_signature(left, right):
     from pops.time.canonical_data import _json_ready
-    return _json_ready(left) == _json_ready(right)
+    from pops._structural_data import equal
+    return equal(_json_ready(left), _json_ready(right))

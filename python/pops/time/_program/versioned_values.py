@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 else:
     _ProgramBase = object
 import hashlib
-import json
+from pops._structural_data import canonical_json
 
 from pops.time._authoring import atomic_authoring
 from pops.time._program.structured_control import new_typed, value_signature, same_signature
@@ -26,18 +26,29 @@ from pops.time.variant_types import ValueType
 from pops.bundles import BUNDLE_OPS, validate_bundle_signature
 
 
-CAPABILITY_TYPES = frozenset(("continuation_base", "continuation_candidate",
+CAPABILITY_TYPES = frozenset(("field_topology", "continuation_base", "continuation_candidate",
                              "continuation_assessment", "continuation_accepted"))
 VERSIONED_OPS = frozenset(("continuation_open", "continuation_read", "continuation_freeze",
                           "continuation_candidate_value", "continuation_proposal",
                           "continuation_candidate_base", "continuation_attest",
                           "continuation_assessment_ok", "continuation_assessment_checks", "continuation_accept",
                           "continuation_accepted_candidate", "continuation_child_base",
-                          "continuation_transform", "continuation_consume_increment", "continuation_publish")) | BUNDLE_OPS
+                          "continuation_transform", "continuation_consume_increment", "continuation_publish",
+                          "continuation_forest_child_phase", "continuation_forest_level",
+                          "continuation_forest_level_count", "continuation_forest_interval",
+                          "continuation_sync_open", "continuation_working_value",
+                          "continuation_synchronized_fields", "continuation_sync_publish",
+                          "continuation_parent_open", "continuation_child_reports",
+                          "continuation_parent_publish",
+                          "continuation_regular_phase", "continuation_regrid_source_count",
+                          "continuation_regrid_source", "continuation_regrid_base",
+                          "continuation_regrid_templates", "continuation_regrid_child_publish",
+                          "continuation_regrid_parent_open", "continuation_regrid_parent_publish",
+                          "continuation_source_topology", "continuation_target_topology")) | BUNDLE_OPS
 
 
 def _digest(value):
-    data = json.dumps(_json_ready(value), sort_keys=True, separators=(",", ":"), allow_nan=False)
+    data = canonical_json(_json_ready(value), allow_nan=False)
     return hashlib.sha256(data.encode()).hexdigest()
 
 
@@ -51,32 +62,35 @@ def validate_schema_data(schema):
     from collections.abc import Mapping
     keys = {"identity", "read", "write", "fields", "time_path", "step_path", "roles",
             "byte_capacity", "scientific", "current_dependencies"}
+    if isinstance(schema, Mapping) and "retained_fields" in schema:
+        keys.add("retained_fields")
     if not isinstance(schema, Mapping) or set(schema) != keys:
         raise ValueError("continuation schema has incomplete mandatory declarations")
     data = {key: schema[key] for key in keys - {"identity", "time_path", "step_path"}}
     data.update(time=schema["time_path"], step=schema["step_path"])
     if schema["identity"] != _digest(data):
         raise ValueError("continuation schema declarations differ from their compiled identity")
+    if "retained_fields" in schema:
+        _validate_retained_fields(schema["read"], schema["fields"], schema["retained_fields"])
 
 
 def validate_signature_schemas(signature, seen=None):
     """Traverse structural capability types; each exact schema object is checked once."""
     from collections.abc import Mapping
     seen = set() if seen is None else seen
-    def visit(item):
+    pending = [signature]
+    while pending:
+        item = pending.pop()
         if not isinstance(item, (Mapping, tuple, list)) or id(item) in seen:
-            return
+            continue
         seen.add(id(item))
         if isinstance(item, Mapping):
             if item.get("vtype") == "continuation_base":
                 validate_schema_data(item["schema"])
-                return
-            for child in item.values():
-                visit(child)
+                continue
+            pending.extend(reversed(tuple(item.values())))
         else:
-            for child in item:
-                visit(child)
-    visit(signature)
+            pending.extend(reversed(item))
 
 
 def _path(value):
@@ -106,14 +120,27 @@ def _replace(signature, path, replacement) -> ValueSignature:
 
 
 def _fields(signature, path=()):
-    kind = signature["vtype"]
-    if kind in ("state", "rhs", "scalar_field"):
-        yield path, signature
-    elif kind in ("product", "variant"):
-        for key, child in signature["members"]:
-            yield from _fields(child, (*path, key))
-    elif kind == "array":
-        yield from _fields(signature["element"], (*path, "[]"))
+    pending = [(signature, path)]
+    while pending:
+        node, prefix = pending.pop()
+        kind = node["vtype"]
+        if kind in ("state", "rhs", "scalar_field"):
+            yield prefix, node
+        elif kind in ("product", "variant"):
+            pending.extend((child, (*prefix, key)) for key, child in reversed(node["members"]))
+        elif kind == "array":
+            pending.append((node["element"], (*prefix, "[]")))
+
+
+def _validate_retained_fields(signature, projections, retained):
+    projected = {tuple(path) for _, path in projections}
+    retained = tuple(_path(path) for path in retained)
+    if len(set(retained)) != len(retained) or set(retained) & projected:
+        raise ValueError("retained fields must be distinct from projected State fields")
+    actual = {path for path, _ in _fields(signature)}
+    if actual != projected | set(retained):
+        raise ValueError("projection and retention declarations must cover every persistent Field exactly")
+    return retained
 
 
 def _persistable(signature):
@@ -129,7 +156,7 @@ def _persistable(signature):
         if signature.get("ownership") not in ("replicated", "contiguous_distributed"):
             raise NotImplementedError("continuation Array ownership has no native structural codec")
         _persistable(signature["element"])
-    elif kind not in ("scalar", "int64", "bool", "index_set", "index", "state", "scalar_field"):
+    elif kind not in ("scalar", "int64", "bool", "index_set", "index", "state", "rhs", "scalar_field"):
         raise TypeError("unsupported persistent continuation leaf %r" % kind)
 
 
@@ -138,7 +165,8 @@ class ContinuationSchema:
     """Compiled structure with distinct authenticated current and outgoing field views.
 
     Bindings are pairs `(U.next, path)`. They cover every declared state block exactly once.
-    Nested fields in Array/Variant require further publication support and fail closed here.
+    A Field not projected to State must be explicitly listed in retained_fields.
+    Its immutable storage remains in the complete image, including under Array/Variant.
     """
     read_type: ValueType
     write_type: ValueType
@@ -149,10 +177,11 @@ class ContinuationSchema:
     byte_capacity: int
     scientific: tuple
     current_dependencies: tuple
+    retained_fields: tuple
     identity: str
     __pops_ir_immutable__ = True
 
-    def __init__(self, initial, *, fields=(), time, step, roles=(), byte_capacity=64 * 1024 * 1024, scientific=None, current_dependencies=()):
+    def __init__(self, initial, *, fields=(), retained_fields=(), time, step, roles=(), byte_capacity=64 * 1024 * 1024, scientific=None, current_dependencies=()):
         from pops.time.handles import StateEndpointHandle
         signature = value_signature(initial)
         if signature["vtype"] != "product":
@@ -180,8 +209,10 @@ class ContinuationSchema:
             paths.add(path)
             bindings.append((endpoint, path))
             outgoing = _replace(outgoing, path, dict(leaf, point=endpoint.point))
-        if {path for path, _ in _fields(signature)} != paths:
-            raise NotImplementedError("every persistent field needs one exact fixed Product publication binding")
+        if retained_fields:
+            retained_fields = _validate_retained_fields(signature, bindings, retained_fields)
+        elif {path for path, _ in _fields(signature)} != paths:
+            raise NotImplementedError("every persistent field needs a projection or explicit retained_fields declaration")
         roles = tuple(( _path(path), role) for path, role in roles)
         if len({path for path, _ in roles}) != len(roles):
             raise ValueError("duplicate continuation role path")
@@ -196,16 +227,22 @@ class ContinuationSchema:
         data = dict(read=signature, write=outgoing, fields=tuple((endpoint.state, path) for endpoint, path in bindings),
                     time=time, step=step, roles=roles, byte_capacity=byte_capacity, scientific=scientific,
                     current_dependencies=current_dependencies)
+        if retained_fields:
+            data["retained_fields"] = retained_fields
         for name, value in dict(read_type=ValueType(signature), write_type=ValueType(outgoing),
                                 fields=tuple(bindings), time_path=time, step_path=step, roles=roles,
-                                byte_capacity=byte_capacity, scientific=scientific, current_dependencies=current_dependencies, identity=_digest(data)).items():
+                                byte_capacity=byte_capacity, scientific=scientific, current_dependencies=current_dependencies,
+                                retained_fields=tuple(retained_fields), identity=_digest(data)).items():
             object.__setattr__(self, name, value)
 
     def to_data(self):
-        return dict(identity=self.identity, read=self.read_type.signature, write=self.write_type.signature,
+        data = dict(identity=self.identity, read=self.read_type.signature, write=self.write_type.signature,
                     fields=tuple((endpoint.state, path) for endpoint, path in self.fields),
                     time_path=self.time_path, step_path=self.step_path, roles=self.roles,
                     byte_capacity=self.byte_capacity, scientific=self.scientific, current_dependencies=self.current_dependencies)
+        if self.retained_fields:
+            data["retained_fields"] = self.retained_fields
+        return data
 
 
 def _cap(kind, **metadata):
@@ -226,6 +263,8 @@ def _same(expected, actual, where):
 
 def validate_continuations(program, *, target=None):
     """Check the closed executable profile and unique root publication after deserialization too."""
+    from pops.time.field_representation import validate_field_representation_program
+    validate_field_representation_program(program)
     def walk(values):
         for value in values:
             yield value
@@ -271,15 +310,48 @@ def validate_continuations(program, *, target=None):
     active = any(value.op in VERSIONED_OPS - BUNDLE_OPS or value.attrs.get("continuation_scope") for value in values)
     if not active:
         return
-    if target is not None and target != "system":
+    from .continuation_forest import forest_node
+    forest = forest_node(program)
+    if target is not None and target != "system" and not (target == "amr_system" and forest is not None):
         raise NotImplementedError("Continuation publication currently requires fixed-topology Uniform")
+    if forest is not None and target not in (None, "amr_system"):
+        raise ValueError("a complete AMR continuation forest requires the AMR execution target")
     publications = [value for value in values if value.op == "continuation_publish"]
     if len(opened) != 1 or opened[0].region or len(publications) != 1 or publications[0].region:
         raise ValueError("Continuation requires one initialization and one root publication")
     from pops.graph_functions import _PURE, _COLLECTIVE
     allowed = _PURE | _COLLECTIVE | VERSIONED_OPS | {"state", "requested_dt", "reached_duration"}
+    if forest is not None:
+        allowed |= {"post_synchronization", "composite_integral", "composite_pair", "attempt_start"}
+        metadata = forest.attrs["continuation_forest"]
+        if metadata.get("version") != 1 or metadata.get("level_capacity", 0) < 1:
+            raise ValueError("AMR forest has no exact finite hierarchy contract")
+        for key in ("root_schema", "level_schema"):
+            validate_schema_data(metadata[key])
+        if metadata["root_schema"]["fields"] or metadata["level_schema"] != opened[0].attrs["schema"]:
+            raise ValueError("AMR forest global/local schema authority mismatch")
+        for op, key in (("continuation_sync_publish", "level_schema"),
+                        ("continuation_parent_publish", "root_schema")):
+            selected = [v for v in values if v.op == op]
+            if len(selected) != 1 or selected[0].attrs["schema"] != metadata[key]:
+                raise ValueError("AMR forest requires one exact child and one exact parent publication")
+        from .continuation_regrid import REGRID_OPS
+        regrid_values = [v for v in values if v.op in REGRID_OPS]
+        regrid = metadata.get("regrid")
+        if regrid_values:
+            if not regrid or type(regrid.get("dimension")) is not int or not 1 <= regrid["dimension"] <= 3:
+                raise ValueError("AMR regrid has no exact dimension and complete closed graph")
+            for op, key in (("continuation_regrid_child_publish", "level_schema"),
+                            ("continuation_regrid_parent_publish", "root_schema")):
+                selected = [v for v in regrid_values if v.op == op]
+                if len(selected) != 1 or selected[0].attrs["schema"] != metadata[key]:
+                    raise ValueError("AMR regrid requires one exact child and parent publication")
     for value in values:
-        if value.op not in allowed:
+        # An AMR trial may compose the existing typed spatial/solver operators;
+        # their native effects are owned by the enclosing hierarchy attempt.
+        # Their own provider/lowerability contracts still run after this check.
+        # Persistent legacy stores and independent commits are rejected below.
+        if value.op not in allowed and forest is None:
             raise NotImplementedError("Continuation operation %r is not a qualified pure trial/projection" % value.op)
         if value.op == "reached_duration" and value.id > publications[0].id:
             raise ValueError("reached duration must precede the complete continuation publication")
@@ -311,6 +383,16 @@ def validate_continuations(program, *, target=None):
 
 
 class _ProgramVersionedValues(_ProgramBase):
+    @atomic_authoring
+    def continuation_forest(self, accepted, *, synchronize, initialize, parent,
+                            observe=None, level_capacity, regrid=None, regrid_parent=None,
+                            regrid_observe=None, dimension=None):
+        from .continuation_forest import author_forest
+        return author_forest(self, accepted, synchronize=synchronize, initialize=initialize,
+                             parent=parent, observe=observe, level_capacity=level_capacity,
+                             regrid=regrid, regrid_parent=regrid_parent,
+                             regrid_observe=regrid_observe, dimension=dimension)
+
     @atomic_authoring
     def continuation_capture(self, body):
         """A real native child scope, revoked on Failure and promoted on accepted success."""

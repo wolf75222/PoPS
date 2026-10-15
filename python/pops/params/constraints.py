@@ -7,6 +7,7 @@ from fractions import Fraction
 from typing import Any
 
 from pops.descriptors import Descriptor
+from pops.identity.scalar import parse_canonical_integer
 
 
 def _literal_data(value: Any) -> dict[str, Any]:
@@ -32,12 +33,12 @@ def _literal_from_data(data: Any) -> Any:
     if kind == "none" and set(data) == {"kind"}:
         return None
     if kind == "integer" and set(data) in ({"kind", "value"}, {"kind", "value", "target"}):
-        return int(data["value"])
+        return parse_canonical_integer(data["value"])
     if kind == "rational" and set(data) in (
         {"kind", "numerator", "denominator"},
         {"kind", "numerator", "denominator", "target"},
     ):
-        return Fraction(int(data["numerator"]), int(data["denominator"]))
+        return Fraction(parse_canonical_integer(data["numerator"]), parse_canonical_integer(data["denominator"]))
     if kind == "decimal" and set(data) in ({"kind", "value"}, {"kind", "value", "target"}):
         return Decimal(data["value"])
     if kind == "binary64" and set(data) in ({"kind", "value"}, {"kind", "value", "target"}):

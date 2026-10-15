@@ -108,7 +108,7 @@ def _resolved_linear_properties(problem: FieldProblem, reaction: Any) -> Any:
     return LinearOperatorProperties.symmetric_operator() if symmetric else LinearOperatorProperties.general()
 
 
-def bind_field_problem(program: Any, field: Handle, registration: Any, *, values: Any, at: Any, solver: Any = None) -> Any:
+def bind_field_problem(program: Any, field: Handle, registration: Any, *, values: Any, at: Any, solver: Any = None, temporal: Any = None) -> Any:
     """Freeze explicit equation inputs; field storage never borrows a species owner."""
     from pops.linalg import LinearProblem
     from pops.time import DerivativeStrategy, SolveRequest, SolveUnknown
@@ -123,6 +123,8 @@ def bind_field_problem(program: Any, field: Handle, registration: Any, *, values
         raise TypeError("general field binding requires FieldProblem; scalar provider adapters retain their existing field solve route")
     from .methods import CellCenteredNonlinearCoupled
     if type(registration.discretization.method) is CellCenteredNonlinearCoupled:
+        if temporal is not None:
+            raise ValueError("nonlinear field temporal evaluation requires an explicit candidate source bundle")
         from ._program_nonlinear_problem import bind_nonlinear_field_problem
         return bind_nonlinear_field_problem(program, field, registration, values=values, at=at, solver=solver)
     method = registration.discretization.method
@@ -177,6 +179,11 @@ def bind_field_problem(program: Any, field: Handle, registration: Any, *, values
               "field_dependencies": tuple(_identity(row) for row in dependencies),
               "field_handle": field.canonical_identity(), "physical_boundary": physical_boundary,
               "scope": scope}
+    if temporal is not None:
+        if scope != "hierarchy":
+            raise ValueError("TemporalEvaluation binds a composite hierarchy field solve")
+        from pops.time._program.temporal_field import bind_temporal_field
+        common["temporal_evaluation"] = bind_temporal_field(program, states, dependencies, temporal)
     if general_coupled:
         common["coefficient_admissibility"] = "finite_general"
     rhs_expressions = tuple(encode_field_expression(eq.rhs, states) for eq in problem.equations)

@@ -35,7 +35,7 @@ def accepted_attempt(payload):
     array=payload['program_accepted_state']
     assert array.dtype==np.uint8 and array.ndim==1
     wire=array.tobytes()
-    assert wire[:8]==b'POPSANDA' and len(wire)>=24
+    assert wire[:8] in (b'POPSANDA', b'POPSANDB', b'POPSANDC', b'POPSANDD', b'POPSANDE') and len(wire)>=24
     assert int.from_bytes(wire[8:16],'little')==2
     length=int.from_bytes(wire[16:24],'little')
     offset=24+length+16

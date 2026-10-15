@@ -42,6 +42,7 @@ void advance_mapping_hierarchy(double dt, Body&& body, std::shared_ptr<AmrProgra
       throw std::invalid_argument("AMR mapping continuation body is empty");
     pending->completed = std::forward<Completed>(completed);
     pending->ports.resize(static_cast<std::size_t>(nlev()));
+    pending->failures.resize(static_cast<std::size_t>(nlev()));
     pending->fields.resize(static_cast<std::size_t>(nlev()));
     for (auto& port : pending->ports)
       port.next = [prepared_body, dt] { prepared_body(dt); };
@@ -80,6 +81,11 @@ struct MappingLevelPort {
   std::function<void()> next;
   std::function<void()> once;
 };
+struct MappingFailureHandler {
+  std::int64_t operation = -1;
+  std::string identity;
+  std::function<void(std::exception_ptr)> callback;
+};
 struct MappingContinuation {
   double dt = 0;
   bool executing = false;
@@ -90,11 +96,15 @@ struct MappingContinuation {
   LevelAttemptEnvelope prior;
   std::function<void()> completed;
   std::vector<MappingLevelPort> ports;
+  std::vector<std::vector<MappingFailureHandler>> failures;
   std::vector<field_type*> fields;
 };
 mutable std::unique_ptr<MappingContinuation> mapping_continuation_;
 
+#include <pops/runtime/program/amr_program_context_hierarchy_failure.inc>
+
 void cancel_mapping_hierarchy_() const noexcept {
+  revoke_finite_values_on_rollback();
   revoke_interaction_history_snapshots_();
   prepared_field_stages_.clear();
   program_values_.revoke_();
@@ -134,40 +144,56 @@ void resume_mapping_hierarchy_(std::shared_ptr<AmrProgramContext> owner) const {
         }
         frame.executing = true;
         for (int level = 0; level < nlev(); ++level) {
-          runtime::program::collective_step_rejection_phase(
-              prepared_execution_lane().communicator(),
-              {"pops.amr-map-region.v1", "amr-map-region", false, false},
-              "AMR mapping level region failed collectively", [&] {
-                with_program_attempt_level(level, [&] {
-                  auto& port = frame.ports[static_cast<std::size_t>(level)];
-                  auto next = std::exchange(port.next, std::function<void()>{});
-                  port = MappingLevelPort{};
-                  if (!next)
-                    throw std::logic_error("AMR mapping level lost its next region");
-                  next();
+          try {
+            runtime::program::collective_step_rejection_phase(
+                prepared_execution_lane().communicator(),
+                {"pops.amr-map-region.v1", "amr-map-region", false, false},
+                "AMR mapping level region failed collectively", [&] {
+                  with_program_attempt_level(level, [&] {
+                    auto& port = frame.ports[static_cast<std::size_t>(level)];
+                    auto next = std::exchange(port.next, std::function<void()>{});
+                    port = MappingLevelPort{};
+                    if (!next)
+                      throw std::logic_error("AMR mapping level lost its next region");
+                    next();
+                  });
                 });
-              });
+          } catch (...) {
+            if (!recover_mapping_failure_(std::current_exception()))
+              throw;
+            break;
+          }
         }
         frame.executing = false;
         agree_continuation_ports_();
         const auto kind = frame.ports.front().kind;
         suspended = kind == MappingPortKind::map;
-        internal = kind == MappingPortKind::linear_solve ||
-                   kind == MappingPortKind::field_publication || kind == MappingPortKind::spatial_rhs ||
-                   kind == MappingPortKind::named_field_solve || kind == MappingPortKind::field_warm_start;
+        internal =
+            kind == MappingPortKind::linear_solve || kind == MappingPortKind::field_publication ||
+            kind == MappingPortKind::spatial_rhs || kind == MappingPortKind::named_field_solve ||
+            kind == MappingPortKind::field_warm_start || kind == MappingPortKind::nonlinear_solve ||
+            kind == MappingPortKind::control;
         if (internal) {
-          runtime::program::collective_step_rejection_phase(
-              prepared_execution_lane().communicator(),
-              {"pops.amr-hierarchy-barrier.v1", "amr-hierarchy-barrier", false, false},
-              "AMR hierarchy barrier callback failed collectively", [&] {
-                with_program_attempt_level(0, [&] {
-                  auto once = std::exchange(frame.ports.front().once, std::function<void()>{});
-                  once();
+          try {
+            runtime::program::collective_step_rejection_phase(
+                prepared_execution_lane().communicator(),
+                {"pops.amr-hierarchy-barrier.v1", "amr-hierarchy-barrier", false, false},
+                "AMR hierarchy barrier callback failed collectively", [&] {
+                  with_program_attempt_level(0, [&] {
+                    auto once = std::exchange(frame.ports.front().once, std::function<void()>{});
+                    once();
+                  });
                 });
-              });
+          } catch (...) {
+            if (!recover_mapping_failure_(std::current_exception()))
+              throw;
+          }
           ++frame.internal_sequence;
         }
         if (!suspended && !internal) {
+          for (const auto& stack : frame.failures)
+            if (!stack.empty())
+              throw std::logic_error("hierarchy completed with an open recovery scope");
           for (int level = 0; level < nlev(); ++level)
             runtime::program::collective_step_rejection_phase(
                 prepared_execution_lane().communicator(),
@@ -211,7 +237,8 @@ void resume_mapping_hierarchy_(std::shared_ptr<AmrProgramContext> owner) const {
             if constexpr (std::is_integral_v<std::remove_cvref_t<decltype(first)>>)
               stage_prepared_publication_candidates_(first, second);
             else
-              prepare_accepted_publication_halos_(mapping_continuation_->dt, first, second, history...);
+              prepare_accepted_publication_halos_(mapping_continuation_->dt, first, second,
+                                                  history...);
           });
       commit_interface_flux_attempt_();
       accepted_subcycling_attempt_ = multiblock_subcycling_->last_accepted_attempt();

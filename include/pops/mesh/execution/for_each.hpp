@@ -177,6 +177,44 @@ POPS_HD CellIndex<Dim> cell_index_from_ordinal(const Index<Dim>& lower, const Ex
   return index;
 }
 
+// Named adapters avoid nvcc's restrictions on extended lambdas. CUDA launch
+// stubs must still be able to name F: use namespace-scope or public nested types.
+// Every Kokkos execution space uses the same ordinal mapping and reducer.
+template <int Dim, class F>
+struct IndexSpaceKernel {
+  Index<Dim> lower;
+  Extent<Dim> extent;
+  F kernel;
+
+  POPS_HD void operator()(std::int64_t ordinal) const {
+    kernel(cell_index_from_ordinal(lower, extent, ordinal));
+  }
+};
+
+template <int Dim, class F>
+struct IndexSpaceSum {
+  Index<Dim> lower;
+  Extent<Dim> extent;
+  F kernel;
+
+  POPS_HD void operator()(std::int64_t ordinal, Real& accumulator) const {
+    accumulator += kernel(cell_index_from_ordinal(lower, extent, ordinal));
+  }
+};
+
+template <int Dim, class F>
+struct IndexSpaceMax {
+  Index<Dim> lower;
+  Extent<Dim> extent;
+  F kernel;
+
+  POPS_HD void operator()(std::int64_t ordinal, Real& accumulator) const {
+    const Real value = kernel(cell_index_from_ordinal(lower, extent, ordinal));
+    if (value > accumulator)
+      accumulator = value;
+  }
+};
+
 template <class ExecutionSpace, int Dim, class F>
 void launch_index_space(const ExecutionSpace& execution, const Box<Dim>& box, const char* label,
                         F f) {
@@ -184,13 +222,10 @@ void launch_index_space(const ExecutionSpace& execution, const Box<Dim>& box, co
                 "PoPS iteration requires a Kokkos execution-space instance");
   const Index<Dim> lower = box.lo;
   const Extent<Dim> extent = box.extent();
-  Kokkos::parallel_for(
-      label,
-      Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(execution, 0,
-                                                                           box.numPts()),
-      KOKKOS_LAMBDA(const std::int64_t ordinal) {
-        f(cell_index_from_ordinal(lower, extent, ordinal));
-      });
+  Kokkos::parallel_for(label,
+                       Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(
+                           execution, 0, box.numPts()),
+                       IndexSpaceKernel<Dim, F>{lower, extent, f});
 }
 
 template <int Dim, int Axis, class F>
@@ -292,14 +327,11 @@ Real for_each_cell_reduce_sum(const ExecutionSpace& execution, const Box<Dim>& b
   Real result = 0;
   const Index<Dim> lower = b.lo;
   const Extent<Dim> extent = b.extent();
-  Kokkos::parallel_reduce(
-      "pops_reduce_sum_index",
-      Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(execution, 0,
-                                                                           b.numPts()),
-      KOKKOS_LAMBDA(const std::int64_t ordinal, Real& accumulator) {
-        accumulator += f(detail::cell_index_from_ordinal(lower, extent, ordinal));
-      },
-      Kokkos::Sum<Real>{result});
+  Kokkos::parallel_reduce("pops_reduce_sum_index",
+                          Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(
+                              execution, 0, b.numPts()),
+                          detail::IndexSpaceSum<Dim, F>{lower, extent, f},
+                          Kokkos::Sum<Real>{result});
   return result;
 }
 
@@ -396,16 +428,11 @@ Real for_each_cell_reduce_max(const ExecutionSpace& execution, const Box<Dim>& b
   Real result = std::numeric_limits<Real>::lowest();
   const Index<Dim> lower = b.lo;
   const Extent<Dim> extent = b.extent();
-  Kokkos::parallel_reduce(
-      "pops_reduce_max_index",
-      Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(execution, 0,
-                                                                           b.numPts()),
-      KOKKOS_LAMBDA(const std::int64_t ordinal, Real& accumulator) {
-        const Real value = f(detail::cell_index_from_ordinal(lower, extent, ordinal));
-        if (value > accumulator)
-          accumulator = value;
-      },
-      Kokkos::Max<Real>{result});
+  Kokkos::parallel_reduce("pops_reduce_max_index",
+                          Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(
+                              execution, 0, b.numPts()),
+                          detail::IndexSpaceMax<Dim, F>{lower, extent, f},
+                          Kokkos::Max<Real>{result});
   return result;
 }
 

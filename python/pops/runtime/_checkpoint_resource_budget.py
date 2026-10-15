@@ -213,9 +213,9 @@ def _history_capacity(
                     if level is None
                     else "history_%s_level_%d_%d" % (name, level, slot)
                 )
-            # POPSHID1: fixed magic/name-length/level/depth, exact UTF-8 name, four u64 per slot.
+            # POPSHID2 adds a fixed SHA256 reconstruction identity to each slot.
             identity_bytes = _add(32, len(name.encode("utf-8")), where="history identity header")
-            identity_bytes = _add(identity_bytes, _mul(depth, 32, where="history identity slots"),
+            identity_bytes = _add(identity_bytes, _mul(depth, 64, where="history identity slots"),
                                   where="history identity bytes")
             data_bytes = _add(data_bytes, identity_bytes, where="history identity budget")
             values = _mul(level_cells, ncomp, where="history scalar budget")
@@ -657,6 +657,8 @@ def _checkpoint_member_names(
             for level in range(levels):
                 names.append("field_provider_phi_%d_%d" % (index, level))
         names.append("program_accepted_state")
+        names.append("program_accepted_state_rank_count")
+        names.extend("program_accepted_state_rank_%d" % rank for rank in range(rank_capacity))
         for level in range(levels):
             names.extend(("distribution_mode_%d" % level, "dmap_%d" % level))
     if has_finite_continuation:
@@ -668,6 +670,22 @@ def _checkpoint_member_names(
     if not names or len(names) != len(set(names)):
         raise RuntimeError("checkpoint resource authority produced duplicate member names")
     return tuple(names)
+
+
+def _accepted_program_archive_capacity(per_rank: int, ranks: int, *, ranked: bool) -> int:
+    """Exact framing capacity of canonical image + complete AMR rank table."""
+    per_rank = _capacity(per_rank, where="accepted Program image capacity")
+    ranks = _capacity(ranks, where="accepted Program rank capacity", positive=True)
+    if type(ranked) is not bool:
+        raise TypeError("accepted Program ranked policy must be an exact bool")
+    if not ranked:
+        return per_rank
+    return _add(
+        _mul(per_rank, _add(ranks, 1, where="accepted Program archive image count"),
+             where="accepted Program ranked image bytes"),
+        8,
+        where="accepted Program rank-count scalar bytes",
+    )
 
 
 def _common_budget(
@@ -765,11 +783,11 @@ def _common_budget(
                                      _mul(len(finite_schema), 4, where="finite continuation schema capacity"),
                                      where="finite continuation archive metadata"),
                                 where="finite continuation archive capacity")
-    program_bytes = _mul(
-        accepted_program_bytes,
-        1,
-        where="accepted Program checkpoint byte budget",
-    )
+    # AMR keeps the complete native rank table plus its historical canonical image.
+    # All capacities come from the installed artifact and the actual execution lane;
+    # archive-authored counts never enlarge this capture/ordinary-restart authority.
+    program_bytes = _accepted_program_archive_capacity(
+        accepted_program_bytes, rank_capacity, ranked=runtime_kind == "amr")
     migration_bytes = 0
     if runtime_kind == "uniform":
         import numpy as np

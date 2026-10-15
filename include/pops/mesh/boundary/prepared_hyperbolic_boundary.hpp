@@ -11,6 +11,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/spatial/embedded_boundary/characteristic.hpp>
 #include <pops/numerics/spatial/nd/face_field.hpp>
+#include <pops/numerics/spatial/nd/state_conversion.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/analytic/expression.hpp>
@@ -325,6 +326,82 @@ concept ExactPrimitiveToConservativeModel =
       Model::n_vars;
       { model.to_conservative(primitive) } -> std::same_as<typename Model::State>;
     };
+
+/// A prescribed boundary state is a Riemann trace, not a ghost-cell value.
+/// The ghost extension remains available to reconstruction and diffusion; only
+/// the exterior reconstructed trace is replaced here, before model
+/// admissibility and numerical-flux checks.
+template <int Dim>
+struct PrescribedFaceTrace {
+  Geometry<Dim> geometry;
+  Real time = Real(0);
+  BoundaryTableView<Dim> table{};
+  const analytic::AnalyticProgramView* programs = nullptr;
+  std::array<bool, 2 * Dim> prescribed{};
+  std::array<bool, 2 * Dim> analytic{};
+  std::array<bool, 2 * Dim> primitive{};
+
+  explicit PrescribedFaceTrace(Geometry<Dim> coordinates, Real stage_time = Real(0))
+      : geometry(coordinates), time(stage_time) {}
+
+  template <int Axis, class Model, class Pair>
+  POPS_HD void operator()(const Model& model, const FieldView<const Real, Dim>& state,
+                          const FaceIndex<Dim, Axis>& face, Pair& traces) const {
+    const auto& domain = geometry.domain();
+    const bool low = face[Axis] == domain.lo[Axis];
+    const bool high =
+        static_cast<std::int64_t>(face[Axis]) == static_cast<std::int64_t>(domain.hi[Axis]) + 1;
+    if (!low && !high)
+      return;
+    const int ordinal = 2 * Axis + (high ? 1 : 0);
+    if (!prescribed[ordinal])
+      return;
+    auto& trace = low ? traces.left : traces.right;
+    auto& status = low ? traces.left_status : traces.right_status;
+    status = nd::StateConversionStatus::NonFiniteState;
+    if (table.ncomp != Model::n_vars)
+      return;
+    typename Model::State value{};
+    if (analytic[ordinal]) {
+      if (Model::n_vars > kMaxAnalyticBoundaryComponents || programs == nullptr)
+        return;
+      Index<Dim> interior = face.coordinate;
+      if (high)
+        --interior[Axis];
+      auto coordinates = geometry.cell_center(interior);
+      coordinates[Axis] = geometry.face_coordinate(Axis, face[Axis]);
+      Real inputs[1 + kMaxAnalyticBoundaryComponents];
+      inputs[0] = time;
+      for (int component = 0; component < Model::n_vars; ++component)
+        inputs[component + 1] = state(interior, component);
+      for (int component = 0; component < Model::n_vars; ++component) {
+        const auto evaluated = programs[ordinal * table.ncomp + component].eval_checked(
+            coordinates, inputs, static_cast<std::uint8_t>(1 + Model::n_vars));
+        if (!evaluated.valid || !Kokkos::isfinite(evaluated.value))
+          return;
+        value[component] = evaluated.value;
+      }
+      if (primitive[ordinal]) {
+        if constexpr (ExactPrimitiveToConservativeModel<Model>) {
+          typename Model::Prim converted{};
+          for (int component = 0; component < Model::n_vars; ++component)
+            converted[component] = value[component];
+          value = model.to_conservative(converted);
+        } else {
+          return;
+        }
+      }
+    } else {
+      for (int component = 0; component < Model::n_vars; ++component)
+        value[component] = table.fixed_value(ordinal, component);
+    }
+    for (int component = 0; component < Model::n_vars; ++component)
+      if (!Kokkos::isfinite(value[component]))
+        return;
+    trace = value;
+    status = model.admissibility(value);
+  }
+};
 
 template <int Axis, int Dim>
 struct ValidateAnalyticFace {
@@ -1100,10 +1177,34 @@ class PreparedHyperbolicBoundary {
   }
 
  public:
-  /// Apply post-Riemann physical face laws to one patch-local integrated flux field.  NoFlux is
-  /// deliberately enforced here rather than by its extrapolated ghost trace: equal traces can
-  /// still carry a non-zero advective flux.  All face regions are validated before the first
-  /// candidate flux is changed.
+  /// Device-callable physical trace authority for the exact evaluation geometry
+  /// and time. Its lifetime is bounded by this prepared boundary's immutable
+  /// device tables.
+  hyperbolic_boundary_detail::PrescribedFaceTrace<Dim> physical_face_trace(
+      const Geometry<Dim>& geometry, Real time = Real(0)) const {
+    if (!std::isfinite(time))
+      throw std::invalid_argument("physical face trace requires a finite stage time");
+    if (requires_fixed_state_conversion())
+      throw std::logic_error("physical face trace requires the selected model conversion");
+    hyperbolic_boundary_detail::PrescribedFaceTrace<Dim> result(geometry, time);
+    result.table = table_view_();
+    result.programs = device_analytic_programs_.data();
+    for (int ordinal = 0; ordinal < 2 * Dim; ++ordinal) {
+      const auto& prepared = faces_[static_cast<std::size_t>(ordinal)];
+      result.prescribed[ordinal] =
+          prepared.law == HyperbolicBoundaryLaw::FixedState && !omitted_interface_faces_[ordinal];
+      result.analytic[ordinal] = !prepared.analytic_state.empty();
+      result.primitive[ordinal] =
+          prepared.authored_representation == HyperbolicStateRepresentation::Primitive;
+    }
+    return result;
+  }
+
+  /// Apply post-Riemann physical face laws to one patch-local integrated flux
+  /// field.  NoFlux is deliberately enforced here rather than by its
+  /// extrapolated ghost trace: equal traces can still carry a non-zero
+  /// advective flux.  All face regions are validated before the first candidate
+  /// flux is changed.
   template <class MemorySpace>
   void apply_physical_flux_conditions(nd::FaceField<Dim, MemorySpace>& integrated_fluxes,
                                       const Box<Dim>& domain) const {
@@ -1571,6 +1672,16 @@ class PreparedHyperbolicBoundary {
         Kokkos::View<Transform*, Kokkos::SharedSpace>("pops_nd_boundary_transforms", components);
     device_fixed_values_ =
         Kokkos::View<Real*, Kokkos::SharedSpace>("pops_nd_boundary_fixed_values", fixed.size());
+    device_analytic_programs_ = Kokkos::View<analytic::AnalyticProgramView*, Kokkos::SharedSpace>(
+        "pops_nd_boundary_analytic_programs", fixed.size());
+    auto host_programs = Kokkos::create_mirror_view(device_analytic_programs_);
+    for (int ordinal = 0; ordinal < 2 * Dim; ++ordinal)
+      for (std::size_t component = 0; component < components; ++component) {
+        const auto& programs = faces_[static_cast<std::size_t>(ordinal)].analytic_state;
+        host_programs(static_cast<std::size_t>(ordinal) * components + component) =
+            programs.empty() ? analytic::AnalyticProgramView{} : programs[component].view();
+      }
+    Kokkos::deep_copy(device_analytic_programs_, host_programs);
     auto host_transforms = Kokkos::create_mirror_view(device_transforms_);
     auto host_fixed = Kokkos::create_mirror_view(device_fixed_values_);
     for (std::size_t index = 0; index < components; ++index)
@@ -1592,6 +1703,7 @@ class PreparedHyperbolicBoundary {
   bool explicit_periodic_identifications_ = false;
   Kokkos::View<Transform*, Kokkos::SharedSpace> device_transforms_;
   Kokkos::View<Real*, Kokkos::SharedSpace> device_fixed_values_;
+  Kokkos::View<analytic::AnalyticProgramView*, Kokkos::SharedSpace> device_analytic_programs_;
   std::optional<Geometry<Dim>> prepared_geometry_{};
 };
 

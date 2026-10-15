@@ -117,6 +117,10 @@ _ALLOWED_OPS = frozenset(
         "history_interval_duration",
         "history_interval_check",
         "reached_duration",
+        "attempt_start",
+        "composite_pair",
+        "composite_integral",
+        "accept_increment",
         "record_balance_term",
         "cell_compare",
         "where",
@@ -448,7 +452,8 @@ def _block_inverse_include(program: Any) -> str:
     """The closed-form block-inverse #include for @p program's generated .so, or "" when it carries no
     condensed-implicit op (ADC-637): only a Program using condensed_* emits pops::detail::block_inverse.
     (block_inverse.hpp itself includes dense_eig.hpp, already pulled in by the template.)"""
-    result = _BLOCK_INVERSE_INCLUDE if any(v.op in _CONDENSED_OPS for v in program._values) else ""
+    result = "#include <pops/runtime/program/host_face_publication.hpp>\n"
+    result += _BLOCK_INVERSE_INCLUDE if any(v.op in _CONDENSED_OPS for v in program._values) else ""
     if any(v.op in ("solve_spatial_nonlinear", "solve_spatial_field") for v in program._values):
         result += "#include <pops/runtime/program/prepared_spatial_residual.hpp>\n"
     if any(v.op == "solve_spatial_field" for v in program._values):
@@ -556,23 +561,20 @@ def _coeff_metadata_terms(powers: Any) -> tuple[tuple[int, int, int], ...]:
                 "AMR conservative coefficient is not an exact rational literal"
             ) from error
         if ratio:
-            signed_limit = (1 << 63) - 1
-            if (
-                power > (1 << 31) - 1
-                or ratio.numerator < -signed_limit
-                or ratio.numerator > signed_limit
-                or ratio.denominator > signed_limit
-            ):
-                raise OverflowError(
-                    "AMR conservative coefficient cannot be represented by the native exact ledger"
-                )
+            if power > (1 << 31) - 1:
+                raise OverflowError("AMR conservative dt power exceeds the native int range")
             terms.append((power, ratio.numerator, ratio.denominator))
     return tuple(terms)
 
 
 def _coeff_metadata_cpp(powers: Any) -> str:
     """Render the same dt polynomial as checked exact native-ledger metadata."""
-    return "{%s}" % ", ".join("{%d, %d, %d}" % term for term in _coeff_metadata_terms(powers))
+    def render(term: tuple[int, int, int]) -> str:
+        power, numerator, denominator = term
+        if -(1 << 63) < numerator < (1 << 63) and denominator < (1 << 63):
+            return "{%d, %d, %d}" % term
+        return '{%d, "%s", "%s"}' % (power, hex(numerator), hex(denominator))
+    return "{%s}" % ", ".join(render(term) for term in _coeff_metadata_terms(powers))
 
 
 # --- Phase-4b: lower a model's split-source / local-linear ops to per-cell C++ kernels ----------

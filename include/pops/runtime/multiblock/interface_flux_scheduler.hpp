@@ -141,7 +141,7 @@ struct InterfaceFluxFragmentPublication {
   ::pops::amr::ClockStamp clock;
   std::string stage_identity;
   ::pops::amr::ClockWindow interval;
-  ::pops::amr::Rational stage_weight{1, 1};
+  ::pops::ExactWeight stage_weight{1, 1};
   bool stage_weight_resolved = true;
 };
 
@@ -1063,10 +1063,14 @@ class InterfaceFluxScheduler {
     int face = 0;
   };
 
+ public:
+  // Kokkos allocation and CUDA launch stubs must be able to name this type.
   struct DeviceFaceJob {
     index_type index{};
     int face = 0;
   };
+
+ private:
   using device_job_view = Kokkos::View<DeviceFaceJob*, memory_space>;
   using device_real_view = Kokkos::View<Real*, memory_space>;
   using host_real_view = Kokkos::View<Real*, Kokkos::SharedHostPinnedSpace>;
@@ -1122,6 +1126,8 @@ class InterfaceFluxScheduler {
     std::shared_ptr<std::size_t> evaluation_count;
   };
 
+ public:
+  // The scheduler state stays private; only launch functor types are public.
   struct PackKernel {
     FieldView<const Real, Dim> field{};
     device_job_view jobs{};
@@ -1160,6 +1166,7 @@ class InterfaceFluxScheduler {
     }
   };
 
+ private:
   static void validate_route_structure_(const route_type& route) {
     if (route.identity.empty() || route.left_block == route.right_block || route.level < 0)
       throw std::invalid_argument("multi-block interface identity/ownership is invalid");
@@ -2086,8 +2093,7 @@ class InterfaceFluxScheduler {
     append_text_(bytes, publication.stage_identity);
     append_clock_(bytes, publication.interval.begin);
     append_clock_(bytes, publication.interval.end);
-    append_scalar_(bytes, publication.stage_weight.numerator);
-    append_scalar_(bytes, publication.stage_weight.denominator);
+    append_text_(bytes, publication.stage_weight.encode());
     append_scalar_(bytes, static_cast<std::uint8_t>(publication.stage_weight_resolved));
     append_scalar_(bytes, publication.ledger->topology_epoch());
     append_scalar_(bytes, static_cast<std::uint64_t>(publication.ledger->transaction_depth()));

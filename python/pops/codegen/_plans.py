@@ -37,14 +37,9 @@ def _builtin_restart_authority():
 
 def _deep_freeze(value: Any) -> Any:
     """Freeze container structure without copying runtime payloads such as arrays/resources."""
-    if isinstance(value, Mapping):
-        return MappingProxyType({_deep_freeze(key): _deep_freeze(item)
-                                 for key, item in value.items()})
-    if isinstance(value, (list, tuple)):
-        return tuple(_deep_freeze(item) for item in value)
-    if isinstance(value, (set, frozenset)):
-        return frozenset(_deep_freeze(item) for item in value)
-    return value
+    from pops._frozen_data import freeze_containers
+
+    return freeze_containers(value)
 
 
 def _string_mapping(value: Any, *, where: str) -> Mapping[str, Any]:

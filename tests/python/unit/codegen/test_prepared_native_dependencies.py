@@ -165,6 +165,7 @@ def test_compiler_dependency_closure_accepts_std_pops_kokkos_and_component(
     tmp_path: Path,
 ) -> None:
     from pops.codegen.toolchain import _run_compile
+    from pops.codegen._native_toolchain import capture_native_toolchain, native_toolchain_flags
     from pops.native_components import (
         PreparedNativeComponent,
         compiler_include_roots,
@@ -201,6 +202,7 @@ namespace vendor { inline std::vector<int> probe() { return {1}; } }
     )
     dependency_file = tmp_path / "generated source.d"
     output = tmp_path / "generated source.o"
+    toolchain_capture = capture_native_toolchain()
     _run_compile(
         [
             _compiler(),
@@ -218,6 +220,7 @@ namespace vendor { inline std::vector<int> probe() { return {1}; } }
             str(kokkos_root),
             "-c",
             str(generated),
+            *native_toolchain_flags(toolchain_capture, []),
             "-o",
             str(output),
         ],
@@ -230,6 +233,7 @@ namespace vendor { inline std::vector<int> probe() { return {1}; } }
         pops_include_root=repo_include(),
         staged_components=((component, staged_root),),
         toolchain_include_roots=compiler_include_roots(["-I", str(kokkos_root)]),
+        toolchain_metadata=toolchain_capture,
     )
 
     assert os.path.realpath(generated) in dependencies
@@ -318,6 +322,8 @@ def test_rejected_dependency_closure_publishes_no_binary_or_sidecar(
     monkeypatch.setattr(drivers, "pops_header_signature", lambda include: "MOCKSIG")
     monkeypatch.setattr(drivers, "_probe_cxx_std", lambda cc, std: std or "c++23")
     monkeypatch.setattr(toolchain, "_native_feature_key", lambda: "TEST-FEATURES")
+    monkeypatch.setattr("pops._native_selector.select_native_dimension", lambda dimension: None)
+    monkeypatch.setattr(toolchain, "loader_native_dimension", lambda: 2)
 
     def _make_escape(path: str) -> str:
         return path.replace("\\", "\\\\").replace(" ", "\\ ")
@@ -337,7 +343,8 @@ def test_rejected_dependency_closure_publishes_no_binary_or_sidecar(
     program, module = _program_fixture("rejected_dependency")
 
     with pytest.raises(RuntimeError, match="outside the authenticated"):
-        drivers.compile_problem(model=module, time=program, force=True, include=INCLUDE)
+        drivers.compile_problem(model=module, time=program, force=True, include=INCLUDE,
+                                native_dimension=2)
 
     assert not tuple(tmp_path.rglob("*.so"))
     assert not tuple(tmp_path.rglob("*.dylib"))

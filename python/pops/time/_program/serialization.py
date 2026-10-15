@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from pops.time.canonical_data import _json_ready as _json_ready
 
-import hashlib
 import json
 from collections.abc import Mapping
 from enum import Enum
@@ -217,9 +216,20 @@ class _ProgramSerialization(_ProgramBase):
             raise TypeError("Program._serialize include_provenance must be bool")
         from .global_history_storage import validate_issuances
         validate_issuances(self)
+        if type(self.max_exact_coefficient_bytes) is not int or not 8 <= self.max_exact_coefficient_bytes <= (1 << 63) - 1:
+            raise ValueError("max_exact_coefficient_bytes must be an integer in [8, INT64_MAX]")
+        from .resource_budgets import validate_flux_expression_budget
+        validate_flux_expression_budget(self.flux_expression_budget)
+        from .resource_budgets import validate_terminal_failure_capacities
+        validate_terminal_failure_capacities(
+            self.terminal_failure_byte_capacity, self.terminal_failure_aggregate_byte_capacity)
         order = self._block_indices()
         result: dict[str, Any] = {
             "name": self.name,
+            "max_exact_coefficient_bytes": self.max_exact_coefficient_bytes,
+            "flux_expression_budget": self.flux_expression_budget,
+            "terminal_failure_byte_capacity": self.terminal_failure_byte_capacity,
+            "terminal_failure_aggregate_byte_capacity": self.terminal_failure_aggregate_byte_capacity,
             # Version 6 extends persistent trace selectors to prepared constitutive faces.
             # Keep existing transport-only program identities/restart authorities unchanged.
             "version": 6 if any(
@@ -385,9 +395,8 @@ class _ProgramSerialization(_ProgramBase):
         return result
 
     def _ir_hash(self) -> str:
-        blob = json.dumps(
-            self._serialize(include_provenance=False), sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(blob.encode()).hexdigest()
+        from pops._structural_data import canonical_json_sha256
+        return canonical_json_sha256(self._serialize(include_provenance=False))
 
     def _semantic_serialize(self) -> dict[str, Any]:
         """Scientific IR projection shared by manual programs and library constructors."""

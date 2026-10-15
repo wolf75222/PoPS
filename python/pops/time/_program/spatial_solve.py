@@ -1,5 +1,6 @@
 """The exact request-to-Program adapter for ordered vector spatial implicit stages."""
 from __future__ import annotations
+from pops.identity.scalar import parse_canonical_integer
 
 import math
 from dataclasses import dataclass
@@ -111,7 +112,7 @@ def spatial_scalar(value: Any) -> int | float:
     if isinstance(value, Mapping):
         data = value.get("scalar", value)
         if data.get("kind") == "integer":
-            return int(data["value"])
+            return parse_canonical_integer(data["value"])
         if data.get("kind") == "binary64":
             return float.fromhex(data["value"])
     raise SolveRequestError("invalid_solver_controls", "spatial controls require exact numeric literals")

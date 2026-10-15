@@ -1,7 +1,7 @@
 """Order-preserving canonical projection for authoring mappings."""
 from __future__ import annotations
 
-import json
+from pops._structural_data import canonical_json
 from typing import Any
 
 
@@ -32,8 +32,8 @@ def canonical_mapping(
         canonical_key = canonical(
             key, path="%s{key}" % path, active=active,
             handle_resolver=handle_resolver, artifact=artifact)
-        key_token = json.dumps(
-            canonical_key, sort_keys=False, separators=(",", ":"), allow_nan=False)
+        key_token = canonical_json(
+            canonical_key, sort_keys=False, allow_nan=False)
         if key_token in canonical_keys:
             raise ValueError(
                 "AuthoringSnapshot mapping at %s contains distinct keys with the same "

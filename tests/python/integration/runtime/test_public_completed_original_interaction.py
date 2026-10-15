@@ -173,7 +173,7 @@ def test_public_completed_original_interaction_exact_restart_and_saved_reduction
                 "interaction":"DirectSpatialInteraction@1","max_workspace_bytes":WORKSPACE,
                 "source_contract":"pops.completed-original-field-source@1",
                 "array_wire":"pops.spatial-interaction-fixture-array-wire@1",
-                "history":{"wire":"POPSHID1","latest_slot":1,"previous_slot":0,"depth":2},
+                "history":{"wire":"POPSHID2","latest_slot":1,"previous_slot":0,"depth":2},
                 "source_physical_owner":None,"storage_owner_only":profile["storage"],
                 "native_I_array_available":False,"I_array_role":"COMPUTED_REFERENCE_ONLY",
                 "native_I_reductions":KINDS,"entire_I_per_cell_qualified":False,

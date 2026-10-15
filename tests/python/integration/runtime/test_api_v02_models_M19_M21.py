@@ -1,4 +1,4 @@
-"""Native M19-M21 profiles split from M15_M21, with the same public equations and oracles."""
+"""Retained reduced M19-M21 regressions; full phase-space receivers are separate."""
 import pytest
 
 from tests.python.support.api_v02_moment_profiles import run_native_moment_profile

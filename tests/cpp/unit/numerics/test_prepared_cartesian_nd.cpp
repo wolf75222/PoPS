@@ -297,9 +297,9 @@ struct ProviderAdvection : nd::ScalarAdvection<Dim> {
 struct SelectedFaceProviderAdvection : nd::ScalarAdvection<2> {
   static constexpr int n_providers = 2;
   static constexpr int n_flux_providers = 1;
-  inline static constexpr std::array<QualifiedProviderRequirement, 1> flux_provider_requirements{{
-      {"model", "aux", "inputs", "velocity", "cell-average", "cell", "", "layout", "",
-       "producer", true, 1}}};
+  inline static constexpr std::array<QualifiedProviderRequirement, 1> flux_provider_requirements{
+      {{"model", "aux", "inputs", "velocity", "cell-average", "cell", "", "layout", "", "producer",
+        true, 1}}};
   POPS_HD State flux(const State& state, const auto& providers, int) const {
     return {state[0] * providers.template provider<1>()};
   }
@@ -320,8 +320,8 @@ void check_selected_face_providers() {
   const Box<2> box = Box<2>::from_extents(Extent<2>{4, 4});
   const auto geometry = unit_geometry(box);
   const auto op = nd::prepare_cartesian_operator<2>(geometry, Model{});
-  const auto masked = nd::prepare_masked_cartesian_operator<2>(
-      Model{}, op.metric(), NoSlope{}, RusanovFlux{});
+  const auto masked =
+      nd::prepare_masked_cartesian_operator<2>(Model{}, op.metric(), NoSlope{}, RusanovFlux{});
   Fab<2> state(box, 1, uniform_extent<2>(NoSlope::n_ghost));
   state.set_val(Real(2));
   Fab<2> projection_only(box, 1), velocity(box, 1, uniform_extent<2>(1));
@@ -778,4 +778,120 @@ TEST(test_prepared_cartesian_nd, shared_face_omission_precedes_dense_and_mapped_
   check_provider_interface_face_omission<1>();
   check_provider_interface_face_omission<2>();
   check_provider_interface_face_omission<3>();
+}
+
+namespace {
+
+template <int Dim>
+void check_prescribed_riemann_trace() {
+  const auto domain = Box<Dim>::from_extents(uniform_extent<Dim>(4));
+  const auto geometry = unit_geometry(domain);
+  std::vector<std::string> laws(2 * Dim, "foextrap");
+  laws[0] = laws[1] = "dirichlet";
+  std::vector<std::string> ids;
+  for (int ordinal = 0; ordinal < 2 * Dim; ++ordinal)
+    ids.push_back("prescribed/" + std::to_string(ordinal));
+  auto boundary =
+      prepare_hyperbolic_boundary<Dim>(laws, std::vector<double>(2 * Dim, 0), ids, {"Scalar"});
+  const mesh::BoxArray<Dim> layout(std::vector<Box<Dim>>{domain});
+  const mesh::RankSpace<Dim> ranks{Index<Dim>{}, uniform_extent<Dim>(1)};
+  const auto distribution = mesh::Distribution<Dim>::replicated(layout, ranks);
+  MultiFab<Dim> state(layout, distribution, Index<Dim>{}, 1, uniform_extent<Dim>(1));
+  state.set_val(Real(0.1));
+  boundary.fill_physical(state, geometry);
+  auto ghost_before = state.fab(0).create_host_mirror();
+  state.fab(0).copy_to_host(ghost_before);
+  for (Real speed : {Real(0.002), Real(-0.002)}) {
+    RealVector<Dim> velocity{};
+    velocity[0] = speed;
+    const auto op = nd::prepare_cartesian_operator<Dim>(
+        geometry, nd::ScalarAdvection<Dim>::prepare(velocity), NoSlope{}, RusanovFlux{});
+    nd::FaceField<Dim> faces(domain, 1), candidate(domain, 1), status(domain, 1), speeds(domain, 1);
+    op.materialize_face_fluxes(state.fab(0), faces);
+    const auto wrong = valid_values(faces.template field<0>());
+    const Real area =
+        nd::metric_face_context<0, MetricFaceSide::Lower>(op.metric(), Index<Dim>{}).face_measure;
+    EXPECT_NEAR(wrong[speed > 0 ? 0 : 4], -speed * Real(0.1) * area, Real(1e-18));
+    op.materialize_face_fluxes(state.fab(0), faces, candidate, status, {}, &speeds,
+                               boundary.physical_face_trace(geometry));
+    const auto values = valid_values(faces.template field<0>());
+    for_each_host_index(faces.template field<0>().box(), [&](const Index<Dim>& face) {
+      const bool incoming = face[0] == (speed > 0 ? domain.lo[0] : domain.hi[0] + 1);
+      EXPECT_NEAR(values[host_offset(faces.template field<0>().box(), face, 0)],
+                  incoming ? Real(0) : speed * Real(0.1) * area, Real(1e-18));
+    });
+    for (Real value : valid_values(speeds.template field<0>()))
+      EXPECT_EQ(value, Kokkos::abs(speed));
+  }
+  auto ghost_after = state.fab(0).create_host_mirror();
+  state.fab(0).copy_to_host(ghost_after);
+  for (std::size_t n = 0; n < ghost_before.size(); ++n)
+    EXPECT_EQ(ghost_before(n), ghost_after(n));
+}
+
+}  // namespace
+
+TEST(test_prepared_cartesian_nd, prescribed_inflow_is_face_trace_not_mirrored_ghost) {
+  check_prescribed_riemann_trace<1>();
+  check_prescribed_riemann_trace<2>();
+  check_prescribed_riemann_trace<3>();
+}
+
+TEST(test_prepared_cartesian_nd, prescribed_trace_uses_face_coordinate_stage_time_and_interior) {
+  const auto domain = Box<1>::from_extents(Extent<1>{4});
+  const auto geometry = unit_geometry(domain);
+  const auto op = nd::prepare_cartesian_operator<1>(
+      geometry, nd::ScalarAdvection<1>::prepare(RealVector<1>{Real(1)}), NoSlope{}, RusanovFlux{});
+  const auto boundary = prepare_hyperbolic_boundary<1>(
+      {"dirichlet", "foextrap"}, {0, 0}, {"analytic/incoming", "outgoing"}, {"Scalar"}, false, {},
+      {}, {{"x", "input", "add", "input", "add"}, {}}, {{0, 0, 0, 1, 0}, {}}, {"clock", ""});
+  Fab<1> state(domain, 1, Extent<1>{1});
+  state.set_val(Real(0.1));
+  nd::FaceField<1> faces(domain, 1);
+  for (Real time : {Real(0.25), Real(0.75)}) {
+    op.materialize_face_fluxes(state, faces, {}, boundary.physical_face_trace(geometry, time));
+    EXPECT_NEAR(valid_values(faces.field<0>()).front(), time + Real(0.1), Real(2e-16));
+    EXPECT_EQ(valid_values(faces.field<0>()).back(), Real(0.1));
+  }
+}
+
+TEST(test_prepared_cartesian_nd, prescribed_trace_retains_selected_provider_and_transaction) {
+  const auto domain = Box<1>::from_extents(Extent<1>{4});
+  const auto geometry = unit_geometry(domain);
+  const auto op =
+      nd::prepare_cartesian_operator<1>(geometry, ProviderAdvection<1>{}, NoSlope{}, RusanovFlux{});
+  const auto boundary = prepare_hyperbolic_boundary<1>({"dirichlet", "foextrap"}, {Real(0.3), 0},
+                                                       {"incoming", "outgoing"}, {"Scalar"});
+  Fab<1> state(domain, 1, Extent<1>{1}), providers(domain, 1, Extent<1>{1});
+  state.set_val(Real(0.1));
+  providers.set_val(Real(2));
+  nd::FaceField<1> faces(domain, 1);
+  op.materialize_face_fluxes(state, providers, faces, {}, boundary.physical_face_trace(geometry));
+  EXPECT_NEAR(valid_values(faces.field<0>()).front(), Real(0.6), Real(2e-16));
+  const auto before = valid_values(faces.field<0>());
+  providers.set_val(std::numeric_limits<Real>::quiet_NaN());
+  EXPECT_THROW(op.materialize_face_fluxes(state, providers, faces, {},
+                                          boundary.physical_face_trace(geometry)),
+               std::runtime_error);
+  EXPECT_EQ(valid_values(faces.field<0>()), before);
+}
+
+TEST(test_prepared_cartesian_nd, masked_face_path_uses_the_same_prescribed_trace) {
+  const auto domain = Box<1>::from_extents(Extent<1>{4});
+  const auto geometry = unit_geometry(domain);
+  const auto model = nd::ScalarAdvection<1>::prepare(RealVector<1>{Real(1)});
+  const auto op = nd::prepare_cartesian_operator<1>(geometry, model, NoSlope{}, RusanovFlux{});
+  const auto boundary = prepare_hyperbolic_boundary<1>({"dirichlet", "foextrap"}, {0, 0},
+                                                       {"incoming", "outgoing"}, {"Scalar"});
+  Fab<1> state(domain, 1, Extent<1>{1}), active(domain, 1, Extent<1>{1});
+  state.set_val(Real(0.1));
+  active.set_val(Real(1));
+  nd::FaceField<1> faces(domain, 1), statuses(domain, 1);
+  nd::masked_operator_detail::materialize_axes<0, nd::ReconstructionVariables::Conservative>(
+      model, op.metric(), NoSlope{}, RusanovFlux{}, Real(0), 0, state, active,
+      nd::cartesian_operator_detail::ProviderFreeStorage<1>{}, faces, statuses, {},
+      boundary.physical_face_trace(geometry));
+  EXPECT_EQ(valid_values(faces.field<0>()).front(), Real(0));
+  EXPECT_EQ(valid_values(faces.field<0>()).back(), Real(0.1));
+  EXPECT_EQ(nd::cartesian_operator_detail::maximum_face_status<0>(statuses), Real(0));
 }

@@ -19,7 +19,7 @@ def storage_contract(program: Any, source: Any, owner: Any) -> dict[str, Any]:
     if source.prog is not program or program._issued_values.get(id(source)) is not source \
             or program._canonical_value(source) is not source:
         raise ValueError("global field history source is not the current issued observation")
-    if source.block is not None or source.state_ref is not None or source.space is not None:
+    if source.block is not None or source.state_ref is not None:
         raise ValueError("global field history cannot override physical State ownership")
     _width, _component, solve = validate_field_observation(source)
     from pops.time._graph.value_traversal import walk_program_nodes, reachable_values
@@ -66,11 +66,16 @@ def storage_contract(program: Any, source: Any, owner: Any) -> dict[str, Any]:
     if any(state.state != matching[0].state for state in matching[1:]):
         raise ValueError("global field history storage has ambiguous allocation State authority")
     # No borrow of StateSpace, state identity, temperature or field ownership.
-    return {"contract":CONTRACT, "owner_block":owner, "clock":clock,
+    result = {"contract":CONTRACT, "owner_block":owner, "clock":clock,
         "point":source.point, "region":source.region, "layout_witness":allocation,
         "storage_state_witness":matching[0].state, "field_problem_identity":source.attrs["field_problem_identity"],
         "field_unknown":source.attrs["field_unknown"], "ncomp":1,
         "sampling":"cell", "representation":"valid_cell_copy"}
+    if source.space is not None:
+        # Observation validation above binds this exact FieldSpace to the solved
+        # physical problem. Storage ownership never borrows the owner's StateSpace.
+        result["field_space"] = source.space.to_data()
+    return result
 
 
 _ISSUER = object()
@@ -129,7 +134,8 @@ def validate_storage_node(program: Any, node: Any) -> dict[str, Any]:
     if not _equal_metadata(issued.metadata, expected):
         raise ValueError("global field history changed its originally issued storage authority")
     if not _equal_metadata(node.attrs.get("global_field_storage"), issued.metadata) \
-            or node.point != node.inputs[0].point or node.state_ref is not None or node.space is not None:
+            or node.point != node.inputs[0].point or node.state_ref is not None \
+            or node.space != node.inputs[0].space:
         raise ValueError("global field history storage changed its immutable authority")
     width = program._histories_ncomp.get(node.attrs["history"])
     if program._history_blocks.get(node.attrs["history"]) is not node.block \

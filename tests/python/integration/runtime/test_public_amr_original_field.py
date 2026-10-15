@@ -34,7 +34,7 @@ from pops.numerics.terms import SourceTerm
 from pops.params import RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.solvers import Newton
-from pops.time import FailRun, FixedDt, every
+from pops.time import FailRun, FixedDt, RejectAttempt, every
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 from tests.python.support.amr_snapshots import composite_active_mask
 from tests.python.support.collective_checks import collective_attempt, collective_call, collective_check
@@ -47,7 +47,7 @@ DIFFUSION = np.array(((.04, .006, 0.), (-.003, .05, 0.), (0., 0., .03)))
 DT, TOL = .01, 3e-8
 
 
-def build(cells, order=(0, 1, 2), *, guarded=False, seed=False, right_preconditioner=None, solver=None, physical_seed=None):
+def build(cells, order=(0, 1, 2), *, guarded=False, seed=False, right_preconditioner=None, solver=None, physical_seed=None, second_solve=False, reuse_request=False, control_region=None):
     width = len(order)
     frame = Rectangle("closed-original-field-box", lower=(0, 0), upper=(1, 1)).frame(Cartesian2D())
     fluid = pops.Model("actual-field-consumer", frame=frame)
@@ -118,7 +118,62 @@ def build(cells, order=(0, 1, 2), *, guarded=False, seed=False, right_preconditi
             frame=state.space.frame, clock=state.space.clock, support=state.space.support)
         request = request.seed_product(program=program, space=space, name="declared-original-seed",
             expressions=tuple(0 * coefficient.n[0] + physical_seed for _ in order))
+    if control_region is not None:
+        if width != 1 or control_region not in ("branch_true", "branch_false", "fold", "fold_overflow", "capture_success", "capture_runtime", "capture_terminal", "capture_user", "iterate_success", "iterate_budget", "iterate_runtime"):
+            raise ValueError("invalid original-field structured observation fixture")
+
+        def regional_solve(body, factor, *, reject=False, terminal=False):
+            regional_solver = (Newton(tolerance=1e-10, max_iterations=1, linear_tolerance=1e-8,
+                linear_max_iterations=240, restart=60, **realization) if reject else solver)
+            changed = body.value("regional-original-load",
+                (factor*load.n[0] + (factor**3-factor)*float(TARGET[0])**3,), at=original_point)
+            regional_request = field.bind_program_inputs(program=body,
+                values={blocks[1][forcing]: changed, blocks[2][parameter]: coefficient.n},
+                at=original_point, solver=regional_solver)
+            result = field.observe(body.solve(regional_request, solver=regional_solver).consume(action=RejectAttempt() if reject and not terminal else FailRun()))
+            return body.max(result[field[unknowns[0]]])
+
+        if control_region.startswith("branch"):
+            observation = program.branch(program.boolean(control_region == "branch_true"),
+                lambda body: regional_solve(body, 2), lambda body: regional_solve(body, 1))
+        elif control_region.startswith("capture"):
+            def captured(body):
+                result = regional_solve(body, 1, reject=control_region in ("capture_runtime", "capture_terminal"),
+                    terminal=control_region == "capture_terminal")
+                if control_region == "capture_user":
+                    result = body.require_success(body.failure(result, -(1 << 63)))
+                return result
+            result = program.capture(captured)
+            observation = program.match(result,
+                ok=lambda body, value: body.float64(5),
+                err=lambda body, error: body.branch(error["code"] == (-(1 << 63) if control_region == "capture_user" else 3),
+                    lambda inner: inner.float64(-7), lambda inner: inner.float64(-9)))
+        elif control_region.startswith("iterate"):
+            result = program.iterate(program.float64(0),
+                lambda body, carry: carry + regional_solve(body, 1, reject=control_region == "iterate_runtime"),
+                lambda body, carry: carry > .2, max_steps=1 if control_region == "iterate_budget" else 3)
+            observation = program.match(result,
+                ok=lambda body, value: body.float64(5),
+                err=lambda body, error: body.branch(error["code"] == (1 if control_region == "iterate_budget" else 3),
+                    lambda inner: inner.float64(-7), lambda inner: inner.float64(-9)))
+        else:
+            observation = program.fold(program.float64(0), program.int64(3 if control_region == "fold_overflow" else 2),
+                lambda body, carry, index: carry + regional_solve(body, 1), max_steps=program.int64(2))
+        program.record_scalar("structured_original_observation", observation)
     observed = field.observe(program.solve(request, solver=solver).consume(action=FailRun()))
+    if second_solve:
+        if width != 1:
+            raise ValueError("the independent repeated-solve witness has one unknown")
+        program.record_scalar("first_original_observation", program.sum(observed[field[unknowns[0]]]))
+        if not reuse_request:
+            # If F(q)=a*q+q^3=f, then F(2q)=2*f+6*q^3. The source is an
+            # authored Python equation; the engine never knows this relation.
+            changed_load = program.value("second-original-load", (2*load.n[0] + 6*float(TARGET[0])**3,),
+                                         at=original_point)
+            request = field.bind_program_inputs(program=program,
+                values={blocks[1][forcing]: changed_load, blocks[2][parameter]: coefficient.n},
+                at=original_point, solver=solver)
+        observed = field.observe(program.solve(request, solver=solver).consume(action=FailRun()))
     outputs = tuple(observed[field[unknown]] for unknown in unknowns)
     module = fluid.module
     carrier = blocks[0][module.field_handle(module.field_spaces()["fields"])]
@@ -310,7 +365,7 @@ def test_public_original_amr_saved_reaction_and_exact_restart(isolated_native_ca
                 "fixture_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                 "initialization": {"kind":initialization, "components":len(order)},
                 "finite_difference_step": 1e-6,
-                "finite_difference_step_binary64": float(1e-6).hex(),
+                "finite_difference_step_binary64": (1e-6).hex(),
                 "solver_controls": {"tolerance":1e-10, "max_iterations":20,
                     "linear_tolerance":1e-6 if cells == 32 else 1e-8,
                     "linear_max_iterations":240, "restart":60},

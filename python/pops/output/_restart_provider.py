@@ -1416,22 +1416,36 @@ class RestartV3:
             raise TypeError("RestartV3.write requires its exact prepared restart snapshot")
         return snapshot.publish(target)
 
-    def reopen(self, runtime: Any, path: Any) -> ReopenedRestart:
+    def reopen(self, runtime: Any, path: Any, *,
+               workspace_byte_capacity: int | None = None) -> ReopenedRestart:
         self.validate_configuration()
         from ._checkpoint_collective import _bounded_checkpoint_path_bytes, root_bytes
-        from ._checkpoint_contract import require_checkpoint_resource_budget
+        from ._checkpoint_restart_budget import restart_checkpoint_resource_budget, restart_workspace_capacity
 
         topology = checkpoint_topology(runtime)
         target = collective_checkpoint_path(
             topology, path, phase_prefix="restart"
         )
         root_payload = b""
-        archive_budget = require_checkpoint_resource_budget(runtime).max_archive_bytes
+        workspace = None
+        archive_budget = 0
+        resource_error = None
+        try:
+            workspace = restart_workspace_capacity(runtime, workspace_byte_capacity, bit_identical=self.bit_identical)
+            archive_budget = restart_checkpoint_resource_budget(
+                runtime, workspace, bit_identical=self.bit_identical).max_archive_bytes
+        except BaseException as error:
+            resource_error = error
+        resource_rows = consensus(topology, "restart source resource preflight", error=resource_error,
+                                  value=(workspace, archive_budget))
+        if any(tuple(row["value"]) != (workspace, archive_budget) for row in resource_rows):
+            raise ValueError("restart source resource policy differs across ranks")
 
         def read_and_authenticate_root() -> dict[str, Any]:
             nonlocal root_payload
             root_payload = _bounded_checkpoint_path_bytes(target, archive_budget)
-            cursors = runtime._inspect_checkpoint_payload(root_payload)
+            options = {} if workspace is None else {"workspace_byte_capacity": workspace}
+            cursors = runtime._inspect_checkpoint_payload(root_payload, **options)
             return cursors.to_data()
 
         cursor_data = root_value(
@@ -1456,12 +1470,15 @@ class RestartV3:
             raise RuntimeError("restart cursor consensus returned no cursor set")
         return ReopenedRestart(Path(target), payload, cursors)
 
-    def restore(self, runtime: Any, reopened: Any, *, state_storage: str = "full") -> Any:
+    def restore(self, runtime: Any, reopened: Any, *, state_storage: str = "full",
+                workspace_byte_capacity: int | None = None) -> Any:
         self.validate_configuration()
         if state_storage != "full" and self.hierarchy.mode == "regrid_on_restart":
             raise ValueError("legacy Uniform8 state storage cannot regrid on restart")
         if type(reopened) is not ReopenedRestart:
             raise TypeError("RestartV3.restore requires an exact ReopenedRestart")
+        resource_options = ({} if workspace_byte_capacity is None else
+                            {"workspace_byte_capacity": workspace_byte_capacity})
         if self.hierarchy.mode == "regrid_on_restart":
             return runtime._restore_checkpoint(
                 reopened.payload,
@@ -1469,6 +1486,7 @@ class RestartV3:
                 bit_identical=self.bit_identical,
                 hierarchy_mode=self.hierarchy.mode,
                 hierarchy_identity=self.hierarchy.identity.token,
+                **resource_options,
             )
         options = {} if state_storage == "full" else {"state_storage": state_storage}
         return runtime._restore_checkpoint(
@@ -1476,6 +1494,7 @@ class RestartV3:
             reopened.cursors,
             bit_identical=self.bit_identical,
             **options,
+            **resource_options,
         )
 
 

@@ -114,6 +114,7 @@ void advance_prepared_hierarchy_(double dt, Body&& body, std::string_view operat
     multiblock_subcycling_has_accepted_step_ = true;
   } catch (...) {
     retain_subcycling_attempt_authority_();
+    revoke_finite_values_on_rollback();
     program_values_.revoke_();
     rhs_input_traces_.clear();
     if (interface_flux_ledger_ && interface_flux_ledger_->in_transaction())
@@ -156,6 +157,7 @@ void prepare_multiblock_subcycling_engine_() const {
   auto& hierarchy = facade_->prepared_amr_multiblock_hierarchy_();
   std::vector<std::size_t> rhs_basis_bounds;
   std::vector<std::size_t> coefficient_term_bounds;
+  std::size_t exact_coefficient_bytes = ::pops::ExactWeight::default_max_bytes;
   std::string program_budget_contract;
   std::exception_ptr local_error;
   try {
@@ -176,6 +178,10 @@ void prepare_multiblock_subcycling_engine_() const {
       throw std::logic_error(
           "AMR Program flux-expression budget is not authentic for the active carrier");
 
+    if (!expression_budget.blocks.empty())
+      exact_coefficient_bytes = expression_budget.blocks.front().exact_coefficient_bytes;
+    if (exact_coefficient_bytes < 8)
+      throw std::invalid_argument("AMR Program exact coefficient byte budget is invalid");
     rhs_basis_bounds.assign(blocks, 0);
     coefficient_term_bounds.assign(blocks, 0);
     std::vector<bool> seen(blocks, false);
@@ -188,6 +194,8 @@ void prepare_multiblock_subcycling_engine_() const {
             "AMR Program flux-expression budget differs from its exact block permutation");
       seen[canonical] = true;
       const auto& block_budget = expression_budget.blocks[program_block];
+      if (block_budget.exact_coefficient_bytes != exact_coefficient_bytes)
+        throw std::invalid_argument("AMR Program coefficient budgets differ between blocks");
       const bool active =
           block_budget.rhs_basis_bound != 0 || block_budget.coefficient_term_bound != 0;
       if (active && (block_budget.rhs_basis_bound == 0 || block_budget.coefficient_term_bound == 0))
@@ -321,6 +329,7 @@ void prepare_multiblock_subcycling_engine_() const {
   multiblock_subcycling_has_accepted_step_ = false;
   prepared_rhs_basis_bounds_ = std::move(rhs_basis_bounds);
   prepared_coefficient_term_bounds_ = std::move(coefficient_term_bounds);
+  max_exact_coefficient_bytes_ = exact_coefficient_bytes;
   multiblock_subcycling_program_budget_contract_ = std::move(program_budget_contract);
   // This engine is prepared against the facade's rebuilt multi-block hierarchy.  Regrid and
   // restart rematerialize that authority before the raw runtime's convenience view necessarily
@@ -441,16 +450,20 @@ void advance_multiblock_level_group_(multiblock_level_group_type group, double m
 }
 
 template <class ClockMatrix, class HistoryMatrix>
-void prepare_accepted_publication_halos_(double macro_dt, std::vector<std::vector<field_type>>& candidates,
-                                        const ClockMatrix& clocks, const HistoryMatrix& histories) const {
-  if (!facade_->requests_accepted_halo_preparation()) return;
+void prepare_accepted_publication_halos_(double macro_dt,
+                                         std::vector<std::vector<field_type>>& candidates,
+                                         const ClockMatrix& clocks,
+                                         const HistoryMatrix& histories) const {
+  if (!facade_->requests_accepted_halo_preparation())
+    return;
   const auto& lane = prepared_execution_lane();
   std::vector<std::vector<runtime::multiblock::BoundaryEvaluationPoint>> points;
   std::exception_ptr error;
   try {
     if (primary_clock_.empty() || !std::isfinite(macro_dt) || macro_dt <= 0 ||
         candidates.size() != clocks.size() || histories.size() != candidates.size())
-      throw std::invalid_argument("accepted halo preparation lacks its exact Program clock authority");
+      throw std::invalid_argument(
+          "accepted halo preparation lacks its exact Program clock authority");
     points.resize(candidates.size());
     for (std::size_t block = 0; block < candidates.size(); ++block) {
       if (clocks[block].size() != candidates[block].size() ||
@@ -459,21 +472,30 @@ void prepare_accepted_publication_halos_(double macro_dt, std::vector<std::vecto
       points[block].reserve(clocks[block].size());
       for (std::size_t level = 0; level < clocks[block].size(); ++level) {
         if (!clocks[block][level] || !histories[block][level])
-          throw std::invalid_argument("accepted halo preparation requires an authenticated accepted clock");
+          throw std::invalid_argument(
+              "accepted halo preparation requires an authenticated accepted clock");
         const auto& clock = *clocks[block][level];
         const auto& window = histories[block][level]->window;
         const double local_dt = macro_dt * (window.end.phase - window.begin.phase).value();
         if (window.end != clock || !std::isfinite(local_dt) || local_dt <= 0 ||
             clock.level != static_cast<int>(level))
           throw std::invalid_argument("accepted halo candidate clock has a different level");
-        points[block].push_back({.clock = primary_clock_, .tick = clock.macro_step,
-            .level = clock.level, .substep = 0, .stage = 0, .stage_fraction = clock.phase,
-            .dt = local_dt, .physical_time = clock.physical_time});
+        points[block].push_back({.clock = primary_clock_,
+                                 .tick = clock.macro_step,
+                                 .level = clock.level,
+                                 .substep = 0,
+                                 .stage = 0,
+                                 .stage_fraction = clock.phase,
+                                 .dt = local_dt,
+                                 .physical_time = clock.physical_time});
       }
     }
-  } catch (...) { error = std::current_exception(); }
+  } catch (...) {
+    error = std::current_exception();
+  }
   if (all_reduce_max(error ? 1L : 0L, lane)) {
-    if (lane.size() == 1 && error) std::rethrow_exception(error);
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
     throw std::runtime_error("accepted halo clock preparation failed collectively");
   }
   facade_->prepare_accepted_halo_candidates(candidates, points);

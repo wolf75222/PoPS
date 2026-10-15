@@ -70,14 +70,14 @@ def main():
         "source_diff_sha256": hashlib.sha256(subprocess.check_output(
             ["git", "diff", "HEAD", "--binary"], cwd=repository)).hexdigest(),
         "requested_profiles": list(args.ids), "results": [],
-        "scope": "installed PoPS; CPU Kokkos; one MPI rank per profile; Dim1 HyQMOM/ALE and Dim2 other profiles",
+        "scope": "installed PoPS; CPU Kokkos; one MPI rank per profile; Dim1 HyQMOM and Dim2 other selected profiles",
         "complete_api_02_conformance": False,
         "qualification": "only the explicit equations, variants and checks in each profile"}
     installed_by_dimension = {}
     common_installation = None
     scientific_sources = None
     for identifier in args.ids:
-        dimension = 1 if identifier in ("M15", "M28") else 2
+        dimension = 1 if identifier == "M15" else 2
         destination = output / identifier
         command = [sys.executable, "-m", "examples.api_v02.reception", "--ids", identifier,
             "--dimension", str(dimension), "--output", str(destination)]

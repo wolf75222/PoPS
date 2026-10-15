@@ -4,7 +4,8 @@ import json
 
 
 def emit_transport_exchanges(
-    faces, operation, occurrence, evaluation, weight, *, program_block=0, active_field=None
+    faces, operation, occurrence, evaluation, weight, *, program_block=0, active_field=None,
+    capture_to=None,
 ):
     # Native hyperbolic FaceField contains the physical face integral already. Preserve
     # its actual measure in the ledger; -div(F) reverses the diffusive incidence sign.
@@ -47,20 +48,27 @@ def emit_transport_exchanges(
         "}",
         "if (pops::all_reduce_max(accepted_mask_layout_error, ctx.prepared_execution_lane()) != 0)",
         '  throw std::invalid_argument("accepted transport face mask differs from local patches collectively");',
-        "ctx.stage_exchange_batch([&](auto&& stage_exchange) {",
+        ("ctx.stage_exchange_batch([&](auto&& stage_exchange) {" if capture_to is None else
+         "ctx.capture_stencil_exchanges(%s, %d, %s, [&](auto&& stage_exchange) {"
+         % (capture_to,program_block,json.dumps(evaluation))),
         "if (!accepted_owner_contributes) return;",
         "for (std::size_t %s = 0; %s < %s.size(); ++%s) {"
         % (local_name, local_name, faces, local_name),
         "  const auto& accepted_faces = %s[%s];" % (faces, local_name),
         "  const auto cells = accepted_faces.cell_box();",
         "  const auto extent = cells.extent();",
-        "  const auto face_values = accepted_faces.view();",
-        "  const auto active_values = %s == nullptr" % active_name,
-        "      ? pops::FieldView<const pops::Real, pops::kNativeDimension>{}",
-        "      : std::as_const(*%s).fab(%s).view();" % (active_name, local_name),
-        "  const auto coverage_values = %s == nullptr" % coverage_name,
-        "      ? pops::FieldView<const pops::Real, pops::kNativeDimension>{}",
-        "      : std::as_const(*%s).fab(%s).view();" % (coverage_name, local_name),
+        "  const pops::runtime::program::HostFacePublication<pops::kNativeDimension> published_faces(accepted_faces);",
+        "  const auto face_values = published_faces.view();",
+        "  using HostMask = pops::runtime::program::HostFabPublication<pops::kNativeDimension>;",
+        "  std::optional<HostMask> published_active, published_coverage;",
+        "  if (%s != nullptr) published_active.emplace(std::as_const(*%s).fab(%s));"
+        % (active_name, active_name, local_name),
+        "  if (%s != nullptr) published_coverage.emplace(std::as_const(*%s).fab(%s));"
+        % (coverage_name, coverage_name, local_name),
+        "  const auto active_values = published_active ? published_active->view()",
+        "      : pops::FieldView<const pops::Real, pops::kNativeDimension>{};",
+        "  const auto coverage_values = published_coverage ? published_coverage->view()",
+        "      : pops::FieldView<const pops::Real, pops::kNativeDimension>{};",
         "  for (std::int64_t ordinal = 0; ordinal < cells.numPts(); ++ordinal) {",
         "    auto remainder = ordinal;",
         "    auto cell = cells.lo;",
@@ -86,9 +94,9 @@ def emit_transport_exchanges(
         '            : quadrature + "/component:" + std::to_string(component);',
         "        stage_exchange(pops::runtime::program::ExchangeRecord{%s, %s, %s, component_quadrature,"
         % (json.dumps(operation), json.dumps(occurrence), json.dumps(evaluation)),
-        "            side == 0 ? 1 : -1, measure, face_values.axes[axis](face, component)/measure, %s, 1,"
-        " axis, side, component, (*accepted_external_face)(axis, side, cell)});"
-        % weight,
+        ("            side == 0 ? 1 : -1, measure, face_values.axes[axis](face, component)/measure, %s, 1,"
+         + (" axis, side, component, (*accepted_external_face)(axis, side, cell)});" if capture_to is None else
+            " axis, side, component, (*accepted_external_face)(axis, side, cell)}, cell);")) % weight,
         "        }",
         "      }",
         "    }",

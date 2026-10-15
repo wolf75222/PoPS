@@ -1,5 +1,6 @@
 """Proof-carrying, exact properties derived from temporal method tableaux."""
 from __future__ import annotations
+from pops.identity.scalar import parse_canonical_integer
 
 from dataclasses import dataclass
 from fractions import Fraction
@@ -223,9 +224,9 @@ def _literal(data: Any) -> Fraction:
         data = data["scalar"]
     kind = data.get("kind") if isinstance(data, dict) else None
     if kind == "integer":
-        return Fraction(int(data["value"]))
+        return Fraction(parse_canonical_integer(data["value"]))
     if kind == "rational":
-        return Fraction(int(data["numerator"]), int(data["denominator"]))
+        return Fraction(parse_canonical_integer(data["numerator"]), parse_canonical_integer(data["denominator"]))
     if kind == "decimal":
         return Fraction(data["value"])
     if kind == "binary64":

@@ -25,6 +25,11 @@ struct AmrProgramHistoryRemapCollectiveTestAccess {
   using Field = MultiFab<Dim>;
 
   static auto& manager(Context& context) { return context.runtime_state().hist_; }
+  static bool live_copied_field(Context& context, const Field* field) {
+    const auto found = context.continuation_field_storage_.find(field);
+    return found != context.continuation_field_storage_.end() && !found->second.lifetime.expired();
+  }
+  static void revoke_copied_fields(Context& context) { context.continuation_revoke_attempt_(); }
   static std::string key(Context& context, const std::string& name, int level) {
     return context.history_key_(name, level);
   }
@@ -33,21 +38,24 @@ struct AmrProgramHistoryRemapCollectiveTestAccess {
         [&] {
           context.validate_accepted_history_remap_metadata_();
           return std::string("tests.amr.declared-history-halo-metadata@1");
-        }, [](const std::string& proof) -> const std::string& { return proof; },
+        },
+        [](const std::string& proof) -> const std::string& { return proof; },
         "tests.amr.declared-history-halo-metadata");
     // The first vote completes before a healthy peer may enter a ranked façade getter.
     (void)context.prepare_history_mutation_collectively_(
         [&] {
           context.validate_accepted_history_remap_();
           return std::string("tests.amr.declared-history-halo-remap@1");
-        }, [](const std::string& proof) -> const std::string& { return proof; },
+        },
+        [](const std::string& proof) -> const std::string& { return proof; },
         "tests.amr.declared-history-halo-remap");
   }
   static void replace_slot_ghosts(Context& context, const std::string& name, int level,
                                   int slot_index, int depth) {
     auto& slot = manager(context).histories.at(key(context, name, level)).at(slot_index);
     Extent<Dim> ghosts{};
-    for (int axis = 0; axis < Dim; ++axis) ghosts[axis] = depth;
+    for (int axis = 0; axis < Dim; ++axis)
+      ghosts[axis] = depth;
     Field replacement(slot.layout(), slot.distribution(), slot.local_rank(), slot.ncomp(), ghosts);
     replacement.set_val(Real(17));
     for (std::size_t local = 0; local < slot.local_size(); ++local) {
@@ -82,7 +90,8 @@ struct ScalarModel {
     return {"tests.amr.history-declared-ghost.scalar", 1};
   }
   void serialize_exact_parameters(pops::ExactContractBuilder& proof) const {
-    for (int axis = 0; axis < Dim; ++axis) proof.scalar(law.velocity()[axis]);
+    for (int axis = 0; axis < Dim; ++axis)
+      proof.scalar(law.velocity()[axis]);
   }
   static pops::VariableSet conservative_vars() {
     return {pops::VariableKind::Conservative, {"u"}, 1, {pops::VariableRole::Scalar}};
@@ -91,10 +100,16 @@ struct ScalarModel {
     return {pops::VariableKind::Primitive, {"u"}, 1, {pops::VariableRole::Scalar}};
   }
   POPS_HD auto recover(const State& state) const { return law.recover(state); }
-  POPS_HD auto make_conservative(const Primitive& state) const { return law.make_conservative(state); }
+  POPS_HD auto make_conservative(const Primitive& state) const {
+    return law.make_conservative(state);
+  }
   POPS_HD auto admissibility(const State& state) const { return law.admissibility(state); }
-  template <int Axis> POPS_HD State flux(const State& state) const { return law.template flux<Axis>(state); }
-  template <int Axis> POPS_HD pops::Real max_wave_speed(const State& state) const {
+  template <int Axis>
+  POPS_HD State flux(const State& state) const {
+    return law.template flux<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD pops::Real max_wave_speed(const State& state) const {
     return law.template max_wave_speed<Axis>(state);
   }
   template <int Axis>
@@ -122,17 +137,18 @@ struct Fixture {
   }
   static std::size_t cells() {
     std::size_t total = 1;
-    for (int axis = 0; axis < Dim; ++axis) total *= 16;
+    for (int axis = 0; axis < Dim; ++axis)
+      total *= 16;
     return total;
   }
   Fixture() : system(config()) {
     pops::test::install_amr_runtime_authority(system, "tests.amr.history-declared-ghost/runtime");
     system.set_temporal_relations({1}, {1}, {"integral_only"});
     system.install_block_state_route("tracer", "state/tracer");
-    pops::add_compiled_model<Dim>(system, "tracer", ScalarModel{}, "minmod", "rusanov",
-        "conservative", "explicit", static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1,
-        {}, {}, 0., static_cast<double>(pops::kWenoEpsilon), false,
-        "tests.amr.history-declared-ghost/flux");
+    pops::add_compiled_model<Dim>(
+        system, "tracer", ScalarModel{}, "minmod", "rusanov", "conservative", "explicit",
+        static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.,
+        static_cast<double>(pops::kWenoEpsilon), false, "tests.amr.history-declared-ghost/flux");
     system.set_conservative_state("tracer", std::vector<double>(cells(), 1.));
     pops::test::install_prepared_refine_coarsen_threshold(
         system, {"tracer", "u", .5, pops::test::PreparedThresholdRelation::Above},
@@ -141,16 +157,16 @@ struct Fixture {
     context = pops::runtime::program::make_program_execution_provider(&system);
     context->configure_primary_clock("clock.macro");
     context->declare_clock_relation("clock.macro", "clock.level.1", 1);
-    context->install([owner = context](double dt) {
-      owner->advance_hierarchy(dt, [](double) {});
-    }, context);
+    context->install([owner = context](double dt) { owner->advance_hierarchy(dt, [](double) {}); },
+                     context);
     system.set_program_block_map({0});
     using Budget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
     system.install_prepared_amr_program_flux_expression_budget(
         "tests.amr.history-declared-ghost/flux-budget", std::vector<Budget>(1, Budget{2, 1}), 0, 0);
     context->for_each_program_resource_level([&](int) {
       context->register_history(kHistory, 1, 1, 0, "scalar-history:" + std::string(kHistory),
-          std::string(pops::runtime::program::kScalarOutputHistorySpace), "clock.macro", "none", 1);
+                                std::string(pops::runtime::program::kScalarOutputHistorySpace),
+                                "clock.macro", "none", 1);
     });
   }
   void fill_history(pops::Real scale = pops::Real(10)) {
@@ -169,7 +185,10 @@ struct Fixture {
     std::vector<double> state(cells(), full ? 1. : .25);
     if (!full) {
       std::size_t centre = 0, stride = 1;
-      for (int axis = 0; axis < Dim; ++axis) { centre += 8 * stride; stride *= 16; }
+      for (int axis = 0; axis < Dim; ++axis) {
+        centre += 8 * stride;
+        stride *= 16;
+      }
       state[centre] = 1.;
     }
     system.set_conservative_state("tracer", state);
@@ -179,7 +198,8 @@ struct Fixture {
   void expect_declared_storage() {
     context->for_each_program_resource_level([&](int level) {
       const auto& live = context->state(0);
-      for (int axis = 0; axis < Dim; ++axis) EXPECT_EQ(live.ghosts()[axis], 2);
+      for (int axis = 0; axis < Dim; ++axis)
+        EXPECT_EQ(live.ghosts()[axis], 2);
       auto& manager = Access::manager(*context);
       const auto key = Access::key(*context, kHistory, level);
       EXPECT_EQ(manager.ghost_depth.at(key), 1);
@@ -188,7 +208,8 @@ struct Fixture {
         EXPECT_EQ(slot.distribution(), live.distribution());
         EXPECT_EQ(slot.local_rank(), live.local_rank());
         EXPECT_EQ(slot.ncomp(), 1);
-        for (int axis = 0; axis < Dim; ++axis) EXPECT_EQ(slot.ghosts()[axis], 1);
+        for (int axis = 0; axis < Dim; ++axis)
+          EXPECT_EQ(slot.ghosts()[axis], 1);
       }
     });
     EXPECT_NO_THROW(Access::validate_collectively(*context));
@@ -217,7 +238,7 @@ TEST(AmrDeclaredHistoryGhosts, ScalarGhostOneSurvivesRealRegridOnStateGhostTwo) 
   for (int level = 0; level < 2; ++level)
     for (int slot = 0; slot < 2; ++slot)
       restored.system.restore_history(kHistory, level, slot,
-          fixture.system.history_global(kHistory, level, slot));
+                                      fixture.system.history_global(kHistory, level, slot));
   ASSERT_NO_THROW(restored.system.restore_checkpoint_accepted_state(bytes));
   restored.expect_declared_storage();
   EXPECT_EQ(restored.system.program_accepted_state(), bytes);
@@ -246,8 +267,8 @@ TEST(AmrDeclaredHistoryGhosts, SlotAndLevelGhostTamperingFailsCollectivelyAndRol
       Access::replace_slot_ghosts(*fixture.context, kHistory, 0, 0, 2);
       if (whole_level) {
         Access::replace_slot_ghosts(*fixture.context, kHistory, 0, 1, 2);
-        Access::manager(*fixture.context).ghost_depth.at(
-            Access::key(*fixture.context, kHistory, 0)) = 2;
+        Access::manager(*fixture.context)
+            .ghost_depth.at(Access::key(*fixture.context, kHistory, 0)) = 2;
       }
     }
     EXPECT_THROW(Access::validate_collectively(*fixture.context), std::exception);
@@ -284,7 +305,8 @@ TEST(AmrDeclaredHistoryGhosts, ForgedWireHistoryTupleFailsCollectivelyBeforeMuta
   const auto before_revision = fixture.system.program_accepted_state_revision();
   const auto before_time = fixture.system.time();
   const auto before_step = fixture.system.macro_step();
-  const auto before_wire = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(before);
+  const auto before_wire =
+      pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(before);
   ASSERT_EQ(before_wire.histories.size(), 1u);
   std::vector<std::vector<double>> before_values;
   for (int level = 0; level < 2; ++level) {
@@ -295,25 +317,41 @@ TEST(AmrDeclaredHistoryGhosts, ForgedWireHistoryTupleFailsCollectivelyBeforeMuta
   for (bool rank_zero_only : {false, true}) {
     for (bool checkpoint_route : {false, true}) {
       for (int field = 0; field < 7; ++field) {
-        SCOPED_TRACE(::testing::Message() << "rank_zero_only=" << rank_zero_only
-            << "/checkpoint_route=" << checkpoint_route << "/field=" << field);
+        SCOPED_TRACE(::testing::Message()
+                     << "rank_zero_only=" << rank_zero_only
+                     << "/checkpoint_route=" << checkpoint_route << "/field=" << field);
         auto changed = before_wire;
         if (!rank_zero_only || pops::my_rank() == 0) {
           auto& descriptor = changed.histories.front();
           switch (field) {
-            case 0: ++descriptor.program_owner; break;
-            case 1: descriptor.state_identity += ".foreign"; break;
-            case 2: descriptor.space_identity += ".foreign"; break;
-            case 3: descriptor.clock_identity = "clock.level.1"; break;
-            case 4: descriptor.interpolation_identity += ".foreign"; break;
-            case 5: ++descriptor.components; break;
-            case 6: ++descriptor.ghost_depth; break;
+            case 0:
+              ++descriptor.program_owner;
+              break;
+            case 1:
+              descriptor.state_identity += ".foreign";
+              break;
+            case 2:
+              descriptor.space_identity += ".foreign";
+              break;
+            case 3:
+              descriptor.clock_identity = "clock.level.1";
+              break;
+            case 4:
+              descriptor.interpolation_identity += ".foreign";
+              break;
+            case 5:
+              ++descriptor.components;
+              break;
+            case 6:
+              ++descriptor.ghost_depth;
+              break;
           }
         }
         // Each forged packet remains wire-valid; native admission must reject its tuple.
         const auto bytes = pops::runtime::program::serialize_amr_program_accepted_state(changed);
-        EXPECT_EQ(pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes).histories,
-                  changed.histories);
+        EXPECT_EQ(
+            pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes).histories,
+            changed.histories);
         if (checkpoint_route)
           EXPECT_THROW(fixture.system.restore_checkpoint_accepted_state(bytes), std::exception);
         else
@@ -328,12 +366,39 @@ TEST(AmrDeclaredHistoryGhosts, ForgedWireHistoryTupleFailsCollectivelyBeforeMuta
         EXPECT_EQ(retained.logical_clock_ticks, before_wire.logical_clock_ticks);
         std::size_t index = 0;
         for (int level = 0; level < 2; ++level) {
-          EXPECT_EQ(fixture.system.block_level_state_global("tracer", level), before_values[index++]);
+          EXPECT_EQ(fixture.system.block_level_state_global("tracer", level),
+                    before_values[index++]);
           for (int slot = 0; slot < 2; ++slot)
             EXPECT_EQ(fixture.system.history_global(kHistory, level, slot), before_values[index++]);
         }
       }
     }
   }
+}
+TEST(AmrContinuationFieldStorage, ExactCopiesRetainOwnerWithoutShapeOrPointerReuseAuthority) {
+  Fixture fixture;
+  using Field = pops::MultiFab<Dim>;
+  std::vector<std::shared_ptr<Field>> copies;
+  fixture.context->for_each_program_resource_level([&](int level) {
+    auto& source = fixture.context->state(0);
+    auto copy = std::make_shared<Field>(source);
+    EXPECT_THROW(fixture.context->rhs_scratch(9901, 0, *copy), std::invalid_argument);
+    fixture.context->continuation_bind_field_provenance(source, *copy, copy);
+    EXPECT_NO_THROW(fixture.context->rhs_scratch(9901, 0, *copy));
+    EXPECT_TRUE(Access::live_copied_field(*fixture.context, copy.get()));
+    if (level != 0)
+      EXPECT_THROW(fixture.context->rhs_scratch(9902, 0, *copies.front()), std::invalid_argument);
+    auto transient = std::make_shared<Field>(source);
+    fixture.context->continuation_bind_field_provenance(source, *transient, transient);
+    const auto retired = transient.get();
+    transient.reset();
+    EXPECT_FALSE(Access::live_copied_field(*fixture.context, retired));
+    copies.push_back(std::move(copy));
+  });
+  Access::revoke_copied_fields(*fixture.context);
+  fixture.context->for_each_program_resource_level([&](int level) {
+    if (copies[level])
+      EXPECT_THROW(fixture.context->rhs_scratch(9903, 0, *copies[level]), std::invalid_argument);
+  });
 }
 }  // namespace

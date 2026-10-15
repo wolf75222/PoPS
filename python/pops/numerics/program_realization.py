@@ -70,6 +70,10 @@ class ProgramRealization(Descriptor):
     def runtime_storage_requirements(self):
         return {"ghost_depth": self.ghost_depth}
 
+    def boundary_stencil_requirements(self):
+        return {"state": self.target, "ghost_depth": self.ghost_depth,
+                "formal_order": self.formal_order}
+
     def runtime_configuration(self):
         return StateStorage(ghost_depth=self.ghost_depth).runtime_configuration()
 

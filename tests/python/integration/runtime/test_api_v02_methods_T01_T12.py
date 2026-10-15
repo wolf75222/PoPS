@@ -7,9 +7,8 @@ import pops
 import pytest
 from tests.python.support.api_v02_native import _compile, _bind
 
-from examples.api_v02.common import MissingCapabilityError
 from examples.api_v02.methods_T01_T12 import READY, build_method
-from examples.api_v02.coverage import OBLIGATIONS
+from examples.api_v02.coverage import OBLIGATIONS, scope_report
 from tests.python.support.collective_checks import collective_call, collective_check, collective_attempt
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.public_native_profile import compile_profile_plan_once, native_profile, profile_gather_value
@@ -182,7 +181,8 @@ def test_t03_native_second_order_against_continuous_solution(
     errors=[]
     exact=.2-1+2*math.exp(-.2)
     for dt in (.1,.05,.025):
-        spec,artifact,world=_compile("T03",dt=dt,end=.2)
+        from examples.api_v02.methods_T01_T12 import build_t03
+        spec,artifact,world=_compile("T03_legacy_extended_Strang",builder=build_t03,dt=dt,end=.2)
         runtime=_bind(spec,artifact,world)
         collective_call(world,lambda:pops.run(runtime,t_end=.2,max_steps=8,console=False))
         rows=profile_gather_value(world,collective_call(world,lambda:spec.invariants(runtime)))
@@ -335,7 +335,8 @@ def test_t09_interval_body_reexecutes_for_changed_duration(isolated_native_cache
 @pytest.mark.native_loader
 def test_t10_retry_uses_new_request_and_publishes_actual_time(isolated_native_cache,native_cxx,kokkos_root):
     del isolated_native_cache,native_cxx,kokkos_root
-    spec,artifact,world=_compile("T10",retry=True)
+    from examples.api_v02.methods_T01_T12 import build_t10
+    spec,artifact,world=_compile("T10_legacy_homogeneous_Heun",builder=build_t10,retry=True)
     runtime=_bind(spec,artifact,world)
     report=collective_call(world,lambda:pops.run(runtime,t_end=spec.t_end,max_steps=1,console=False))
     rows=profile_gather_value(world,collective_call(world,lambda:spec.invariants(runtime)))
@@ -354,7 +355,9 @@ def test_t11_equal_net_ode_distinct_directed_schemes_and_empty_species(
     del isolated_native_cache,native_cxx,kokkos_root
     outputs=[]
     for circulation in (0.,.7):
-        spec,artifact,world=_compile("T11",circulation=circulation,initial=initial)
+        from examples.api_v02.methods_T01_T12 import build_t11
+        spec,artifact,world=_compile("T11_legacy_two_species",builder=build_t11,
+                                    circulation=circulation,initial=initial)
         runtime=_bind(spec,artifact,world)
         collective_call(world,lambda:pops.run(runtime,t_end=spec.t_end,max_steps=2,console=False))
         actual=collective_call(world,lambda:runtime.state_global("method"))
@@ -376,11 +379,12 @@ def test_t11_equal_net_ode_distinct_directed_schemes_and_empty_species(
     "T01", "T02", "T03", "T04", "T05", "T06",
     "T07", "T08", "T09", "T10", "T11", "T12",
 ))
-def test_unqualified_family_obligations_are_explicit(method):
-    with pytest.raises(MissingCapabilityError) as failure:
-        build_method(method,require_complete=True)
-    assert failure.value.required == OBLIGATIONS[method]
-    assert failure.value.required
+def test_unestablished_scientific_properties_remain_explicit(method):
+    report = scope_report(method)
+    assert report["unestablished_properties"] == OBLIGATIONS[method]
+    assert report["required_components"]
+    assert report["unestablished_properties"]
+    assert "native_pass" not in report
 
 
 def test_unknown_method_does_not_fall_back():

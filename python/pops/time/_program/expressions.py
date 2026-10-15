@@ -183,53 +183,66 @@ def _validate_pointwise_rate_dependencies(value, source):
     seen = set()
 
     def leaves(item):
-        if isinstance(item, ProgramValue):
-            yield item
-        elif isinstance(item, Mapping):
-            for child in item.values():
-                yield from leaves(child)
-        elif isinstance(item, (tuple, list)):
-            for child in item:
-                yield from leaves(child)
+        pending, containers = [item], set()
+        while pending:
+            item = pending.pop()
+            if isinstance(item, ProgramValue):
+                yield item
+            elif isinstance(item, (Mapping, tuple, list)):
+                if id(item) in containers:
+                    continue
+                containers.add(id(item))
+                children = tuple(item.values()) if isinstance(item, Mapping) else item
+                pending.extend(reversed(children))
 
     def visit(node, *, boundary=False):
-        if (node is source and not boundary) or node.id in seen:
-            return
-        seen.add(node.id)
-        if node.vtype == "rhs":
-            local = (node.op in {"source", "linear_combine"}
-                     or (node.op == "rhs" and not node.attrs.get("flux", True))
-                     or (node.op == "pointwise_expression"
-                         and node.attrs.get("numerical_pointwise_rate") == "pops.pointwise-rate@1"))
-            if not local:
-                raise ValueError("pointwise rate cannot absorb a spatial or unclassified rate; "
-                                 "keep its affine update, stability bound and accepted flux receipt explicit")
-        support_only = node.attrs.get("support_only_inputs", ())
-        for index, dependency in enumerate(node.inputs):
-            if index not in support_only:
-                visit(dependency)
-        for name, attribute in node.attrs.items():
-            if not name.endswith("_block"):
-                for dependency in leaves(attribute):
-                    visit(dependency)
+        pending = [(node, boundary)]
+        while pending:
+            node, boundary = pending.pop()
+            if (node is source and not boundary) or node.id in seen:
+                continue
+            seen.add(node.id)
+            if node.vtype == "rhs":
+                local = (node.op in {"source", "linear_combine"}
+                         or (node.op == "rhs" and not node.attrs.get("flux", True))
+                         or (node.op == "pointwise_expression"
+                             and node.attrs.get("numerical_pointwise_rate") == "pops.pointwise-rate@1"))
+                if not local:
+                    raise ValueError("pointwise rate cannot absorb a spatial or unclassified rate; "
+                                     "keep its affine update, stability bound and accepted flux receipt explicit")
+            support_only = node.attrs.get("support_only_inputs", ())
+            dependencies = [dependency for index, dependency in enumerate(node.inputs)
+                            if index not in support_only]
+            for name, attribute in node.attrs.items():
+                if not name.endswith("_block"):
+                    dependencies.extend(leaves(attribute))
+            pending.extend((dependency, False) for dependency in reversed(dependencies))
 
     # A retagged RHS is not a State-stage authority. Only the affine update
     # shape traversed by explicit_update_consumers may retain spatial leaves
     # here; its exact weights/budget are subsequently checked at lowering.
     has_state_leaf = False
+    from pops.time._program.affine_expressions import affine_field_terms
 
     def stage(node):
         nonlocal has_state_leaf
-        if node.op == "linear_combine":
-            for child in node.inputs:
-                stage(child)
-        elif node.op == "acceptance_guard":
-            stage(node.inputs[0])
-        elif node.vtype != "rhs":
-            has_state_leaf |= node.vtype == "state"
-            visit(node, boundary=True)
+        pending = [node]
+        while pending:
+            node = pending.pop()
+            if node.op == "linear_combine":
+                pending.extend(reversed(node.inputs))
+            elif node.op == "acceptance_guard":
+                pending.append(node.inputs[0])
+            elif (terms := affine_field_terms(node)) is not None:
+                if not any(child.vtype == "state" for child, _ in terms):
+                    raise ValueError("pointwise rate State is only a retagged rate; "
+                                     "an affine equation must retain an input State")
+                pending.extend(child for child, _ in reversed(tuple(terms)))
+            elif node.vtype != "rhs":
+                has_state_leaf |= node.vtype == "state"
+                visit(node, boundary=True)
 
-    if source.op in {"linear_combine", "acceptance_guard"}:
+    if source.op in {"linear_combine", "acceptance_guard"} or affine_field_terms(source) is not None:
         stage(source)
         if not has_state_leaf:
             raise ValueError("pointwise rate State is only a retagged rate; "
