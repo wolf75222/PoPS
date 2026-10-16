@@ -1301,6 +1301,10 @@ class AmrSystem {
                                                          const std::vector<int>& ncomps);
   POPS_EXPORT std::uint64_t program_accepted_state_revision() const;
   /// Human/audit-readable qualification rows decoded from the same accepted image persisted as bytes.
+  /// Owning diagnostic tables from one fully authenticated accepted image. Each call
+  /// validates current authority anew; no projection survives as a runtime capability.
+  POPS_EXPORT std::map<std::string, std::vector<std::vector<std::string>>>
+  program_manifest_snapshot() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_accepted_state_manifest() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_clock_manifest() const;
   /// Accepted temporal-partition provider, synchronization tick and per-rung cell counts. The rows

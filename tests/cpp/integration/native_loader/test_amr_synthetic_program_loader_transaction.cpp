@@ -429,6 +429,20 @@ std::vector<double> select_indices(const std::vector<double>& values,
   return selected;
 }
 
+auto checked_manifest_snapshot(const pops::AmrSystem<Dim>& system) {
+  const auto rows = system.program_manifest_snapshot();
+  EXPECT_EQ(rows.size(), 6u);
+  EXPECT_EQ(rows.at("program_accepted_state_manifest"), system.program_accepted_state_manifest());
+  EXPECT_EQ(rows.at("program_clock_manifest"), system.program_clock_manifest());
+  EXPECT_EQ(rows.at("program_temporal_partition_manifest"),
+            system.program_temporal_partition_manifest());
+  EXPECT_EQ(rows.at("program_flux_ledger_manifest"), system.program_flux_ledger_manifest());
+  EXPECT_EQ(rows.at("program_interface_flux_ledger_manifest"),
+            system.program_interface_flux_ledger_manifest());
+  EXPECT_EQ(rows.at("program_sync_manifest"), system.program_sync_manifest());
+  return rows;
+}
+
 }  // namespace
 
 TEST(test_amr_synthetic_program_loader_transaction,
@@ -601,6 +615,7 @@ TEST(test_amr_synthetic_program_loader_transaction,
   EXPECT_EQ(continuous.installed_program_hash(), kSyntheticLoaderProgramHash);
   EXPECT_TRUE(continuous.program_flux_ledger_manifest().empty());
   EXPECT_TRUE(continuous.program_sync_manifest().empty());
+  const auto initial_manifest = checked_manifest_snapshot(continuous);
   const auto& budget = continuous.prepared_amr_program_flux_expression_budget();
   EXPECT_EQ(budget.program_hash, kSyntheticLoaderProgramHash);
   ASSERT_EQ(budget.blocks.size(), 1u);
@@ -631,7 +646,10 @@ TEST(test_amr_synthetic_program_loader_transaction,
   EXPECT_TRUE(byte_exact_equal(continuous.block_level_state_global(kBlock, 0), coarse_before));
   EXPECT_TRUE(byte_exact_equal(continuous.block_level_state_global(kBlock, 1), fine_before));
 
+  EXPECT_EQ(checked_manifest_snapshot(continuous), initial_manifest);
   continuous.step(dt);
+  const auto accepted_manifest = checked_manifest_snapshot(continuous);
+  EXPECT_NE(accepted_manifest, initial_manifest);
   const std::vector<double> coarse_first = continuous.block_level_state_global(kBlock, 0);
   const std::vector<double> fine_first = continuous.block_level_state_global(kBlock, 1);
   const std::vector<double> fine_interior_first = select_indices(fine_first, fine_interior_indices);
@@ -1147,6 +1165,7 @@ TEST(test_amr_synthetic_program_loader_transaction,
     ASSERT_NO_THROW(original.step(.01));
     ASSERT_NO_THROW(original.step(.01));
     const auto middle = original.program_accepted_state();
+    const auto middle_manifest = checked_manifest_snapshot(original);
     const auto decoded =
         pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(middle);
     EXPECT_EQ(decoded.accepted_attempt, 2u);
@@ -1176,10 +1195,13 @@ TEST(test_amr_synthetic_program_loader_transaction,
     EXPECT_EQ(resumed.accepted_attempt(), 2u);
     EXPECT_EQ(resumed.allocated_attempt(), 2u);
     EXPECT_EQ(restored.program_accepted_state(), middle);
+    EXPECT_EQ(checked_manifest_snapshot(restored), middle_manifest);
     EXPECT_EQ(restored.program_last_dt(), original.program_last_dt());
     ASSERT_NO_THROW(original.step(.01));
     ASSERT_NO_THROW(restored.step(.01));
     EXPECT_EQ(original.program_accepted_state(), restored.program_accepted_state());
+    EXPECT_EQ(checked_manifest_snapshot(original), checked_manifest_snapshot(restored));
+    EXPECT_NE(checked_manifest_snapshot(original), middle_manifest);
     for (int level = 0; level < original.n_levels(); ++level)
       EXPECT_EQ(original.block_level_state_global("tracer", level),
                 restored.block_level_state_global("tracer", level));
@@ -1195,6 +1217,7 @@ TEST(test_amr_synthetic_program_loader_transaction,
   auto& system = *fixture.system;
   ASSERT_NO_THROW(system.step(.01));
   const auto before = system.program_accepted_state();
+  const auto before_manifest = checked_manifest_snapshot(system);
   const auto original = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(before);
   const auto manifest = system.checkpoint_rank_local_carrier_manifest();
   const auto epoch = system.checkpoint_topology_epoch();
@@ -1248,6 +1271,7 @@ TEST(test_amr_synthetic_program_loader_transaction,
   EXPECT_EQ(system.checkpoint_topology_epoch(), epoch);
   EXPECT_EQ(system.checkpoint_rank_local_carrier_manifest(), manifest);
   EXPECT_EQ(system.program_accepted_state(), before);
+  EXPECT_EQ(checked_manifest_snapshot(system), before_manifest);
 }
 
 TEST(test_amr_synthetic_program_loader_transaction,

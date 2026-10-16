@@ -1464,7 +1464,7 @@ TEST(GeneratedAmrSystemBlock, ScalarParentPreparationRefreshesSparsePeriodicGhos
                                 "dense.linear");
       for (int sample = 0; sample < 3; ++sample) {
         context->begin_step(0.25);
-        auto value = context->scratch_state_like(context->state(0));
+        auto& value = context->scratch_state(940105, 0, context->state(0));
         value.set_val(pops::Real(7));
         context->store_history("tracer.prior", value, 0);
         context->rotate_histories("clock.macro");
@@ -1477,7 +1477,7 @@ TEST(GeneratedAmrSystemBlock, ScalarParentPreparationRefreshesSparsePeriodicGhos
   // advances the actual sample. Test its refusal INSIDE the genuine synchronized gather scope.
   context->with_program_resource_level(0, [&] {
     context->begin_step(0.25);
-    auto value = context->scratch_state_like(context->state(0));
+    auto& value = context->scratch_state(940105, 0, context->state(0));
     value.set_val(pops::Real(19));
     context->store_history("tracer.prior", value, 0);
     context->rotate_histories("clock.macro");
@@ -2740,7 +2740,7 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRetainsAndInterpolatesExactLevelHist
   context->register_history("tracer.rate", 2, 1, 0, "tracer.U", "cell.conservative", "clock.macro",
                             "dense.linear");
 
-  pops::MultiFab<Dim> sample = context->scratch_state_like(context->state(0));
+  auto& sample = context->scratch_state(940106, 0, context->state(0));
   context->begin_step(0.2);
   sample.set_val(pops::Real(10));
   context->store_history("tracer.rate", sample, 0);
@@ -2764,7 +2764,7 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRetainsAndInterpolatesExactLevelHist
   // An equally shaped scratch is not authority to reinterpret this ring on a foreign clock.
   EXPECT_THROW(context->interpolate_history_linear(interpolated, "tracer.rate", 2, 0, "clock.fast",
                                                    "clock.macro", -1, pops::Real(0)),
-               std::invalid_argument);
+               std::runtime_error);
   EXPECT_EQ(pops::reduce_min_local(interpolated), pops::Real(15));
   EXPECT_EQ(pops::reduce_max_local(interpolated), pops::Real(15));
   // history() exposes a public ring element, so replacing slot zero must not invalidate a
@@ -2985,7 +2985,7 @@ TEST(GeneratedAmrSystemBlock, AlignedFourSlotHistoryProjectsEarnedSamplesAtomica
   for (const double dt : {0.1, 0.2, 0.3, 0.4}) {
     ++step;
     context->advance_hierarchy(dt, [&](double) {
-      auto sample = context->rhs_scratch_like(context->state(0));
+      auto& sample = context->rhs_scratch(940107, 0, context->state(0));
       sample.set_val(
           static_cast<pops::Real>(step * (Observer::active_level(*context) == 0 ? 10 : 100)));
       context->store_history("tracer.U", sample, 0);
@@ -3083,7 +3083,7 @@ TEST(GeneratedAmrSystemBlock, AlignedFourSlotHistoryProjectsEarnedSamplesAtomica
   ASSERT_TRUE(system.regrid_from_prepared_tagging(0));
   context->advance_hierarchy(0.5, [&](double) {
     auto& stage = context->state(0);
-    auto rate = context->rhs_scratch_like(stage);
+    auto& rate = context->rhs_scratch(940109, 0, stage);
     context->rhs_into(0, stage, rate, 0);
     context->store_history("tracer.U", rate, 0);
     context->rotate_histories("clock.macro");
@@ -3326,7 +3326,7 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
         break;
       context->advance_hierarchy(dt, [&](double) {
         auto& stage = context->state(0);
-        auto sample = context->rhs_scratch_like(stage);
+        auto& sample = context->rhs_scratch(940108, 0, stage);
         context->rhs_into(0, stage, sample, 0);
         context->store_history("tracer.rate", sample, 0);
         context->rotate_histories("clock.macro");
@@ -3374,7 +3374,7 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
     // coverage expansion makes its parent samples the deferred source.
     context->advance_hierarchy(0.3, [&](double) {
       auto& stage = context->state(0);
-      auto sample = context->rhs_scratch_like(stage);
+      auto& sample = context->rhs_scratch(940108, 0, stage);
       context->rhs_into(0, stage, sample, 0);
       context->store_history("tracer.rate", sample, 0);
       context->rotate_histories("clock.macro");
@@ -3578,7 +3578,7 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
     context->advance_hierarchy(current_dt, [&](double local_dt) {
       const int level = RemapObserver::active_level(*context);
       auto& stage = context->state(0);
-      auto sample = context->rhs_scratch_like(stage);
+      auto& sample = context->rhs_scratch(940108, 0, stage);
       context->rhs_into(0, stage, sample, 0);
       context->store_history("tracer.rate", sample, 0);
       if (level == 1 && RemapObserver::has_pending_history(*context, "tracer.rate", level)) {
@@ -3812,7 +3812,7 @@ TEST(GeneratedAmrSystemBlock, NoopPreparedRegridPreservesInitializedHistory) {
                             "dense.linear");
   for (const double dt : {0.1, 0.2, 0.3}) {
     context->begin_step(dt);
-    pops::MultiFab<Dim> sample = context->scratch_state_like(context->state(0));
+    auto& sample = context->scratch_state(940106, 0, context->state(0));
     sample.set_val(pops::Real(dt));
     context->store_history("tracer.rate", sample, 0);
     context->rotate_histories("clock.macro");

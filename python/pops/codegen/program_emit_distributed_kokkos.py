@@ -83,7 +83,8 @@ def emit(value, var, lines, *, token, registry, session, lane):
     if reason:
         return False
     assert plan is not None
-    from .program_emit_distributed_arrays import pack, unpack, schema, _runtime_error
+    from .program_emit_distributed_arrays import unpack, schema, _runtime_error
+    from .program_emit_versioned import _local_storage, _limits
     from .program_source_map import operation
 
     captured, raw, block, formal, captures = plan
@@ -264,6 +265,9 @@ def emit(value, var, lines, *, token, registry, session, lane):
     # output storage after zero-filling every scalar leaf before the dispatch.
     for _, col in _leaves(element, outputs):
         allocate("Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{},%s)" % col, col + "_host")
+    packer_type = "pops::runtime::program::finite_structural::ScalarProductPack<pops::kNativeDimension>"
+    packer = token + "_packer"
+    body.append("std::unique_ptr<%s> %s;" % (packer_type, packer))
     body.append(
         "const auto outcome = %smap<pops::kNativeDimension>(%s,%s,%s_element,%s_error,%d,[&](auto distributed_index){"
         % (_DN, registry, domain, token, token, value.attrs["byte_capacity"])
@@ -279,7 +283,13 @@ def emit(value, var, lines, *, token, registry, session, lane):
             % (failure, offset, _CV, _runtime_error(captured, "3"))
         )
         projected = _tree(element, lambda _s, path: _path(outputs, path) + "_host(" + offset + ")")
-        packed = pack(element, projected, host, result, capacity=value.attrs["byte_capacity"])
+        capacity = value.attrs["byte_capacity"]
+        storage = _local_storage(element, projected, host, result, capacity)
+        # Prepare lazily at the first successful lane. Empty ranks and a failed
+        # first lane retain the same local error and collective publication path.
+        host.append("if (!%s) %s = std::make_unique<%s>(%s_element,%s);"
+                    % (packer, packer, packer_type, token, _limits(capacity)))
+        packed = "%s->pack(%s)" % (packer, storage)
         callback_env[captured.id] = _CV + "::variant(1," + packed + ")"
         host.append("return " + callback_env[captured.id] + ";")
         host.append(

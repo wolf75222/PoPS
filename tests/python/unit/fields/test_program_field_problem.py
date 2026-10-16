@@ -13,7 +13,7 @@ from pops.solvers import CG
 from pops.time import FailRun
 
 
-def field_case(*, joint=False, duplicate_input=False, component_transforms=False, publication_fields=False, publication_source=False, problem_override=None, solver=None):
+def field_case(*, joint=False, duplicate_input=False, component_transforms=False, publication_fields=False, publication_source=False, problem_override=None, solver=None, history_field_metadata_budget=None):
     case = pops.Case("general fields")
     from pops.domain import Rectangle
     from pops.frames import Cartesian2D
@@ -73,7 +73,8 @@ def field_case(*, joint=False, duplicate_input=False, component_transforms=False
             boundaries=problem_override.boundaries, gauge=problem_override.gauge)
     field = case.field(problem, FieldDiscretization(method=CellCenteredSecondOrder(), boundaries=(),
         solver=CG(max_iter=4000, rel_tol=1e-11, abs_tol=1e-12) if solver is None else solver))
-    program = pops.Program("field stage")
+    program = pops.Program("field stage",
+        history_field_metadata_budget=history_field_metadata_budget)
     first_time, second_time = program.state(first_block[first_state]), program.state(second_block[second_state])
     values = {first_block[first_state]: first_time.n,
               second_block[second_state]: first_time.n if duplicate_input else second_time.n}

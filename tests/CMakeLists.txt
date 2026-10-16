@@ -748,6 +748,9 @@ add_dependencies(test_prepared_field_rhs_inputs pops_field_rhs_value_program_fix
 target_compile_definitions(test_prepared_field_rhs_inputs PRIVATE
   POPS_TEST_FIELD_RHS_VALUE_PROGRAM_SO="${_field_rhs_fixture_stem}.so")
 add_dependencies(test_generated_amr_system_block pops_field_rhs_value_program_fixture)
+# This suite now dlopens the same fixture as test_prepared_field_rhs_inputs.
+# Its native PoPS/Kokkos symbols must be visible to that package on ELF hosts.
+set_target_properties(test_generated_amr_system_block PROPERTIES ENABLE_EXPORTS ON)
 target_compile_definitions(test_generated_amr_system_block PRIVATE
   POPS_TEST_FIELD_RHS_VALUE_PROGRAM_SO="${_field_rhs_fixture_stem}.so")
 

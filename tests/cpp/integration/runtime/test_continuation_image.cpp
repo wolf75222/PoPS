@@ -68,6 +68,146 @@ TEST(ContinuationImage, ExactInt64NanPayloadAndVariantRoundTrip) {
             UINT64_C(0x7ff8000000000005));
 }
 
+TEST(ContinuationImage, PreparedScalarPackOwnsItsSchemaAndPreservesEveryPayloadBit) {
+  namespace fs = finite_structural;
+  auto type = product(
+      {"empty", "nested"},
+      {product({}, {}), product({"flag", "id", "real"},
+                                {scalar(ContinuationKind::Boolean), scalar(ContinuationKind::Int64),
+                                 scalar(ContinuationKind::Float64)})});
+  const auto original_type = type;
+  const fs::Limits limits{65536, 65536, 65536};
+  fs::ScalarProductPack<D> prepared(type, limits);
+  type.children.clear();
+  type.names.clear();
+  Codec codec(original_type, "test/prepared-scalar-pack", 65536, none());
+  for (const auto bits : {UINT64_C(0x8000000000000000), UINT64_C(0x7ff8000000000005),
+                          UINT64_C(0x0000000000000001), UINT64_C(0x3ff0000000000000)}) {
+    fs::Record source{{true, INT64_C(9007199254740997), std::bit_cast<Real>(bits)}};
+    const auto ordinary = fs::pack<D>(original_type, source, limits);
+    const auto fast = prepared.pack(source);
+    EXPECT_EQ(codec.encode(ordinary, 17), codec.encode(fast, 17));
+    source.values[0] = false;
+    source.values[1] = INT64_C(-9007199254740997);
+    const auto next = prepared.pack(source);
+    EXPECT_TRUE(fast->members()[1]->members()[0]->boolean());
+    EXPECT_FALSE(next->members()[1]->members()[0]->boolean());
+    EXPECT_EQ(next->members()[1]->members()[1]->integer(), INT64_C(-9007199254740997));
+    EXPECT_EQ(std::bit_cast<std::uint64_t>(next->members()[1]->members()[2]->real()), bits);
+  }
+}
+
+TEST(ContinuationImage, PreparedScalarPackRetainsEveryPerRowBudgetAndRejection) {
+  namespace fs = finite_structural;
+  const auto type =
+      product({"flag", "id"}, {scalar(ContinuationKind::Boolean), scalar(ContinuationKind::Int64)});
+  const fs::Record source{{true, INT64_C(3)}};
+  const auto failure = [](auto&& fn) {
+    try {
+      (void)fn();
+      return std::string{};
+    } catch (const std::exception& error) {
+      return std::string(typeid(error).name()) + ":" + error.what();
+    }
+  };
+  for (int dimension = 0; dimension != 3; ++dimension) {
+    for (std::uint64_t bytes = 0; bytes != 2048; ++bytes) {
+      fs::Limits limits{65536, 65536, 65536};
+      if (dimension == 0)
+        limits.source_bytes = bytes;
+      if (dimension == 1)
+        limits.destination_bytes = bytes;
+      if (dimension == 2)
+        limits.workspace_bytes = bytes;
+      const auto ordinary = failure([&] { return fs::pack<D>(type, source, limits); });
+      const auto fast = failure([&] {
+        const fs::ScalarProductPack<D> prepared(type, limits);
+        return prepared.pack(source);
+      });
+      ASSERT_EQ(ordinary, fast) << "budget " << dimension << " bytes " << bytes;
+    }
+  }
+  const fs::Limits limits{65536, 65536, 65536};
+  const fs::ScalarProductPack<D> prepared(type, limits);
+  for (const auto& bad :
+       {fs::Record{{true}}, fs::Record{{INT64_C(1), INT64_C(3)}}, fs::Record{{true, Real(3)}}}) {
+    const auto expected = failure([&] { return fs::pack<D>(type, bad, limits); });
+    ASSERT_FALSE(expected.empty());
+    EXPECT_EQ(expected, failure([&] { return prepared.pack(bad); }));
+  }
+  auto variant = type;
+  variant.kind = ContinuationKind::Variant;
+  EXPECT_THROW((fs::ScalarProductPack<D>(variant, limits)), std::invalid_argument);
+}
+
+TEST(ContinuationImage, PreparedScalarPackRetainsOnlyBudgetedShapeAfterSourceDestruction) {
+  namespace fs = finite_structural;
+  const fs::Limits limits{4096, 4096, 4096};
+  std::unique_ptr<fs::ScalarProductPack<D>> prepared;
+  const fs::Record source{{INT64_C(9007199254740997)}};
+  R original;
+  {
+    // Names are not storage slots. Retaining or copying this string is not
+    // needed for conversion and must not escape the bounded layout workspace.
+    const auto type = product({std::string(32768, 'x')}, {scalar(ContinuationKind::Int64)});
+    original = fs::pack<D>(type, source, limits);
+    prepared = std::make_unique<fs::ScalarProductPack<D>>(type, limits);
+  }
+  const auto restored = prepared->pack(source);
+  ASSERT_EQ(restored->members().size(), 1u);
+  EXPECT_EQ(restored->members()[0]->integer(), original->members()[0]->integer());
+  EXPECT_EQ(restored->members()[0]->integer(), INT64_C(9007199254740997));
+}
+
+TEST(ContinuationImage, PreparedScalarPackHasNoStructuralDepthCutoff) {
+  namespace fs = finite_structural;
+  auto type = scalar(ContinuationKind::Int64);
+  for (int n = 0; n != 512; ++n)
+    type = product({"next"}, {std::move(type)});
+  const fs::Limits limits{1 << 20, 1 << 20, 1 << 20};
+  const fs::Record source{{INT64_C(9007199254740997)}};
+  const fs::ScalarProductPack<D> prepared(type, limits);
+  Codec codec(type, "test/prepared-deep-product", 1 << 20, none());
+  EXPECT_EQ(codec.encode(fs::pack<D>(type, source, limits), 3),
+            codec.encode(prepared.pack(source), 3));
+}
+
+TEST(ContinuationImage, PreparedScalarPackKeepsEmptyRanksAndFirstFailingGid) {
+  namespace fs = finite_structural;
+  namespace dist = distributed;
+  const auto lane = ExecutionLane::world();
+  dist::Registry registry(lane);
+  std::vector<std::int64_t> offsets(std::size_t(lane.size()) + 1, 0);
+  offsets.back() = 3;
+  const auto domain = registry.issue(81, 3, offsets);
+  const auto type = scalar(ContinuationKind::Int64);
+  std::unique_ptr<fs::ScalarProductPack<D>> prepared;
+  const fs::Limits limits{4096, 4096, 4096};
+  const auto invoke = [&](bool use_prepared) {
+    return dist::map<D>(registry, domain, type, type, 4096, [&](dist::Index index) {
+      if (index.gid == 1)
+        return V::variant(0, V::integer(INT64_C(9007199254740997)));
+      const std::any source(index.gid);
+      if (!use_prepared)
+        return V::variant(1, fs::pack<D>(type, source, limits));
+      if (!prepared)
+        prepared = std::make_unique<fs::ScalarProductPack<D>>(type, limits);
+      return V::variant(1, prepared->pack(source));
+    });
+  };
+  const auto ordinary = invoke(false), fast = invoke(true);
+  ASSERT_FALSE(ordinary.ok());
+  ASSERT_FALSE(fast.ok());
+  EXPECT_EQ(ordinary.code, fast.code);
+  EXPECT_EQ(ordinary.rank, fast.rank);
+  EXPECT_EQ(fast.rank, lane.size() - 1);
+  EXPECT_EQ(ordinary.gid, fast.gid);
+  EXPECT_EQ(fast.gid, 1);
+  ASSERT_TRUE(ordinary.payload && fast.payload);
+  EXPECT_EQ(ordinary.payload->integer(), fast.payload->integer());
+  EXPECT_EQ(bool(prepared), lane.rank() == lane.size() - 1);
+}
+
 TEST(ContinuationImage, DomainAliasesSurviveOneTableAndRealmIsRenewed) {
   FiniteDomainRegistry registry;
   auto domain = registry.issue(2, 8, 5);

@@ -1,5 +1,6 @@
 """Exercise CI selection only: no selected PoPS test or native build is executed."""
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -159,11 +160,22 @@ def test_unknown_change_in_a_mixed_pr_keeps_full_required_coverage(plans):
 
 
 def test_dynamic_matrices_cover_each_selected_test_once(plans):
+    partitions = json.loads((ROOT / "tests/python/test_partitions.json").read_text())["files"]
     for plan in plans.values():
         ordinary = [test for shard in plan["python_shards"] for test in shard]
         assert len(ordinary) == len(set(ordinary))
         assert set(ordinary).isdisjoint(plan["compile_cache"])
-        assert set(ordinary) | set(plan["compile_cache"]) == set(plan["python"])
+        # Selection owns files, while independently scheduled partitions own exact
+        # pytest nodeids. Compare with the explicit inventory, not the planner's
+        # expansion helper, so an omitted/duplicated case still fails this test.
+        expected = [
+            row["nodeid"]
+            for file in plan["python"]
+            for row in partitions.get(file, {"nodes": [{"nodeid": file}]})["nodes"]
+        ]
+        assert len(expected) == len(set(expected))
+        assert set(ordinary) | set(plan["compile_cache"]) == set(expected)
+        assert {unit.split("::", 1)[0] for unit in ordinary} | set(plan["compile_cache"]) == set(plan["python"])
         nonempty = [index for index, shard in enumerate(plan["python_shards"]) if shard]
         assert plan["outputs"]["python_required"] == bool(nonempty)
         assert plan["outputs"]["python_matrix"] == (nonempty or [0])

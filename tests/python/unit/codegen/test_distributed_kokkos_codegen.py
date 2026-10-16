@@ -21,6 +21,8 @@ def test_distributed_native_receivers_have_closed_device_maps(kind,ranks):
     assert 'distributed::map<pops::kNativeDimension>' in cpp
     assert 'pops_finite_kokkos_launch_count' in cpp
     assert '::host_mirror_type' in cpp and '::HostMirror' not in cpp
+    assert 'finite_structural::ScalarProductPack<pops::kNativeDimension>' in cpp
+    assert '_packer->pack(' in cpp
     # Every accelerated region uses its authenticated SSA-local execution lane,
     # including allocation consensus, host staging and the device rank capture.
     assert 'distributed_lane' not in cpp

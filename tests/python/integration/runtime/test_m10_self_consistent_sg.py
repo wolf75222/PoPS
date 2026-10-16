@@ -24,7 +24,6 @@ from pops.frames import Cartesian1D
 from pops.layouts import Uniform
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.model import Handle, OwnerPath
-from pops.model.provider_pack import ProviderPack
 from pops.numerics import DiscretizationPlan, ScharfetterGummel, StateStorage
 from pops.solvers import CG
 from pops.time import FailRun, FixedDt, Program
@@ -157,7 +156,9 @@ def _case(n=N, dt=DT):
         method=CellCenteredSecondOrder(), boundaries=(),
         solver=CG(max_iter=4000, rel_tol=1e-12, abs_tol=1e-13)))
 
-    program = Program("M10-one-stage")
+    # Retained provider descriptors have a separate declared budget from field storage.
+    program = Program("M10-one-stage",
+        history_field_metadata_budget=(8 * 1024 * 1024, 16 * 1024 * 1024))
     density_time = program.state(density_block[state])
     background_time = program.state(background_block[background])
     point = program.stage("potential", c=0)

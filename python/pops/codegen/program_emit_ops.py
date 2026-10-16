@@ -471,6 +471,7 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
     # Operation lowering explicitly identifies the storage setup needed by both cadence
     # branches. Evaluation context and kernels remain in the guarded body.
     output_setup_end = None
+    observed_output = None
     delegated_before_write = None
     evaluation_prelude = []
     if v.op in {"source", "implicit_source", "local_transform", "affine_moment_update", "apply", "integral_candidate",
@@ -1941,7 +1942,7 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         lines.append('  }, "identity Field metadata copy rejected");')
         lines.append("}")
         lines.append("auto& %s = %s ? *%s : %s;" % (alias, owner, owner, var[v.id]))
-        var[v.id] = alias
+        observed_output = alias
     # UNIFIED SCHEDULER (ADC-458, Spec 3 sections 17-18): if this op carries a non-always schedule,
     # wrap the statements it just emitted (lines[_profile_start:]) in the due-test guard + policy
     # branch. Done HERE, after the op lowered itself, so EVERY schedulable node (field solve, rhs,
@@ -1959,6 +1960,11 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
     from .program_value_authority import instrument_value_cpp
     instrument_value_cpp(v, var, lines, write_start + len(stencil_before))
     lines.extend(stencil_after)
+    if observed_output is not None:
+        # The write ticket and receipt guards surround the context-owned buffer
+        # actually evaluated above. Only later consumers select the retained
+        # structural identity copy; it never substitutes for a write target.
+        var[v.id] = observed_output
     if v.op == "stencil_flux_divergence":
         from .program_emit_stencil_flux import emit_stencil_exchange_capture
         lines.extend(emit_stencil_exchange_capture(v, var, block=bidx, target=target))

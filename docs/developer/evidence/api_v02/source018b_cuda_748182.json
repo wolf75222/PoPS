@@ -1,0 +1,216 @@
+{
+  "job_id": 748182,
+  "scope": "Source018b/CUDA native installed SDK. Fifteen numerical receivers, 15 actual compiler inputs and15 successful native install_program calls; no scaling or zero host-work claim.",
+  "passed": true,
+  "cases": 15,
+  "failures": 0,
+  "skips": 0,
+  "native_sha256": "af448c091d86a540305a8bceec5c246b946bc8844a8c683454fab022b71f69f2",
+  "source_manifest_sha256": "494cfb261be2e0b11d993b09a88d2ea62b229f04d64a18e8c807f10bdebcba75",
+  "driver_sha256": "690fcb168021166c287a76c5b756017ff9213a17e9d085aaff6d6670179c2991",
+  "audit_sha256": "16c578b6bd81d39ab3f68d5463598f710f0997a856af6e9f1655939e06be15e3",
+  "numerical_seconds": 1291.88,
+  "source_unchanged": true,
+  "native_unchanged": true,
+  "retained_hashes_verified": 30,
+  "receiver_receipt_sha256": "c569b4e77d35121945418988b0c4c17a4417a64241552a31d361dec07beb373e",
+  "tests": [
+    {
+      "nodeid": "tests/python/integration/runtime/test_api_v02_finite_kokkos_native.py::test_installed_finite_map_dispatch[arithmetic]",
+      "outcome": "passed",
+      "properties": {
+        "actual_nonempty_map_launches": 1,
+        "artifact_identity": "3b9081f0cbb2497ed60ba34a2c2c8c2f401b5494b4ff8abab22506330b3385ca",
+        "first_failing_map_index": -1,
+        "host_map_invocations": 0,
+        "kokkos_execution_space": "Cuda",
+        "metrics": "({'max_error': 4.547473508864641e-13, 'metrics_owner': True, 'passed': True},)",
+        "program_dso_sha256": "a9b18d6e903065349136f2ef585b598f0053369008cd7d538de4b9a2f949b09a"
+      },
+      "seconds": 92.39739755354822
+    },
+    {
+      "nodeid": "tests/python/integration/runtime/test_api_v02_finite_kokkos_native.py::test_installed_finite_map_dispatch[gather]",
+      "outcome": "passed",
+      "properties": {
+        "actual_nonempty_map_launches": 2,
+        "artifact_identity": "5b8ed5c09848b567d1931204d169ad87750bf6384de893aaf473504ba6d665bc",
+        "first_failing_map_index": -1,
+        "host_map_invocations": 0,
+        "kokkos_execution_space": "Cuda",
+        "metrics": "({'max_error': 0.0, 'metrics_owner': True, 'passed': True},)",
+        "program_dso_sha256": "00b23e1390c2c2eba21dac8ae647ecf7a5a2ab94df4a4d728934082410134274"
+      },
+      "seconds": 76.53443831019104
+    },
+    {
+      "nodeid": "tests/python/integration/runtime/test_api_v02_finite_kokkos_native.py::test_installed_finite_map_dispatch[empty]",
+      "outcome": "passed",
+      "properties": {
+        "actual_nonempty_map_launches": 0,
+        "artifact_identity": "a75aebb880ebbed0b42e393c8923679567b0c96aecfd913ac98ecb4e491195dc",
+        "first_failing_map_index": -1,
+        "host_map_invocations": 0,
+        "kokkos_execution_space": "Cuda",
+        "metrics": "({'max_error': 0.0, 'metrics_owner': True, 'passed': True},)",
+        "program_dso_sha256": "79036f609dbe71a5e02c0a7628613220862aef968ce6537448b7e88e8f635359"
+      },
+      "seconds": 76.44846578966826
+    },
+    {
+      "nodeid": "tests/python/integration/runtime/test_api_v02_finite_kokkos_native.py::test_installed_finite_map_dispatch[overflow]",
+      "outcome": "passed",
+      "properties": {
+        "actual_nonempty_map_launches": 1,
+        "artifact_identity": "f8cec00a4bcd731d62db4a15933ae33c19a6041cd61fc4b2c38641264c01d052",
+        "first_failing_map_index": 256,
+        "host_map_invocations": 0,
+        "kokkos_execution_space": "Cuda",
+        "metrics": "({'max_error': 0.0, 'metrics_owner': True, 'passed': True},)",
+        "program_dso_sha256": "fd6ee78eed05529ad57e75b680ebc4293a7191fbd3072ffadcf078a34e453181"
+      },
+      "seconds": 72.31594976596534
+    },
+    {
+      "nodeid": "tests/python/integration/runtime/test_api_v02_finite_kokkos_native.py::test_installed_finite_map_dispatch[bounds]",
+      "outcome": "passed",
+      "properties": {
+        "actual_nonempty_map_launches": 2,
+        "artifact_identity": "8f9da293e7faf2060ef046b97645f0502e2263ec75a14165ed6d6851256e26dd",
+        "first_failing_map_index": 256,
+        "host_map_invocations": 0,
+        "kokkos_execution_space": "Cuda",
+        "metrics": "({'max_error': 0.0, 'metrics_owner': True, 'passed': True},)",
+        "program_dso_sha256": "fb3bf621b9131340d28ef90aed413324417eb3986067af08cdfa7b6a41cf7fe2"
+      },
+      "seconds": 72.10581895243376
+    },
+    {
+      "nodeid": "tests/python/integration/runtime/test_api_v02_finite_kokkos_native.py::test_installed_finite_map_dispatch[nonfinite]",
+      "outcome": "passed",
+      "properties": {
+        "actual_nonempty_map_launches": 1,
+        "artifact_identity": "a6b1bf7b5ad75d2505e8542a17ec76c5c4a0bdc2eb3717f416f7874a4978d8cf",
+        "first_failing_map_index": 256,
+        "host_map_invocations": 0,
+        "kokkos_execution_space": "Cuda",
+        "metrics": "({'max_error': 0.0, 'metrics_owner': True, 'passed': True},)",
+        "program_dso_sha256": "e0d28d1569d3586b70edbd53a8f74f9a642426c1a7fd4e4c592165525ce5f48d"
+      },
+      "seconds": 71.68307641800493
+    },
+    {
+      "nodeid": "tests/python/integration/runtime/test_api_v02_distributed_kokkos_native.py::test_installed_distributed_map_dispatch[arithmetic]",
+      "outcome": "passed",
+      "properties": {
+        "actual_nonempty_map_launches": 2,
+        "artifact_identity": "fce498c093711c904e4c7f025db25f10491e0a370530637be3b911a24a293745",
+        "first_failing_map_gid": -1,
+        "kokkos_execution_space": "Cuda",
+        "metrics": "({'max_error': 0.0, 'metrics_owner': True, 'passed': True},)",
+        "program_dso_sha256": "282624fd654156f6da06019efc847d0d42d71c292107f5bec37a67daaeeba232"
+      },
+      "seconds": 94.26437780447304
+    },
+    {
+      "nodeid": "tests/python/integration/runtime/test_api_v02_distributed_kokkos_native.py::test_installed_distributed_map_dispatch[import]",
+      "outcome": "passed",
+      "properties": {
+        "actual_nonempty_map_launches": 2,
+        "artifact_identity": "91fe7e937c4dadb02208708bc6f0d90a5e8c90443b866bd67e0a6acb67587db2",
+        "first_failing_map_gid": -1,
+        "kokkos_execution_space": "Cuda",
+        "metrics": "({'max_error': 0.0, 'metrics_owner': True, 'passed': True},)",
+        "program_dso_sha256": "1bae7186f7e3b9d355d3db48a74ba5ce8ee68c8b70fe4fa6477fa4c8cf872fb9"
+      },
+      "seconds": 97.09396550245583
+    },
+    {
+      "nodeid": "tests/python/integration/runtime/test_api_v02_distributed_kokkos_native.py::test_installed_distributed_map_dispatch[empty]",
+      "outcome": "passed",
+      "properties": {
+        "actual_nonempty_map_launches": 0,
+        "artifact_identity": "6165a6276e91544c3b46fd70c5910113a75317092edf3c28c1078cd9911c5461",
+        "first_failing_map_gid": -1,
+        "kokkos_execution_space": "Cuda",
+        "metrics": "({'max_error': 0.0, 'metrics_owner': True, 'passed': True},)",
+        "program_dso_sha256": "1eb608452b5d985a2c320a77c839d1e2a1950a29e3afa5cbfa8598d432db0413"
+      },
+      "seconds": 94.9884777944535
+    },
+    {
+      "nodeid": "tests/python/integration/runtime/test_api_v02_distributed_kokkos_native.py::test_installed_distributed_map_dispatch[nested]",
+      "outcome": "passed",
+      "properties": {
+        "actual_nonempty_map_launches": 2,
+        "artifact_identity": "a53a316f03529ceebefd40ea7282272bd7a0e8f149366b2ef449c28dc0974b80",
+        "first_failing_map_gid": -1,
+        "kokkos_execution_space": "Cuda",
+        "metrics": "({'max_error': 0.0, 'metrics_owner': True, 'passed': True},)",
+        "program_dso_sha256": "922c660c4ee9cbf20f29d35cddaac59ba73943860d3df2c515e41da40b698332"
+      },
+      "seconds": 98.51663566753268
+    },
+    {
+      "nodeid": "tests/python/integration/runtime/test_api_v02_distributed_kokkos_native.py::test_installed_distributed_map_dispatch[overflow]",
+      "outcome": "passed",
+      "properties": {
+        "actual_nonempty_map_launches": 2,
+        "artifact_identity": "13f4c85269c7c130ea62c760e4f02c527433e052698bf5636fc0691696f66a0f",
+        "first_failing_map_gid": 4,
+        "kokkos_execution_space": "Cuda",
+        "metrics": "({'max_error': 0.0, 'metrics_owner': True, 'passed': True},)",
+        "program_dso_sha256": "37db29b183051fba859461d8d31afb3bd921a186d8c548763f9918beea2715d1"
+      },
+      "seconds": 91.48101668898016
+    },
+    {
+      "nodeid": "tests/python/integration/runtime/test_api_v02_distributed_kokkos_native.py::test_installed_distributed_map_dispatch[bounds]",
+      "outcome": "passed",
+      "properties": {
+        "actual_nonempty_map_launches": 2,
+        "artifact_identity": "83942ad3806ec751db19e930f31236112eea0d699a32d578bedcf23f4fc66ae3",
+        "first_failing_map_gid": 4,
+        "kokkos_execution_space": "Cuda",
+        "metrics": "({'max_error': 0.0, 'metrics_owner': True, 'passed': True},)",
+        "program_dso_sha256": "4c5ce24e4cf8b292807922000f4e5167174df7e3c48d26ce792b8fd5b19790ad"
+      },
+      "seconds": 93.51638932991773
+    },
+    {
+      "nodeid": "tests/python/integration/runtime/test_api_v02_distributed_kokkos_native.py::test_installed_distributed_map_dispatch[nonfinite]",
+      "outcome": "passed",
+      "properties": {
+        "actual_nonempty_map_launches": 2,
+        "artifact_identity": "b2a21a2aad08be992ec8af04bd218fbc5bb2425e95e55d73a57abcc6c4c6efc8",
+        "first_failing_map_gid": 4,
+        "kokkos_execution_space": "Cuda",
+        "metrics": "({'max_error': 0.0, 'metrics_owner': True, 'passed': True},)",
+        "program_dso_sha256": "cb1a69b6cd7f48f26039d7bf45293e8b690233d59e6c9de94ca1ba6b39ebd0e3"
+      },
+      "seconds": 94.12784702889621
+    },
+    {
+      "nodeid": "tests/python/integration/runtime/test_diffusion_device_publication_native.py::test_installed_diffusion_publishes_exact_device_faces[nonlinear]",
+      "outcome": "passed",
+      "properties": {
+        "accepted_face_incidences": 256,
+        "ledger_max_error": 1.5415999640028266e-18,
+        "native_environment": "{'dimension': 2, 'amr_refinement_ratio': None, 'amr_refinement_ratio_selection': 'hierarchy_exact_rank', 'amr_refinement_ratio_rank': 2, 'precision': 'double', 'real_bytes': 8, 'supports_single_precision': False, 'supports_mixed_precision': False, 'has_kokkos': True, 'kokkos_initialized': True, 'kokkos_finalized': False, 'kokkos_initialized_by_pops': True, 'kokkos_atexit_finalize_registered': True, 'kokkos_backend': 'Cuda', 'kokkos_device': 'cuda', 'kokkos_shared_space': 'CudaUVM', 'field_memory_space': 'device', 'kokkos_stream': 'Kokkos::Cuda::default-instance', 'kokkos_stream_synchronous': False, 'kokkos_concurrency': 270336, 'kokkos_ownership': 'pops-owned-lazy', 'kokkos_lifecycle': 'PoPS lazily initialized Kokkos and registered an atexit finalize hook', 'mpi_compiled': True, 'mpi_active': True, 'mpi_rank': 0, 'mpi_ranks': 1, 'communicator': 'MPI_COMM_WORLD', 'supports_custom_communicator': False, 'mpi_initialized_by_pops': True, 'mpi_atexit_finalize_registered': True, 'mpi_thread_level': 3, 'mpi_ownership': 'pops-owned', 'allocator_mode': 'kokkos_shared_space_managed_arena', 'comm_allocator_mode': 'kokkos_shared_host_pinned_space', 'allocator_lifetime': 'process-lifetime ManagedArena; blocks are released by a Kokkos finalize hook, the arena tables are intentionally never destroyed'}",
+        "program_dso_sha256": "bdd7ca409078ca61db0a00c580250ad2d278f7adaea67c4bfd27b2b86b9f91cd"
+      },
+      "seconds": 78.59141133725643
+    },
+    {
+      "nodeid": "tests/python/integration/runtime/test_diffusion_device_publication_native.py::test_installed_diffusion_publishes_exact_device_faces[tensor]",
+      "outcome": "passed",
+      "properties": {
+        "accepted_face_incidences": 512,
+        "ledger_max_error": 1.6661138072492088e-18,
+        "native_environment": "{'dimension': 2, 'amr_refinement_ratio': None, 'amr_refinement_ratio_selection': 'hierarchy_exact_rank', 'amr_refinement_ratio_rank': 2, 'precision': 'double', 'real_bytes': 8, 'supports_single_precision': False, 'supports_mixed_precision': False, 'has_kokkos': True, 'kokkos_initialized': True, 'kokkos_finalized': False, 'kokkos_initialized_by_pops': True, 'kokkos_atexit_finalize_registered': True, 'kokkos_backend': 'Cuda', 'kokkos_device': 'cuda', 'kokkos_shared_space': 'CudaUVM', 'field_memory_space': 'device', 'kokkos_stream': 'Kokkos::Cuda::default-instance', 'kokkos_stream_synchronous': False, 'kokkos_concurrency': 270336, 'kokkos_ownership': 'pops-owned-lazy', 'kokkos_lifecycle': 'PoPS lazily initialized Kokkos and registered an atexit finalize hook', 'mpi_compiled': True, 'mpi_active': True, 'mpi_rank': 0, 'mpi_ranks': 1, 'communicator': 'MPI_COMM_WORLD', 'supports_custom_communicator': False, 'mpi_initialized_by_pops': True, 'mpi_atexit_finalize_registered': True, 'mpi_thread_level': 3, 'mpi_ownership': 'pops-owned', 'allocator_mode': 'kokkos_shared_space_managed_arena', 'comm_allocator_mode': 'kokkos_shared_host_pinned_space', 'allocator_lifetime': 'process-lifetime ManagedArena; blocks are released by a Kokkos finalize hook, the arena tables are intentionally never destroyed'}",
+        "program_dso_sha256": "027217dd405b047ed099022f7582586acbd696a42ded86537b1a7ece8123a19e"
+      },
+      "seconds": 83.9396956032142
+    }
+  ]
+}

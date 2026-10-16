@@ -233,7 +233,14 @@ def _drop_program_presentation(value: Any, program_clock_owner: Any) -> Any:
 
 def semantic_value(value: Any, *, where: str) -> Any:
     """Normalize the closed value language accepted by semantic identities."""
-    from pops._structural_data import StructuralPath, transform_tree_context
+    from pops._structural_data import StructuralPath, transform_tree_context, _plain_json_data
+    if _plain_json_data(value, nonempty_keys=True):
+        import json
+        try:
+            return json.loads(json.dumps(value, allow_nan=False, separators=(",", ":")),
+                              parse_float=lambda text: {"binary64": float(text).hex()})
+        except (RecursionError, ValueError):
+            pass
 
     def describe(value, where):
         if value is None or isinstance(value, (bool, int, str, bytes)):

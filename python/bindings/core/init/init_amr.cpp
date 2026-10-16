@@ -1268,6 +1268,7 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
                 history_flux_snapshot_shards_from_python(payloads), source_rank_count);
           },
           py::arg("payloads"), py::arg("source_rank_count"))
+      .def("program_manifest_snapshot", &AmrSystem::program_manifest_snapshot)
       .def("program_accepted_state_manifest", &AmrSystem::program_accepted_state_manifest)
       .def("program_clock_manifest", &AmrSystem::program_clock_manifest)
       .def("program_temporal_partition_manifest", &AmrSystem::program_temporal_partition_manifest)

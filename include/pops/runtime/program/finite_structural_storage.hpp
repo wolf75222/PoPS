@@ -307,16 +307,15 @@ struct LegacyFieldPreflight {
   }
 };
 
-template <int Dim, class FieldCopy = IgnoreFieldCopy, class FieldPreflight = LegacyFieldPreflight>
-ContinuationValueRef<Dim> pack(const ContinuationType& type, const std::any& source, Limits limits,
-                               const FieldCopy& on_field_copy = {},
-                               const FieldPreflight& preflight = {}) {
+namespace detail {
+template <int Dim, class FieldCopy, class FieldPreflight>
+ContinuationValueRef<Dim> pack_prepared(const std::vector<Layout>& nodes, Budget work,
+                                        const std::any& source, Limits limits,
+                                        const FieldCopy& on_field_copy,
+                                        const FieldPreflight& preflight) {
   using Ref = ContinuationValueRef<Dim>;
   using Value = ContinuationValue<Dim>;
-  type.validate(limits.workspace_bytes);
-  detail::Budget input(limits.source_bytes), output(limits.destination_bytes),
-      work(limits.workspace_bytes);
-  const auto nodes = detail::layout(type, work);
+  Budget input(limits.source_bytes), output(limits.destination_bytes);
   struct Frame {
     std::size_t node, offset = 0, next = 0, arm = 0, count = 0;
     const std::any* source = nullptr;
@@ -400,6 +399,67 @@ ContinuationValueRef<Dim> pack(const ContinuationType& type, const std::any& sou
     stack.back().children.push_back(std::move(result));
   }
 }
+}  // namespace detail
+
+template <int Dim, class FieldCopy = IgnoreFieldCopy, class FieldPreflight = LegacyFieldPreflight>
+ContinuationValueRef<Dim> pack(const ContinuationType& type, const std::any& source, Limits limits,
+                               const FieldCopy& on_field_copy = {},
+                               const FieldPreflight& preflight = {}) {
+  type.validate(limits.workspace_bytes);
+  detail::Budget work(limits.workspace_bytes);
+  const auto nodes = detail::layout(type, work);
+  return detail::pack_prepared<Dim>(nodes, work, source, limits, on_field_copy, preflight);
+}
+
+// A map can reuse this immutable scalar/Product layout without retaining values,
+// domain authority, or per-row validation results. Each pack still charges the
+// full conversion budget and uses the ordinary conversion implementation.
+template <int Dim>
+class ScalarProductPack {
+ public:
+  ScalarProductPack(const ContinuationType& type, Limits limits)
+      : limits_(limits), work_(limits.workspace_bytes) {
+    type.validate(limits_.workspace_bytes);
+    nodes_ = detail::layout(type, work_);
+    for (auto& node : nodes_) {
+      // Packing these kinds reads only kind; children/offsets/slots are owned
+      // by Layout. Do not copy unbudgeted names or retain source type pointers.
+      node.type = &primitive_type(node.type->kind);
+    }
+  }
+  ScalarProductPack(const ScalarProductPack&) = delete;
+  ScalarProductPack& operator=(const ScalarProductPack&) = delete;
+  ScalarProductPack(ScalarProductPack&&) = delete;
+  ScalarProductPack& operator=(ScalarProductPack&&) = delete;
+
+  ContinuationValueRef<Dim> pack(const std::any& source) const {
+    return detail::pack_prepared<Dim>(nodes_, work_, source, limits_, IgnoreFieldCopy{},
+                                      LegacyFieldPreflight{});
+  }
+
+ private:
+  static const ContinuationType& primitive_type(ContinuationKind kind) {
+    static const std::array<ContinuationType, 4> primitives{
+        ContinuationType{ContinuationKind::Product}, ContinuationType{ContinuationKind::Boolean},
+        ContinuationType{ContinuationKind::Int64}, ContinuationType{ContinuationKind::Float64}};
+    switch (kind) {
+      case ContinuationKind::Product:
+        return primitives[0];
+      case ContinuationKind::Boolean:
+        return primitives[1];
+      case ContinuationKind::Int64:
+        return primitives[2];
+      case ContinuationKind::Float64:
+        return primitives[3];
+      default:
+        throw std::invalid_argument("prepared scalar Product contains a nonscalar leaf");
+    }
+  }
+
+  const Limits limits_;
+  detail::Budget work_;
+  std::vector<detail::Layout> nodes_;
+};
 
 template <int Dim, class FieldCopy = IgnoreFieldCopy, class FieldPreflight = LegacyFieldPreflight>
 std::any unpack(const ContinuationType& type, const ContinuationValueRef<Dim>& source,

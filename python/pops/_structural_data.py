@@ -192,9 +192,9 @@ def _plain_json_depths(value):
             depths[id(node)] = 1 + max((depths.get(id(child), 0) for child in children), default=0)
             active.remove(id(node))
             continue
-        if node is None or kind in (str, int, bool, float):
+        if node is None or kind is str or kind is int or kind is bool or kind is float:
             continue
-        if kind not in (dict, list, tuple):
+        if kind is not dict and kind is not list and kind is not tuple:
             return None
         marker = id(node)
         if marker in active:

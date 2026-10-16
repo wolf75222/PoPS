@@ -12,6 +12,40 @@ This page follows the completion work after the original v15d2 reception.
 with their own identities. The [original reception](api_v02_reception_v15d2.json)
 remains historical evidence; its results do not certify later changes.
 
+## Source019 integration checkpoint
+
+The source019q official Dim2/MPI build passes with an unchanged source manifest
+and a verified installed native identity. This checkpoint includes a shared,
+validated layout for scalar/Product map outputs, closed structural projection,
+and one coherent native AMR manifest snapshot instead of six repeated snapshot
+decodes. Its three native C++ contracts pass on MPI1/2/3 (18 observations),
+including equality with all six legacy tables, rollback, cold restart and a
+subsequent accepted step. The depth160 compilation/execution/restart receiver is in progress;
+its preparation results alone are not a native receipt.
+
+Seven scalar/Product packing contracts pass on MPI1/2/3 (42 rank observations),
+including exact floating-point bits, source lifetime, every tested budget
+boundary, depth512, empty ranks and first-error selection. Fifteen corrected
+History fixtures also pass on MPI1/2/3 (90 observations) against the unchanged
+source018e core; they now use exact Context-owned SSA allocations and retain
+the foreign-copy rejection checks.
+
+The [source018b H100 receipt](evidence/api_v02/source018b_cuda_748182.json)
+records fifteen passing CUDA receivers, actual compiler inputs and loaded DSOs.
+The [CPU allocation pilot](evidence/api_v02/source018b_cpu_leaf_748183.json)
+finishes three M19 repetitions on 262144 phase cells, with unchanged numerical
+tolerances and checkpoint checks. Its modest timing changes relative to one
+clean baseline do not establish robust acceleration or MPI scalability; that
+allocation prototype is not integrated by this checkpoint.
+
+Explicit Field `Increment` publication and persistence, including actual
+delivery matrices and source intervals, are still being integrated. Ordinary
+State or History values cannot substitute for that ledger. Scheduled retained
+Field metadata is also being completed. The current PR is an implementation
+checkpoint, not a claim that these outstanding compositions or final CI pass.
+
+## Historical source009–014 checkpoints
+
 The source012 reception has passed 51 selected native C++ cases on MPI1,
 MPI2 and MPI3 (306 rank observations), covering continuation images, Field
 migration, retained face sources and hierarchy recovery. The official Dim2/MPI

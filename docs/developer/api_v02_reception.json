@@ -1074,7 +1074,7 @@
         }
       ],
       "assumptions": [
-        "Stationary periodic planar magnetic geometry with b\u00b7curl(b)=0, J=B and actual three-dimensional spatial operators.",
+        "Stationary periodic planar magnetic geometry with b·curl(b)=0, J=B and actual three-dimensional spatial operators.",
         "Declared FV/Euler, finite zero-flux velocity box and explicit collision moment projection."
       ],
       "unestablished_properties": [
@@ -1783,7 +1783,7 @@
             "symbol": "examples.api_v02.methods_T01_T12:build_t06",
             "parameters": []
           },
-          "scope": "Local F(a,b)=a*b versus b\u00b2 distinction."
+          "scope": "Local F(a,b)=a*b versus b² distinction."
         }
       ],
       "companion_profiles": [],
@@ -5849,6 +5849,91 @@
         "inputs_unchanged": true,
         "listed_cases_qualified": false,
         "native_executed": false
+      }
+    },
+    {
+      "archive_key": "completion-v02/backend/romeo018/cuda-maps-r4-748182/receipt.json",
+      "sha256": "0c4f59fa6a54a515cba11bc2b1c8c009545defe652f75b6ae40502e5f26b9e25",
+      "availability": "tracked_receipt_and_local_archive",
+      "result": {
+        "scope": "Source018b on ROMEO H100: 15 real CUDA finite/distributed-map and diffusion receivers, actual compiler inputs and loaded DSO hashes; no final-source or scaling claim.",
+        "selected_cases": 15,
+        "listed_cases_qualified": true,
+        "job_id": 748182,
+        "source_unchanged": true,
+        "native_unchanged": true,
+        "speedup_demonstrated": false
+      },
+      "tracked_receipt": "docs/developer/evidence/api_v02/source018b_cuda_748182.json"
+    },
+    {
+      "archive_key": "completion-v02/backend/romeo018b-leaf2/pilot-748183-terminal/receipt.json",
+      "sha256": "58efed8560c9c2ce9d35d65644ae826074103cc45a6992d999dc3bfcf73d3154",
+      "availability": "tracked_receipt_and_local_archive",
+      "result": {
+        "scope": "Real source018b plus scalar-leaf allocation prototype: M19, 262144 phase cells, three clean repetitions with invariant/checkpoint/oracle checks. Prototype not integrated; comparison does not establish speedup or MPI scaling.",
+        "listed_cases_qualified": true,
+        "job_id": 748183,
+        "speedup_demonstrated": false,
+        "scalability_demonstrated": false,
+        "integrated": false
+      },
+      "tracked_receipt": "docs/developer/evidence/api_v02/source018b_cpu_leaf_748183.json"
+    },
+    {
+      "archive_key": "completion-v02/cpp-scalar-pack019-r2/receipt.json",
+      "sha256": "cb2c9725cb4f08dbf54f72e3f39fe7e26cea67647976f7b1c6a484ebb7541f45",
+      "availability": "local_archive",
+      "result": {
+        "scope": "ScalarProductPack r2 shares only a validated scalar/Product layout. Seven real CMake/Kokkos cases cover exact bits, budgets, errors, source lifetime, depth512 and distributed empty/error ranks.",
+        "selected_cases": 7,
+        "rank_observations": 42,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "listed_cases_qualified": true,
+        "integrated": true,
+        "sources_unchanged": true,
+        "binaries_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/methods/history-ci-d17-020/receipt.json",
+      "sha256": "16b0ef30ef21233a07366623af1244634fca678de56823f8a39bbfeb57815d00",
+      "availability": "tracked_receipt_and_local_archive",
+      "result": {
+        "scope": "Fifteen corrected History fixtures on the unchanged source018e native core; exact Context-owned SSA storage, foreign-copy refusal, declared clocks, and MPI initialization. Failed first receipt retained; rerun covers only four remaining cases.",
+        "selected_cases": 15,
+        "rank_observations": 90,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "listed_cases_qualified": true,
+        "integrated": true
+      },
+      "tracked_receipt": "docs/developer/evidence/api_v02/source018e_history_ci_fixtures.json"
+    },
+    {
+      "archive_key": "completion-v02/cpp-manifest-batch019q/receipt.json",
+      "sha256": "56216c5a89bb6c42f8bcfcf12607e9576251be65b03645e3873bd40108ca5350",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Full source019q CMake/Kokkos/MPI build. Native batched manifests equal all six legacy tables, rollback retains the previous manifest, cold restart matches and the following accepted step changes it.",
+        "selected_cases": 3,
+        "rank_observations": 18,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "listed_cases_qualified": true,
+        "sources_unchanged": true,
+        "binaries_unchanged": true,
+        "integrated": true
       }
     }
   ],

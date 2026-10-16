@@ -37,12 +37,16 @@ struct ScalarModel {
     return {pops::VariableKind::Primitive, {"u"}, 1, {pops::VariableRole::Scalar}};
   }
   POPS_HD auto recover(const State& state) const { return law.recover(state); }
-  POPS_HD auto make_conservative(const Primitive& state) const { return law.make_conservative(state); }
+  POPS_HD auto make_conservative(const Primitive& state) const {
+    return law.make_conservative(state);
+  }
   POPS_HD auto admissibility(const State& state) const { return law.admissibility(state); }
-  template <int Axis> POPS_HD State flux(const State& state) const {
+  template <int Axis>
+  POPS_HD State flux(const State& state) const {
     return law.template flux<Axis>(state);
   }
-  template <int Axis> POPS_HD pops::Real max_wave_speed(const State& state) const {
+  template <int Axis>
+  POPS_HD pops::Real max_wave_speed(const State& state) const {
     return law.template max_wave_speed<Axis>(state);
   }
   template <int Axis>
@@ -65,29 +69,53 @@ TEST(AmrOutputHistoryCapability, CompleteFrozenArtifactTupleAndArbitraryTypedRin
   state.block_map_ = {3, 7};
   state.installed_hash_ = "installed-test-artifact";
   state.artifact_backed_ = true;
-  ProgramCheckpointHistoryMetadata row{
-      "temperature", 1, "scalar-history:temperature",
-      std::string(kOutputHistoryProjectionSpace), "clock-exact", "cell-copy", 6, 3, 1};
+  ProgramCheckpointHistoryMetadata row{"temperature",
+                                       1,
+                                       "scalar-history:temperature",
+                                       std::string(kOutputHistoryProjectionSpace),
+                                       "clock-exact",
+                                       "cell-copy",
+                                       6,
+                                       3,
+                                       1};
   state.checkpoint_metadata_.histories = {row};
   const auto validate = [&](const ProgramCheckpointHistoryMetadata& candidate, int owner = 7) {
     return state.require_frozen_output_history_projection(
         candidate.name, owner, candidate.state_identity, candidate.space_identity,
-        candidate.clock_identity, candidate.interpolation_identity,
-        candidate.depth, candidate.components, candidate.program_owner, candidate.ghost_depth);
+        candidate.clock_identity, candidate.interpolation_identity, candidate.depth,
+        candidate.components, candidate.program_owner, candidate.ghost_depth);
   };
   EXPECT_EQ(validate(row), row);
   for (int field = 0; field < 9; ++field) {
     auto candidate = row;
     switch (field) {
-      case 0: candidate.name += ".foreign"; break;
-      case 1: candidate.program_owner = 0; break;
-      case 2: candidate.state_identity += " "; break;
-      case 3: candidate.space_identity = std::string(kScalarOutputHistorySpace); break;
-      case 4: candidate.clock_identity += ".foreign"; break;
-      case 5: candidate.interpolation_identity += ".foreign"; break;
-      case 6: --candidate.depth; break;
-      case 7: --candidate.components; break;
-      case 8: ++candidate.ghost_depth; break;
+      case 0:
+        candidate.name += ".foreign";
+        break;
+      case 1:
+        candidate.program_owner = 0;
+        break;
+      case 2:
+        candidate.state_identity += " ";
+        break;
+      case 3:
+        candidate.space_identity = std::string(kScalarOutputHistorySpace);
+        break;
+      case 4:
+        candidate.clock_identity += ".foreign";
+        break;
+      case 5:
+        candidate.interpolation_identity += ".foreign";
+        break;
+      case 6:
+        --candidate.depth;
+        break;
+      case 7:
+        --candidate.components;
+        break;
+      case 8:
+        ++candidate.ghost_depth;
+        break;
     }
     EXPECT_THROW(validate(candidate), std::invalid_argument) << field;
     EXPECT_EQ(state.checkpoint_metadata_.histories, std::vector{row});
@@ -137,21 +165,25 @@ TEST_P(AmrScalarOutputHistory, ExpansionPreservesOnlyAuthenticatedOutputOverlap)
   auto context = pops::runtime::program::make_program_execution_provider(&system);
   context->configure_primary_clock("clock.macro");
   context->declare_clock_relation("clock.macro", "clock.level.1", temporal_ratio);
-  context->install([context](double dt) { context->advance_hierarchy(dt, [](double) {}); }, context);
+  context->install([context](double dt) { context->advance_hierarchy(dt, [](double) {}); },
+                   context);
   system.set_program_block_map({0});
   using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
   system.install_prepared_amr_program_flux_expression_budget(
-      "tests.scalar-output-history/flux-budget", std::vector<FluxBudget>(1, FluxBudget{2, 1}), 0, 0);
+      "tests.scalar-output-history/flux-budget", std::vector<FluxBudget>(1, FluxBudget{2, 1}), 0,
+      0);
   context->for_each_program_resource_level([&](int) {
     context->register_history("tracer.potential", 1, 1, 0, "scalar-history:tracer.potential",
-                             output_only ? std::string(pops::runtime::program::kScalarOutputHistorySpace)
-                                         : "scalar-field", "clock.macro", "none");
+                              output_only
+                                  ? std::string(pops::runtime::program::kScalarOutputHistorySpace)
+                                  : "scalar-field",
+                              "clock.macro", "none");
   });
   int step = 0;
   for (double dt : {.1, .2}) {
     ++step;
     context->advance_hierarchy(dt, [&](double) {
-      auto value = context->rhs_scratch_like(context->state(0));
+      auto& value = context->rhs_scratch(940101, 0, context->state(0));
       const bool fine = context->level() == 1;
       for (std::size_t patch = 0; patch < value.local_size(); ++patch) {
         const auto view = value.fab(patch).view();
@@ -184,8 +216,7 @@ TEST_P(AmrScalarOutputHistory, ExpansionPreservesOnlyAuthenticatedOutputOverlap)
   if (output_only) {
     context->for_each_program_resource_level([&](int) {
       EXPECT_THROW(context->history("tracer.potential", 1, 0), std::invalid_argument);
-      EXPECT_THROW(context->history_zero_start("tracer.potential", 1, 1, 0),
-                   std::invalid_argument);
+      EXPECT_THROW(context->history_zero_start("tracer.potential", 1, 1, 0), std::invalid_argument);
     });
     const auto expect_atomic_refusal = [&]() {
       system.execute_prepared_tagging(0);
@@ -228,7 +259,7 @@ TEST_P(AmrScalarOutputHistory, ExpansionPreservesOnlyAuthenticatedOutputOverlap)
       ++retained;
       if (before0[cell] != after0[cell] || before1[cell] != after1[cell])
         ++changed;
-      maximum_change = std::max(maximum_change, std::abs(after1[cell]-before1[cell]));
+      maximum_change = std::max(maximum_change, std::abs(after1[cell] - before1[cell]));
     } else {
       ++added;
       EXPECT_EQ(after0[cell], 10.);
@@ -237,7 +268,7 @@ TEST_P(AmrScalarOutputHistory, ExpansionPreservesOnlyAuthenticatedOutputOverlap)
   }
   std::cout << "scalar_history_overlap retained=" << retained << " added=" << added
             << " changed=" << changed << " max_change=" << maximum_change
-            << " time_change=" << system.time()-time_before << '\n';
+            << " time_change=" << system.time() - time_before << '\n';
   EXPECT_GT(retained, 0u);
   EXPECT_GT(added, 0u);
   EXPECT_EQ(changed, output_only ? 0u : retained);
@@ -249,7 +280,8 @@ TEST_P(AmrScalarOutputHistory, ExpansionPreservesOnlyAuthenticatedOutputOverlap)
             pops::runtime::program::decode_history_sample_identity(
                 system.history_sample_identity("tracer.potential", 0), "tracer.potential", 0, 2));
   const auto accepted = system.program_accepted_state();
-  const auto restored = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(accepted);
+  const auto restored =
+      pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(accepted);
   EXPECT_EQ(restored.pending_history_remaps.empty(), output_only);
   if (!output_only) {
     // The integrator route still requires a current store before a deferred lag read.
@@ -268,7 +300,7 @@ TEST_P(AmrScalarOutputHistory, ExpansionPreservesOnlyAuthenticatedOutputOverlap)
   ASSERT_TRUE(system.regrid_from_prepared_tagging(0));
   context->advance_hierarchy(.3, [&](double) {
     auto& state = context->state(0);
-    auto rate = context->rhs_scratch_like(state);
+    auto& rate = context->rhs_scratch(940110, 0, state);
     context->rhs_into(0, state, rate, 0);
     context->store_history("tracer.potential", rate, 0);
     context->rotate_histories("clock.macro");

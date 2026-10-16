@@ -1749,6 +1749,7 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
 // The remaining host-validatable seams return sane, consistent results.
 TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   ensure_kokkos();
+  comm_init();
   const int n = 16;
   const double dt = 1e-3;
   NativeSystemConfig cfg = native_config(n);
@@ -1872,7 +1873,7 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
       << "an undeclared projection capability must fail loud";
 
   // history register/store/read/rotate through the context seam.
-  ctx.register_history("h", 2);
+  ctx.register_history("h", 2, -1, 0, "gas.U", "cell.conservative", "clock.macro", "dense.linear");
   NativeField hv = ctx.rhs_scratch_like(U);
   hv.set_val(Real(3));
   ctx.store_history("h", hv);
@@ -3021,7 +3022,7 @@ TEST(ProgramContextContract, AmrHistoryDeclaredScalarHaloPreservesExactStorageCo
     for (int axis = 0; axis < kTestDimension; ++axis)
       EXPECT_EQ(slot.ghosts()[axis], 0);
   }
-  auto value = context->alloc_scalar_field(1, 0);
+  auto& value = context->scalar_scratch(940102, 0, context->state(0), 1, 0);
   value.set_val(Real(5));
   EXPECT_NO_THROW(context->store_history("scalar_observation", value, 0));
   const auto& stored = context->history("scalar_observation", 0, 0);
@@ -3045,7 +3046,13 @@ TEST(ProgramContextContract, AmrHistoryDeclaredScalarHaloPreservesExactStorageCo
       EXPECT_EQ(system->history_slot_dt("scalar_observation", 0, slot), before_dts[slot]);
     }
   };
-  auto wider = context->alloc_scalar_field(1, 1);
+  // Equal shape and values do not give an unissued clone producer authority.
+  auto unissued = value;
+  expect_collective_exception<std::invalid_argument>(context->prepared_execution_lane(), [&] {
+    context->store_history("scalar_observation", unissued, 0);
+  });
+  require_unchanged();
+  auto& wider = context->scalar_scratch(940103, 0, context->state(0), 1, 1);
   wider.set_val(Real(6));
   expect_collective_exception<std::invalid_argument>(context->prepared_execution_lane(), [&] {
     context->store_history("scalar_observation", wider, 0);
@@ -3053,7 +3060,8 @@ TEST(ProgramContextContract, AmrHistoryDeclaredScalarHaloPreservesExactStorageCo
   require_unchanged();
   // One participant's wrong halo must refuse every participant before any ring slot moves.
   const auto& lane = context->prepared_execution_lane();
-  auto rank_local_mismatch = context->alloc_scalar_field(1, lane.rank() == 0 ? 1 : 0);
+  auto& rank_local_mismatch =
+      context->scalar_scratch(940104, 0, context->state(0), 1, lane.rank() == 0 ? 1 : 0);
   rank_local_mismatch.set_val(Real(11));
   expect_collective_exception<std::invalid_argument>(
       lane, [&] { context->store_history("scalar_observation", rank_local_mismatch, 0); });

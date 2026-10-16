@@ -27,6 +27,9 @@ from pops.problem._snapshot_mapping import canonical_mapping as _canonical_mappi
 from pops.problem._snapshot_literals import canonical_enum_data as _canonical_enum_data, canonical_literal_data as _canonical_literal_data
 
 
+_NATIVE_ISFINITE = math.isfinite
+
+
 def _canonical(
     value: Any,
     *,
@@ -119,11 +122,12 @@ def _canonical(
 class _ContainerPath:
     """Local diagnostic spine; canonical payloads never contain these objects."""
 
-    __slots__ = ("parent", "suffix")
+    __slots__ = ("parent", "suffix", "depth")
 
     def __init__(self, parent, suffix):
         self.parent = parent
         self.suffix = suffix
+        self.depth = parent.depth + 1 if type(parent) is _ContainerPath else 0
 
     def __str__(self):
         parts, node = [], self
@@ -163,6 +167,14 @@ def _canonical_containers(value, *, path, active, handle_resolver, artifact, pro
                         "canonical identity" % location)
                 destination.add(token)
                 continue
+            # This is an optimization depth, never a supported-data limit. At
+            # most four preflights inspect a leaf before ordinary traversal;
+            # protocols still run in their original declaration order.
+            if location.depth < 4 and (type(node) is dict or type(node) is list):
+                copied, output = _canonical_builtin(node, active)
+                if copied:
+                    destination[index] = output
+                    continue
             if (not isinstance(node, (list, tuple, set, frozenset, Mapping)) or
                     isinstance(node, (bool, int, Fraction, Decimal, float, str, bytes, complex,
                                       Enum, types.ModuleType, type, types.FunctionType,
@@ -612,3 +624,46 @@ def _qualified_type(value: Any) -> str:
 
 
 __all__ = ["_canonical"]
+
+
+def _canonical_builtin(value, active):
+    """Project a closed builtin island, or leave the authoritative walk intact.
+
+    The preflight executes no protocols and retains no verdict beyond this call.
+    Tuple/subclass/opaque data is deliberately not part of the C codec language.
+    """
+    # A replaced public scalar check retains its original traversal and calls.
+    if (math.isfinite is not _NATIVE_ISFINITE or
+            type(_NATIVE_ISFINITE) is not types.BuiltinFunctionType):
+        return False, None
+    seen, pending = set(), [value]
+    while pending:
+        node = pending.pop()
+        kind = type(node)
+        if node is None or kind is bool or kind is str or kind is int:
+            continue
+        if kind is float:
+            continue
+        if kind is not dict and kind is not list:
+            return False, None
+        marker = id(node)
+        if marker in active:
+            return False, None
+        if marker in seen:
+            continue
+        seen.add(marker)
+        if kind is dict:
+            if any(type(key) is not str for key in node):
+                return False, None
+            pending.extend(node.values())
+        else:
+            pending.extend(node)
+    try:
+        return True, json.loads(
+            json.dumps(value, allow_nan=False, separators=(",", ":")),
+            parse_int=lambda text: {"$scalar": {"kind": "integer", "value": text}},
+            parse_float=lambda text: {"$scalar": {"kind": "binary64", "value": float(text).hex()}},
+        )
+    except (ValueError, RecursionError):
+        # Cycles, deep inputs and very wide integers retain existing diagnostics.
+        return False, None

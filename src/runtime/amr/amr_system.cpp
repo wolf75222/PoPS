@@ -26187,15 +26187,11 @@ std::uint64_t AmrSystem<Dim>::program_accepted_state_revision() const {
   return p_->program_accepted_revision;
 }
 
+namespace {
 template <int Dim>
-std::vector<std::vector<std::string>> AmrSystem<Dim>::program_accepted_state_manifest() const {
+std::vector<std::vector<std::string>> program_accepted_state_manifest_rows(
+    const runtime::program::AmrProgramAcceptedState<Dim>& state) {
   std::vector<std::vector<std::string>> rows;
-  const auto bytes = program_accepted_state();
-  if (bytes.empty())
-    return rows;
-  const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
-  const auto state =
-      runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes, &interface_budget);
   rows.reserve(state.history_slots.size());
   for (const auto& provenance : state.history_slots) {
     const auto history =
@@ -26215,14 +26211,9 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::program_accepted_state_man
 }
 
 template <int Dim>
-std::vector<std::vector<std::string>> AmrSystem<Dim>::program_clock_manifest() const {
+std::vector<std::vector<std::string>> program_clock_manifest_rows(
+    const runtime::program::AmrProgramAcceptedState<Dim>& state) {
   std::vector<std::vector<std::string>> rows;
-  const auto bytes = program_accepted_state();
-  if (bytes.empty())
-    return rows;
-  const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
-  const auto state =
-      runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes, &interface_budget);
   rows.reserve(state.level_clocks.size() + state.logical_clock_ticks.size());
   for (const auto& clock : state.level_clocks)
     rows.push_back({"level", std::to_string(clock.level), std::to_string(clock.macro_step),
@@ -26234,14 +26225,9 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::program_clock_manifest() c
 }
 
 template <int Dim>
-std::vector<std::vector<std::string>> AmrSystem<Dim>::program_temporal_partition_manifest() const {
+std::vector<std::vector<std::string>> program_temporal_partition_manifest_rows(
+    const runtime::program::AmrProgramAcceptedState<Dim>& state) {
   std::vector<std::vector<std::string>> rows;
-  const auto bytes = program_accepted_state();
-  if (bytes.empty())
-    return rows;
-  const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
-  const auto state =
-      runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes, &interface_budget);
   const auto& temporal = state.temporal_partition;
   rows.push_back(
       {"summary",
@@ -26258,14 +26244,9 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::program_temporal_partition
 }
 
 template <int Dim>
-std::vector<std::vector<std::string>> AmrSystem<Dim>::program_flux_ledger_manifest() const {
+std::vector<std::vector<std::string>> program_flux_ledger_manifest_rows(
+    const runtime::program::AmrProgramAcceptedState<Dim>& state) {
   std::vector<std::vector<std::string>> rows;
-  const auto bytes = program_accepted_state();
-  if (bytes.empty())
-    return rows;
-  const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
-  const auto state =
-      runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes, &interface_budget);
   const std::string evidence_space =
       state.face_evidence_provenance
           ? prefixed_sha256("pops.amr-program.face-evidence-space.v1:sha256:",
@@ -26305,15 +26286,9 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::program_flux_ledger_manife
 }
 
 template <int Dim>
-std::vector<std::vector<std::string>> AmrSystem<Dim>::program_interface_flux_ledger_manifest()
-    const {
+std::vector<std::vector<std::string>> program_interface_flux_ledger_manifest_rows(
+    const runtime::program::AmrProgramAcceptedState<Dim>& state) {
   std::vector<std::vector<std::string>> rows;
-  const auto bytes = program_accepted_state();
-  if (bytes.empty())
-    return rows;
-  const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
-  const auto state =
-      runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes, &interface_budget);
   for (const auto& fragment : state.accepted_interface_flux) {
     const auto& key = fragment.key;
     const auto& measure = fragment.measure;
@@ -26355,14 +26330,9 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::program_interface_flux_led
 }
 
 template <int Dim>
-std::vector<std::vector<std::string>> AmrSystem<Dim>::program_sync_manifest() const {
+std::vector<std::vector<std::string>> program_sync_manifest_rows(
+    const runtime::program::AmrProgramAcceptedState<Dim>& state) {
   std::vector<std::vector<std::string>> rows;
-  const auto bytes = program_accepted_state();
-  if (bytes.empty())
-    return rows;
-  const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
-  const auto state =
-      runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes, &interface_budget);
   const std::string evidence_space =
       state.face_evidence_provenance
           ? prefixed_sha256("pops.amr-program.face-evidence-space.v1:sha256:",
@@ -26377,6 +26347,102 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::program_sync_manifest() co
          evidence_space, std::to_string(state.face_evidence_provenance->topology_epoch),
          std::to_string(state.face_evidence_provenance->materialization_generation),
          std::to_string(state.face_evidence_provenance->level_count)});
+  return rows;
+}
+
+}  // namespace
+
+template <int Dim>
+std::vector<std::vector<std::string>> AmrSystem<Dim>::program_accepted_state_manifest() const {
+  const auto bytes = program_accepted_state();
+  if (bytes.empty())
+    return {};
+  const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
+  const auto state =
+      runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes, &interface_budget);
+  return program_accepted_state_manifest_rows(state);
+}
+
+template <int Dim>
+std::vector<std::vector<std::string>> AmrSystem<Dim>::program_clock_manifest() const {
+  const auto bytes = program_accepted_state();
+  if (bytes.empty())
+    return {};
+  const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
+  const auto state =
+      runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes, &interface_budget);
+  return program_clock_manifest_rows(state);
+}
+
+template <int Dim>
+std::vector<std::vector<std::string>> AmrSystem<Dim>::program_temporal_partition_manifest() const {
+  const auto bytes = program_accepted_state();
+  if (bytes.empty())
+    return {};
+  const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
+  const auto state =
+      runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes, &interface_budget);
+  return program_temporal_partition_manifest_rows(state);
+}
+
+template <int Dim>
+std::vector<std::vector<std::string>> AmrSystem<Dim>::program_flux_ledger_manifest() const {
+  const auto bytes = program_accepted_state();
+  if (bytes.empty())
+    return {};
+  const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
+  const auto state =
+      runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes, &interface_budget);
+  return program_flux_ledger_manifest_rows(state);
+}
+
+template <int Dim>
+std::vector<std::vector<std::string>> AmrSystem<Dim>::program_interface_flux_ledger_manifest()
+    const {
+  const auto bytes = program_accepted_state();
+  if (bytes.empty())
+    return {};
+  const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
+  const auto state =
+      runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes, &interface_budget);
+  return program_interface_flux_ledger_manifest_rows(state);
+}
+
+template <int Dim>
+std::vector<std::vector<std::string>> AmrSystem<Dim>::program_sync_manifest() const {
+  const auto bytes = program_accepted_state();
+  if (bytes.empty())
+    return {};
+  const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
+  const auto state =
+      runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes, &interface_budget);
+  return program_sync_manifest_rows(state);
+}
+
+template <int Dim>
+std::map<std::string, std::vector<std::vector<std::string>>>
+AmrSystem<Dim>::program_manifest_snapshot() const {
+  // One authenticated image per invocation; no state, revision or validation is cached.
+  const auto bytes = program_accepted_state();
+  std::map<std::string, std::vector<std::vector<std::string>>> rows;
+  rows.emplace("program_accepted_state_manifest", std::vector<std::vector<std::string>>{});
+  rows.emplace("program_clock_manifest", std::vector<std::vector<std::string>>{});
+  rows.emplace("program_temporal_partition_manifest", std::vector<std::vector<std::string>>{});
+  rows.emplace("program_flux_ledger_manifest", std::vector<std::vector<std::string>>{});
+  rows.emplace("program_interface_flux_ledger_manifest", std::vector<std::vector<std::string>>{});
+  rows.emplace("program_sync_manifest", std::vector<std::vector<std::string>>{});
+  if (bytes.empty())
+    return rows;
+  const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
+  const auto state =
+      runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes, &interface_budget);
+  rows.at("program_accepted_state_manifest") = program_accepted_state_manifest_rows(state);
+  rows.at("program_clock_manifest") = program_clock_manifest_rows(state);
+  rows.at("program_temporal_partition_manifest") = program_temporal_partition_manifest_rows(state);
+  rows.at("program_flux_ledger_manifest") = program_flux_ledger_manifest_rows(state);
+  rows.at("program_interface_flux_ledger_manifest") =
+      program_interface_flux_ledger_manifest_rows(state);
+  rows.at("program_sync_manifest") = program_sync_manifest_rows(state);
   return rows;
 }
 
@@ -27146,6 +27212,8 @@ template std::vector<double> AmrSystem<kNativeDimension>::density();
 template std::vector<double> AmrSystem<kNativeDimension>::density(const std::string&);
 template std::vector<double> AmrSystem<kNativeDimension>::potential();
 template std::vector<std::uint8_t> AmrSystem<kNativeDimension>::program_accepted_state() const;
+template std::map<std::string, std::vector<std::vector<std::string>>>
+AmrSystem<kNativeDimension>::program_manifest_snapshot() const;
 template const AmrSystem<kNativeDimension>::ProgramHistoryFluxSnapshots&
 AmrSystem<kNativeDimension>::program_history_flux_snapshots() const;
 template void AmrSystem<kNativeDimension>::publish_program_history_flux_snapshots(

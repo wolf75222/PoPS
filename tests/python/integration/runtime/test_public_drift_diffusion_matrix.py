@@ -137,7 +137,9 @@ def _solved_potential_case(n, dt):
         gauge=SharedMeanGauge((unknown,)))
     field = case.field(problem, FieldDiscretization(method=CellCenteredSecondOrder(), boundaries=(),
         solver=CG(max_iter=4000, rel_tol=1e-12, abs_tol=1e-13)))
-    program = Program("solved-potential-step")
+    # Retained provider descriptors have a separate declared budget from field storage.
+    program = Program("solved-potential-step",
+        history_field_metadata_budget=(8 * 1024 * 1024, 16 * 1024 * 1024))
     driver_time, density_time = program.state(driver_block[driver]), program.state(block[state])
     point = program.stage("potential", c=0)
     solution = field.observe(program.solve(field, values={driver_block[driver]:driver_time.n}, at=point)

@@ -204,8 +204,10 @@ def _cache(sim: Any) -> Any:
 
 
 def _amr_temporal_report(sim: Any) -> tuple[Any, Any, Any, Any, Any]:
+    from pops.runtime._program_manifest_snapshot import program_manifest_reader
+    manifest = program_manifest_reader(sim, fallback=lambda name: _call(sim, name, []))
     clocks = []
-    for row in _call(sim, "program_clock_manifest", []) or []:
+    for row in manifest("program_clock_manifest") or []:
         if row[0] == "level" and len(row) == 6:
             clocks.append(
                 {
@@ -233,7 +235,7 @@ def _amr_temporal_report(sim: Any) -> tuple[Any, Any, Any, Any, Any]:
             }
         )
     ledger = []
-    for row in _call(sim, "program_flux_ledger_manifest", []) or []:
+    for row in manifest("program_flux_ledger_manifest") or []:
         if len(row) not in (13, 17):
             raise ValueError("native AMR Program flux-ledger report has an invalid row")
         ledger.append(
@@ -259,7 +261,7 @@ def _amr_temporal_report(sim: Any) -> tuple[Any, Any, Any, Any, Any]:
                 "level_count": int(row[16]),
             }
     synchronization = []
-    for row in _call(sim, "program_sync_manifest", []) or []:
+    for row in manifest("program_sync_manifest") or []:
         if len(row) not in (7, 11):
             raise ValueError("native AMR Program synchronization report has an invalid row")
         synchronization.append(
@@ -280,7 +282,7 @@ def _amr_temporal_report(sim: Any) -> tuple[Any, Any, Any, Any, Any]:
                 "level_count": int(row[10]),
             }
     temporal_partition = {}
-    for row in _call(sim, "program_temporal_partition_manifest", []) or []:
+    for row in manifest("program_temporal_partition_manifest") or []:
         if row[0] == "summary" and len(row) == 7:
             if temporal_partition:
                 raise ValueError("native temporal-partition report has duplicate summary rows")

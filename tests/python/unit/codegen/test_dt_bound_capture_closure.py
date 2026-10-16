@@ -92,14 +92,16 @@ def test_existing_graph_identity_and_source_remain_exact(kind):
 
     # IR v28 discriminates scalar-op nonfinite rejection. The legacy CFL product uses it;
     # the unbounded identity has no scalar op and retains v5. Check this explicit
-    # transition and the four explicit resource contracts added since 5d97b7a5.
+    # transition and the six explicit resource contracts added since 5d97b7a5.
     # Compare every remaining byte with the historical v5 receipts. In particular,
     # preserve all node metadata and the old hashes; resources stay in today's hash.
     version = 28 if kind == "legacy" else 5
     assert ir["version"] == semantic["version"] == version
     resources = {
         "flux_expression_budget": None,
+        "history_field_metadata_budget": None,
         "max_exact_coefficient_bytes": 65536,
+        "representation_workspace_byte_capacity": 67108864,
         "terminal_failure_aggregate_byte_capacity": 268435456,
         "terminal_failure_byte_capacity": 67108864,
     }
@@ -109,7 +111,9 @@ def test_existing_graph_identity_and_source_remain_exact(kind):
                              if key not in resources}, version=5)
                        for data in (ir, semantic))
     assert tuple(digest(data) for data in historical) == BASELINE[kind][:2]
-    assert program._ir_hash() == digest(ir)
+    # Current identities include every resource contract, without projection.
+    assert (digest(ir), digest(semantic)) == CURRENT[kind]
+    assert program._ir_hash() == CURRENT[kind][0]
     from pops.codegen.program_source_map import source_map
     mapping = source_map(source)
     assert mapping["complete"]
@@ -222,6 +226,17 @@ def test_callback_cannot_add_a_hidden_commit_of_a_preexisting_candidate():
     assert len(program.commits()) == 1 and not program.has_dt_bound()
     program.set_dt_bound(lambda P, cfl: cfl / (1 + P.norm2(passive.n)))
     assert len(program.commits()) == 1
+
+
+# Current complete IR and semantic receipts, including all six resources.
+CURRENT = {
+    "legacy": (
+        "863031c7021e5250469eb09beee03ed80bb12a8c9b4e07305eba778ba5775e8b",
+        "4adc62491248b359cb116d3a18dff7b4759c132f620814f3092f43a49c3e60a0"),
+    "unbounded": (
+        "b17f4be3dfdd802d04899fe97b396159cc0429893aec39a65c61347902e5c4fd",
+        "2fb78950b14f8afdc8ea6798677ee1c3f7442aa7310299d75b3ea647ba80d613"),
+}
 
 
 # Filled from public source-only emission on the exact pre-fix 5d97b7a5 tree.

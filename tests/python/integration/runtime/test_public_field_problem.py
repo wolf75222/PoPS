@@ -52,7 +52,9 @@ def _data(kind, n):
 
 def _public_case(kind, n, *, reject=False):
     joint = kind != "variable_scalar_two_state_load"
-    case, field, problem, program, values, point = field_case(joint=joint)
+    # One or two retained observations share this explicit metadata-only capacity.
+    case, field, problem, program, values, point = field_case(joint=joint,
+        history_field_metadata_budget=(8 * 1024 * 1024, 16 * 1024 * 1024))
     # This provisional diagnostic executes before the failure gate. It must disappear on rejection.
     program.record_scalar("provisional_load_sum", program.sum_component(next(iter(values.values())), 0))
     solved = program.solve(field, values=values, at=point).consume(
